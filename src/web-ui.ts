@@ -571,6 +571,120 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .db-bar .on { color: #60a5fa; }
 .db-create { display: flex; gap: 8px; align-items: center; padding: 8px 12px; background: rgba(99,140,255,.08); border-bottom: 1px solid rgba(148,163,184,.08); font-size: 12px; }
 .db-create input { flex: 1; }
+
+/* 移动端侧栏切换按钮（默认桌面隐藏） */
+.side-toggle {
+  display: none; background: transparent; border: 1px solid var(--line2); color: var(--tx2);
+  border-radius: var(--rad-sm); padding: 3px 8px; font-size: 14px; line-height: 1; flex: none;
+}
+.side-toggle:hover { color: var(--pri); border-color: var(--pri); }
+.side-backdrop { display: none; }
+
+/* ============================================================
+   移动端响应式适配 (≤768px)
+   侧栏变抽屉 · 头部压缩 · 输入区自适应 · 弹窗/抽屉全屏 · 表格横向滚动
+   ============================================================ */
+@media (max-width: 768px) {
+  /* ---- 顶部导航 ---- */
+  header { padding: 0 10px; gap: 8px; height: 48px; }
+  .brand { gap: 7px; }
+  .brand .logo { width: 26px; height: 26px; font-size: 13px; }
+  .brand span { font-size: 13.5px; }
+  .brand small { display: none; }
+  nav { overflow-x: auto; max-width: 62vw; scrollbar-width: none; }
+  nav::-webkit-scrollbar { display: none; }
+  nav button { padding: 5px 8px; font-size: 12px; white-space: nowrap; }
+  .chip { display: none; }
+
+  /* ---- 工作台：侧栏变抽屉 ---- */
+  #view-work { position: relative; }
+  .task-side {
+    position: absolute; top: 0; left: 0; bottom: 0; z-index: 20;
+    width: 80vw; max-width: 330px; border-right: 1px solid var(--line2);
+    transform: translateX(-100%); transition: transform .22s ease;
+    box-shadow: 6px 0 24px rgba(0,0,0,.55);
+  }
+  #view-work.side-open .task-side { transform: translateX(0); }
+  .side-backdrop {
+    display: block; position: absolute; inset: 0; background: rgba(0,0,0,.55);
+    z-index: 15; opacity: 0; pointer-events: none; transition: opacity .18s ease;
+  }
+  #view-work.side-open .side-backdrop { opacity: 1; pointer-events: auto; }
+  .side-toggle { display: inline-flex; align-items: center; }
+  .side-toggle .st-hamb { font-size: 16px; }
+
+  /* ---- 聊天头部 ---- */
+  .chat-head { padding: 0 12px 0 8px; gap: 6px; height: 48px; }
+  .chat-head .title { max-width: 38vw; font-size: 13px; }
+  .chat-head .mini-btn { padding: 4px 7px; font-size: 12px; white-space: nowrap; }
+  .chat-head .mini-btn.danger { padding: 4px 7px; }
+  .badge { font-size: 10px; padding: 2px 7px; }
+
+  /* ---- 消息区 ---- */
+  .chat-scroll { padding: 12px 12px 20px; }
+  .msg { gap: 8px; margin-bottom: 16px; }
+  .msg .avatar { width: 28px; height: 28px; font-size: 12px; border-radius: 7px; }
+  .msg.agent .bubble, .msg.system .bubble { padding-left: 10px; }
+  .msg.user .content { padding: 8px 11px; }
+  .msg .content { font-size: 13px; }
+  .markdown h1 { font-size: 15px; }
+  .markdown h2 { font-size: 14px; }
+  .markdown h3 { font-size: 13.5px; }
+  .md-code-block pre { font-size: 11.5px; }
+
+  /* ---- 输入区 ---- */
+  .chat-input { padding: 8px 10px 6px; gap: 8px; }
+  .chat-input textarea { font-size: 14px; min-height: 40px; }
+  .btn-send { padding: 8px 14px; font-size: 13px; }
+  .btn-stop { padding: 6px 11px; }
+  .composer-bar { padding: 5px 10px 7px; }
+  .cfg-sel { max-width: 100%; width: 100%; }
+
+  /* ---- 提及浮层 ---- */
+  .mention-popup { width: calc(100vw - 24px); left: 12px; }
+
+  /* ---- 计划卡片 ---- */
+  .plan-card { padding: 10px 12px; }
+  .plan-row { flex-wrap: wrap; gap: 6px; }
+  .plan-row .st { width: 58px; }
+  .plan-row .ag { width: 100%; order: 3; }
+  .plan-row .ops { margin-left: auto; }
+
+  /* ---- 通用面板 ---- */
+  .panel { padding: 14px 12px; }
+  .panel-head { flex-wrap: wrap; gap: 8px; }
+  .panel-head h2 { font-size: 15px; }
+  .panel-head .sub { width: 100%; font-size: 12px; }
+  .grid2, .grid3 { grid-template-columns: 1fr; }
+
+  /* ---- 卡片: 标签与操作按钮换行，避免溢出 ---- */
+  .card { padding: 12px; }
+  .card .row1 { flex-wrap: wrap; gap: 6px; }
+  .card .row1 h3 { font-size: 15px; }
+  .card .ops { flex-wrap: wrap; gap: 7px; }
+  .card .ops .btn { font-size: 12px; padding: 6px 10px; }
+  .bind-row, .agent-check { padding: 10px; }
+
+  /* ---- 表格横向滚动 ---- */
+  table.res { min-width: 620px; }
+  .card:has(table.res) { overflow-x: auto; }
+  .md-table { font-size: 12px; }
+  .md-table th, .md-table td { padding: 6px 8px; }
+
+  /* ---- 弹窗 / 抽屉 ---- */
+  .modal { max-width: 96vw; max-height: 92vh; }
+  .modal-head { padding: 12px 14px; }
+  .modal-body { padding: 14px; }
+  .modal-foot { padding: 10px 14px; }
+  .drawer { width: 100vw; max-width: 100vw; }
+  .drawer-head { padding: 0 14px; height: 48px; }
+  .drawer-body { padding: 12px 14px; }
+  #upload-panel { right: 10px; bottom: 78px; width: calc(100vw - 20px); max-width: 100%; }
+  .pre-block { max-height: 60vh; }
+
+  /* ---- Toast ---- */
+  .toast { max-width: 90vw; font-size: 12.5px; }
+}
 </style>
 </head>
 <body>
@@ -589,6 +703,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
   </header>
   <main>
     <div class="view on" id="view-work">
+      <div class="side-backdrop" id="side-backdrop"></div>
       <aside class="task-side">
         <div class="side-head">
           <b>任务会话</b>
@@ -603,6 +718,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
       </aside>
       <section class="chat-main">
         <div class="chat-head" id="chat-head">
+          <button class="side-toggle" id="btn-side-toggle" title="会话列表"><span class="st-hamb">☰</span></button>
           <span class="title" id="chat-title" title="双击重命名">选择或新建任务</span>
           <button class="mini-btn" id="btn-rename-task" style="display:none" title="重命名会话">✏️</button>
           <span class="badge mode" id="chat-mode" style="display:none"></span>
@@ -983,6 +1099,26 @@ function switchView(v) {
   if (v === 'board') renderBoard();
   if (v === 'settings') renderSettings();
 }
+
+// ---------- 移动端侧栏抽屉开关 ----------
+function isMobile() { return window.innerWidth <= 768; }
+function closeSidebar() { $('view-work').classList.remove('side-open'); }
+function openSidebar() { $('view-work').classList.add('side-open'); }
+if ($('btn-side-toggle')) {
+  $('btn-side-toggle').addEventListener('click', (e) => {
+    e.stopPropagation();
+    $('view-work').classList.toggle('side-open');
+  });
+}
+if ($('side-backdrop')) {
+  $('side-backdrop').addEventListener('click', () => closeSidebar());
+}
+// 选中会话后自动收起手机端侧栏
+document.addEventListener('click', (e) => {
+  if (isMobile() && e.target.closest('.task-item')) closeSidebar();
+});
+// 窗口从手机切回桌面时清理抽屉状态
+window.addEventListener('resize', () => { if (!isMobile()) closeSidebar(); });
 
 // ---------- 初始化引导 ----------
 async function boot() {
