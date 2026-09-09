@@ -18,6 +18,19 @@ function defaultSettings(): WorkBuddySettings {
   }
 }
 
+/** 判断两个 DSH 实体引用是否指向同一个目标（用于同实体去重防重复新增） */
+function sameDshRef(a: DshRef | undefined, b: DshRef): boolean {
+  if (!a) return false
+  if (a.kind === 'direct' && b.kind === 'direct') return normalizeUrl(a.apiBaseUrl || '') === normalizeUrl(b.apiBaseUrl || '')
+  if (a.kind === 'mapping' && b.kind === 'mapping') return a.mappingId === b.mappingId
+  if (a.kind === 'app' && b.kind === 'app') return a.appId === b.appId
+  return false
+}
+
+function normalizeUrl(u: string): string {
+  return u.trim().replace(/\/+$/, '').toLowerCase()
+}
+
 export class WorkStore {
   private filePath: string
   private data: StorageData
@@ -86,23 +99,29 @@ export class WorkStore {
     const existing = input.id ? this.data.agents.find((a) => a.id === input.id) : undefined
     const dshRef: DshRef = (input.dshRef as DshRef) || existing?.dshRef || { kind: 'direct', apiBaseUrl: '' }
     const resources: AgentResourceBinding[] = (input.resources as AgentResourceBinding[]) || existing?.resources || []
+    // 防重复兜底：无 id 新建时，若已存在「同名 + 相同 DSH 实体」的智能体，则复用该条目（更新而非新增），
+    // 避免前端重复提交（如双击保存）生成多条同其实体的记录。
+    let target = existing
+    if (!target) {
+      target = this.data.agents.find((a) => a.name === String(input.name) && sameDshRef(a.dshRef, dshRef))
+    }
     const agent: SubAgent = {
-      id: existing?.id || `agent-${Math.random().toString(36).slice(2, 10)}`,
-      name: String(input.name ?? existing?.name ?? '未命名子智能体'),
+      id: target?.id || `agent-${Math.random().toString(36).slice(2, 10)}`,
+      name: String(input.name ?? target?.name ?? '未命名子智能体'),
       dshRef,
-      ...(input.apiKey !== undefined ? { apiKey: input.apiKey } : existing?.apiKey ? { apiKey: existing.apiKey } : {}),
-      agentPreset: input.agentPreset ?? existing?.agentPreset,
-      permission: input.permission ?? existing?.permission,
-      provider: input.provider ?? existing?.provider,
-      model: input.model ?? existing?.model,
-      reasoningEffort: input.reasoningEffort ?? existing?.reasoningEffort,
-      systemPrompt: input.systemPrompt ?? existing?.systemPrompt,
-      workDir: input.workDir !== undefined ? normalizeWorkDir(input.workDir) : existing?.workDir,
+      ...(input.apiKey !== undefined ? { apiKey: input.apiKey } : target?.apiKey ? { apiKey: target.apiKey } : {}),
+      agentPreset: input.agentPreset ?? target?.agentPreset,
+      permission: input.permission ?? target?.permission,
+      provider: input.provider ?? target?.provider,
+      model: input.model ?? target?.model,
+      reasoningEffort: input.reasoningEffort ?? target?.reasoningEffort,
+      systemPrompt: input.systemPrompt ?? target?.systemPrompt,
+      workDir: input.workDir !== undefined ? normalizeWorkDir(input.workDir) : target?.workDir,
       resources,
-      ...(input.tags !== undefined ? { tags: input.tags } : existing?.tags ? { tags: existing.tags } : {}),
-      description: input.description ?? existing?.description,
-      enabled: input.enabled ?? existing?.enabled ?? true,
-      createdAt: existing?.createdAt ?? now,
+      ...(input.tags !== undefined ? { tags: input.tags } : target?.tags ? { tags: target.tags } : {}),
+      description: input.description ?? target?.description,
+      enabled: input.enabled ?? target?.enabled ?? true,
+      createdAt: target?.createdAt ?? now,
       updatedAt: now,
     }
     const idx = this.data.agents.findIndex((a) => a.id === agent.id)

@@ -2551,11 +2551,18 @@ function openAgentDrawer(agent) {
     }
   });
   $('ag-save').addEventListener('click', async () => {
+    const btn = $('ag-save');
+    if (btn.disabled) return; // 防重复保存：保存中忽略后续点击
     const payload = collectAgent(isEdit ? agent : null);
     if (!payload) return;
-    const r = await api('/agents', { method: 'POST', body: JSON.stringify(payload) });
-    if (!r.ok) { toast(r.error || '保存失败', true); return; }
-    closeDrawer(); await loadAgents(); renderAgents(); toast('✓ 子智能体已保存');
+    btn.disabled = true; btn.textContent = '保存中…';
+    try {
+      const r = await api('/agents', { method: 'POST', body: JSON.stringify(payload) });
+      if (!r.ok) { toast(r.error || '保存失败', true); return; }
+      closeDrawer(); await loadAgents(); renderAgents(); toast('✓ 子智能体已保存');
+    } finally {
+      btn.disabled = false; btn.textContent = '保存';
+    }
   });
   wireBindRows();
 }
