@@ -326,6 +326,7 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
 .md-table th:last-child { border-right: none; }
 .md-table td {
   padding: 8px 12px; border-bottom: 1px solid rgba(148,163,184,.1); border-right: 1px solid rgba(148,163,184,.1); color: var(--tx);
+  word-break: break-word; overflow-wrap: anywhere;
 }
 .md-table td:last-child { border-right: none; }
 .md-table tr:last-child td { border-bottom: none; }
@@ -659,11 +660,11 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
   header { padding: 0 10px; gap: 8px; height: 48px; }
   .brand { gap: 7px; }
   .brand .logo { width: 26px; height: 26px; font-size: 13px; }
-  .brand span { font-size: 13.5px; }
+  .brand span { font-size: 12.5px; }
   .brand small { display: none; }
-  nav { overflow-x: auto; max-width: 62vw; scrollbar-width: none; }
+  nav { overflow-x: auto; max-width: 68vw; scrollbar-width: none; }
   nav::-webkit-scrollbar { display: none; }
-  nav button { padding: 5px 8px; font-size: 12px; white-space: nowrap; }
+  nav button { padding: 5px 7px; font-size: 11.5px; white-space: nowrap; }
   .chip { display: none; }
 
   /* ---- 工作台：侧栏变抽屉 ---- */
@@ -707,7 +708,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
   .chat-input textarea { font-size: 14px; min-height: 40px; }
   .btn-send { padding: 8px 14px; font-size: 13px; }
   .btn-stop { padding: 6px 11px; }
-  .composer-bar { padding: 5px 10px 7px; }
+  .composer-bar { padding: 5px 10px calc(7px + env(safe-area-inset-bottom)); }
   .cfg-sel { max-width: 100%; width: 100%; }
 
   /* ---- 提及浮层 ---- */
@@ -738,8 +739,10 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
   /* ---- 表格横向滚动 ---- */
   table.res { min-width: 620px; }
   .card:has(table.res) { overflow-x: auto; }
-  .md-table { font-size: 12px; }
-  .md-table th, .md-table td { padding: 6px 8px; }
+  /* 宽表自适应：单元格单行 + 容器横向滚动，避免窄屏把列压成逐字竖排/文字墙 */
+  .md-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .md-table { width: auto; font-size: 12px; }
+  .md-table th, .md-table td { white-space: nowrap; padding: 6px 9px; }
 
   /* ---- 弹窗 / 抽屉 ---- */
   .modal { max-width: 96vw; max-height: 92vh; }
@@ -801,7 +804,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <div class="chat-empty" id="chat-empty">
             <div style="font-size:36px">⚡</div>
             <div style="font-weight:600;font-size:15px;color:var(--tx)">OneNat WorkBuddy · 智能体协作工作台</div>
-            <div style="font-size:12.5px;max-width:420px;text-align:center;line-height:1.6">点击「＋ 新建任务」直接开启会话。在输入框中键入 @ 可即时指定智能体或注入资源。</div>
+            <div style="font-size:12.5px;max-width:340px;text-align:center;line-height:1.6">点击「＋ 新建任务」开启会话。<br>在输入框键入 @ 可即时指定智能体或注入资源。</div>
           </div>
         </div>
         <div class="chat-input-container">
@@ -816,7 +819,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <div class="chat-input">
             <button class="mini-btn" id="btn-attach" title="上传附件到工作区" style="padding:10px 12px">📎</button>
             <input type="file" id="file-input" multiple style="display:none" />
-            <textarea id="input" placeholder="输入消息…（输入 @ 可指定智能体或绑定资源，Enter 发送）"></textarea>
+            <textarea id="input" placeholder="输入消息…（@ 指定智能体/注入资源，Enter 发送）"></textarea>
             <button class="btn-send" id="btn-send">发送</button>
           </div>
           <div class="composer-bar">
