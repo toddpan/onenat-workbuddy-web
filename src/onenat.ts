@@ -160,6 +160,17 @@ export class OnenatDirectory {
     const app: OnenatApp | undefined = m.app
     const online = Boolean(t.online && parsed)
     const kind = classifyKind(app, String(m.local ?? ''), m.proto === 'http' ? 'http' : 'tcp')
+    const rawAppName = app?.name || m.note || ''
+    // 自动为同名或泛称资源（如 "SSH Server"、"DSH"）打上隧道环境前缀，确保全系统资源名唯一直观
+    let uniqueName = rawAppName
+    if (t.name) {
+      if (!uniqueName) {
+        uniqueName = `${t.name}-${kind.toUpperCase()}`
+      } else if (uniqueName === 'SSH Server' || uniqueName === 'SSH' || uniqueName === 'DSH' || uniqueName === 'HTTP API') {
+        uniqueName = `${t.name}-${uniqueName}`
+      }
+    }
+
     const ep: ResolvedEndpoint = {
       mappingId: m.id,
       appId: app?.id,
@@ -172,7 +183,7 @@ export class OnenatDirectory {
       port: parsed?.port,
       local: String(m.local ?? ''),
       kind,
-      appName: app?.name,
+      appName: uniqueName || rawAppName || `${t.name || 'node'}-${kind}`,
       appType: app?.type,
       appSkills: app?.skills,
       resolvedAt: at,
