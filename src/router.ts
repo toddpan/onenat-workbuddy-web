@@ -303,6 +303,183 @@ export class WorkBuddyRouter {
       this.sendJson(res, 200, { ok: true, data: await this.client.getPresets(target) })
       return true
     }
+    // ---- 技能管理（技能中心，目标节点 = 当前编辑的子智能体） ----
+    // 列出该节点已安装技能
+    const skillsMatch = /^\/api\/agents\/([^/]+)\/skills$/.exec(p)
+    if (skillsMatch && method === 'GET') {
+      const aid = decodeURIComponent(skillsMatch[1])
+      const url = new URL(req.url || '/', 'http://localhost')
+      const agent = this.store.getAgent(aid)
+      if (!agent) {
+        this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
+        return true
+      }
+      const target = await this.resolver.resolve(agent)
+      if (!target.online) {
+        this.sendJson(res, 200, { ok: false, error: target.error, data: { skills: [], bindings: agent.skills || [] } })
+        return true
+      }
+      const r = await this.client.listSkills(target, {
+        root: url.searchParams.get('root') || undefined,
+        cwd: url.searchParams.get('cwd') || agent.workDir || undefined,
+        search: url.searchParams.get('search') || undefined,
+      })
+      if (r.unsupported) {
+        this.sendJson(res, 200, { ok: false, error: r.error, data: { skills: [], bindings: agent.skills || [], unsupported: true } })
+        return true
+      }
+      this.sendJson(res, 200, { ok: true, data: { ...r, bindings: agent.skills || [] } })
+      return true
+    }
+    // 读取绑定技能
+    const bindingsMatch = /^\/api\/agents\/([^/]+)\/skills\/bindings$/.exec(p)
+    if (bindingsMatch && method === 'GET') {
+      const aid = decodeURIComponent(bindingsMatch[1])
+      const agent = this.store.getAgent(aid)
+      if (!agent) {
+        this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
+        return true
+      }
+      this.sendJson(res, 200, { ok: true, data: { bindings: agent.skills || [] } })
+      return true
+    }
+    if (bindingsMatch && method === 'POST') {
+      const aid = decodeURIComponent(bindingsMatch[1])
+      const agent = this.store.getAgent(aid)
+      if (!agent) {
+        this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
+        return true
+      }
+      const body = await this.parseBody(req)
+      const skills = Array.isArray(body?.skills) ? body.skills.map((s: any) => String(s)).filter(Boolean) : []
+      this.store.mutateAgent(aid, (a) => { a.skills = skills })
+      this.sendJson(res, 200, { ok: true, data: { bindings: skills } })
+      return true
+    }
+    // 上传技能压缩包到该节点
+    const uploadMatch = /^\/api\/agents\/([^/]+)\/skills\/upload$/.exec(p)
+    if (uploadMatch && method === 'POST') {
+      const aid = decodeURIComponent(uploadMatch[1])
+      const agent = this.store.getAgent(aid)
+      if (!agent) {
+        this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
+        return true
+      }
+      const target = await this.resolver.resolve(agent)
+      if (!target.online) {
+        this.sendJson(res, 200, { ok: false, error: target.error })
+        return true
+      }
+      const contentType = String(req.headers['content-type'] || '')
+      const raw = await readRawBuffer(req, 100 * 1024 * 1024)
+      if (raw.length === 0) {
+        this.sendJson(res, 400, { ok: false, error: '请求体为空：请以 multipart/form-data 上传技能压缩包' })
+        return true
+      }
+      const parts = parseMultipartParts(raw, contentType)
+      const file = parts.find((p) => p.filename !== undefined && p.data.length > 0)
+      const fields: Record<string, string> = {}
+      for (const p of parts) {
+        if (p.name !== undefined && p.filename === undefined) fields[p.name] = p.data.toString('utf-8')
+      }
+      if (!file) {
+        this.sendJson(res, 400, { ok: false, error: 'multipart 中未找到技能压缩包文件字段' })
+        return true
+      }
+      const r = await this.client.uploadSkill(target, { filename: file.filename || 'skill.zip', data: file.data }, {
+        root: fields.root || undefined,
+        name: fields.name || undefined,
+        cwd: fields.cwd || agent.workDir || undefined,
+      })
+      if (r.unsupported) this.sendJson(res, 200, { ok: false, error: r.error, data: { unsupported: true } })
+      else if (!r.ok) this.sendJson(res, 200, { ok: false, error: r.error })
+      else this.sendJson(res, 200, { ok: true, data: r })
+      return true
+    }
+    // 技能详情/正文（预览 + 下载）
+    const skillPreviewMatch = /^\/api\/agents\/([^/]+)\/skills\/preview$/.exec(p)
+    if (skillPreviewMatch && method === 'GET') {
+      const aid = decodeURIComponent(skillPreviewMatch[1])
+      const agent = this.store.getAgent(aid)
+      if (!agent) {
+        this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
+        return true
+      }
+      const url = new URL(req.url || '/', 'http://localhost')
+      const name = (url.searchParams.get('name') || '').trim()
+      if (!name) {
+        this.sendJson(res, 400, { ok: false, error: '缺少 name 参数' })
+        return true
+      }
+      const target = await this.resolver.resolve(agent)
+      if (!target.online) {
+        this.sendJson(res, 200, { ok: false, error: target.error })
+        return true
+      }
+      const r = await this.client.getSkill(target, name, {
+        root: url.searchParams.get('root') || undefined,
+        cwd: url.searchParams.get('cwd') || agent.workDir || undefined,
+      })
+      if (r.unsupported) this.sendJson(res, 200, { ok: false, error: r.error, data: { unsupported: true } })
+      else if (!r.ok) this.sendJson(res, 200, { ok: false, error: r.error })
+      else this.sendJson(res, 200, { ok: true, data: r.skill })
+      return true
+    }
+    // 删除技能
+    const skillDelMatch = /^\/api\/agents\/([^/]+)\/skills\/([^/]+)$/.exec(p)
+    if (skillDelMatch && method === 'DELETE') {
+      const aid = decodeURIComponent(skillDelMatch[1])
+      const name = decodeURIComponent(skillDelMatch[2])
+      const agent = this.store.getAgent(aid)
+      if (!agent) {
+        this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
+        return true
+      }
+      const url = new URL(req.url || '/', 'http://localhost')
+      const target = await this.resolver.resolve(agent)
+      if (!target.online) {
+        this.sendJson(res, 200, { ok: false, error: target.error })
+        return true
+      }
+      const r = await this.client.deleteSkill(target, name, {
+        root: url.searchParams.get('root') || undefined,
+        cwd: url.searchParams.get('cwd') || agent.workDir || undefined,
+      })
+      if (!r.ok) this.sendJson(res, 200, { ok: false, error: r.error })
+      else this.sendJson(res, 200, { ok: true, data: { name } })
+      return true
+    }
+    // 下载技能 SKILL.md 全文（代理 text/markdown）
+    const skillDlMatch = /^\/api\/agents\/([^/]+)\/skills\/([^/]+)\/download$/.exec(p)
+    if (skillDlMatch && method === 'GET') {
+      const aid = decodeURIComponent(skillDlMatch[1])
+      const name = decodeURIComponent(skillDlMatch[2])
+      const agent = this.store.getAgent(aid)
+      if (!agent) {
+        this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
+        return true
+      }
+      const url = new URL(req.url || '/', 'http://localhost')
+      const target = await this.resolver.resolve(agent)
+      if (!target.online) {
+        this.sendJson(res, 200, { ok: false, error: target.error })
+        return true
+      }
+      const r = await this.client.getSkillBody(target, name, {
+        root: url.searchParams.get('root') || undefined,
+        cwd: url.searchParams.get('cwd') || agent.workDir || undefined,
+      })
+      if (r.unsupported) this.sendJson(res, 200, { ok: false, error: r.error, data: { unsupported: true } })
+      else if (!r.ok) this.sendJson(res, 200, { ok: false, error: r.error })
+      else {
+        res.statusCode = 200
+        res.setHeader('Content-Type', 'text/markdown; charset=utf-8')
+        res.setHeader('Content-Disposition', `attachment; filename="${name}.md"`)
+        res.setHeader('Cache-Control', 'no-store')
+        res.end(r.content)
+      }
+      return true
+    }
     const previewMatch = /^\/api\/agents\/([^/]+)\/prompt-preview$/.exec(p)
     if (previewMatch && method === 'GET') {
       const agent = this.store.getAgent(decodeURIComponent(previewMatch[1]))
@@ -315,7 +492,9 @@ export class WorkBuddyRouter {
       } catch {
         /* 无网时用缓存 */
       }
-      const composed = await this.composer.compose(agent, { resolvedAt: Date.now(), mask: true })
+      const url = new URL(req.url || '/', 'http://localhost')
+      const mask = url.searchParams.get('mask') === '0' ? false : true
+      const composed = await this.composer.compose(agent, { resolvedAt: Date.now(), mask })
       this.sendJson(res, 200, {
         ok: true,
         data: {
@@ -893,4 +1072,46 @@ function safeDecode(v: string): string {
   } catch {
     return t
   }
+}
+
+/** 最小 multipart 解析：提取「文件字段 + 普通字段」两步（技能上传用，含 root/name/cwd） */
+function parseMultipartParts(buffer: Buffer, contentType: string): Array<{ name?: string; filename?: string; data: Buffer; mimeType?: string }> {
+  const m = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType)
+  if (!m) return []
+  const delim = Buffer.from('--' + (m[1] || m[2]).trim())
+  const parts: Array<{ name?: string; filename?: string; data: Buffer; mimeType?: string }> = []
+  let pos = buffer.indexOf(delim)
+  while (pos >= 0) {
+    const start = pos + delim.length
+    if (buffer.slice(start, start + 2).toString('utf-8') === '--') break
+    const headStart = start + 2
+    const headEnd = buffer.indexOf('\r\n\r\n', headStart)
+    if (headEnd < 0) break
+    const headerBlock = buffer.slice(headStart, headEnd).toString('utf-8')
+    const bodyStart = headEnd + 4
+    const next = buffer.indexOf(delim, bodyStart)
+    if (next < 0) break
+    let bodyEnd = next
+    if (buffer.slice(bodyEnd - 2, bodyEnd).toString('utf-8') === '\r\n') bodyEnd -= 2
+    const data = buffer.slice(bodyStart, bodyEnd)
+    let fieldName: string | undefined
+    let filename: string | undefined
+    let mimeType: string | undefined
+    for (const line of headerBlock.split('\r\n')) {
+      const colon = line.indexOf(':')
+      if (colon < 0) continue
+      const key = line.slice(0, colon).trim()
+      const value = line.slice(colon + 1).trim()
+      if (/^content-disposition$/i.test(key)) {
+        fieldName = /(?:^|;\s*)name="([^"]*)"/i.exec(value)?.[1] ?? fieldName
+        const fn = /filename="([^"]*)"/i.exec(value)?.[1] ?? /filename=([^;\r\n]+)/i.exec(value)?.[1]
+        if (fn !== undefined) filename = safeDecode(fn)
+      } else if (/^content-type$/i.test(key)) {
+        mimeType = value
+      }
+    }
+    parts.push({ name: fieldName, filename, data, mimeType })
+    pos = next
+  }
+  return parts
 }

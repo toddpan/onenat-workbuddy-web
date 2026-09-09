@@ -58,6 +58,40 @@ function clean(url: string): string {
   return url.replace(/\/+$/, '')
 }
 
+function toQuery(opts?: { root?: string; cwd?: string }): string {
+  const q: string[] = []
+  if (opts?.root) q.push(`root=${encodeURIComponent(opts.root)}`)
+  if (opts?.cwd) q.push(`cwd=${encodeURIComponent(opts.cwd)}`)
+  return q.length ? '?' + q.join('&') : ''
+}
+
+/** 远端 /skills 列表条目 */
+export interface RemoteSkillEntry {
+  name: string
+  description: string
+  whenToUse?: string
+  modelInvocable: boolean
+  userInvocable: boolean
+  source: string
+  path: string
+  root: string
+  size: number
+}
+
+/** 远端 /skills/:name 详情 */
+export interface RemoteSkillDetail {
+  name: string
+  description: string
+  whenToUse?: string
+  modelInvocable: boolean
+  userInvocable: boolean
+  path: string
+  root: string
+  content: string
+  raw: string
+  size: number
+}
+
 export class DshClient {
   private headers(apiKey?: string): Record<string, string> {
     const h: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json' }
@@ -159,6 +193,142 @@ export class DshClient {
       return { ok: true, res, name: relPath.split('/').pop() }
     } catch (err: any) {
       return { ok: false, error: err?.message || '下载失败' }
+    }
+  }
+
+  // ---------- 技能管理（dsh-web-service /skills） ----------
+
+  /** 技能条目（远端 /skills 列表返回） */
+  public async listSkills(
+    target: DshTarget,
+    opts?: { root?: string; cwd?: string; search?: string },
+  ): Promise<{ ok: boolean; root?: { kind: string; path: string }; skills: Array<RemoteSkillEntry>; count?: number; error?: string; unsupported?: boolean }> {
+    try {
+      const q: string[] = []
+      if (opts?.root) q.push(`root=${encodeURIComponent(opts.root)}`)
+      if (opts?.cwd) q.push(`cwd=${encodeURIComponent(opts.cwd)}`)
+      if (opts?.search) q.push(`search=${encodeURIComponent(opts.search)}`)
+      const url = `${clean(target.baseUrl)}/skills${q.length ? '?' + q.join('&') : ''}`
+      const res = await fetch(url, { headers: this.headers(target.apiKey), signal: AbortSignal.timeout(15_000) })
+      if (res.status === 404 || res.status === 501) return { ok: false, skills: [], unsupported: true, error: '远端 dsh-web-service 未安装 /skills 端点' }
+      const json: any = await res.json().catch(() => ({}))
+      if (!res.ok || !json?.ok) return { ok: false, skills: [], error: json?.error || `HTTP ${res.status}` }
+      return { ok: true, root: json.data?.root, count: json.data?.count, skills: Array.isArray(json.data?.skills) ? json.data.skills : [] }
+    } catch (err: any) {
+      return { ok: false, skills: [], error: err?.message || '获取技能列表失败' }
+    }
+  }
+
+  /** 单技能详情（含正文 content 与全文 raw） */
+  public async getSkill(
+    target: DshTarget,
+    name: string,
+    opts?: { root?: string; cwd?: string },
+  ): Promise<{ ok: boolean; skill?: RemoteSkillDetail; error?: string; unsupported?: boolean }> {
+    const q = toQuery(opts)
+    try {
+      const res = await fetch(`${clean(target.baseUrl)}/skills/${encodeURIComponent(name)}${q}`, {
+        headers: this.headers(target.apiKey),
+        signal: AbortSignal.timeout(15_000),
+      })
+      if (res.status === 404 || res.status === 501) return { ok: false, unsupported: true, error: '远端 dsh-web-service 未安装 /skills 端点' }
+      const json: any = await res.json().catch(() => ({}))
+      if (!res.ok || !json?.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
+      return { ok: true, skill: json.data }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || '获取技能详情失败' }
+    }
+  }
+
+  /** 获取 SKILL.md 全文（预览/下载） */
+  public async getSkillBody(
+    target: DshTarget,
+    name: string,
+    opts?: { root?: string; cwd?: string },
+  ): Promise<{ ok: boolean; content?: string; error?: string; unsupported?: boolean }> {
+    const q = toQuery(opts)
+    try {
+      const res = await fetch(`${clean(target.baseUrl)}/skills/${encodeURIComponent(name)}/body${q}`, {
+        headers: this.headersAuth(target.apiKey),
+        signal: AbortSignal.timeout(20_000),
+      })
+      if (res.status === 404 || res.status === 501) return { ok: false, unsupported: true, error: '远端 dsh-web-service 未安装 /skills 端点' }
+      if (!res.ok) {
+        const json: any = await res.json().catch(() => ({}))
+        return { ok: false, error: json?.error || `HTTP ${res.status}` }
+      }
+      return { ok: true, content: await res.text() }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || '获取技能全文失败' }
+    }
+  }
+
+  /** 上传技能（multipart：file=技能压缩包 .zip/.tgz，字段 root/name） */
+  public async uploadSkill(
+    target: DshTarget,
+    file: { filename: string; data: Buffer },
+    fields?: { root?: string; name?: string; cwd?: string },
+  ): Promise<{ ok: boolean; name?: string; path?: string; error?: string; unsupported?: boolean }> {
+    try {
+      const fd = new FormData()
+      fd.append('file', new Blob([new Uint8Array(file.data)]), file.filename)
+      if (fields?.root) fd.append('root', fields.root)
+      if (fields?.name) fd.append('name', fields.name)
+      if (fields?.cwd) fd.append('cwd', fields.cwd)
+      const res = await fetch(`${clean(target.baseUrl)}/skills`, {
+        method: 'POST',
+        headers: this.headersAuth(target.apiKey),
+        body: fd,
+        signal: AbortSignal.timeout(120_000),
+      })
+      if (res.status === 404 || res.status === 501) return { ok: false, unsupported: true, error: '远端 dsh-web-service 未安装 /skills 端点' }
+      const json: any = await res.json().catch(() => ({}))
+      if (!res.ok || !json?.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
+      return { ok: true, name: json.data?.name, path: json.data?.path }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || '上传技能失败' }
+    }
+  }
+
+  /** 更新技能元数据/正文（JSON） */
+  public async updateSkill(
+    target: DshTarget,
+    name: string,
+    payload: { description?: string; whenToUse?: string; content?: string; modelInvocable?: boolean; userInvocable?: boolean },
+    opts?: { root?: string; cwd?: string },
+  ): Promise<{ ok: boolean; error?: string }> {
+    const q = toQuery(opts)
+    try {
+      const res = await fetch(`${clean(target.baseUrl)}/skills/${encodeURIComponent(name)}${q}`, {
+        method: 'PUT',
+        headers: this.headers(target.apiKey),
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(15_000),
+      })
+      if (res.status === 404 || res.status === 501) return { ok: false, error: '远端 dsh-web-service 未安装 /skills 端点' }
+      const json: any = await res.json().catch(() => ({}))
+      if (!res.ok || !json?.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
+      return { ok: true }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || '更新技能失败' }
+    }
+  }
+
+  /** 删除技能 */
+  public async deleteSkill(target: DshTarget, name: string, opts?: { root?: string; cwd?: string }): Promise<{ ok: boolean; error?: string }> {
+    const q = toQuery(opts)
+    try {
+      const res = await fetch(`${clean(target.baseUrl)}/skills/${encodeURIComponent(name)}${q}`, {
+        method: 'DELETE',
+        headers: this.headers(target.apiKey),
+        signal: AbortSignal.timeout(15_000),
+      })
+      if (res.status === 404 || res.status === 501) return { ok: false, error: '远端 dsh-web-service 未安装 /skills 端点' }
+      const json: any = await res.json().catch(() => ({}))
+      if (!res.ok || !json?.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
+      return { ok: true }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || '删除技能失败' }
     }
   }
 

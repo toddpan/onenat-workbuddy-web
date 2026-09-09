@@ -94,6 +94,14 @@ export class WorkStore {
     return this.data.agents.find((a) => a.id === id)
   }
 
+  public mutateAgent(id: string, fn: (a: SubAgent) => void): void {
+    const agent = this.data.agents.find((a) => a.id === id)
+    if (!agent) return
+    fn(agent)
+    agent.updatedAt = Date.now()
+    this.save()
+  }
+
   public upsertAgent(input: Partial<SubAgent>): SubAgent {
     const now = Date.now()
     const existing = input.id ? this.data.agents.find((a) => a.id === input.id) : undefined
@@ -118,6 +126,7 @@ export class WorkStore {
       systemPrompt: input.systemPrompt ?? target?.systemPrompt,
       workDir: input.workDir !== undefined ? normalizeWorkDir(input.workDir) : target?.workDir,
       resources,
+      skills: input.skills !== undefined ? input.skills : target?.skills,
       ...(input.tags !== undefined ? { tags: input.tags } : target?.tags ? { tags: target.tags } : {}),
       description: input.description ?? target?.description,
       enabled: input.enabled ?? target?.enabled ?? true,
