@@ -299,15 +299,21 @@ export interface SubtaskLogEntry {
 
 export type TaskEvent =
   | { type: 'turn_start'; turn: TaskTurn }
-  | { type: 'turn_delta'; turnId: string; delta: string }
-  | { type: 'turn_reasoning'; turnId: string; delta: string }
-  | { type: 'turn_tool'; turnId: string; tool: TurnToolCall }
+  | { type: 'turn_delta'; turnId: string; delta: string; seq: number }
+  | { type: 'turn_reasoning'; turnId: string; delta: string; seq: number }
+  | { type: 'turn_tool'; turnId: string; tool: TurnToolCall; seq: number }
   | { type: 'turn_end'; turn: TaskTurn }
   | { type: 'plan_update'; plan: TaskPlan }
   | { type: 'subtask_status'; subtask: PlanSubtask }
   | { type: 'log'; subtaskId?: string; level: SubtaskLogEntry['level']; msg: string }
   | { type: 'task_status'; status: TaskStatus }
   | { type: 'task_end'; task: WorkTask }
+
+/** 单个流式内容块（对齐 DSH ui-chat 的 assistant block 序列；按流式到达顺序排列） */
+export type StreamBlock =
+  | { kind: 'reasoning'; text: string }
+  | { kind: 'tool'; tool: TurnToolCall }
+  | { kind: 'text'; text: string }
 
 // ---------- 存储 ----------
 

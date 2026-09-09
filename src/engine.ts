@@ -516,6 +516,8 @@ export class TaskEngine {
 
     // 工具调用过程追踪（对齐 DSH ui-chat turn-process）
     const toolStarts = new Map<string, number>()
+    // 单调递增流式序号：客户端按此顺序交错渲染 reasoning/tool/text 块（对齐 DSH assistant-block 序列）
+    let streamSeq = 0
     const summarize = (v: any, cap: number): string | undefined => {
       if (v === undefined || v === null) return undefined
       let s = typeof v === 'string' ? v : (() => { try { return JSON.stringify(v) } catch { return String(v) } })()
@@ -524,7 +526,7 @@ export class TaskEngine {
       return s.length > cap ? s.slice(0, cap) + '…' : s
     }
     const emitTool = (tool: TurnToolCall) => {
-      this.emit(taskId, { type: 'turn_tool', turnId: turn.id, tool })
+      this.emit(taskId, { type: 'turn_tool', turnId: turn.id, tool, seq: streamSeq++ })
     }
 
     const result = await this.dispatchWithFallback(
@@ -537,10 +539,10 @@ export class TaskEngine {
             const tt = t.turns.find((x) => x.id === turn.id)
             if (tt) tt.text += delta
           })
-          this.emit(taskId, { type: 'turn_delta', turnId: turn.id, delta })
+          this.emit(taskId, { type: 'turn_delta', turnId: turn.id, delta, seq: streamSeq++ })
         },
         onReasoning: (delta) => {
-          this.emit(taskId, { type: 'turn_reasoning', turnId: turn.id, delta })
+          this.emit(taskId, { type: 'turn_reasoning', turnId: turn.id, delta, seq: streamSeq++ })
         },
         onToolCall: (info) => {
           const id = String(info.id || `tool-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`)

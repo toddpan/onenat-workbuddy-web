@@ -336,6 +336,10 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
 }
 
 /* 思考过程组件 */
+.blocks { display: flex; flex-direction: column; gap: 6px; }
+.blk { min-width: 0; }
+.blk-text { margin: 2px 0; }
+.blk-tool .tw-row { margin: 0; }
 .rz {
   margin: 4px 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg2); overflow: hidden;
 }
@@ -1468,36 +1472,81 @@ function refreshChatHead(taskMaybe) {
 
 // ---------- RAF 节流流式更新与 SSE 事件连接 ----------
 let pendingStreamUpdates = false;
-const streamBuffer = { deltas: [], reasonings: [], tools: [] };
+// 流式块缓冲：按 seq 排序后交错渲染（reasoning / tool / text 到达顺序）
+const streamBuffer = { events: [] };
 
 function scheduleStreamFlush() {
   if (pendingStreamUpdates) return;
   pendingStreamUpdates = true;
   requestAnimationFrame(() => {
     pendingStreamUpdates = false;
-    // 刷写正文 delta
-    while (streamBuffer.deltas.length > 0) {
-      const { turnId, delta } = streamBuffer.deltas.shift();
-      const el = state.turnEls[turnId];
-      if (el && el.text) el.text.textContent += delta;
-    }
-    // 刷写思考 reasoning
-    while (streamBuffer.reasonings.length > 0) {
-      const { turnId, delta } = streamBuffer.reasonings.shift();
-      const el = state.turnEls[turnId];
-      if (el && el.rz) {
-        el.rz.style.display = '';
-        el.reasoning.textContent += delta;
-        el.rzSum.textContent = '思考中 · ' + lastLine(el.reasoning.textContent);
+    // 按到达顺序（seq）排序，跨类型交错渲染，避免「所有思考/工具/回答堆一起」
+    streamBuffer.events.sort((a, b) => a.seq - b.seq);
+    const batch = streamBuffer.events.splice(0);
+    for (const ev of batch) {
+      const el = state.turnEls[ev.turnId];
+      if (!el) continue;
+      if (el.kind !== 'stream' && ev.kind !== 'delta') continue;
+      if (ev.kind === 'reasoning') {
+        const blk = ensureLiveBlock(el, 'reasoning', ev.turnId);
+        blk.append(ev.delta || '', true);
+      } else if (ev.kind === 'tool') {
+        upsertLiveTool(el, ev.tool);
+      } else if (ev.kind === 'delta') {
+        const blk = ensureLiveBlock(el, 'text', ev.turnId);
+        blk.append(ev.delta || '');
       }
-    }
-    // 刷写工具调用
-    while (streamBuffer.tools.length > 0) {
-      const { turnId, tool } = streamBuffer.tools.shift();
-      handleToolEvent(turnId, tool);
     }
     smartScrollBottom();
   });
+}
+
+/** 确保流式消息中存在指定类型的块；若最后一块类型不同则新增，实现按到达顺序交错 */
+function ensureLiveBlock(el, kind, turnId) {
+  const blocks = el.blocks.querySelectorAll('.blk');
+  let last = blocks.length ? blocks[blocks.length - 1] : null;
+  // 工具调用按 id 复用；文本/思考连续追加到现有块
+  if (last && last.dataset.kind === kind && kind !== 'tool') {
+    const existing = el.blocks.__blockMap[kind];
+    if (existing) return existing;
+  }
+  const blk = createBlock(kind);
+  el.blocks.appendChild(blk.el);
+  el.blocks.__blockMap = el.blocks.__blockMap || {};
+  el.blocks.__blockMap[kind] = blk;
+  return blk;
+}
+
+function upsertLiveTool(el, tool) {
+  let row = el.blocks.querySelector('.blk-tool[data-tid="' + tool.id + '"]');
+  if (!row) {
+    const blk = createBlock('tool');
+    blk.upsert(tool);
+    el.blocks.appendChild(blk.el);
+    row = blk.el;
+  } else {
+    // 复用现有行更新
+    const tmp = { el: row, kind: 'tool', upsert(t) {
+      row.querySelector('.tw-ic').textContent = t.status === 'running' ? '⏳' : (t.status === 'error' ? '✗' : '✓');
+      row.querySelector('.tw-name').textContent = t.name + (t.args ? ' · ' + t.args.slice(0, 80) : '');
+      row.querySelector('.tw-ms').textContent = t.ms !== undefined ? (t.ms / 1000).toFixed(1) + 's' : '';
+      const parts = [];
+      if (t.args) parts.push('参数: ' + t.args);
+      if (t.result) parts.push('结果: ' + t.result);
+      let d = row.querySelector('.tw-detail');
+      d.textContent = parts.join('\\n') || '（无详情）';
+    } };
+    tmp.upsert(tool);
+  }
+  if (tool.status === 'running') {
+    const line = row.querySelector('.tw-line');
+    if (line) {
+      const d = row.querySelector('.tw-detail');
+      if (d) d.style.display = 'block';
+      const chev = row.querySelector('.tw-chev');
+      if (chev) chev.textContent = '▾';
+    }
+  }
 }
 
 function connectStream(taskId) {
@@ -1515,7 +1564,7 @@ function connectStream(taskId) {
   es.addEventListener('turn_delta', e => {
     try {
       const ev = JSON.parse(e.data);
-      streamBuffer.deltas.push({ turnId: ev.turnId, delta: ev.delta });
+      streamBuffer.events.push({ seq: ev.seq || 0, kind: 'delta', turnId: ev.turnId, delta: ev.delta });
       scheduleStreamFlush();
     } catch {}
   });
@@ -1523,7 +1572,7 @@ function connectStream(taskId) {
   es.addEventListener('turn_reasoning', e => {
     try {
       const ev = JSON.parse(e.data);
-      streamBuffer.reasonings.push({ turnId: ev.turnId, delta: ev.delta });
+      streamBuffer.events.push({ seq: ev.seq || 0, kind: 'reasoning', turnId: ev.turnId, delta: ev.delta });
       scheduleStreamFlush();
     } catch {}
   });
@@ -1531,7 +1580,7 @@ function connectStream(taskId) {
   es.addEventListener('turn_tool', e => {
     try {
       const ev = JSON.parse(e.data);
-      streamBuffer.tools.push({ turnId: ev.turnId, tool: ev.tool });
+      streamBuffer.events.push({ seq: ev.seq || 0, kind: 'tool', turnId: ev.turnId, tool: ev.tool });
       scheduleStreamFlush();
     } catch {}
   });
@@ -1541,19 +1590,7 @@ function connectStream(taskId) {
       const ev = JSON.parse(e.data);
       const el = state.turnEls[ev.turn.id];
       if (el) {
-        el.text.innerHTML = md(withFileLinks(taskId, ev.turn.agentId, ev.turn.text || ''));
-        const c = el.wrap.querySelector('.cursor');
-        if (c) c.remove();
-        if (el.rz && ev.turn.reasoning) {
-          el.rz.style.display = '';
-          el.reasoning.textContent = ev.turn.reasoning;
-          el.rzSum.textContent = '已思考 ' + ev.turn.reasoning.length + ' 字';
-        }
-        if (el.tws && ev.turn.tools && ev.turn.tools.length) {
-          el.tools = ev.turn.tools;
-          ev.turn.tools.forEach(t => upsertToolRow(el.twsBody, t));
-          syncToolsBar(el.tws, el.twsSum, el.tools);
-        }
+        finalizeTurnBlocks(el, ev.turn, taskId);
       }
       smartScrollBottom();
       loadTasksQuiet();
@@ -1622,11 +1659,113 @@ function scrollBottom() {
 }
 
 // ---------- 消息组件构建器 ----------
+
+/**
+ * 渲染单个消息内容块（对齐 DSH ui-chat 的 assistant block 序列）。
+ * 思考、工具调用、正文在消息内按到达顺序交错排列，而非三个堆叠容器。
+ * @returns 块元素 { el, kind, update } — update 用于流式追加内容
+ */
+function createBlock(kind) {
+  if (kind === 'reasoning') {
+    const el = document.createElement('div');
+    el.className = 'blk blk-reasoning rz';
+    el.dataset.kind = 'reasoning';
+    el.innerHTML =
+      '<div class="rz-head"><span class="rz-chev">▸</span>💭 思考过程<span class="rz-sum"></span></div>' +
+      '<div class="rz-body"></div>';
+    const body = el.querySelector('.rz-body');
+    const sum = el.querySelector('.rz-sum');
+    const chev = el.querySelector('.rz-chev');
+    el.querySelector('.rz-head').addEventListener('click', () => {
+      const open = body.style.display !== 'none';
+      body.style.display = open ? 'none' : 'block';
+      chev.textContent = open ? '▸' : '▾';
+    });
+    return {
+      el, kind,
+      /** 流式追加思考文字 */
+      append(delta, running) {
+        body.style.display = '';
+        chev.textContent = '▾';
+        body.textContent += delta;
+        el.querySelector('.rz-head').classList.add('open');
+        sum.textContent = running ? '思考中 · ' + lastLine(body.textContent) : '已思考 ' + body.textContent.length + ' 字';
+      },
+      /** 回填完整思考文本（turn_end） */
+      fill(text) {
+        if (!text) return;
+        body.style.display = '';
+        chev.textContent = '▾';
+        body.textContent = text;
+        sum.textContent = '已思考 ' + text.length + ' 字';
+      },
+      el,
+    };
+  }
+
+  if (kind === 'text') {
+    const el = document.createElement('div');
+    el.className = 'blk blk-text content markdown';
+    el.dataset.kind = 'text';
+    const state = { streamingText: '' };
+    return {
+      el, kind,
+      /** 流式追加纯文本（转义，暂不渲染 markdown） */
+      append(delta) {
+        state.streamingText += delta;
+        el.textContent = '';
+        const cur = document.createElement('span'); cur.className = 'cursor';
+        el.appendChild(document.createTextNode(state.streamingText));
+        el.appendChild(cur);
+        el.contentState = { streaming: true, text: state.streamingText };
+      },
+      /** 完成后渲染 markdown */
+      fill(html) {
+        el.innerHTML = html;
+        delete el.contentState;
+      },
+    };
+  }
+
+  // kind === 'tool'
+  const el = document.createElement('div');
+  el.className = 'blk blk-tool tw-row';
+  el.dataset.kind = 'tool';
+  el.dataset.tid = '';
+  const rowEl = {
+    el, kind,
+    /** 更新单个工具调用行（按 id 复用现有行） */
+    upsert(t) {
+      el.dataset.tid = t.id;
+      let line = el.querySelector('.tw-line');
+      if (!line) {
+        el.innerHTML = '<div class="tw-line"><span class="tw-ic"></span><span class="tw-name"></span><span class="tw-ms"></span><span class="tw-chev">▸</span></div><div class="tw-detail" style="display:none"></div>';
+        line = el.querySelector('.tw-line');
+        line.addEventListener('click', () => {
+          const d = el.querySelector('.tw-detail');
+          const open = d.style.display !== 'none';
+          d.style.display = open ? 'none' : 'block';
+          el.querySelector('.tw-chev').textContent = open ? '▸' : '▾';
+        });
+      }
+      el.querySelector('.tw-ic').textContent = t.status === 'running' ? '⏳' : (t.status === 'error' ? '✗' : '✓');
+      el.querySelector('.tw-name').textContent = t.name + (t.args ? ' · ' + t.args.slice(0, 80) : '');
+      el.querySelector('.tw-ms').textContent = t.ms !== undefined ? (t.ms / 1000).toFixed(1) + 's' : '';
+      const parts = [];
+      if (t.args) parts.push('参数: ' + t.args);
+      if (t.result) parts.push('结果: ' + t.result);
+      el.querySelector('.tw-detail').textContent = parts.join('\\n') || '（无详情）';
+    },
+  };
+  return rowEl;
+}
+
 function buildTurnElement(taskId, turn) {
   const wrap = document.createElement('div');
   const roleClass = turn.role === 'user' ? 'user' : (turn.role === 'system' ? 'system' : 'agent');
   const isOrch = turn.agentName === '🎯 总调度汇总';
   wrap.className = 'msg ' + roleClass + (isOrch ? ' orchestrator' : '');
+  wrap.dataset.turnId = turn.id;
 
   const avatar = turn.role === 'user' ? '你' : (turn.role === 'system' ? '⚠' : (isOrch ? '🎯' : '🤖'));
   const name = turn.role === 'user' ? '你' : (turn.role === 'system' ? '系统' : esc(turn.agentName || '子智能体'));
@@ -1638,51 +1777,35 @@ function buildTurnElement(taskId, turn) {
     '<div class="avatar">' + avatar + '</div>' +
     '<div class="bubble">' +
     '<div class="meta"><b>' + name + '</b>' + modelBadge + '<span>' + fmtTime(turn.at) + '</span></div>' +
-    '<div class="rz" style="display:none"><div class="rz-head"><span class="rz-chev">▸</span>💭 思考过程<span class="rz-sum"></span></div><div class="rz-body"></div></div>' +
-    '<div class="tws" style="display:none"><div class="tws-head"><span class="rz-chev">▸</span>🔧 工具调用<span class="tws-sum"></span></div><div class="tws-body"></div></div>' +
-    '<div class="content markdown"></div>' +
+    '<div class="blocks"></div>' +
     '</div>';
 
-  const textEl = wrap.querySelector('.content');
-  if (turn.streaming) {
-    textEl.textContent = turn.text || '';
-    const cur = document.createElement('span'); cur.className = 'cursor'; textEl.appendChild(cur);
+  const blocks = wrap.querySelector('.blocks');
+
+  // 非流式（历史回放）：按「思考 → 工具调用 → 正文」的稳定顺序渲染
+  if (!turn.streaming) {
+    if (turn.reasoning && turn.role === 'agent') {
+      const rb = createBlock('reasoning'); rb.fill(turn.reasoning); blocks.appendChild(rb.el);
+    }
+    if (turn.tools && turn.tools.length) {
+      for (const t of turn.tools) {
+        const tb = createBlock('tool'); tb.upsert(t); blocks.appendChild(tb.el);
+      }
+    }
+    if (turn.text) {
+      const te = createBlock('text');
+      te.el.innerHTML = turn.role === 'agent' ? md(withFileLinks(taskId, turn.agentId, turn.text || '')) : md(turn.text || '');
+      blocks.appendChild(te.el);
+    }
   } else {
-    textEl.innerHTML = turn.role === 'agent' ? md(withFileLinks(taskId, turn.agentId, turn.text || '')) : md(turn.text || '');
-  }
-
-  const rz = wrap.querySelector('.rz');
-  const rzBody = wrap.querySelector('.rz-body');
-  const rzSum = wrap.querySelector('.rz-sum');
-  const rzChev = wrap.querySelector('.rz-chev');
-  if (turn.reasoning && turn.role === 'agent') {
-    rz.style.display = '';
-    rzBody.textContent = turn.reasoning;
-    rzSum.textContent = '已思考 ' + turn.reasoning.length + ' 字';
-  }
-  rz.querySelector('.rz-head').addEventListener('click', () => {
-    const open = rzBody.style.display !== 'none';
-    rzBody.style.display = open ? 'none' : 'block';
-    rzChev.textContent = open ? '▸' : '▾';
-  });
-
-  const tws = wrap.querySelector('.tws');
-  const twsBody = wrap.querySelector('.tws-body');
-  const twsSum = wrap.querySelector('.tws-sum');
-  tws.querySelector('.tws-head').addEventListener('click', () => {
-    const open = twsBody.style.display !== 'none';
-    twsBody.style.display = open ? 'none' : 'flex';
-    tws.querySelector('.rz-chev').textContent = open ? '▸' : '▾';
-  });
-
-  if (turn.tools && turn.tools.length) {
-    turn.tools.forEach(t => upsertToolRow(twsBody, t));
-    syncToolsBar(tws, twsSum, turn.tools);
+    // 流式：按到达顺序交错追加块（对齐 DSH assistant-block 序列）
+    if (turn.text) {
+      const te = createBlock('text'); te.el.textContent = turn.text || ''; blocks.appendChild(te.el);
+    }
   }
 
   state.turnEls[turn.id] = {
-    wrap, text: textEl, reasoning: rzBody, rz, rzSum, content: textEl, tws, twsBody, twsSum,
-    tools: turn.tools && turn.tools.length ? turn.tools.slice() : undefined
+    wrap, blocks, kind: turn.streaming ? 'stream' : 'settled', text: null, reasoning: null,
   };
 
   return wrap;
@@ -1695,49 +1818,41 @@ function appendLiveTurn(taskId, turn) {
   smartScrollBottom();
 }
 
-function upsertToolRow(twsBody, t) {
-  let row = twsBody.querySelector('.tw-row[data-tid="' + t.id + '"]');
-  if (!row) {
-    row = document.createElement('div');
-    row.className = 'tw-row'; row.dataset.tid = t.id;
-    row.innerHTML = '<div class="tw-line"><span class="tw-ic"></span><span class="tw-name"></span><span class="tw-ms"></span><span class="tw-chev">▸</span></div><div class="tw-detail" style="display:none"></div>';
-    twsBody.appendChild(row);
-    row.querySelector('.tw-line').addEventListener('click', () => {
-      const d = row.querySelector('.tw-detail');
-      const open = d.style.display !== 'none';
-      d.style.display = open ? 'none' : 'block';
-      row.querySelector('.tw-chev').textContent = open ? '▸' : '▾';
-    });
-  }
-  row.querySelector('.tw-ic').textContent = t.status === 'running' ? '⏳' : (t.status === 'failed' ? '✗' : '✓');
-  row.querySelector('.tw-name').textContent = t.name + (t.args ? ' · ' + t.args.slice(0, 80) : '');
-  row.querySelector('.tw-ms').textContent = t.ms !== undefined ? (t.ms / 1000).toFixed(1) + 's' : '';
-  const parts = [];
-  if (t.args) parts.push('参数: ' + t.args);
-  if (t.result) parts.push('结果: ' + t.result);
-  row.querySelector('.tw-detail').textContent = parts.join('\\n') || '（无详情）';
-  return row;
-}
+/** turn_end 收尾：把流式块收敛为最终形式（思考回填、正文渲染 markdown、压缩为稳定顺序） */
+function finalizeTurnBlocks(el, turn, taskId) {
+  el.kind = 'settled';
+  const blocks = el.blocks;
+  // 移除残留光标
+  blocks.querySelectorAll('.cursor').forEach(c => c.remove());
 
-function syncToolsBar(tws, twsSum, tools) {
-  tws.style.display = '';
-  const running = tools.some(t => t.status === 'running');
-  twsSum.textContent = '（' + tools.length + '）' + (running ? ' · 执行中…' : '');
-}
-
-function handleToolEvent(turnId, tool) {
-  const el = state.turnEls[turnId];
-  if (!el || !el.twsBody) return;
-  el.tools = el.tools || [];
-  const i = el.tools.findIndex(t => t.id === tool.id);
-  if (i >= 0) el.tools[i] = tool; else el.tools.push(tool);
-  upsertToolRow(el.twsBody, tool);
-  syncToolsBar(el.tws, el.twsSum, el.tools);
-  if (tool.status === 'running') {
-    el.twsBody.style.display = 'flex';
-    el.tws.querySelector('.rz-chev').textContent = '▾';
+  // 1) 正文：从留在页面上的 text 块取回流式文本，渲染成 markdown
+  let streamText = '';
+  const textBlk = blocks.querySelector('.blk-text');
+  if (textBlk && textBlk.contentState) streamText = textBlk.contentState.text;
+  const fullText = turn.text || streamText;
+  if (textBlk && textBlk.contentState) {
+    textBlk.classList.add('settled');
+    textBlk.innerHTML = turn.role === 'agent' ? md(withFileLinks(taskId, turn.agentId, fullText)) : md(fullText);
+    delete textBlk.contentState;
+  } else if (fullText && !blocks.querySelector('.blk-text')) {
+    const te = createBlock('text');
+    te.el.innerHTML = turn.role === 'agent' ? md(withFileLinks(taskId, turn.agentId, fullText)) : md(fullText);
+    blocks.appendChild(te.el);
   }
-  smartScrollBottom();
+
+  // 2) 思考：若最终有 reasoning 但页面流式未生成块，则补充
+  if (turn.reasoning && !blocks.querySelector('.blk-reasoning')) {
+    const rb = createBlock('reasoning'); rb.fill(turn.reasoning); blocks.appendChild(rb.el);
+  }
+
+  // 3) 工具：确保最终工具列表的每一行都在页面上
+  if (turn.tools && turn.tools.length) {
+    for (const t of turn.tools) {
+      if (!blocks.querySelector('.blk-tool[data-tid="' + t.id + '"]')) {
+        const tb = createBlock('tool'); tb.upsert(t); blocks.appendChild(tb.el);
+      }
+    }
+  }
 }
 
 // ---------- 编排计划卡片 (Plan Card) ----------
