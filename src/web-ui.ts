@@ -2631,12 +2631,16 @@ function renderAgents() {
     const card = document.createElement('div'); card.className = 'card';
     const dshDesc = describeDshRef(a);
     const resDesc = (a.resources || []).map(r => r.alias || r.ref.mappingId || r.ref.appId).join('、') || '无';
+    const skillNames = (a.skills || []).filter(Boolean);
+    const skillDesc = skillNames.length ? skillNames.map(esc).join('、') : '无';
     card.innerHTML = '<div class="row1"><h3>' + esc(a.name) + '</h3>' +
       (a.enabled === false ? '<span class="tag err">停用</span>' : '<span class="tag ok">启用</span>') +
       '<span class="tag">' + esc(a.agentPreset || 'cordis') + '</span>' +
       (a.model ? '<span class="tag">' + esc(a.model) + '</span>' : '') +
-      (a.workDir ? '<span class="tag" title="远端工作目录">📁 ' + esc(a.workDir) + '</span>' : '') + '</div>' +
+      (a.workDir ? '<span class="tag" title="远端工作目录">📁 ' + esc(a.workDir) + '</span>' : '') +
+      (skillNames.length ? '<span class="tag" title="绑定技能（会话自动注入全文）">🎯 ' + skillNames.length + ' 技能</span>' : '') + '</div>' +
       '<div class="desc">DSH 实体: <span class="mono">' + esc(dshDesc) + '</span><br>绑定资源: ' + esc(resDesc) +
+      '<br>绑定技能: <span class="mono">' + (skillNames.length ? skillNames.map(s => '<span class="tag" style="margin:2px 4px 2px 0">🎯 ' + esc(s) + '</span>').join('') : '<span class="sub">无</span>') + '</span>' +
       (a.systemPrompt ? '<br>角色: ' + esc(a.systemPrompt.slice(0, 80)) : '') + '</div>' +
       '<div class="ops"><button class="btn" data-op="edit">编辑</button><button class="btn" data-op="ping">Ping 探活</button><button class="btn" data-op="preview">提示词预览</button><button class="btn" data-op="skills">🎯 技能</button><button class="btn danger" data-op="del">删除</button></div>';
     card.querySelector('[data-op=edit]').addEventListener('click', () => openAgentDrawer(a));
