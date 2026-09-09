@@ -339,6 +339,65 @@ export class WorkBuddyRouter {
       return true
     }
 
+    // ---------- 提及与联想候选数据 (@ Mentions Directory) ----------
+    if (p === '/api/mentions/candidates' && method === 'GET') {
+      const candidates: Array<{
+        type: 'agent' | 'resource'
+        id: string
+        name: string
+        kind?: string
+        detail?: string
+        meta?: any
+      }> = []
+
+      // 1. 子智能体
+      const agents = this.store.getAgents()
+      for (const a of agents) {
+        if (a.enabled !== false) {
+          candidates.push({
+            type: 'agent',
+            id: a.id,
+            name: a.name,
+            kind: 'agent',
+            detail: `${a.dshRef.kind} · ${a.model ? String(a.model).split('/').pop() : '默认模型'}`,
+            meta: { agentId: a.id, description: a.description },
+          })
+        }
+      }
+
+      // 2. ONENAT 映射与应用资源
+      const endpoints = this.directory.listEndpoints()
+      for (const ep of endpoints) {
+        const name = ep.appName || ep.note || `mapping:${ep.mappingId}`
+        candidates.push({
+          type: 'resource',
+          id: ep.mappingId,
+          name,
+          kind: ep.kind || 'unknown',
+          detail: `${(ep.kind || '').toUpperCase()} · ${ep.tunnelName || ''} · ${ep.online ? '在线' : '离线'}`,
+          meta: { mappingId: ep.mappingId, kind: ep.kind, online: ep.online },
+        })
+      }
+
+      // 3. 本地 SSH 资源池
+      const sshs = this.sshStore.list()
+      for (const s of sshs) {
+        if (!candidates.some(c => c.id === s.id || c.name === s.name)) {
+          candidates.push({
+            type: 'resource',
+            id: s.id,
+            name: s.name,
+            kind: 'ssh',
+            detail: `SSH · ${s.username}@${s.host}:${s.port || 22} · ${s.description || '本地直连'}`,
+            meta: { sshId: s.id, kind: 'ssh' },
+          })
+        }
+      }
+
+      this.sendJson(res, 200, { ok: true, data: candidates })
+      return true
+    }
+
     // ---------- 任务会话 ----------
     if (p === '/api/tasks' && method === 'GET') {
       const tasks = this.store.getTasks()

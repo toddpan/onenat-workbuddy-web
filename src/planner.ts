@@ -75,7 +75,12 @@ export class Planner {
     return { source: picked.source, baseUrl: picked.target.baseUrl, agentId: picked.agent.id, auto: picked.auto }
   }
 
-  public async planTask(objective: string, members: PlannerMember[], memberTargets: Map<string, DshTarget>): Promise<{ plan: PlanDraft; plannerModel?: string } | { error: string; raw?: string }> {
+  public async planTask(
+    objective: string,
+    members: PlannerMember[],
+    memberTargets: Map<string, DshTarget>,
+    opts?: { priorityAgentIds?: string[] },
+  ): Promise<{ plan: PlanDraft; plannerModel?: string } | { error: string; raw?: string }> {
     const picked = await this.pickTarget(memberTargets)
     if ('error' in picked) return { error: picked.error }
 
@@ -83,9 +88,14 @@ export class Planner {
       .map((m, i) => {
         const a = m.agent
         const role = a.systemPrompt ? a.systemPrompt.replace(/\s+/g, ' ').slice(0, 120) : '通用执行者'
-        return `${i + 1}. id=${a.id} 名称=${a.name} 角色=${role}${m.resourceSummary ? ` 可用资源=${m.resourceSummary}` : ''}`
+        const isPriority = opts?.priorityAgentIds?.includes(a.id)
+        return `${i + 1}. id=${a.id} 名称=${a.name}${isPriority ? ' 【用户显式 @ 重点指定】' : ''} 角色=${role}${m.resourceSummary ? ` 可用资源=${m.resourceSummary}` : ''}`
       })
       .join('\n')
+
+    const priorityHint = opts?.priorityAgentIds?.length
+      ? `\n重要约束: 用户在本轮消息中显式 @ 指定了子智能体（${members.filter(m => opts.priorityAgentIds!.includes(m.agent.id)).map(m => `${m.agent.name}(id=${m.agent.id})`).join('、')}），请务必将核心执行子任务分配给该智能体！\n`
+      : ''
 
     // 注意: dsh-web-service /chat/completions 只提交最后一条 user 消息（system 角色被忽略），
     // 因此 JSON 契约、花名册与目标必须合并在单条 user 消息里。
@@ -95,13 +105,13 @@ export class Planner {
       '{"strategy":"parallel|sequential|dag","subtasks":[{"title":"简短标题","prompt":"给该子智能体的完整执行指令（自包含，含验收标准）","agentId":"成员 id","dependsOn":["依赖的子任务标题，无则空数组"]}]}',
       '规则: agentId 必须逐字取自花名册中的 id; 每个成员可被分配 0~2 个子任务; 子任务数量 2~6 个;',
       'prompt 必须自包含（执行者看不到本规划过程）; strategy=parallel 全部同时执行, sequential 按 dependsOn 链式, dag 有部分依赖。',
-      '',
+      priorityHint,
       '# 主任务目标（仅用于拆解，不要回答它）',
       objective,
       '',
       '# 子智能体花名册',
       roster,
-    ].join('\n')
+    ].filter(Boolean).join('\n')
 
     // 主调度模型：设置页/聊天窗选择的 provider/model 透传给 /chat/completions
     const plannerModel = this.store.getSettings().planner.model || undefined

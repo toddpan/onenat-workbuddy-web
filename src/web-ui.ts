@@ -285,6 +285,12 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
   color: #38bdf8; border-radius: 4px; padding: 1px 5px; margin: 0 2px;
 }
 
+/* @ 提及高亮胶囊 (Mention Pill) */
+.markdown .mention-tag {
+  display: inline-flex; align-items: center; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4);
+  color: #38bdf8; border-radius: 4px; padding: 0 5px; font-weight: 600; font-size: 12px; margin: 0 2px;
+}
+
 /* 代码块 Banner + 复制（对齐 DSH CodeBlock） */
 .md-code-block {
   margin: 12px 0; border-radius: 10px; background: #070c14; border: 1px solid var(--line); overflow: hidden;
@@ -527,6 +533,37 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .db-row .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .db-row .chev { color: var(--tx3); }
 .db-row.up { color: var(--tx2); }
+
+/* @ 提及自动联想浮层 (Mentions Popup) */
+.chat-input-container { position: relative; }
+.mention-popup {
+  position: absolute; bottom: 100%; left: 16px; width: 340px; max-height: 280px;
+  background: var(--bg2); border: 1px solid var(--line2); border-radius: 10px;
+  box-shadow: 0 8px 30px rgba(0,0,0,.65); z-index: 35; display: none; flex-direction: column;
+  overflow: hidden; margin-bottom: 8px;
+}
+.mention-popup.on { display: flex; }
+.mention-popup-head {
+  padding: 8px 12px; background: var(--bg3); border-bottom: 1px solid var(--line);
+  font-size: 11px; font-weight: 600; color: var(--tx3); display: flex; justify-content: space-between;
+}
+.mention-popup-list { overflow-y: auto; flex: 1; }
+.mention-item {
+  padding: 8px 12px; display: flex; align-items: center; gap: 10px; cursor: pointer;
+  border-bottom: 1px solid rgba(148,163,184,.06); font-size: 13px; transition: background .12s ease;
+}
+.mention-item:last-child { border-bottom: none; }
+.mention-item.active, .mention-item:hover { background: rgba(56,189,248,.12); }
+.mention-item .icon { font-size: 14px; flex: none; }
+.mention-item .info { flex: 1; min-width: 0; }
+.mention-item .name { font-weight: 600; color: var(--tx); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mention-item .desc { font-size: 11px; color: var(--tx3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+.mention-item .tag {
+  font-size: 10px; padding: 1px 5px; border-radius: 4px; font-family: var(--mono); border: 1px solid var(--line);
+}
+.mention-item .tag.agent { color: var(--pri); border-color: rgba(56,189,248,.4); }
+.mention-item .tag.resource { color: var(--warn); border-color: rgba(251,191,36,.4); }
+.mention-empty { padding: 16px; text-align: center; color: var(--tx3); font-size: 12px; }
 .db-row.is-hidden { opacity: .55; }
 .db-empty { padding: 18px; text-align: center; color: var(--tx3); font-size: 12px; line-height: 1.7; }
 .db-note { font-size: 11.5px; color: var(--tx3); margin-top: 6px; min-height: 15px; word-break: break-all; }
@@ -583,10 +620,18 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           </div>
         </div>
         <div class="chat-input-container">
+          <!-- @ 提及自动联想浮层 -->
+          <div class="mention-popup" id="mention-popup">
+            <div class="mention-popup-head">
+              <span>提及智能体或资源 (@)</span>
+              <span>↑↓ 选择 · Enter 插入</span>
+            </div>
+            <div class="mention-popup-list" id="mention-list"></div>
+          </div>
           <div class="chat-input">
             <button class="mini-btn" id="btn-attach" title="上传附件到成员工作区" style="padding:10px 12px">📎</button>
             <input type="file" id="file-input" multiple style="display:none" />
-            <textarea id="input" placeholder="输入消息…（Enter / Ctrl+Enter 发送，📎 可附带文件）"></textarea>
+            <textarea id="input" placeholder="输入消息…（输入 @ 可指定智能体或绑定资源，Enter 发送）"></textarea>
             <button class="btn-send" id="btn-send">发送</button>
           </div>
           <div class="composer-bar">
@@ -665,6 +710,13 @@ const state = {
 
 // Markdown 结果缓存，消除反复正则计算
 const mdCache = new Map();
+
+// @ 提及候选缓存与浮层状态
+let mentionCandidates = [];
+let mentionActiveIdx = 0;
+let mentionMatched = [];
+let mentionQuery = '';
+let mentionCursorStart = 0;
 
 // ---------- 工具函数 ----------
 function $(id) { return document.getElementById(id); }
@@ -767,6 +819,8 @@ function md(text) {
 
 function parseInline(text) {
   let s = esc(text);
+  // @ 智能体与资源高亮（对齐 DSH UI pill）
+  s = s.replace(/@([^\s@,，。!！?？:：;；]+)/g, '<span class="mention-tag">@$1</span>');
   // 行内代码
   s = s.replace(/\`([^\`\\n]+)\`/g, '<code>$1</code>');
   // 粗体
@@ -934,7 +988,9 @@ function switchView(v) {
 
 // ---------- 初始化引导 ----------
 async function boot() {
+  initMentionPopup();
   await Promise.all([loadResources(), loadAgents(), loadTasks(), loadSettings()]);
+  await refreshMentionCandidates();
   renderTaskList();
   setInterval(loadTasksQuiet, 4000);
 }
@@ -1739,6 +1795,147 @@ function appendAttachmentLine(line) {
   const inp = $('input');
   inp.value = (inp.value ? inp.value.replace(/\\n$/, '') + '\\n' : '') + line;
   inp.focus();
+}
+
+// ---------- @ 提及自动联想组件 (Mentions Auto-complete) ----------
+async function refreshMentionCandidates() {
+  const r = await api('/mentions/candidates');
+  if (r.ok && r.data) {
+    mentionCandidates = r.data;
+  } else {
+    // 降级使用本地 state 聚合
+    const list = [];
+    (state.agents || []).forEach(a => {
+      if (a.enabled !== false) {
+        list.push({
+          type: 'agent', id: a.id, name: a.name, kind: 'agent',
+          detail: (a.dshRef && a.dshRef.kind) + ' · ' + (a.model ? String(a.model).split('/').pop() : '默认模型')
+        });
+      }
+    });
+    (state.resources || []).forEach(m => {
+      list.push({
+        type: 'resource', id: m.mappingId || m.id, name: m.appName || m.note || m.id, kind: m.kind || 'unknown',
+        detail: (m.kind || '').toUpperCase() + ' · ' + (m.online ? '在线' : '离线')
+      });
+    });
+    mentionCandidates = list;
+  }
+}
+
+function initMentionPopup() {
+  const input = $('input');
+  const popup = $('mention-popup');
+  const listEl = $('mention-list');
+  if (!input || !popup || !listEl) return;
+
+  function hidePopup() {
+    popup.classList.remove('on');
+    mentionMatched = [];
+  }
+
+  function renderMentionList() {
+    if (!mentionMatched.length) {
+      listEl.innerHTML = '<div class="mention-empty">无匹配的智能体或资源</div>';
+      return;
+    }
+    let html = '';
+    mentionMatched.forEach((item, idx) => {
+      const active = idx === mentionActiveIdx ? ' active' : '';
+      const icon = item.type === 'agent' ? '🤖' : (item.kind === 'ssh' ? '🖥️' : (item.kind === 'http' ? '🌐' : '📦'));
+      const tagClass = item.type === 'agent' ? 'agent' : 'resource';
+      const tagText = item.type === 'agent' ? '智能体' : (item.kind ? item.kind.toUpperCase() : '资源');
+      html += '<div class="mention-item' + active + '" data-idx="' + idx + '">' +
+        '<span class="icon">' + icon + '</span>' +
+        '<div class="info">' +
+          '<div class="name">' + esc(item.name) + '</div>' +
+          (item.detail ? '<div class="desc">' + esc(item.detail) + '</div>' : '') +
+        '</div>' +
+        '<span class="tag ' + tagClass + '">' + esc(tagText) + '</span>' +
+      '</div>';
+    });
+    listEl.innerHTML = html;
+
+    listEl.querySelectorAll('.mention-item').forEach(el => {
+      el.addEventListener('click', () => {
+        const idx = +el.dataset.idx;
+        insertMention(mentionMatched[idx]);
+      });
+    });
+
+    const activeEl = listEl.querySelector('.mention-item.active');
+    if (activeEl && typeof activeEl.scrollIntoView === 'function') activeEl.scrollIntoView({ block: 'nearest' });
+  }
+
+  function insertMention(item) {
+    if (!item) return;
+    const text = input.value;
+    const before = text.slice(0, mentionCursorStart);
+    const after = text.slice(input.selectionEnd);
+    const insertText = '@' + item.name + ' ';
+    input.value = before + insertText + after;
+    const newPos = before.length + insertText.length;
+    input.selectionStart = newPos;
+    input.selectionEnd = newPos;
+    hidePopup();
+    input.focus();
+  }
+
+  input.addEventListener('input', () => {
+    const text = input.value;
+    const pos = input.selectionStart;
+    const textBeforeCursor = text.slice(0, pos);
+
+    // 匹配光标前最近的一个 @ 符号
+    const match = /@([^\s@]*)$/.exec(textBeforeCursor);
+    if (!match) {
+      hidePopup();
+      return;
+    }
+
+    mentionCursorStart = match.index;
+    mentionQuery = match[1].toLowerCase().trim();
+
+    if (!mentionCandidates.length) refreshMentionCandidates();
+
+    mentionMatched = mentionCandidates.filter(c => {
+      if (!mentionQuery) return true;
+      const n = (c.name || '').toLowerCase();
+      const id = (c.id || '').toLowerCase();
+      const d = (c.detail || '').toLowerCase();
+      return n.includes(mentionQuery) || id.includes(mentionQuery) || d.includes(mentionQuery);
+    });
+
+    mentionActiveIdx = 0;
+    renderMentionList();
+    popup.classList.add('on');
+  });
+
+  input.addEventListener('keydown', e => {
+    if (!popup.classList.contains('on') || !mentionMatched.length) return;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      mentionActiveIdx = (mentionActiveIdx + 1) % mentionMatched.length;
+      renderMentionList();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      mentionActiveIdx = (mentionActiveIdx - 1 + mentionMatched.length) % mentionMatched.length;
+      renderMentionList();
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault();
+      e.stopPropagation();
+      insertMention(mentionMatched[mentionActiveIdx]);
+    } else if (e.key === 'Escape') {
+      hidePopup();
+    }
+  });
+
+  document.addEventListener('click', e => {
+    if (!popup.contains(e.target) && e.target !== input) {
+      hidePopup();
+    }
+  });
 }
 
 // ---------- 主调度模型选择 ----------

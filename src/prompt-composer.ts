@@ -16,6 +16,8 @@ export interface ComposeContext {
   resolvedAt: number
   /** 脱敏预览模式（UI 提示词预览用：凭证打码、技能截断更狠） */
   mask?: boolean
+  /** 用户本轮通过 @ 动态提及注入的临时资源列表 */
+  extraResources?: AgentResourceBinding[]
 }
 
 export interface ComposeResult {
@@ -32,7 +34,20 @@ export class PromptComposer {
     const resources: ComposeResult['resources'] = []
     const sections: string[] = []
 
-    for (const binding of agent.resources || []) {
+    // 合并静态资源与动态 @ 注入的资源（按 ref.mappingId/appId 去重）
+    const allBindings: AgentResourceBinding[] = [...(agent.resources || [])]
+    const existingRefKeys = new Set(allBindings.map(b => b.ref.kind === 'mapping' ? b.ref.mappingId : b.ref.appId))
+
+    for (const extra of ctx.extraResources || []) {
+      const k = extra.ref.kind === 'mapping' ? extra.ref.mappingId : extra.ref.appId
+      if (!existingRefKeys.has(k)) {
+        existingRefKeys.add(k)
+        allBindings.push(extra)
+      }
+    }
+
+    for (const binding of allBindings) {
+      const isDynamic = !(agent.resources || []).some(b => (b.ref.kind === 'mapping' ? b.ref.mappingId : b.ref.appId) === (binding.ref.kind === 'mapping' ? binding.ref.mappingId : binding.ref.appId))
       const ep =
         binding.ref.kind === 'mapping'
           ? this.directory.resolveMapping(binding.ref.mappingId)
@@ -51,7 +66,7 @@ export class PromptComposer {
       }
 
       const lines: string[] = []
-      const title = `资源: ${alias} (${ep.kind.toUpperCase()})  [${ep.tunnelName}]`
+      const title = `资源: ${alias} (${ep.kind.toUpperCase()})  [${ep.tunnelName}]` + (isDynamic ? ' 【用户当轮 @ 动态指定】' : '')
       if (ep.kind === 'ssh') {
         const cred = binding.credentialMode === 'inline' ? await this.directory.fetchMappingCredentials(ep.mappingId) : undefined
         const user = cred?.username || 'root'

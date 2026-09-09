@@ -166,6 +166,23 @@ export interface ResolveIssue {
   error: string
 }
 
+// ---------- 动态提及 (@ Mentions) ----------
+
+export interface MentionItem {
+  type: 'agent' | 'resource'
+  id: string
+  name: string
+  kind?: 'ssh' | 'dsh' | 'http' | 'tcp' | 'unknown'
+  detail?: string
+  ref?: { kind: 'mapping' | 'app' | 'direct'; mappingId?: string; appId?: string; apiBaseUrl?: string }
+}
+
+export interface ExtractedMentions {
+  mentionedAgentIds: string[]
+  mentionedResourceBindings: AgentResourceBinding[]
+  cleanText: string
+}
+
 // ---------- 任务会话（多轮） ----------
 
 export type TaskMode = 'chat' | 'orchestrate'

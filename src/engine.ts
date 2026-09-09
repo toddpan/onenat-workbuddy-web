@@ -15,7 +15,7 @@ import { Planner } from './planner.js'
 import type { OnenatDirectory } from './onenat.js'
 import type { WorkStore } from './store.js'
 import type { SubtaskLogEntry } from './types.js'
-import type { PlanSubtask, SubAgent, TaskEvent, TaskTurn, TurnToolCall, WorkTask } from './types.js'
+import type { AgentResourceBinding, ExtractedMentions, PlanSubtask, SubAgent, TaskEvent, TaskTurn, TurnToolCall, WorkTask } from './types.js'
 
 export interface CreateTaskInput {
   title?: string
@@ -38,6 +38,67 @@ export class TaskEngine {
     private composer: PromptComposer,
     private planner: Planner,
   ) {}
+
+  /** 从用户消息中提取 @子智能体 与 @资源 */
+  public extractMentions(text: string): ExtractedMentions {
+    const mentionedAgentIds: string[] = []
+    const mentionedResourceBindings: AgentResourceBinding[] = []
+    const agents = this.store.getAgents()
+    const endpoints = this.directory.listEndpoints()
+
+    const mentionPattern = /@([^\s@,，。!！?？:：;；]+)/g
+    let match: RegExpExecArray | null
+
+    while ((match = mentionPattern.exec(text)) !== null) {
+      const rawTag = match[1].trim()
+      if (!rawTag) continue
+
+      // 1. 匹配子智能体 (name 精确匹配 -> id 匹配 -> 忽略大小写匹配)
+      const matchedAgent = agents.find(
+        (a) => a.name === rawTag || a.id === rawTag || a.name.toLowerCase() === rawTag.toLowerCase(),
+      )
+      if (matchedAgent) {
+        if (!mentionedAgentIds.includes(matchedAgent.id)) {
+          mentionedAgentIds.push(matchedAgent.id)
+        }
+        continue
+      }
+
+      // 2. 匹配 ONENAT 映射或应用资源
+      const matchedEp = endpoints.find(
+        (r) =>
+          r.appName === rawTag ||
+          r.note === rawTag ||
+          r.mappingId === rawTag ||
+          r.appId === rawTag ||
+          (r.appName && r.appName.toLowerCase() === rawTag.toLowerCase()) ||
+          (r.note && r.note.toLowerCase() === rawTag.toLowerCase()),
+      )
+      if (matchedEp) {
+        const binding: AgentResourceBinding = {
+          ref: matchedEp.mappingId
+            ? { kind: 'mapping', mappingId: matchedEp.mappingId }
+            : { kind: 'app', appId: matchedEp.appId! },
+          alias: matchedEp.appName || matchedEp.note || rawTag,
+          credentialMode: matchedEp.kind === 'ssh' ? 'inline' : 'self-fetch',
+          skillMode: 'all',
+          note: `用户本轮在消息中 @${rawTag} 动态指定使用`,
+        }
+        const refKey = binding.ref.kind === 'mapping' ? binding.ref.mappingId : binding.ref.appId
+        if (
+          !mentionedResourceBindings.some((b) => (b.ref.kind === 'mapping' ? b.ref.mappingId : b.ref.appId) === refKey)
+        ) {
+          mentionedResourceBindings.push(binding)
+        }
+      }
+    }
+
+    return {
+      mentionedAgentIds,
+      mentionedResourceBindings,
+      cleanText: text,
+    }
+  }
 
   // ---------- 事件枢纽 ----------
 
@@ -175,7 +236,7 @@ export class TaskEngine {
         })
         return { ok: false, error: '节点解析失败' }
       }
-      await this.runSubtask(task, this.store.getTask(taskId)!.plan!.subtasks.find((s) => s.id === subtaskId)!, agent, target, [], ctrl.signal)
+      await this.runSubtask(task, this.store.getTask(taskId)!.plan!.subtasks.find((s) => s.id === subtaskId)!, agent, target, [], [], ctrl.signal)
       // 重算汇总
       const fresh = this.store.getTask(taskId)!
       const summary = await this.planner.summarize(fresh.turns[0]?.text || fresh.title, fresh.plan?.subtasks || [], new Map())
@@ -205,10 +266,29 @@ export class TaskEngine {
     })
     this.emit(taskId, { type: 'turn_start', turn })
 
+    // 提取 @ 提及的智能体与资源
+    const mentions = this.extractMentions(text.trim())
+
+    // 若提及了当前任务之外的新智能体，自动纳入任务成员
+    if (mentions.mentionedAgentIds.length > 0) {
+      this.store.mutateTask(taskId, (t) => {
+        let changed = false
+        for (const aid of mentions.mentionedAgentIds) {
+          if (!t.memberAgentIds.includes(aid)) {
+            t.memberAgentIds.push(aid)
+            changed = true
+          }
+        }
+        if (changed && t.memberAgentIds.length > 1) {
+          t.mode = 'orchestrate'
+        }
+      })
+    }
+
     const ctrl = new AbortController()
     this.activeJobs.set(taskId, ctrl)
     // 异步执行，立即返回用户轮次（流式经 SSE 推送）
-    void this.processUserMessage(taskId, text.trim(), ctrl.signal)
+    void this.processUserMessage(taskId, text.trim(), mentions, ctrl.signal)
       .catch((err) => {
         this.appendSystemTurn(taskId, `⚠️ 引擎异常: ${err?.message || err}`)
       })
@@ -239,7 +319,7 @@ export class TaskEngine {
     this.taskLog(taskId, level, msg)
   }
 
-  private async processUserMessage(taskId: string, text: string, signal: AbortSignal): Promise<void> {
+  private async processUserMessage(taskId: string, text: string, mentions: ExtractedMentions, signal: AbortSignal): Promise<void> {
     const task = this.store.getTask(taskId)
     if (!task) return
     const { targets, issues } = await this.resolver.resolveMembers(task.memberAgentIds)
@@ -256,9 +336,9 @@ export class TaskEngine {
     }
 
     if (task.mode === 'chat' || targets.size === 1) {
-      await this.runChatTurn(taskId, text, targets, signal)
+      await this.runChatTurn(taskId, text, mentions, targets, signal)
     } else {
-      await this.runOrchestrateTurn(taskId, text, targets, signal)
+      await this.runOrchestrateTurn(taskId, text, mentions, targets, signal)
     }
     const fresh = this.store.getTask(taskId)!
     this.emit(taskId, { type: 'task_end', task: fresh })
@@ -266,9 +346,17 @@ export class TaskEngine {
 
   // ---------- chat 直通 ----------
 
-  private async runChatTurn(taskId: string, text: string, targets: Map<string, DshTarget>, signal: AbortSignal): Promise<void> {
+  private async runChatTurn(
+    taskId: string,
+    text: string,
+    mentions: ExtractedMentions,
+    targets: Map<string, DshTarget>,
+    signal: AbortSignal,
+  ): Promise<void> {
     const task = this.store.getTask(taskId)!
-    const agentId = task.memberAgentIds.find((id) => targets.has(id)) || [...targets.keys()][0]
+    // 若显式 @ 了某个可用智能体，优先使用被 @ 的智能体
+    const preferredId = mentions.mentionedAgentIds.find((id) => targets.has(id))
+    const agentId = preferredId || task.memberAgentIds.find((id) => targets.has(id)) || [...targets.keys()][0]
     const agent = this.store.getAgent(agentId)!
     const target = targets.get(agentId)!
 
@@ -297,14 +385,19 @@ export class TaskEngine {
 
     const blockKey = `${taskId}:${agent.id}`
     let fullPrompt = text
-    if (!this.blockCache.has(blockKey)) {
-      const composed = await this.composer.compose(agent, { resolvedAt: Date.now() })
+    const hasDynamicResources = mentions.mentionedResourceBindings.length > 0
+
+    if (!this.blockCache.has(blockKey) || hasDynamicResources) {
+      const composed = await this.composer.compose(agent, {
+        resolvedAt: Date.now(),
+        extraResources: mentions.mentionedResourceBindings,
+      })
       const block = composed.block
       if (block) {
-        this.blockCache.set(blockKey, block)
+        if (!hasDynamicResources) this.blockCache.set(blockKey, block)
         fullPrompt = `${block}\n\n[当前用户消息]:\n${text}`
       } else {
-        this.blockCache.set(blockKey, ' ')
+        if (!hasDynamicResources) this.blockCache.set(blockKey, ' ')
       }
       for (const w of composed.warnings) this.emit(taskId, { type: 'log', level: 'warn', msg: w })
     } else if (this.blockCache.get(blockKey) !== ' ') {
@@ -394,6 +487,7 @@ export class TaskEngine {
   private async runOrchestrateTurn(
     taskId: string,
     text: string,
+    mentions: ExtractedMentions,
     targets: Map<string, DshTarget>,
     signal: AbortSignal,
   ): Promise<void> {
@@ -413,7 +507,9 @@ export class TaskEngine {
     // 2. LLM 规划（失败兜底静态三段）
     this.emit(taskId, { type: 'log', level: 'info', msg: '正在调用规划器拆解主任务...' })
     let draft: { strategy: 'parallel' | 'sequential' | 'dag'; subtasks: Array<{ title: string; prompt: string; agentId: string; dependsOn: string[] }> }
-    const planned = await this.planner.planTask(text, rosterMembers, targets)
+    const planned = await this.planner.planTask(text, rosterMembers, targets, {
+      priorityAgentIds: mentions.mentionedAgentIds,
+    })
     if ('plan' in planned) {
       draft = planned.plan
       this.taskLog(taskId, 'info', `规划完成（${planned.plan.strategy}，${planned.plan.subtasks.length} 个子任务）`)
@@ -464,8 +560,8 @@ export class TaskEngine {
     })
     this.emit(taskId, { type: 'plan_update', plan: this.store.getTask(taskId)!.plan! })
 
-    // 4. DAG 调度
-    await this.executeDag(taskId, targets, signal)
+    // 4. DAG 调度 (透传动态 mentions 资源)
+    await this.executeDag(taskId, mentions, targets, signal)
 
     // 5. 汇总
     const fresh = this.store.getTask(taskId)!
@@ -514,7 +610,12 @@ export class TaskEngine {
     return visited !== subtasks.length
   }
 
-  private async executeDag(taskId: string, targets: Map<string, DshTarget>, signal: AbortSignal): Promise<void> {
+  private async executeDag(
+    taskId: string,
+    mentions: ExtractedMentions,
+    targets: Map<string, DshTarget>,
+    signal: AbortSignal,
+  ): Promise<void> {
     for (;;) {
       if (signal.aborted) return
       const task = this.store.getTask(taskId)
@@ -533,11 +634,17 @@ export class TaskEngine {
         }
         break
       }
-      await Promise.all(ready.map((sub) => this.launchSubtask(taskId, sub.id, targets, signal)))
+      await Promise.all(ready.map((sub) => this.launchSubtask(taskId, sub.id, mentions, targets, signal)))
     }
   }
 
-  private async launchSubtask(taskId: string, subtaskId: string, targets: Map<string, DshTarget>, signal: AbortSignal): Promise<void> {
+  private async launchSubtask(
+    taskId: string,
+    subtaskId: string,
+    mentions: ExtractedMentions,
+    targets: Map<string, DshTarget>,
+    signal: AbortSignal,
+  ): Promise<void> {
     const task = this.store.getTask(taskId)
     const sub = task?.plan?.subtasks.find((s) => s.id === subtaskId)
     if (!task || !sub) return
@@ -561,7 +668,7 @@ export class TaskEngine {
         upstream.push(`### 上游子任务《${dep.title}》产出摘要\n${dep.result.content.slice(0, 800)}`)
       }
     }
-    await this.runSubtask(task, sub, agent, target, upstream, signal)
+    await this.runSubtask(task, sub, agent, target, upstream, mentions.mentionedResourceBindings, signal)
   }
 
   /** 执行单个子任务（供 DAG 与单项重试共用） */
@@ -571,6 +678,7 @@ export class TaskEngine {
     agent: SubAgent,
     target: DshTarget,
     upstream: string[],
+    extraResources: AgentResourceBinding[],
     signal: AbortSignal,
   ): Promise<void> {
     const taskId = task.id
@@ -601,10 +709,15 @@ export class TaskEngine {
 
     const blockKey = `${taskId}:${agent.id}`
     const parts: string[] = []
-    if (!this.blockCache.has(blockKey)) {
-      const composed = await this.composer.compose(agent, { resolvedAt: Date.now() })
+    const hasDynamicResources = extraResources && extraResources.length > 0
+
+    if (!this.blockCache.has(blockKey) || hasDynamicResources) {
+      const composed = await this.composer.compose(agent, {
+        resolvedAt: Date.now(),
+        extraResources,
+      })
       const block = composed.block
-      this.blockCache.set(blockKey, block || ' ')
+      if (!hasDynamicResources) this.blockCache.set(blockKey, block || ' ')
       if (block) parts.push(block)
       for (const w of composed.warnings) this.emit(taskId, { type: 'log', subtaskId: sub.id, level: 'warn', msg: w })
     } else {
