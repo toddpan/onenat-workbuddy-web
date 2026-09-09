@@ -322,6 +322,28 @@ export class TaskEngine {
   private async processUserMessage(taskId: string, text: string, mentions: ExtractedMentions, signal: AbortSignal): Promise<void> {
     const task = this.store.getTask(taskId)
     if (!task) return
+
+    // 智能调度模式判定：
+    // 1. 如果用户明确 @ 了子智能体，按提及的智能体定向派发（如果多个则编排，单人则直通）；
+    // 2. 如果用户完全没有 @ 任何子智能体（纯提问/咨询/诊断，如“分析为什么连接不上”）：
+    //    由【主智能体（Planner / 本地主调度）】直接进行分析与应答（直通 chat 模式），避免强行将诊断性问题拆解分发给故障节点；
+    // 3. 只有当任务本身是 orchestrate 模式且有多成员、并且用户没有被强制走主智能体时才走编排。
+
+    const hasExplicitAgentMention = mentions.mentionedAgentIds.length > 0
+
+    if (!hasExplicitAgentMention && task.mode === 'orchestrate') {
+      // 未指定智能体时，优先由主智能体进行分析应答
+      const plannerTarget = await this.planner.pickTarget()
+      if (!('error' in plannerTarget) && plannerTarget.agent) {
+        const pAgent = plannerTarget.agent
+        const targetsMap = new Map<string, DshTarget>([[pAgent.id, plannerTarget.target]])
+        await this.runChatTurn(taskId, text, mentions, targetsMap, signal, pAgent.id)
+        const fresh = this.store.getTask(taskId)!
+        this.emit(taskId, { type: 'task_end', task: fresh })
+        return
+      }
+    }
+
     const { targets, issues } = await this.resolver.resolveMembers(task.memberAgentIds)
     for (const issue of issues) {
       this.taskLog(taskId, 'warn', `成员「${issue.name}」不可用: ${issue.error}`)
@@ -335,9 +357,11 @@ export class TaskEngine {
       return
     }
 
-    if (task.mode === 'chat' || targets.size === 1) {
+    if (task.mode === 'chat' || targets.size === 1 || (!hasExplicitAgentMention && targets.size > 1)) {
+      // 单智能体、直通模式或普通对话：走直通对话
       await this.runChatTurn(taskId, text, mentions, targets, signal)
     } else {
+      // 显式多成员协同/明确要求多子智能体协作：走流程编排
       await this.runOrchestrateTurn(taskId, text, mentions, targets, signal)
     }
     const fresh = this.store.getTask(taskId)!
@@ -352,10 +376,11 @@ export class TaskEngine {
     mentions: ExtractedMentions,
     targets: Map<string, DshTarget>,
     signal: AbortSignal,
+    overrideAgentId?: string,
   ): Promise<void> {
     const task = this.store.getTask(taskId)!
-    // 若显式 @ 了某个可用智能体，优先使用被 @ 的智能体
-    const preferredId = mentions.mentionedAgentIds.find((id) => targets.has(id))
+    // 若显式 @ 了某个可用智能体，优先使用被 @ 的智能体；或使用指定的 overrideAgentId
+    const preferredId = overrideAgentId || mentions.mentionedAgentIds.find((id) => targets.has(id))
     const agentId = preferredId || task.memberAgentIds.find((id) => targets.has(id)) || [...targets.keys()][0]
     const agent = this.store.getAgent(agentId)!
     const target = targets.get(agentId)!
