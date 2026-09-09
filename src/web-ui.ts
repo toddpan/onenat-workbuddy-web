@@ -1673,16 +1673,14 @@ function setSending(on) {
 
 // ---------- 发送消息与附件 ----------
 $('btn-send').addEventListener('click', send);
-$('input').addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    send();
-  }
-});
 
 async function send() {
   const text = $('input').value.trim();
-  if (!text || !state.currentTaskId) return;
+  if (!text) return;
+  if (!state.currentTaskId) {
+    toast('请先从左侧选择任务，或点击「＋ 新建任务」', true);
+    return;
+  }
   $('input').value = '';
   setSending(true);
   const r = await api('/tasks/' + state.currentTaskId + '/messages', { method: 'POST', body: JSON.stringify({ message: text }) });
@@ -1912,22 +1910,38 @@ function initMentionPopup() {
   });
 
   input.addEventListener('keydown', e => {
-    if (!popup.classList.contains('on') || !mentionMatched.length) return;
+    const isPopupOpen = popup.classList.contains('on') && mentionMatched.length > 0;
+    if (isPopupOpen) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        mentionActiveIdx = (mentionActiveIdx + 1) % mentionMatched.length;
+        renderMentionList();
+        return;
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        mentionActiveIdx = (mentionActiveIdx - 1 + mentionMatched.length) % mentionMatched.length;
+        renderMentionList();
+        return;
+      } else if (e.key === 'Tab') {
+        e.preventDefault();
+        e.stopPropagation();
+        insertMention(mentionMatched[mentionActiveIdx]);
+        return;
+      } else if (e.key === 'Enter') {
+        // 若弹窗中有多个选项或者用户主动用上下键选了某个非首项，优先插入；否则允许直接回车或按 Tab
+        e.preventDefault();
+        e.stopPropagation();
+        insertMention(mentionMatched[mentionActiveIdx]);
+        return;
+      } else if (e.key === 'Escape') {
+        hidePopup();
+        return;
+      }
+    }
 
-    if (e.key === 'ArrowDown') {
+    if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      mentionActiveIdx = (mentionActiveIdx + 1) % mentionMatched.length;
-      renderMentionList();
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      mentionActiveIdx = (mentionActiveIdx - 1 + mentionMatched.length) % mentionMatched.length;
-      renderMentionList();
-    } else if (e.key === 'Enter' || e.key === 'Tab') {
-      e.preventDefault();
-      e.stopPropagation();
-      insertMention(mentionMatched[mentionActiveIdx]);
-    } else if (e.key === 'Escape') {
-      hidePopup();
+      send();
     }
   });
 
