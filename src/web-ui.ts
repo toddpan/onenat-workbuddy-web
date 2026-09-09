@@ -2214,8 +2214,18 @@ async function send() {
 
 $('btn-stop').addEventListener('click', async () => {
   if (state.currentTaskId) {
-    await api('/tasks/' + state.currentTaskId + '/cancel', { method: 'POST' });
-    toast('已发送停止指令');
+    const btn = $('btn-stop');
+    btn.disabled = true;
+    btn.textContent = '■ 停止中…';
+    const r = await api('/tasks/' + state.currentTaskId + '/cancel', { method: 'POST' });
+    btn.disabled = false;
+    btn.textContent = '■ 停止';
+    if (r.ok) {
+      setSending(false);
+      toast('✓ 任务已成功停止');
+    } else {
+      toast(r.error || '停止指令发送失败', true);
+    }
   }
 });
 

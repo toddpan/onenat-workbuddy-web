@@ -186,7 +186,7 @@ export interface ExtractedMentions {
 // ---------- 任务会话（多轮） ----------
 
 export type TaskMode = 'chat' | 'orchestrate'
-export type TaskStatus = 'draft' | 'running' | 'completed' | 'failed' | 'partial_success' | 'success'
+export type TaskStatus = 'draft' | 'running' | 'completed' | 'failed' | 'partial_success' | 'success' | 'cancelled'
 
 export interface TaskSessionBinding {
   remoteSessionId: string

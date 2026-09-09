@@ -243,8 +243,11 @@ export class TaskEngine {
 
   public async cancelTask(taskId: string, reason = '用户中止'): Promise<void> {
     const ctrl = this.activeJobs.get(taskId)
-    if (!ctrl) return
-    ctrl.abort()
+    if (ctrl) {
+      ctrl.abort()
+      this.activeJobs.delete(taskId)
+    }
+
     // 中止仍在运行的远端子任务会话
     const task = this.store.getTask(taskId)
     if (task) {
@@ -272,6 +275,31 @@ export class TaskEngine {
         if (!binding || !ag) continue
         const tg = await this.resolver.resolve(ag).catch(() => undefined)
         if (tg?.online) await this.client.cancelSession(tg, binding.remoteSessionId).catch(() => {})
+      }
+
+      // 若任务当前状态是 running，置为 cancelled 并通知前端
+      if (task.status === 'running') {
+        this.store.mutateTask(taskId, (t) => {
+          t.status = 'cancelled'
+          // 将最后一个正在流式的 turn 结束
+          for (const turn of t.turns) {
+            if (turn.streaming) {
+              turn.streaming = false
+            }
+            if (turn.tools) {
+              for (const tool of turn.tools) {
+                if (tool.status === 'running') {
+                  tool.status = 'error'
+                  tool.result = reason
+                }
+              }
+            }
+          }
+        })
+        this.appendSystemTurn(taskId, `⏹ 已停止 — ${reason}`)
+        this.emit(taskId, { type: 'task_status', status: 'cancelled' })
+        const fresh = this.store.getTask(taskId)!
+        this.emit(taskId, { type: 'task_end', task: fresh })
       }
     }
   }
@@ -619,6 +647,15 @@ export class TaskEngine {
     })
     const finalTurn = this.store.getTask(taskId)!.turns.find((x) => x.id === turn.id)!
     this.emit(taskId, { type: 'turn_end', turn: finalTurn })
+
+    if (signal.aborted) {
+      this.appendSystemTurn(taskId, `⏹ 已停止 — ${agent.name} 的本轮执行已中止`)
+      this.store.mutateTask(taskId, (t) => {
+        t.status = 'cancelled'
+      })
+      this.emit(taskId, { type: 'task_status', status: 'cancelled' })
+      return
+    }
 
     if (!result.ok && !finalTurn.text) {
       this.appendSystemTurn(taskId, result.error && result.error.includes('中止')

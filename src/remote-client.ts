@@ -237,14 +237,23 @@ export class DshClient {
 
   public async cancelSession(target: DshTarget, sessionId: string): Promise<{ ok: boolean; error?: string }> {
     try {
-      const res = await fetch(`${clean(target.baseUrl)}/sessions/${encodeURIComponent(sessionId)}/cancel`, {
+      // 1. 尝试专用的 /cancel 路由
+      const cancelRes = await fetch(`${clean(target.baseUrl)}/sessions/${encodeURIComponent(sessionId)}/cancel`, {
         method: 'POST',
         headers: this.headers(target.apiKey),
-        signal: AbortSignal.timeout(10_000),
-      })
-      const json: any = await res.json().catch(() => ({}))
-      if (!res.ok || !json?.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
-      return { ok: true }
+        signal: AbortSignal.timeout(6000),
+      }).catch(() => null)
+      if (cancelRes && cancelRes.ok) return { ok: true }
+
+      // 2. 尝试标准 RESTful DELETE /sessions/:id 终止远端会话
+      const delRes = await fetch(`${clean(target.baseUrl)}/sessions/${encodeURIComponent(sessionId)}`, {
+        method: 'DELETE',
+        headers: this.headers(target.apiKey),
+        signal: AbortSignal.timeout(6000),
+      }).catch(() => null)
+      if (delRes && delRes.ok) return { ok: true }
+
+      return { ok: false, error: '远端会话未响应终止请求' }
     } catch (err: any) {
       return { ok: false, error: err?.message || '中止失败' }
     }
