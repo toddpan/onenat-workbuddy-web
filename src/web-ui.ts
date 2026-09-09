@@ -223,8 +223,8 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
 }
 .hist-more-btn:hover { color: var(--pri); border-color: var(--pri); background: var(--pri-light); }
 
-/* 对话消息条目 */
-.msg { margin-bottom: 20px; display: flex; gap: 12px; max-width: 960px; }
+/* ---- 对话消息条目 & DSH Web 级 Markdown 样式体系 ---- */
+.msg { margin-bottom: 22px; display: flex; gap: 12px; max-width: 980px; }
 .msg.user { margin-left: auto; flex-direction: row-reverse; }
 .msg .avatar {
   width: 32px; height: 32px; border-radius: 8px; flex: none; display: flex; align-items: center;
@@ -235,37 +235,95 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
 .msg.agent.orchestrator .avatar { background: linear-gradient(135deg, #f59e0b, #ef4444); }
 .msg.system .avatar { background: #7c2d3a; }
 .msg .bubble { flex: 1; min-width: 0; }
-.msg.agent .bubble, .msg.system .bubble { border-left: 2px solid rgba(99, 140, 255, 0.28); padding-left: 12px; }
+.msg.agent .bubble, .msg.system .bubble { border-left: 2px solid rgba(99, 140, 255, 0.28); padding-left: 14px; }
 .msg .meta {
-  font-size: 11.5px; color: var(--tx3); margin-bottom: 4px; display: flex; gap: 8px; align-items: center;
+  font-size: 11.5px; color: var(--tx3); margin-bottom: 6px; display: flex; gap: 8px; align-items: center;
 }
 .msg.user .meta { justify-content: flex-end; }
 .msg .meta .tag-model {
   background: var(--bg3); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; font-size: 10px; color: var(--tx2);
 }
+
+/* DSH Web 规范 Markdown 内容区 */
 .msg .content {
-  line-height: 1.65; word-break: break-word; font-size: 13.5px;
+  line-height: 1.65; word-break: break-word; font-size: 13.5px; color: var(--tx);
 }
 .msg.user .content {
   background: #1e293b; border: 1px solid var(--line2); border-radius: 12px 2px 12px 12px;
   padding: 10px 14px; display: inline-block; text-align: left;
 }
-.msg.agent .content { color: var(--tx); }
-.msg .content p { margin-bottom: 8px; }
-.msg .content p:last-child { margin-bottom: 0; }
-.msg .content code {
-  background: #0d1526; border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px;
-  font-size: 12px; font-family: var(--mono);
+.msg.user .content p { margin: 0; }
+
+.markdown { overflow-wrap: anywhere; }
+.markdown h1 { font-size: 18px; font-weight: 700; margin: 20px 0 10px; color: var(--tx); border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+.markdown h2 { font-size: 16px; font-weight: 600; margin: 18px 0 8px; color: var(--tx); }
+.markdown h3 { font-size: 14.5px; font-weight: 600; margin: 14px 0 6px; color: var(--tx); }
+.markdown h4 { font-size: 13.5px; font-weight: 600; margin: 12px 0 4px; color: var(--tx); }
+.markdown p { margin: 10px 0; }
+.markdown p:first-child { margin-top: 0; }
+.markdown p:last-child { margin-bottom: 0; }
+.markdown strong { font-weight: 600; color: #fff; }
+.markdown em { font-style: italic; }
+.markdown s { text-decoration: line-through; opacity: .75; }
+.markdown hr { border: none; height: 1px; background: var(--line); margin: 16px 0; }
+.markdown blockquote {
+  border-left: 3px solid var(--pri-d); background: rgba(2,132,199,.06); border-radius: 0 6px 6px 0;
+  padding: 6px 12px; margin: 10px 0; color: var(--tx2); font-size: 13px;
 }
-.msg .content pre {
-  background: #0d1526; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
-  overflow-x: auto; margin: 8px 0;
+.markdown a { color: var(--pri); text-decoration: none; border-bottom: 1px solid transparent; transition: border-color .15s ease; }
+.markdown a:hover { border-color: var(--pri); text-decoration: none; }
+.markdown ul, .markdown ol { margin: 10px 0; padding-left: 20px; }
+.markdown li { margin: 4px 0; }
+.markdown li > p { margin: 4px 0; }
+.markdown input[type="checkbox"] {
+  width: auto; margin-right: 6px; vertical-align: middle; accent-color: var(--pri);
 }
-.msg .content pre code { border: none; background: none; padding: 0; }
-.msg .content a { color: var(--pri); text-decoration: none; }
-.msg .content a:hover { text-decoration: underline; }
-.msg .content ul, .msg .content ol { padding-left: 20px; margin: 6px 0; }
-.msg .content li { margin-bottom: 3px; }
+
+/* 行内代码 */
+.markdown :not(pre) > code {
+  font-family: var(--mono); font-size: 12px; background: #162238; border: 1px solid var(--line);
+  color: #38bdf8; border-radius: 4px; padding: 1px 5px; margin: 0 2px;
+}
+
+/* 代码块 Banner + 复制（对齐 DSH CodeBlock） */
+.md-code-block {
+  margin: 12px 0; border-radius: 10px; background: #070c14; border: 1px solid var(--line); overflow: hidden;
+}
+.md-code-banner {
+  display: flex; align-items: center; justify-content: space-between; padding: 6px 12px;
+  background: #0f172a; border-bottom: 1px solid var(--line); font-size: 11px; color: var(--tx3);
+  font-family: var(--mono); user-select: none;
+}
+.md-code-lang { font-weight: 600; color: var(--tx2); text-transform: uppercase; letter-spacing: .05em; }
+.md-code-copy {
+  background: transparent; border: 1px solid var(--line2); color: var(--tx2); border-radius: 4px;
+  padding: 2px 7px; font-size: 10.5px; cursor: pointer; transition: all .15s ease;
+}
+.md-code-copy:hover { color: var(--pri); border-color: var(--pri); }
+.md-code-copy.copied { color: var(--ok); border-color: var(--ok); }
+.md-code-block pre {
+  margin: 0; padding: 12px 14px; overflow-x: auto; background: transparent; font-family: var(--mono);
+  font-size: 12.5px; line-height: 1.6; color: #e2e8f0;
+}
+.md-code-block pre code { border: none; background: none; padding: 0; margin: 0; color: inherit; font-size: inherit; }
+
+/* GFM 表格（对齐 DSH TableWrapper） */
+.md-table-wrap {
+  max-width: 100%; overflow-x: auto; margin: 12px 0; border: 1px solid var(--line); border-radius: 8px;
+}
+.md-table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; }
+.md-table th {
+  background: #0f172a; padding: 8px 12px; font-weight: 600; color: var(--tx2); font-size: 12px;
+  border-bottom: 1px solid var(--line); border-right: 1px solid var(--line);
+}
+.md-table th:last-child { border-right: none; }
+.md-table td {
+  padding: 8px 12px; border-bottom: 1px solid rgba(148,163,184,.1); border-right: 1px solid rgba(148,163,184,.1); color: var(--tx);
+}
+.md-table td:last-child { border-right: none; }
+.md-table tr:last-child td { border-bottom: none; }
+.md-table tr:nth-child(even) td { background: rgba(255,255,255,.015); }
+.md-table tr:hover td { background: rgba(56,189,248,.05); }
 .cursor {
   display: inline-block; width: 7px; height: 14px; background: var(--pri);
   animation: pulse .8s infinite; vertical-align: text-bottom; margin-left: 2px;
@@ -632,54 +690,205 @@ function fmtDateTime(ts) {
   return d.toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
-/** 高性能轻量 Markdown 渲染器（带 LRU 缓存） */
+/**
+ * DSH Web 对齐的高性能 GFM Markdown 渲染引擎（含代码块复制、GFM 表格、任务列表、LRU 缓存）
+ */
 function md(text) {
   if (!text) return '';
   const cacheKey = text.length < 5000 ? text : (text.slice(0, 500) + '::' + text.length + '::' + text.slice(-500));
   if (mdCache.has(cacheKey)) return mdCache.get(cacheKey);
 
-  let s = esc(text);
-  // 代码块保护
+  let s = String(text);
+
+  // 1. 提取并保护代码块
   const codeBlocks = [];
-  s = s.replace(/\`\`\`([\\s\\S]*?)\`\`\`/g, (m, c) => {
-    codeBlocks.push('<pre><code>' + c.replace(/^\\w*\\n/, '') + '</code></pre>');
-    return '%%CODEBLOCK_' + (codeBlocks.length - 1) + '%%';
+  s = s.replace(/\`\`\`([a-zA-Z0-9_+\\-#]*)[ \\t]*\\n([\\s\\S]*?)(?:\`\`\`|$)/g, (m, lang, code) => {
+    const langClean = (lang || '').trim();
+    const langLabel = langClean || 'TEXT';
+    const escapedCode = esc(code.replace(/\\n$/, ''));
+    const html =
+      '<div class="md-code-block">' +
+      '<div class="md-code-banner">' +
+      '<span class="md-code-lang">' + esc(langLabel) + '</span>' +
+      '<button class="md-code-copy" onclick="copyCode(this)" title="复制内容">复制</button>' +
+      '</div>' +
+      '<pre><code data-lang="' + esc(langClean) + '">' + escapedCode + '</code></pre>' +
+      '</div>';
+    codeBlocks.push(html);
+    return '\\n%%CODEBLOCK_' + (codeBlocks.length - 1) + '%%\\n';
   });
-  // 行内代码
-  s = s.replace(/\`([^\`\\n]+)\`/g, '<code>$1</code>');
-  // 标题
-  s = s.replace(/^#### (.+)$/gm, '<b>$1</b>');
-  s = s.replace(/^### (.+)$/gm, '<b style="font-size:13.5px">$1</b>');
-  s = s.replace(/^## (.+)$/gm, '<b style="font-size:14px">$1</b>');
-  s = s.replace(/^# (.+)$/gm, '<b style="font-size:15px">$1</b>');
-  // 引用
-  s = s.replace(/^&gt; ?(.+)$/gm, '<blockquote style="border-left:3px solid rgba(148,163,184,.35);padding-left:8px;color:var(--tx2);margin:4px 0">$1</blockquote>');
-  // 分隔线
-  s = s.replace(/^(?:-{3,}|\\*{3,})[ \\t]*$/gm, '<hr style="border:none;border-top:1px solid rgba(148,163,184,.2);margin:8px 0">');
-  // 粗体 / 斜体 / 删除线
-  s = s.replace(/\\*\\*([^*\\n]+)\\*\\*/g, '<b>$1</b>');
-  s = s.replace(/(^|[^*\\w])\\*([^*\\n]+)\\*/g, '$1<i>$2</i>');
-  s = s.replace(/~~([^~\\n]+)~~/g, '<s>$1</s>');
-  // 链接
-  s = s.replace(/\\[([^\\]]+)\\]\\((https?:[^)\\s]+)\\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-  // 无序列表
-  s = s.replace(/(?:^|\\n)((?:[ \\t]*[-*•][ \\t]+.+(?:\\n|$))+)/g, (m, block) => {
-    const items = block.trim().split(/\\n/).map(l => l.replace(/^[ \\t]*[-*•][ \\t]+/, ''));
-    return '<ul style="margin:4px 0;padding-left:18px">' + items.map(i => '<li>' + i + '</li>').join('') + '</ul>';
+
+  // 2. 提取并保护 GFM 表格
+  const tables = [];
+  s = s.replace(/(?:^|\\n)((?:\\|[^\\n]+\\|\\n?){2,})/g, (m, tableBlock) => {
+    const lines = tableBlock.trim().split(/\\n/).map(l => l.trim()).filter(Boolean);
+    if (lines.length >= 2 && lines[1].includes('-')) {
+      const parseRow = row => row.replace(/^\\|/, '').replace(/\\|$/, '').split('|').map(c => c.trim());
+      const headers = parseRow(lines[0]);
+      const alignLine = parseRow(lines[1]);
+      const aligns = alignLine.map(a => {
+        if (a.startsWith(':') && a.endsWith(':')) return 'center';
+        if (a.endsWith(':')) return 'right';
+        return 'left';
+      });
+      let tblHtml = '<div class="md-table-wrap"><table class="md-table"><thead><tr>';
+      headers.forEach((h, i) => {
+        const al = aligns[i] ? ' style="text-align:' + aligns[i] + '"' : '';
+        tblHtml += '<th' + al + '>' + parseInline(h) + '</th>';
+      });
+      tblHtml += '</tr></thead><tbody>';
+      for (let r = 2; r < lines.length; r++) {
+        const cells = parseRow(lines[r]);
+        tblHtml += '<tr>';
+        cells.forEach((c, i) => {
+          const al = aligns[i] ? ' style="text-align:' + aligns[i] + '"' : '';
+          tblHtml += '<td' + al + '>' + parseInline(c) + '</td>';
+        });
+        tblHtml += '</tr>';
+      }
+      tblHtml += '</tbody></table></div>';
+      tables.push(tblHtml);
+      return '\\n%%TABLE_' + (tables.length - 1) + '%%\\n';
+    }
+    return m;
   });
-  // 有序列表
-  s = s.replace(/(?:^|\\n)((?:[ \\t]*\\d+[.)][ \\t]+.+(?:\\n|$))+)/g, (m, block) => {
-    const items = block.trim().split(/\\n/).map(l => l.replace(/^[ \\t]*\\d+[.)][ \\t]+/, ''));
-    return '<ol style="margin:4px 0;padding-left:18px">' + items.map(i => '<li>' + i + '</li>').join('') + '</ol>';
-  });
-  // 换行（非块级元素）
-  s = s.replace(/\\n/g, '<br>');
-  // 还原代码块
+
+  // 3. 行内元素与块级解析
+  s = parseBlocks(s);
+
+  // 4. 还原保护块
   s = s.replace(/%%CODEBLOCK_(\\d+)%%/g, (m, idx) => codeBlocks[+idx] || '');
+  s = s.replace(/%%TABLE_(\\d+)%%/g, (m, idx) => tables[+idx] || '');
 
   if (mdCache.size > 800) mdCache.clear();
   mdCache.set(cacheKey, s);
   return s;
+}
+
+function parseInline(text) {
+  let s = esc(text);
+  // 行内代码
+  s = s.replace(/\`([^\`\\n]+)\`/g, '<code>$1</code>');
+  // 粗体
+  s = s.replace(/\\*\\*([^*\\n]+)\\*\\*/g, '<strong>$1</strong>');
+  // 斜体
+  s = s.replace(/(^|[^*\\w])\\*([^*\\n]+)\\*/g, '$1<em>$2</em>');
+  // 删除线
+  s = s.replace(/~~([^~\\n]+)~~/g, '<s>$1</s>');
+  // 链接
+  s = s.replace(/\\[([^\\]]+)\\]\\((https?:[^)\\s]+)\\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  return s;
+}
+
+function parseBlocks(src) {
+  const lines = src.split(/\\n/);
+  const out = [];
+  let inList = null; // 'ul' | 'ol'
+  let inQuote = false;
+
+  const closeList = () => {
+    if (inList) { out.push('</' + inList + '>'); inList = null; }
+  };
+  const closeQuote = () => {
+    if (inQuote) { out.push('</blockquote>'); inQuote = false; }
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      closeList();
+      closeQuote();
+      continue;
+    }
+
+    // 占位符直接穿透
+    if (trimmed.startsWith('%%CODEBLOCK_') || trimmed.startsWith('%%TABLE_')) {
+      closeList(); closeQuote();
+      out.push(trimmed);
+      continue;
+    }
+
+    // 引用 blockquote
+    if (trimmed.startsWith('&gt;') || trimmed.startsWith('>')) {
+      closeList();
+      if (!inQuote) { out.push('<blockquote>'); inQuote = true; }
+      const qText = trimmed.replace(/^(?:&gt;|>)\\s?/, '');
+      out.push('<p>' + parseInline(qText) + '</p>');
+      continue;
+    } else {
+      closeQuote();
+    }
+
+    // 标题
+    if (/^#{1,6}\\s/.test(trimmed)) {
+      closeList();
+      const level = trimmed.match(/^#+/)[0].length;
+      const hText = trimmed.replace(/^#+\\s*/, '');
+      out.push('<h' + level + '>' + parseInline(hText) + '</h' + level + '>');
+      continue;
+    }
+
+    // 分隔线
+    if (/^(?:-{3,}|\\*{3,}|_{3,})$/.test(trimmed)) {
+      closeList();
+      out.push('<hr>');
+      continue;
+    }
+
+    // 任务列表 Task List: - [ ] 或 - [x]
+    const taskMatch = /^[-*]\\s+\\[([ xX])\\]\\s+(.+)$/.exec(trimmed);
+    if (taskMatch) {
+      if (inList !== 'ul') { closeList(); out.push('<ul style="list-style:none;padding-left:4px">'); inList = 'ul'; }
+      const checked = taskMatch[1].toLowerCase() === 'x';
+      out.push('<li><input type="checkbox" ' + (checked ? 'checked' : '') + ' disabled>' + parseInline(taskMatch[2]) + '</li>');
+      continue;
+    }
+
+    // 无序列表
+    const ulMatch = /^[-*•]\\s+(.+)$/.exec(trimmed);
+    if (ulMatch) {
+      if (inList !== 'ul') { closeList(); out.push('<ul>'); inList = 'ul'; }
+      out.push('<li>' + parseInline(ulMatch[1]) + '</li>');
+      continue;
+    }
+
+    // 有序列表
+    const olMatch = /^(\\d+)[.)]\\s+(.+)$/.exec(trimmed);
+    if (olMatch) {
+      if (inList !== 'ol') { closeList(); out.push('<ol>'); inList = 'ol'; }
+      out.push('<li>' + parseInline(olMatch[2]) + '</li>');
+      continue;
+    }
+
+    // 普通段落
+    closeList();
+    out.push('<p>' + parseInline(trimmed) + '</p>');
+  }
+
+  closeList();
+  closeQuote();
+  return out.join('\\n');
+}
+
+/** 代码复制功能（对齐 DSH Web CodeBlock） */
+function copyCode(btn) {
+  const block = btn.closest('.md-code-block');
+  if (!block) return;
+  const code = block.querySelector('code');
+  if (!code) return;
+  const text = code.textContent || '';
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = '✓ 已复制';
+    btn.classList.add('copied');
+    setTimeout(() => {
+      btn.textContent = '复制';
+      btn.classList.remove('copied');
+    }, 2000);
+  }).catch(() => {
+    toast('复制失败', true);
+  });
 }
 
 function statusColor(s) {
@@ -1254,7 +1463,7 @@ function buildTurnElement(taskId, turn) {
     '<div class="meta"><b>' + name + '</b>' + modelBadge + '<span>' + fmtTime(turn.at) + '</span></div>' +
     '<div class="rz" style="display:none"><div class="rz-head"><span class="rz-chev">▸</span>💭 思考过程<span class="rz-sum"></span></div><div class="rz-body"></div></div>' +
     '<div class="tws" style="display:none"><div class="tws-head"><span class="rz-chev">▸</span>🔧 工具调用<span class="tws-sum"></span></div><div class="tws-body"></div></div>' +
-    '<div class="content"></div>' +
+    '<div class="content markdown"></div>' +
     '</div>';
 
   const textEl = wrap.querySelector('.content');
