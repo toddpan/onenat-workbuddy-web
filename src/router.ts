@@ -79,6 +79,7 @@ export class WorkBuddyRouter {
       status: t.status,
       running: this.engine.isRunning(t.id),
       memberAgentIds: t.memberAgentIds,
+      lastRoute: t.lastRoute,
       createdAt: t.createdAt,
       archivedAt: t.archivedAt,
       turnsCount: turns.length,

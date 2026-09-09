@@ -193,6 +193,7 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
 }
 .badge.mode { color: var(--acc); border-color: rgba(129,140,248,.4); background: var(--acc-light); }
 .badge.mode.chat { color: var(--pri); border-color: rgba(56,189,248,.4); background: var(--pri-light); }
+.badge.mode.chat.direct { color: var(--ok); border-color: rgba(74,222,128,.4); background: var(--ok-light); font-weight: 600; }
 .member-chips { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .mchip {
   display: inline-flex; align-items: center; gap: 5px; background: var(--bg3); border: 1px solid var(--line2);
@@ -1474,6 +1475,18 @@ function refreshChatHead(taskMaybe) {
   const modeEl = $('chat-mode');
   modeEl.style.display = '';
   const isOrch = task.mode === 'orchestrate';
+  // lastRoute 记录最近一轮的实际路由（单人为定向直通），优先展示它，避免与多成员 mode 冲突
+  const route = task.lastRoute;
+  if (route && route.kind === 'direct') {
+    modeEl.className = 'badge mode chat direct';
+    modeEl.textContent = '🎯 定向直通 → ' + (route.agentName || route.agentId || '子智能体');
+    return;
+  }
+  if (route && route.kind === 'chat') {
+    modeEl.className = 'badge mode chat';
+    modeEl.textContent = '💬 直通对话';
+    return;
+  }
   modeEl.className = 'badge mode' + (isOrch ? '' : ' chat');
   modeEl.textContent = isOrch ? '⚡ 协同编排' : '💬 直通对话';
 }
@@ -1636,6 +1649,13 @@ function connectStream(taskId) {
   });
 
   es.addEventListener('task_end', e => {
+    try {
+      const ev = JSON.parse(e.data);
+      if (ev.task) {
+        state.taskCache.set(ev.task.id, ev.task);
+        if (ev.task.id === state.currentTaskId) refreshChatHead(ev.task);
+      }
+    } catch {}
     loadTasksQuiet();
     for (const k in state.turnEls) {
       const c = state.turnEls[k].wrap.querySelector('.cursor');

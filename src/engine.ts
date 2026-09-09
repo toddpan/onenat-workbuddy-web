@@ -442,6 +442,11 @@ export class TaskEngine {
     // @ 了恰好一个智能体：定向直通该智能体（即使任务本身是多成员编排任务）
     if (singleExplicitMention && hasExplicitAgentMention) {
       const onlyId = mentions.mentionedAgentIds[0]
+      const onlyAgent = this.store.getAgent(onlyId)
+      // 记录本轮路由：单人 @ → 定向直通
+      this.store.mutateTask(taskId, (t) => {
+        t.lastRoute = { kind: 'direct', agentId: onlyId, agentName: onlyAgent?.name || onlyId }
+      })
       // 只解析被 @ 的那一个智能体
       const single = await this.resolver.resolveMembers([onlyId])
       const singleTarget = single.targets.get(onlyId)
@@ -469,9 +474,16 @@ export class TaskEngine {
 
     if (task.mode === 'chat' || targets.size === 1 || (!hasExplicitAgentMention && targets.size > 1)) {
       // 单智能体、直通模式或普通对话：走直通对话
+      const targetAgentId = [...targets.keys()][0]
+      this.store.mutateTask(taskId, (t) => {
+        t.lastRoute = { kind: 'chat', agentId: targetAgentId, agentName: this.store.getAgent(targetAgentId)?.name || targetAgentId }
+      })
       await this.runChatTurn(taskId, text, mentions, targets, signal)
     } else {
       // ≥2 个智能体被明确 @ 或任务本就设定为多智能体编排：走流程编排
+      this.store.mutateTask(taskId, (t) => {
+        t.lastRoute = { kind: 'orchestrate' }
+      })
       await this.runOrchestrateTurn(taskId, text, mentions, targets, signal)
     }
     const fresh = this.store.getTask(taskId)!

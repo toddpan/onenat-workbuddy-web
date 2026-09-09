@@ -261,6 +261,8 @@ export interface WorkTask {
   mode: TaskMode
   status: TaskStatus
   memberAgentIds: string[]
+  /** 最近一轮的路由模式：明确 @ 单人时为 direct（定向直通），否则为编排/默认 */
+  lastRoute?: { kind: 'direct' | 'orchestrate' | 'chat'; agentId?: string; agentName?: string }
   turns: TaskTurn[]
   /** 任务级引擎日志（规划器结果/成员问题/会话创建等，持久化） */
   taskLogs?: SubtaskLogEntry[]
