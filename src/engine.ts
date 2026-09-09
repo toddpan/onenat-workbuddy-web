@@ -39,57 +39,124 @@ export class TaskEngine {
     private planner: Planner,
   ) {}
 
-  /** 从用户消息中提取 @子智能体 与 @资源 */
+  /** 从用户消息中提取 @子智能体 与 @资源（支持包含空格名称的最长前缀匹配与同名多实体解析） */
   public extractMentions(text: string): ExtractedMentions {
     const mentionedAgentIds: string[] = []
     const mentionedResourceBindings: AgentResourceBinding[] = []
     const agents = this.store.getAgents()
     const endpoints = this.directory.listEndpoints()
 
-    const mentionPattern = /@([^\s@,，。!！?？:：;；]+)/g
-    let match: RegExpExecArray | null
+    // 1. 构建候选字典（按名称长度降序排列，优先匹配最长包含空格的完整实体名，如 "SSH Server"）
+    interface DictEntry {
+      type: 'agent' | 'resource'
+      name: string
+      data: any
+    }
+    const dict: DictEntry[] = []
 
-    while ((match = mentionPattern.exec(text)) !== null) {
-      const rawTag = match[1].trim()
-      if (!rawTag) continue
+    for (const a of agents) {
+      if (a.name) dict.push({ type: 'agent', name: a.name, data: a })
+      if (a.id) dict.push({ type: 'agent', name: a.id, data: a })
+    }
 
-      // 1. 匹配子智能体 (name 精确匹配 -> id 匹配 -> 忽略大小写匹配)
-      const matchedAgent = agents.find(
-        (a) => a.name === rawTag || a.id === rawTag || a.name.toLowerCase() === rawTag.toLowerCase(),
-      )
-      if (matchedAgent) {
-        if (!mentionedAgentIds.includes(matchedAgent.id)) {
-          mentionedAgentIds.push(matchedAgent.id)
-        }
-        continue
-      }
+    for (const ep of endpoints) {
+      if (ep.appName) dict.push({ type: 'resource', name: ep.appName, data: ep })
+      if (ep.note && ep.note !== ep.appName) dict.push({ type: 'resource', name: ep.note, data: ep })
+      if (ep.mappingId) dict.push({ type: 'resource', name: ep.mappingId, data: ep })
+    }
 
-      // 2. 匹配 ONENAT 映射或应用资源
-      const matchedEp = endpoints.find(
-        (r) =>
-          r.appName === rawTag ||
-          r.note === rawTag ||
-          r.mappingId === rawTag ||
-          r.appId === rawTag ||
-          (r.appName && r.appName.toLowerCase() === rawTag.toLowerCase()) ||
-          (r.note && r.note.toLowerCase() === rawTag.toLowerCase()),
-      )
-      if (matchedEp) {
-        const binding: AgentResourceBinding = {
-          ref: matchedEp.mappingId
-            ? { kind: 'mapping', mappingId: matchedEp.mappingId }
-            : { kind: 'app', appId: matchedEp.appId! },
-          alias: matchedEp.appName || matchedEp.note || rawTag,
-          credentialMode: matchedEp.kind === 'ssh' ? 'inline' : 'self-fetch',
-          skillMode: 'all',
-          note: `用户本轮在消息中 @${rawTag} 动态指定使用`,
+    dict.sort((a, b) => b.name.length - a.name.length)
+
+    // 2. 扫描文本中所有的 '@' 索引位置
+    let i = 0
+    while (i < text.length) {
+      if (text[i] === '@') {
+        const rest = text.slice(i + 1)
+        let matched = false
+
+        // 优先在词典中查找最长前缀匹配（支持名称中含有空格、短横线、中文等）
+        for (const entry of dict) {
+          if (rest.startsWith(entry.name)) {
+            matched = true
+            i += 1 + entry.name.length // 跳过当前 @ 和名称
+
+            if (entry.type === 'agent') {
+              const a = entry.data
+              if (!mentionedAgentIds.includes(a.id)) {
+                mentionedAgentIds.push(a.id)
+              }
+            } else if (entry.type === 'resource') {
+              const ep = entry.data
+              const refKey = ep.mappingId || ep.appId
+              // 若有多个同名但不同 mappingId 的资源，查找未注入的同名映射
+              const allSameNameEps = endpoints.filter((r) => r.appName === entry.name || r.note === entry.name)
+              const unusedEp = allSameNameEps.find(
+                (r) =>
+                  !mentionedResourceBindings.some(
+                    (b) => (b.ref.kind === 'mapping' ? b.ref.mappingId : b.ref.appId) === (r.mappingId || r.appId),
+                  ),
+              ) || ep
+
+              const targetMappingId = unusedEp.mappingId
+              const binding: AgentResourceBinding = {
+                ref: targetMappingId
+                  ? { kind: 'mapping', mappingId: targetMappingId }
+                  : { kind: 'app', appId: unusedEp.appId! },
+                alias: unusedEp.appName || unusedEp.note || entry.name,
+                credentialMode: unusedEp.kind === 'ssh' ? 'inline' : 'self-fetch',
+                skillMode: 'all',
+                note: `用户当轮 @${entry.name} 动态指定使用`,
+              }
+              const bKey = binding.ref.kind === 'mapping' ? binding.ref.mappingId : binding.ref.appId
+              if (!mentionedResourceBindings.some((b) => (b.ref.kind === 'mapping' ? b.ref.mappingId : b.ref.appId) === bKey)) {
+                mentionedResourceBindings.push(binding)
+              }
+            }
+            break
+          }
         }
-        const refKey = binding.ref.kind === 'mapping' ? binding.ref.mappingId : binding.ref.appId
-        if (
-          !mentionedResourceBindings.some((b) => (b.ref.kind === 'mapping' ? b.ref.mappingId : b.ref.appId) === refKey)
-        ) {
-          mentionedResourceBindings.push(binding)
+
+        if (!matched) {
+          // 兜底：若未在已知字典精确匹配，尝试提取紧随的连续非标点单词
+          const fallbackMatch = /^([^\s@,，。!！?？:：;；]+)/.exec(rest)
+          if (fallbackMatch) {
+            const rawTag = fallbackMatch[1].trim()
+            i += 1 + fallbackMatch[1].length
+
+            const matchedAgent = agents.find(
+              (a) => a.name.toLowerCase() === rawTag.toLowerCase() || a.id.toLowerCase() === rawTag.toLowerCase(),
+            )
+            if (matchedAgent && !mentionedAgentIds.includes(matchedAgent.id)) {
+              mentionedAgentIds.push(matchedAgent.id)
+            } else {
+              const matchedEp = endpoints.find(
+                (r) =>
+                  (r.appName && r.appName.toLowerCase() === rawTag.toLowerCase()) ||
+                  (r.note && r.note.toLowerCase() === rawTag.toLowerCase()) ||
+                  r.mappingId === rawTag,
+              )
+              if (matchedEp) {
+                const binding: AgentResourceBinding = {
+                  ref: matchedEp.mappingId
+                    ? { kind: 'mapping', mappingId: matchedEp.mappingId }
+                    : { kind: 'app', appId: matchedEp.appId! },
+                  alias: matchedEp.appName || matchedEp.note || rawTag,
+                  credentialMode: matchedEp.kind === 'ssh' ? 'inline' : 'self-fetch',
+                  skillMode: 'all',
+                  note: `用户当轮 @${rawTag} 动态指定使用`,
+                }
+                const bKey = binding.ref.kind === 'mapping' ? binding.ref.mappingId : binding.ref.appId
+                if (!mentionedResourceBindings.some((b) => (b.ref.kind === 'mapping' ? b.ref.mappingId : b.ref.appId) === bKey)) {
+                  mentionedResourceBindings.push(binding)
+                }
+              }
+            }
+          } else {
+            i++
+          }
         }
+      } else {
+        i++
       }
     }
 
