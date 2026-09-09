@@ -359,6 +359,19 @@ export class TaskEngine {
 
     const ctrl = new AbortController()
     this.activeJobs.set(taskId, ctrl)
+
+    // 若是第一轮用户消息且任务还是默认标题，异步自动提炼生成更精准的会话标题
+    if (task.turns.filter((t) => t.role === 'user').length === 1 && (task.title.startsWith('新任务') || task.title.startsWith('未命名任务') || task.title.length <= 6)) {
+      void this.planner.generateTitle(text.trim()).then((autoTitle) => {
+        if (autoTitle && autoTitle !== task.title) {
+          this.store.mutateTask(taskId, (t) => {
+            t.title = autoTitle
+          })
+          this.emit(taskId, { type: 'task_status', status: this.store.getTask(taskId)?.status || 'running' })
+        }
+      }).catch(() => {})
+    }
+
     // 异步执行，立即返回用户轮次（流式经 SSE 推送）
     void this.processUserMessage(taskId, text.trim(), mentions, ctrl.signal)
       .catch((err) => {

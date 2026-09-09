@@ -608,15 +608,14 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <span class="badge mode" id="chat-mode" style="display:none"></span>
           <span class="hspacer"></span>
           <button class="btn-stop" id="btn-stop">■ 停止</button>
-          <button class="mini-btn" id="btn-add-member" style="display:none">＋ 成员</button>
           <button class="mini-btn" id="btn-arch-task" style="display:none" title="归档会话">🗄️ 归档</button>
           <button class="mini-btn danger" id="btn-del-task" style="display:none">删除</button>
         </div>
         <div class="chat-scroll" id="chat-scroll">
           <div class="chat-empty" id="chat-empty">
             <div style="font-size:36px">⚡</div>
-            <div style="font-weight:600;font-size:15px;color:var(--tx)">OneNat WorkBuddy · 多智能体协作工作台</div>
-            <div style="font-size:12.5px;max-width:420px;text-align:center;line-height:1.6">从左侧选择任务，或新建一个任务会话。子智能体绑定 ONENAT 上的 DSH 算力节点，支持多机直通与协同编排。</div>
+            <div style="font-weight:600;font-size:15px;color:var(--tx)">OneNat WorkBuddy · 智能体协作工作台</div>
+            <div style="font-size:12.5px;max-width:420px;text-align:center;line-height:1.6">点击「＋ 新建任务」直接开启会话。在输入框中键入 @ 可即时指定智能体或注入资源。</div>
           </div>
         </div>
         <div class="chat-input-container">
@@ -629,13 +628,12 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
             <div class="mention-popup-list" id="mention-list"></div>
           </div>
           <div class="chat-input">
-            <button class="mini-btn" id="btn-attach" title="上传附件到成员工作区" style="padding:10px 12px">📎</button>
+            <button class="mini-btn" id="btn-attach" title="上传附件到工作区" style="padding:10px 12px">📎</button>
             <input type="file" id="file-input" multiple style="display:none" />
             <textarea id="input" placeholder="输入消息…（输入 @ 可指定智能体或绑定资源，Enter 发送）"></textarea>
             <button class="btn-send" id="btn-send">发送</button>
           </div>
           <div class="composer-bar">
-            <span class="member-chips" id="member-chips"></span>
             <span class="hspacer"></span>
             <select class="cfg-sel" id="chat-model" title="主调度模型（主任务拆解用，不影响成员子智能体）" style="display:none">
               <option value="">主调度默认模型</option>
@@ -1330,26 +1328,6 @@ function refreshChatHead(taskMaybe) {
   const isOrch = task.mode === 'orchestrate';
   modeEl.className = 'badge mode' + (isOrch ? '' : ' chat');
   modeEl.textContent = isOrch ? '⚡ 协同编排' : '💬 直通对话';
-
-  const chips = $('member-chips');
-  chips.innerHTML = '';
-  for (const id of task.memberAgentIds || []) {
-    const a = state.agents.find(x => x.id === id);
-    const chip = document.createElement('span');
-    chip.className = 'mchip';
-    chip.innerHTML = '<span class="dot"></span>' + esc(a ? a.name : id) + (a && a.model ? ' · <span style="opacity:.8">' + esc(String(a.model).split('/').pop()) + '</span>' : '') + ' <span class="x" data-id="' + esc(id) + '" title="移除成员">✕</span>';
-    chip.querySelector('.x').addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const rest = task.memberAgentIds.filter(x => x !== id);
-      if (!rest.length) { toast('至少保留一个成员', true); return; }
-      await api('/tasks/' + task.id, { method: 'PATCH', body: JSON.stringify({ memberAgentIds: rest }) });
-      toast('成员已移除');
-      state.taskCache.delete(task.id);
-      loadTasks();
-      openTask(task.id);
-    });
-    chips.appendChild(chip);
-  }
 }
 
 // ---------- RAF 节流流式更新与 SSE 事件连接 ----------
@@ -2034,70 +2012,27 @@ $('btn-arch-task').addEventListener('click', async () => {
   } else toast(r.error || '归档失败', true);
 });
 
-// ---------- 新建任务弹窗 ----------
-$('btn-new-task').addEventListener('click', openNewTaskModal);
-function openNewTaskModal() {
-  if (!state.agents.length) {
-    toast('还没有子智能体，请先到「子智能体」页创建', true);
-    switchView('agents');
+// ---------- 一键新建任务（免弹窗，自动生成会话并即刻开聊，参考 DSH 体验） ----------
+$('btn-new-task').addEventListener('click', createNewTaskDirectly);
+async function createNewTaskDirectly() {
+  const allIds = state.agents.map(a => a.id);
+  const r = await api('/tasks', {
+    method: 'POST',
+    body: JSON.stringify({
+      title: '新任务',
+      memberAgentIds: allIds,
+    })
+  });
+  if (!r.ok) {
+    toast(r.error || '创建会话失败', true);
     return;
   }
-  const body = state.agents.map(a => {
-    const dshEp = a.dshRef && a.dshRef.kind === 'mapping' ? state.resources.find(x => x.mappingId === a.dshRef.mappingId) : null;
-    return '<label class="agent-check" data-id="' + esc(a.id) + '"><input type="checkbox" ' + (a.enabled === false ? 'disabled' : '') + '>' +
-      '<span><span class="n">' + esc(a.name) + '</span><div class="d">' + esc(a.model || a.agentPreset || '默认配置') + (dshEp ? ' · ' + esc(dshEp.baseUrl || '离线') : '') + '</div></span></label>';
-  }).join('');
-  $('modal-title').textContent = '⚡ 新建任务会话';
-  $('modal-body').innerHTML =
-    '<div class="field"><label>任务标题（可选）</label><input id="nt-title" placeholder="如：排查 136 环境 5xx 飙升"></div>' +
-    '<div class="field"><label>选择子智能体成员（1 个 = 直通对话；多个 = 协同编排）</label>' + body + '</div>' +
-    '<div class="field"><label>首条消息（可选，填写后立即发起）</label><textarea id="nt-msg" placeholder="描述任务目标…"></textarea></div>';
-  $('modal-body').querySelectorAll('.agent-check').forEach(el => {
-    el.addEventListener('click', e => {
-      if (e.target.tagName !== 'INPUT') {
-        const cb = el.querySelector('input');
-        if (!cb.disabled) cb.checked = !cb.checked;
-      }
-      el.classList.toggle('on', el.querySelector('input').checked);
-    });
-  });
-  $('modal-foot').innerHTML = '<button class="btn" onclick="closeModal()">取消</button><button class="btn pri" id="nt-go">创建并打开</button>';
-  $('modal-mask').classList.add('on');
-  $('nt-go').addEventListener('click', async () => {
-    const ids = Array.from($('modal-body').querySelectorAll('.agent-check input:checked')).map(x => x.closest('.agent-check').dataset.id);
-    if (!ids.length) { toast('至少选择一个子智能体', true); return; }
-    const r = await api('/tasks', { method: 'POST', body: JSON.stringify({ title: $('nt-title').value.trim(), memberAgentIds: ids, message: $('nt-msg').value.trim() }) });
-    closeModal();
-    if (!r.ok) { toast(r.error || '创建失败', true); return; }
-    await loadTasks();
-    openTask(r.data.id);
-  });
+  await loadTasks();
+  await openTask(r.data.id);
+  const input = $('input');
+  if (input) input.focus();
 }
 function closeModal() { $('modal-mask').classList.remove('on'); }
-
-// ---------- 添加成员 ----------
-$('btn-add-member').addEventListener('click', () => {
-  const task = state.taskCache.get(state.currentTaskId) || state.tasks.find(t => t.id === state.currentTaskId);
-  if (!task) return;
-  const rest = state.agents.filter(a => !task.memberAgentIds.includes(a.id));
-  if (!rest.length) { toast('所有子智能体都已在任务中', true); return; }
-  const body = rest.map(a => '<label class="agent-check" data-id="' + esc(a.id) + '"><input type="checkbox"><span><span class="n">' + esc(a.name) + '</span></span></label>').join('');
-  $('modal-title').textContent = '添加任务成员（超过 1 人转为协同编排模式）';
-  $('modal-body').innerHTML = body;
-  $('modal-foot').innerHTML = '<button class="btn" onclick="closeModal()">取消</button><button class="btn pri" id="am-go">添加</button>';
-  $('modal-mask').classList.add('on');
-  $('modal-body').querySelectorAll('.agent-check').forEach(el => el.addEventListener('click', e => { if (e.target.tagName !== 'INPUT') { const cb = el.querySelector('input'); cb.checked = !cb.checked; } }));
-  $('am-go').addEventListener('click', async () => {
-    const ids = Array.from($('modal-body').querySelectorAll('input:checked')).map(x => x.closest('.agent-check').dataset.id);
-    if (!ids.length) { closeModal(); return; }
-    await api('/tasks/' + task.id, { method: 'PATCH', body: JSON.stringify({ memberAgentIds: task.memberAgentIds.concat(ids) }) });
-    closeModal();
-    state.taskCache.delete(task.id);
-    await loadTasks();
-    openTask(task.id);
-    toast('成员已添加，下一轮消息生效');
-  });
-});
 
 // ---------- 资源目录视图 ----------
 $('btn-res-refresh').addEventListener('click', async () => {

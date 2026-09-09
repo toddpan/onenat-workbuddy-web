@@ -408,9 +408,10 @@ export class WorkBuddyRouter {
     }
     if (p === '/api/tasks' && method === 'POST') {
       const body = await this.parseBody(req)
+      // 若未指定成员，自动使用全部可用子智能体或默认主智能体
       if (!Array.isArray(body.memberAgentIds) || body.memberAgentIds.length === 0) {
-        this.sendJson(res, 400, { ok: false, error: 'memberAgentIds 至少需要一个子智能体' })
-        return true
+        const allAgents = this.store.getAgents()
+        body.memberAgentIds = allAgents.map(a => a.id)
       }
       try {
         const task = await this.engine.createTask(body)

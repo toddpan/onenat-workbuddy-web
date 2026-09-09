@@ -255,6 +255,52 @@ export class Planner {
       completedAt: Date.now(),
     }
   }
+
+  /**
+   * 自动根据第一条用户消息生成简短有意义的会话标题（参考 DSH session-title 策略）
+   * 优先使用 LLM 生成 4~12 字标题；失败则优雅降级截取前缀
+   */
+  public async generateTitle(firstUserMessage: string): Promise<string> {
+    const raw = firstUserMessage.replace(/@[^\s@,，。!！?？:：;；]+/g, '').replace(/\s+/g, ' ').trim()
+    const fallback = raw.length > 20 ? raw.slice(0, 20) + '…' : (raw || '未命名任务')
+
+    try {
+      const picked = await this.pickTarget()
+      if (!('target' in picked)) return fallback
+
+      const res = await this.client.chat(
+        picked.target,
+        [
+          {
+            role: 'user',
+            content: [
+              '你是一个会话标题提炼专家。请根据以下用户发送的第一条消息，提炼一个简明扼要的中文任务标题。',
+              '要求：',
+              '1. 长度控制在 4 到 12 个汉字之间；',
+              '2. 必须直接返回标题文本，严禁包含任何标点符号、引号、前缀、Markdown 或多余解释；',
+              '3. 突出核心动作与业务对象。',
+              '',
+              `用户消息: ${raw}`,
+            ].join('\n'),
+          },
+        ],
+        { timeoutMs: 15_000 },
+      )
+
+      if (res.ok && res.content) {
+        let title = res.content.trim().replace(/^["'《「『【]+|["'》」』】]+$/g, '').trim()
+        // 去除可能的多行
+        title = title.split(/[\r\n]/)[0].trim()
+        if (title.length >= 2 && title.length <= 30) {
+          return title
+        }
+      }
+    } catch {
+      // 忽略 LLM 异常，安全回退
+    }
+
+    return fallback
+  }
 }
 
 function optionsModel(_target: DshTarget): string | undefined {
