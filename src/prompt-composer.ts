@@ -140,10 +140,11 @@ export class PromptComposer {
     }
     if (sections.length > 0) {
       parts.push('')
-      parts.push('[资源使用约定]:')
+      parts.push('[资源与任务约定]:')
       parts.push('1. 使用任何资源前先读对应技能文件，技能与你的猜测冲突时以技能为准；技能没提的能力不要臆造；')
       parts.push('2. 连接被拒/超时视为端口可能已漂移，向调度方报告一次即可，不要反复重试或探测；')
-      parts.push('3. 凭证仅限本任务使用，不得写入脚本文件、不得转发给第三方。')
+      parts.push('3. 凭证仅限本任务使用，不得写入脚本文件、不得转发给第三方；')
+      parts.push('4. 【交互与执行】：若需要用户确认目标，可调用 ask_user_question 工具抛出结构化选项；用户确认答复后请立即执行目标任务，避免重复确认。')
     }
 
     return { block: parts.join('\n'), resources, warnings }

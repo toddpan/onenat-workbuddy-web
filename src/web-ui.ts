@@ -381,6 +381,63 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
   max-height: 180px; overflow-y: auto; color: var(--tx2);
 }
 
+/* 问答交互卡片 */
+.ask-card {
+  margin: 10px 0; padding: 14px 16px; background: var(--bg2); border: 1px solid rgba(99, 140, 255, 0.45);
+  border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.3); display: flex; flex-direction: column; gap: 12px;
+  max-width: 720px; width: 100%; box-sizing: border-box;
+}
+.ask-card.submitted {
+  border-color: rgba(52,211,153,0.35); background: rgba(15, 23, 42, 0.5); opacity: 0.92;
+}
+.ask-head {
+  display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--pri);
+  padding-bottom: 6px; border-bottom: 1px dashed var(--line);
+}
+.ask-head .ask-icon { font-size: 16px; }
+.ask-head .ask-status {
+  margin-left: auto; font-size: 11px; padding: 2px 9px; border-radius: 999px;
+  background: rgba(99,140,255,0.15); color: var(--pri); border: 1px solid rgba(99,140,255,0.3);
+}
+.ask-card.submitted .ask-status {
+  background: var(--ok-light); color: var(--ok); border-color: rgba(52,211,153,0.3); font-weight: 500;
+}
+.ask-q-title {
+  font-size: 14px; font-weight: 600; color: var(--tx); line-height: 1.5; margin-bottom: 8px;
+}
+.ask-options {
+  display: flex; flex-direction: column; gap: 8px;
+}
+.ask-opt {
+  display: flex; align-items: flex-start; gap: 12px; padding: 10px 14px; background: rgba(255,255,255,0.03);
+  border: 1px solid var(--line2); border-radius: 8px; cursor: pointer; transition: all 0.15s ease; user-select: none;
+}
+.ask-opt:hover {
+  background: rgba(99,140,255,0.08); border-color: rgba(99,140,255,0.4);
+}
+.ask-opt.selected {
+  background: rgba(99,140,255,0.15); border-color: var(--pri); box-shadow: 0 0 0 1px var(--pri);
+}
+.ask-card.submitted .ask-opt.selected {
+  background: rgba(52,211,153,0.12); border-color: var(--ok); box-shadow: 0 0 0 1px var(--ok);
+}
+.ask-card.submitted .ask-opt:not(.selected) {
+  opacity: 0.45; cursor: default;
+}
+.ask-opt input[type="radio"], .ask-opt input[type="checkbox"] {
+  margin-top: 3px; accent-color: var(--pri); cursor: pointer; transform: scale(1.1);
+}
+.ask-opt-main { flex: 1; min-width: 0; }
+.ask-opt-label { font-size: 13.5px; font-weight: 500; color: var(--tx); }
+.ask-opt-desc { font-size: 12px; color: var(--tx3); margin-top: 3px; line-height: 1.45; }
+.ask-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 6px; padding-top: 6px; }
+.ask-btn-submit {
+  padding: 8px 20px; font-size: 13px; font-weight: 600; border-radius: 7px; background: var(--pri);
+  color: #fff; border: none; cursor: pointer; transition: all 0.15s ease; box-shadow: 0 2px 8px rgba(56,189,248,0.25);
+}
+.ask-btn-submit:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
+.ask-btn-submit:not(:disabled):hover { filter: brightness(1.1); transform: translateY(-1px); }
+
 /* 编排计划卡片 */
 .plan-card {
   border: 1px solid var(--line2); background: var(--bg2); border-radius: var(--rad); padding: 12px 16px; margin: 8px 0 20px;
@@ -1539,25 +1596,26 @@ function ensureLiveBlock(el, kind, turnId) {
 }
 
 function upsertLiveTool(el, tool) {
+  const turnMeta = {
+    agentName: el.dataset?.agentName || el.wrap?.dataset?.agentName || '',
+    agentId: el.dataset?.agentId || el.wrap?.dataset?.agentId || '',
+  };
   let row = el.blocks.querySelector('.blk-tool[data-tid="' + tool.id + '"]');
   if (!row) {
     const blk = createBlock('tool');
-    blk.upsert(tool);
+    blk.upsert(tool, turnMeta);
     el.blocks.appendChild(blk.el);
     row = blk.el;
   } else {
     // 复用现有行更新
-    const tmp = { el: row, kind: 'tool', upsert(t) {
-      row.querySelector('.tw-ic').textContent = t.status === 'running' ? '⏳' : (t.status === 'error' ? '✗' : '✓');
-      row.querySelector('.tw-name').textContent = t.name + (t.args ? ' · ' + t.args.slice(0, 80) : '');
-      row.querySelector('.tw-ms').textContent = t.ms !== undefined ? (t.ms / 1000).toFixed(1) + 's' : '';
-      const parts = [];
-      if (t.args) parts.push('参数: ' + t.args);
-      if (t.result) parts.push('结果: ' + t.result);
-      let d = row.querySelector('.tw-detail');
-      d.textContent = parts.join('\\n') || '（无详情）';
+    const blk = { el: row, kind: 'tool', upsert(t, meta) {
+      if (t.name === 'ask_user_question' || t.name === 'ask-user-question') {
+        renderAskUserCard(row, t, meta || turnMeta);
+      } else {
+        renderNormalToolRow(row, t);
+      }
     } };
-    tmp.upsert(tool);
+    blk.upsert(tool, turnMeta);
   }
   if (tool.status === 'running') {
     const line = row.querySelector('.tw-line');
@@ -1762,30 +1820,165 @@ function createBlock(kind) {
   el.dataset.tid = '';
   const rowEl = {
     el, kind,
-    /** 更新单个工具调用行（按 id 复用现有行） */
-    upsert(t) {
+    /** 更新单个工具调用行（按 id 复用现有行，支持 ask_user_question 问答卡片） */
+    upsert(t, meta) {
       el.dataset.tid = t.id;
-      let line = el.querySelector('.tw-line');
-      if (!line) {
-        el.innerHTML = '<div class="tw-line"><span class="tw-ic"></span><span class="tw-name"></span><span class="tw-ms"></span><span class="tw-chev">▸</span></div><div class="tw-detail" style="display:none"></div>';
-        line = el.querySelector('.tw-line');
-        line.addEventListener('click', () => {
-          const d = el.querySelector('.tw-detail');
-          const open = d.style.display !== 'none';
-          d.style.display = open ? 'none' : 'block';
-          el.querySelector('.tw-chev').textContent = open ? '▸' : '▾';
-        });
+      if (t.name === 'ask_user_question' || t.name === 'ask-user-question') {
+        renderAskUserCard(el, t, meta);
+      } else {
+        renderNormalToolRow(el, t);
       }
-      el.querySelector('.tw-ic').textContent = t.status === 'running' ? '⏳' : (t.status === 'error' ? '✗' : '✓');
-      el.querySelector('.tw-name').textContent = t.name + (t.args ? ' · ' + t.args.slice(0, 80) : '');
-      el.querySelector('.tw-ms').textContent = t.ms !== undefined ? (t.ms / 1000).toFixed(1) + 's' : '';
-      const parts = [];
-      if (t.args) parts.push('参数: ' + t.args);
-      if (t.result) parts.push('结果: ' + t.result);
-      el.querySelector('.tw-detail').textContent = parts.join('\\n') || '（无详情）';
     },
   };
   return rowEl;
+}
+
+function parseAskQuestions(argsStr) {
+  if (!argsStr) return null;
+  try {
+    const obj = typeof argsStr === 'string' ? JSON.parse(argsStr) : argsStr;
+    if (obj && Array.isArray(obj.questions) && obj.questions.length) {
+      return obj.questions;
+    }
+    if (obj && obj.question) {
+      return [obj];
+    }
+  } catch {}
+  return null;
+}
+
+function renderAskUserCard(el, t, turnMeta) {
+  el.className = 'blk blk-tool';
+  el.dataset.tid = t.id;
+  const questions = parseAskQuestions(t.args);
+  if (!questions) {
+    renderNormalToolRow(el, t);
+    return;
+  }
+  const isDone = t.status === 'done' || Boolean(t.result);
+  let qHtml = '';
+  questions.forEach((q, qIdx) => {
+    const qTitle = q.header ? '【' + esc(q.header) + '】' + esc(q.question) : esc(q.question);
+    const isMulti = Boolean(q.multi_select);
+    const inputType = isMulti ? 'checkbox' : 'radio';
+    const groupName = 'ask_q_' + t.id + '_' + (q.id || qIdx);
+    let optHtml = '';
+    (q.options || []).forEach((opt, oIdx) => {
+      const optLabel = typeof opt === 'string' ? opt : opt.label;
+      const optDesc = typeof opt === 'object' && opt.description ? opt.description : '';
+      const isDefault = oIdx === 0 && !isMulti;
+      optHtml += '<label class="ask-opt' + (isDefault && !isDone ? ' selected' : '') + '">' +
+        '<input type="' + inputType + '" name="' + groupName + '" value="' + esc(optLabel) + '"' + (isDefault && !isDone ? ' checked' : '') + (isDone ? ' disabled' : '') + '>' +
+        '<div class="ask-opt-main">' +
+          '<div class="ask-opt-label">' + esc(optLabel) + '</div>' +
+          (optDesc ? '<div class="ask-opt-desc">' + esc(optDesc) + '</div>' : '') +
+        '</div>' +
+      '</label>';
+    });
+    qHtml += '<div class="ask-q" data-qid="' + esc(q.id || String(qIdx)) + '">' +
+      '<div class="ask-q-title">' + qTitle + '</div>' +
+      '<div class="ask-options">' + optHtml + '</div>' +
+    '</div>';
+  });
+
+  const statusText = isDone ? '✓ 已答复' : '⏳ 等待选择';
+  const footHtml = isDone
+    ? (t.result ? '<div class="ask-result-hint" style="font-size:11.5px;color:var(--tx3);margin-top:4px">答复内容: ' + esc(t.result) + '</div>' : '')
+    : '<div class="ask-actions">' +
+        '<span style="font-size:11.5px;color:var(--tx3);margin-right:auto">点击选项后提交答复</span>' +
+        '<button class="ask-btn-submit" type="button">📤 确认并提交选择</button>' +
+      '</div>';
+
+  el.innerHTML = '<div class="ask-card' + (isDone ? ' submitted' : '') + '">' +
+    '<div class="ask-head">' +
+      '<span class="ask-icon">❓</span>' +
+      '<span class="ask-title">子智能体需要您的确认 / 选择</span>' +
+      '<span class="ask-status">' + statusText + '</span>' +
+    '</div>' +
+    '<div class="ask-body">' + qHtml + '</div>' +
+    footHtml +
+  '</div>';
+
+  const card = el.querySelector('.ask-card');
+  if (!isDone && card) {
+    card.querySelectorAll('.ask-opt').forEach(optEl => {
+      optEl.addEventListener('click', () => {
+        const inp = optEl.querySelector('input');
+        if (!inp || inp.disabled) return;
+        if (inp.type === 'radio') {
+          const group = card.querySelectorAll('input[name="' + inp.name + '"]');
+          group.forEach(g => {
+            const p = g.closest('.ask-opt');
+            if (p) p.classList.remove('selected');
+          });
+          optEl.classList.add('selected');
+        } else {
+          if (inp.checked) optEl.classList.add('selected');
+          else optEl.classList.remove('selected');
+        }
+      });
+    });
+
+    const submitBtn = card.querySelector('.ask-btn-submit');
+    if (submitBtn) {
+      submitBtn.addEventListener('click', async () => {
+        const answers = [];
+        card.querySelectorAll('.ask-q').forEach(qEl => {
+          const checked = qEl.querySelectorAll('input:checked');
+          const vals = Array.from(checked).map(c => c.value);
+          if (vals.length) answers.push(vals.join('、'));
+        });
+        if (!answers.length) {
+          toast('请至少选择一个选项', true);
+          return;
+        }
+        submitBtn.disabled = true;
+        submitBtn.textContent = '提交中…';
+        card.classList.add('submitted');
+        card.querySelectorAll('input').forEach(i => { i.disabled = true; });
+        const st = card.querySelector('.ask-status');
+        if (st) st.textContent = '✓ 已提交选择';
+
+        const agName = (turnMeta && turnMeta.agentName) || '';
+        const msg = (agName ? '@' + agName + ' ' : '') + '已确认选择：' + answers.join('；');
+
+        if (state.currentTaskId) {
+          toast('✓ 已提交选择，智能体继续执行中…');
+          setSending(true);
+          const r = await api('/tasks/' + state.currentTaskId + '/messages', {
+            method: 'POST',
+            body: JSON.stringify({ message: msg }),
+          });
+          if (!r.ok) {
+            toast(r.error || '提交失败', true);
+            setSending(false);
+          }
+        }
+      });
+    }
+  }
+}
+
+function renderNormalToolRow(el, t) {
+  el.className = 'blk blk-tool tw-row';
+  let line = el.querySelector('.tw-line');
+  if (!line) {
+    el.innerHTML = '<div class="tw-line"><span class="tw-ic"></span><span class="tw-name"></span><span class="tw-ms"></span><span class="tw-chev">▸</span></div><div class="tw-detail" style="display:none"></div>';
+    line = el.querySelector('.tw-line');
+    line.addEventListener('click', () => {
+      const d = el.querySelector('.tw-detail');
+      const open = d.style.display !== 'none';
+      d.style.display = open ? 'none' : 'block';
+      el.querySelector('.tw-chev').textContent = open ? '▸' : '▾';
+    });
+  }
+  el.querySelector('.tw-ic').textContent = t.status === 'running' ? '⏳' : (t.status === 'error' ? '✗' : '✓');
+  el.querySelector('.tw-name').textContent = t.name + (t.args ? ' · ' + t.args.slice(0, 80) : '');
+  el.querySelector('.tw-ms').textContent = t.ms !== undefined ? (t.ms / 1000).toFixed(1) + 's' : '';
+  const parts = [];
+  if (t.args) parts.push('参数: ' + t.args);
+  if (t.result) parts.push('结果: ' + t.result);
+  el.querySelector('.tw-detail').textContent = parts.join('\\n') || '（无详情）';
 }
 
 function buildTurnElement(taskId, turn) {
@@ -1794,6 +1987,8 @@ function buildTurnElement(taskId, turn) {
   const isOrch = turn.agentName === '🎯 总调度汇总';
   wrap.className = 'msg ' + roleClass + (isOrch ? ' orchestrator' : '');
   wrap.dataset.turnId = turn.id;
+  wrap.dataset.agentName = turn.agentName || '';
+  wrap.dataset.agentId = turn.agentId || '';
 
   const avatar = turn.role === 'user' ? '你' : (turn.role === 'system' ? '⚠' : (isOrch ? '🎯' : '🤖'));
   const name = turn.role === 'user' ? '你' : (turn.role === 'system' ? '系统' : esc(turn.agentName || '子智能体'));
@@ -1809,6 +2004,7 @@ function buildTurnElement(taskId, turn) {
     '</div>';
 
   const blocks = wrap.querySelector('.blocks');
+  const turnMeta = { agentName: turn.agentName, agentId: turn.agentId, taskId };
 
   // 非流式（历史回放）：按「思考 → 工具调用 → 正文」的稳定顺序渲染
   if (!turn.streaming) {
@@ -1817,7 +2013,7 @@ function buildTurnElement(taskId, turn) {
     }
     if (turn.tools && turn.tools.length) {
       for (const t of turn.tools) {
-        const tb = createBlock('tool'); tb.upsert(t); blocks.appendChild(tb.el);
+        const tb = createBlock('tool'); tb.upsert(t, turnMeta); blocks.appendChild(tb.el);
       }
     }
     if (turn.text) {
@@ -1875,9 +2071,10 @@ function finalizeTurnBlocks(el, turn, taskId) {
 
   // 3) 工具：确保最终工具列表的每一行都在页面上
   if (turn.tools && turn.tools.length) {
+    const turnMeta = { agentName: turn.agentName, agentId: turn.agentId, taskId };
     for (const t of turn.tools) {
       if (!blocks.querySelector('.blk-tool[data-tid="' + t.id + '"]')) {
-        const tb = createBlock('tool'); tb.upsert(t); blocks.appendChild(tb.el);
+        const tb = createBlock('tool'); tb.upsert(t, turnMeta); blocks.appendChild(tb.el);
       }
     }
   }
