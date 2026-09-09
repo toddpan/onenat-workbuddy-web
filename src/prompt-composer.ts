@@ -8,8 +8,17 @@
 
 import type { OnenatDirectory } from './onenat.js'
 import type { AgentResourceBinding, SubAgent } from './types.js'
+import { DshClient, type DshTarget } from './remote-client.js'
+import type { AgentResolver } from './resolver.js'
 
 const SKILL_INLINE_LIMIT = 8 * 1024
+const MAX_BOUND_SKILLS = 8
+/** 命中目标节点后按候选根顺序定位绑定技能（project 用 workDir 作 cwd） */
+const SKILL_ROOTS: Array<{ root: string; needsCwd?: boolean }> = [
+  { root: 'user-dsh' },
+  { root: 'project', needsCwd: true },
+  { root: 'user-agents' },
+]
 
 export interface ComposeContext {
   /** 派发时刻的时间戳标记（写进提示词，提醒 AI 端口是实况） */
@@ -27,7 +36,9 @@ export interface ComposeResult {
 }
 
 export class PromptComposer {
-  constructor(private directory: OnenatDirectory) {}
+  constructor(private directory: OnenatDirectory, private resolver: AgentResolver) {}
+
+  private client = new DshClient()
 
   public async compose(agent: SubAgent, ctx: ComposeContext): Promise<ComposeResult> {
     const warnings: string[] = []
@@ -147,6 +158,87 @@ export class PromptComposer {
       parts.push('4. 【交互与执行】：若需要用户确认目标，可调用 ask_user_question 工具抛出结构化选项；用户确认答复后请立即执行目标任务，避免重复确认。')
     }
 
+    // 子智能体绑定的技能：会话自动装载（注入 <skill_content> 全文）
+    const boundSkills = agent.skills || []
+    if (boundSkills.length > 0 && !ctx.mask) {
+      const target = await this.resolveTarget(agent)
+      if (target) {
+        const skillWarnings: string[] = []
+        const skillBlocks = await this.fetchAgentSkills(target, boundSkills, agent, skillWarnings)
+        if (skillBlocks.length > 0) {
+          parts.push('')
+          parts.push('[已装载技能]（当前子智能体绑定的技能，已注入全文，请直接遵循，无需再调用 skill 工具）:')
+          parts.push(...skillBlocks)
+        }
+        for (const w of skillWarnings) {
+          if (!warnings.includes(w)) warnings.push(w)
+        }
+      }
+    } else if (boundSkills.length > 0 && ctx.mask) {
+      parts.push('')
+      parts.push(`[已绑定技能]（预览打码，共 ${boundSkills.length} 个: ${boundSkills.join('、')}）`)
+    }
+
     return { block: parts.join('\n'), resources, warnings }
   }
+
+  /** 解析子智能体目标节点（baseUrl/apiKey）；不可达返回 undefined */
+  private async resolveTarget(agent: SubAgent): Promise<DshTarget | undefined> {
+    try {
+      const t = await this.resolver.resolve(agent)
+      if (!t.online || !t.baseUrl) return undefined
+      return { baseUrl: t.baseUrl, apiKey: t.apiKey }
+    } catch {
+      return undefined
+    }
+  }
+
+  /** 拉取绑定技能的 <skill_content> 块（超限截断；按候选根定位） */
+  private async fetchAgentSkills(target: DshTarget, boundSkills: string[], agent: SubAgent, warnings: string[]): Promise<string[]> {
+    const blocks: string[] = []
+    const seen = new Set<string>()
+    for (const name of boundSkills.slice(0, MAX_BOUND_SKILLS)) {
+      if (seen.has(name)) continue
+      seen.add(name)
+      const content = await this.fetchSkillBody(target, name, agent.workDir)
+      if (content === undefined) {
+        warnings.push(`绑定技能「${name}」未在目标节点找到（已跳过注入）`)
+        continue
+      }
+      const safe = content.length > SKILL_INLINE_LIMIT ? `${content.slice(0, SKILL_INLINE_LIMIT)}\n…(技能正文超限截断)` : content
+      blocks.push(renderSkillContent(name, safe))
+    }
+    return blocks
+  }
+
+  /** 按候选根依次尝试获取技能全文（project 用 workDir 作 cwd） */
+  private async fetchSkillBody(target: DshTarget, name: string, workDir?: string): Promise<string | undefined> {
+    for (const { root, needsCwd } of SKILL_ROOTS) {
+      const res = await this.client.getSkillBody(target, name, {
+        root,
+        ...(needsCwd ? { cwd: workDir || undefined } : {}),
+      })
+      if (res.ok && res.content) return res.content
+      if (res.unsupported) return undefined
+      // 404（不在此根）→ 试下一个根
+    }
+    return undefined
+  }
+}
+
+/** 渲染与 DSH `renderSkillContent` 同构的 <skill_content> 块（技能全文注入用）。 */
+function renderSkillContent(name: string, content: string): string {
+  const escaped = name.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  return [
+    `<skill_content name="${escaped}">`,
+    '<skill_resources>',
+    'Resources for this skill are managed by OneNat WorkBuddy.',
+    'Load referenced resources only as needed.',
+    '</skill_resources>',
+    '',
+    '<skill_instructions>',
+    content,
+    '</skill_instructions>',
+    '</skill_content>',
+  ].join('\n')
 }

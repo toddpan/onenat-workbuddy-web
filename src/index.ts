@@ -52,7 +52,7 @@ export function apply(ctx: Context, config: Config): void {
   directory.startAutoRefresh(settings.onenat.autoRefreshMs)
 
   const resolver = new AgentResolver(store, directory)
-  const composer = new PromptComposer(directory)
+  const composer = new PromptComposer(directory, resolver)
   const planner = new Planner(store, resolver, ctx)
   const engine = new TaskEngine(store, directory, resolver, composer, planner)
   const router = new WorkBuddyRouter(store, directory, resolver, composer, planner, engine, sshStore)

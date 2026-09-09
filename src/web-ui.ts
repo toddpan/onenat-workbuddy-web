@@ -915,6 +915,13 @@ async function api(path, opts) {
   if (!json) json = { ok: false, error: 'HTTP ' + res.status };
   return json;
 }
+/** multipart 上传（不设 Content-Type，让浏览器自动带 boundary） */
+async function apiPostMulti(path, formData) {
+  const res = await fetch(API + path, { method: 'POST', body: formData });
+  let json = null; try { json = await res.json(); } catch (e) {}
+  if (!json) json = { ok: false, error: 'HTTP ' + res.status };
+  return json;
+}
 function fmtTime(ts) {
   if (!ts) return '';
   const d = new Date(ts);
@@ -2631,8 +2638,9 @@ function renderAgents() {
       (a.workDir ? '<span class="tag" title="远端工作目录">📁 ' + esc(a.workDir) + '</span>' : '') + '</div>' +
       '<div class="desc">DSH 实体: <span class="mono">' + esc(dshDesc) + '</span><br>绑定资源: ' + esc(resDesc) +
       (a.systemPrompt ? '<br>角色: ' + esc(a.systemPrompt.slice(0, 80)) : '') + '</div>' +
-      '<div class="ops"><button class="btn" data-op="edit">编辑</button><button class="btn" data-op="ping">Ping 探活</button><button class="btn" data-op="preview">提示词预览</button><button class="btn danger" data-op="del">删除</button></div>';
+      '<div class="ops"><button class="btn" data-op="edit">编辑</button><button class="btn" data-op="ping">Ping 探活</button><button class="btn" data-op="preview">提示词预览</button><button class="btn" data-op="skills">🎯 技能</button><button class="btn danger" data-op="del">删除</button></div>';
     card.querySelector('[data-op=edit]').addEventListener('click', () => openAgentDrawer(a));
+    card.querySelector('[data-op=skills]').addEventListener('click', () => openSkillCenter(a));
     card.querySelector('[data-op=ping]').addEventListener('click', async () => {
       toast('探测中…');
       const r = await api('/agents/' + a.id + '/ping', { method: 'POST' });
@@ -2662,6 +2670,125 @@ function describeDshRef(a) {
   }
   const ep = state.resources.find(x => x.appId === a.dshRef.appId);
   return '应用 ' + a.dshRef.appId + (ep ? ' → ' + (ep.baseUrl || '离线') : '');
+}
+
+// ---------- 技能中心（管理 + 绑定子智能体节点的技能） ----------
+let skillCenterAgent = null; // 当前技能中心对应的子智能体
+async function openSkillCenter(agent) {
+  skillCenterAgent = agent;
+  openDrawer('🎯 技能中心 · ' + (agent.name || agent.id));
+  $('drawer-body').innerHTML =
+    '<div class="hint" id="sk-hint">加载该节点的技能列表…</div>' +
+    '<div id="sk-body"></div>';
+  await loadSkillCenter();
+}
+async function loadSkillCenter() {
+  const a = skillCenterAgent;
+  if (!a) return;
+  const body = $('sk-body');
+  $('sk-hint').textContent = '加载中…';
+  const r = await api('/agents/' + a.id + '/skills');
+  if (!r.ok) {
+    $('sk-hint').textContent = '✗ ' + (r.error || '加载失败');
+    return;
+  }
+  $('sk-hint').textContent = '';
+  const d = r.data || {};
+  const skills = (d.skills || []).map(s => ({
+    name: s.name, description: s.description, path: s.path, root: s.root,
+    modelInvocable: s.modelInvocable !== false, userInvocable: !!s.userInvocable,
+    whenToUse: s.whenToUse, size: s.size,
+  }));
+  const bound = new Set(d.bindings || []);
+  if (d.unsupported) {
+    $('sk-hint').textContent = '⚠ ' + (d.error || '远端 dsh-web-service 未暴露 /skills 端点');
+    body.innerHTML = '';
+    return;
+  }
+  const rows = skills.map((s, i) => skillRowHtml(s, bound.has(s.name), i)).join('');
+  body.innerHTML =
+    '<div style="margin-bottom:12px;background:var(--bg2);padding:12px;border-radius:8px">' +
+    '<div class="field" style="margin:0"><label>上传技能（整包压缩包 .zip/.tgz，含 SKILL.md 与 references/）</label>' +
+    '<div style="display:flex;gap:8px;align-items:center"><input type="file" id="sk-file" accept=".zip,.tgz,.tar.gz,.gz" style="flex:1">' +
+    '<button class="mini-btn" id="sk-up" style="padding:10px 14px">⬆ 上传</button></div>' +
+    '<div class="hint">解压后自动识别技能名；同名覆盖。上传到该节点的「用户技能」目录。</div></div></div>' +
+    '<div class="field"><label>已安装技能（' + skills.length + ' 个）· 勾选 = 绑定到该子智能体（派发时自动注入全文，最多 8 个）</label>' +
+    '<div id="sk-list" style="display:flex;flex-direction:column;gap:8px">' +
+    (rows || '<div class="card"><span class="sub">该节点暂无技能，上传一个技能包开始。</span></div>') + '</div></div>' +
+    '<div class="ops" style="display:flex;gap:10px;margin-top:14px"><button class="btn pri" id="sk-save">保存绑定</button><button class="btn" id="sk-close">关闭</button></div>';
+  // 绑定切换（本地集合，保存时才提交）
+  const bindSel = new Set(bound);
+  body.querySelectorAll('.sk-bind').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const name = cb.dataset.name;
+      if (cb.checked) bindSel.add(name); else bindSel.delete(name);
+      if (bindSel.size > 8) {
+        cb.checked = false; bindSel.delete(name);
+        toast('最多绑定 8 个技能', true);
+      }
+    });
+  });
+  body.querySelectorAll('[data-sk=preview]').forEach(btn => btn.addEventListener('click', async () => {
+    const name = btn.dataset.name;
+    toast('加载技能「' + name + '」…');
+    const p = await api('/agents/' + a.id + '/skills/preview?name=' + encodeURIComponent(name));
+    if (!p.ok || !p.data) { toast(p.error || '预览失败', true); return; }
+    const s = p.data;
+    openModal('技能预览 · ' + s.name,
+      '<div class="sub" style="margin-bottom:6px">' + esc(s.path || '') + '</div>' +
+      '<div class="tag ok">可模型调用</div><div class="tag">' + (s.userInvocable ? '用户可调用' : '仅模型') + '</div>' +
+      '<div class="pre-block" style="max-height:52vh;overflow:auto">' + esc(s.raw || s.content || '') + '</div>');
+  }));
+  body.querySelectorAll('[data-sk=del]').forEach(btn => btn.addEventListener('click', async () => {
+    const name = btn.dataset.name;
+    if (!confirm('删除技能「' + name + '」？')) return;
+    const del = await api('/agents/' + a.id + '/skills/' + encodeURIComponent(name), { method: 'DELETE' });
+    if (!del.ok) { toast(del.error || '删除失败', true); return; }
+    toast('已删除 ' + name); await loadSkillCenter();
+  }));
+  // 下载 SKILL.md
+  body.querySelectorAll('[data-sk=dl]').forEach(btn => btn.addEventListener('click', () => {
+    const name = btn.dataset.name;
+    fetch(API + '/agents/' + a.id + '/skills/' + encodeURIComponent(name) + '/download').then(r => {
+      if (!r.ok) { toast('下载失败', true); return; }
+      return r.blob();
+    }).then(b => {
+      const url = URL.createObjectURL(b);
+      const link = document.createElement('a'); link.href = url; link.download = name + '.md';
+      document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+    }).catch(() => toast('下载失败', true));
+  }));
+  // 上传
+  $('sk-up').addEventListener('click', async () => {
+    const input = $('sk-file');
+    if (!input.files || !input.files[0]) { toast('请先选择技能压缩包', true); return; }
+    const fd = new FormData();
+    fd.append('file', input.files[0]);
+    toast('上传中…');
+    const up = await apiPostMulti('/agents/' + a.id + '/skills/upload', fd);
+    if (!up.ok) { toast(up.error || '上传失败', true); return; }
+    toast('✓ 技能已安装 ' + (up.data && up.data.name || '')); await loadSkillCenter();
+  });
+  $('sk-save').addEventListener('click', async () => {
+    const skills = Array.from(bindSel);
+    const save = await api('/agents/' + a.id + '/skills/bindings', { method: 'POST', body: JSON.stringify({ skills }) });
+    if (!save.ok) { toast(save.error || '保存失败', true); return; }
+    toast('✓ 已保存 ' + skills.length + ' 个绑定技能'); await loadAgents(); renderAgents();
+  });
+  $('sk-close').addEventListener('click', closeDrawer);
+}
+function skillRowHtml(s, bound, i) {
+  const tags = [s.modelInvocable ? '模型可调用' : '仅用户', s.userInvocable ? '用户可调用' : ''].filter(Boolean)
+    .map(t => '<span class="tag">' + t + '</span>').join('');
+  return '<div class="card" style="margin:0">' +
+    '<div class="row1" style="align-items:center"><label style="display:flex;align-items:center;gap:8px;flex:1;min-width:0">' +
+    '<input type="checkbox" class="sk-bind" data-name="' + esc(s.name) + '"' + (bound ? ' checked' : '') + ' style="width:16px;height:16px">' +
+    '<span class="mono" style="font-weight:600">' + esc(s.name) + '</span>' + tags + '</label>' +
+    '<span class="sub" style="flex:none">' + (s.size ? (s.size > 1024 ? (s.size / 1024).toFixed(1) + 'KB' : s.size + 'B') : '') + '</span></div>' +
+    '<div class="desc">' + esc(s.description || '') + (s.path ? '<br><span class="mono" style="color:var(--tx3);font-size:11px">' + esc(s.path) + '</span>' : '') + '</div>' +
+    '<div class="ops" style="margin-top:6px"><button class="mini-btn" data-sk="preview" data-name="' + esc(s.name) + '">预览</button>' +
+    '<button class="mini-btn" data-sk="dl" data-name="' + esc(s.name) + '">下载</button>' +
+    '<button class="mini-btn danger" data-sk="del" data-name="' + esc(s.name) + '">删除</button></div></div>';
 }
 
 function openAgentDrawer(agent) {
