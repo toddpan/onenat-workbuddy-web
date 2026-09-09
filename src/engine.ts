@@ -63,6 +63,11 @@ export class TaskEngine {
       if (ep.appName) dict.push({ type: 'resource', name: ep.appName, data: ep })
       if (ep.note && ep.note !== ep.appName) dict.push({ type: 'resource', name: ep.note, data: ep })
       if (ep.mappingId) dict.push({ type: 'resource', name: ep.mappingId, data: ep })
+      // 支持带环境名的精确定向匹配（例："SSH Server (测试 B 环境)" 或 "SSH Server(测试 B 环境)"）
+      if (ep.appName && ep.tunnelName) {
+        dict.push({ type: 'resource', name: `${ep.appName} (${ep.tunnelName})`, data: ep })
+        dict.push({ type: 'resource', name: `${ep.appName}(${ep.tunnelName})`, data: ep })
+      }
     }
 
     dict.sort((a, b) => b.name.length - a.name.length)

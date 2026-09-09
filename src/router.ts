@@ -368,14 +368,18 @@ export class WorkBuddyRouter {
       // 2. ONENAT 映射与应用资源
       const endpoints = this.directory.listEndpoints()
       for (const ep of endpoints) {
-        const name = ep.appName || ep.note || `mapping:${ep.mappingId}`
+        // 若名称重复（如多个 "SSH Server"），附带隧道环境名以示区分，例："SSH Server (测试 B 环境)"
+        const baseName = ep.appName || ep.note || `mapping:${ep.mappingId}`
+        const hasDuplicateName = endpoints.filter(e => (e.appName || e.note) === baseName).length > 1
+        const displayName = hasDuplicateName && ep.tunnelName ? `${baseName} (${ep.tunnelName})` : baseName
+
         candidates.push({
           type: 'resource',
           id: ep.mappingId,
-          name,
+          name: displayName,
           kind: ep.kind || 'unknown',
           detail: `${(ep.kind || '').toUpperCase()} · ${ep.tunnelName || ''} · ${ep.online ? '在线' : '离线'}`,
-          meta: { mappingId: ep.mappingId, kind: ep.kind, online: ep.online },
+          meta: { mappingId: ep.mappingId, kind: ep.kind, online: ep.online, rawName: baseName },
         })
       }
 
