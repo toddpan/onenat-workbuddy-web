@@ -2209,8 +2209,8 @@ function initMentionPopup() {
     const pos = input.selectionStart;
     const textBeforeCursor = text.slice(0, pos);
 
-    // 匹配光标前最近的一个 @ 符号
-    const match = /@([^\s@]*)$/.exec(textBeforeCursor);
+    // 匹配光标前最近的一个 @ 符号，允许资源名/智能体名内部含空格（如 "测试 B 环境-SSH Server"）
+    const match = /@([^@]*)$/.exec(textBeforeCursor);
     if (!match) {
       hidePopup();
       return;
@@ -2226,8 +2226,15 @@ function initMentionPopup() {
       const n = (c.name || '').toLowerCase();
       const id = (c.id || '').toLowerCase();
       const d = (c.detail || '').toLowerCase();
-      return n.includes(mentionQuery) || id.includes(mentionQuery) || d.includes(mentionQuery);
+      // 前缀匹配优先：允许多词名称随输入逐词匹配；其次兜底子串匹配
+      return n.startsWith(mentionQuery) || n.includes(mentionQuery) || id.includes(mentionQuery) || d.includes(mentionQuery);
     });
+
+    // 无匹配 → 隐藏弹窗，不显示「无匹配」空提示
+    if (!mentionMatched.length) {
+      hidePopup();
+      return;
+    }
 
     mentionActiveIdx = 0;
     renderMentionList();
