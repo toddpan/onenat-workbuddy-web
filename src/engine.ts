@@ -505,7 +505,7 @@ export class TaskEngine {
       }))
 
     // 2. LLM 规划（失败兜底静态三段）
-    this.emit(taskId, { type: 'log', level: 'info', msg: '正在调用规划器拆解主任务...' })
+    this.appendSystemTurn(taskId, '🎯 主调度正在拆解主任务并规划子任务流水线…')
     let draft: { strategy: 'parallel' | 'sequential' | 'dag'; subtasks: Array<{ title: string; prompt: string; agentId: string; dependsOn: string[] }> }
     const planned = await this.planner.planTask(text, rosterMembers, targets, {
       priorityAgentIds: mentions.mentionedAgentIds,
@@ -564,6 +564,7 @@ export class TaskEngine {
     await this.executeDag(taskId, mentions, targets, signal)
 
     // 5. 汇总
+    this.appendSystemTurn(taskId, '📊 所有子任务已完成，主调度正在综合各方产出生成总结报告…')
     const fresh = this.store.getTask(taskId)!
     const summary = await this.planner.summarize(text, fresh.plan?.subtasks || [], targets)
     this.store.mutateTask(taskId, (t) => {
@@ -584,6 +585,7 @@ export class TaskEngine {
     this.store.appendTurn(taskId, summaryTurn)
     this.emit(taskId, { type: 'turn_start', turn: summaryTurn })
     this.emit(taskId, { type: 'turn_end', turn: summaryTurn })
+    this.store.save()
   }
 
   private hasCycle(subtasks: PlanSubtask[]): boolean {

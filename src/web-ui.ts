@@ -1009,12 +1009,12 @@ async function loadResources() {
 }
 async function loadAgents() {
   const r = await api('/agents');
-  if (r.ok) state.agents = r.data || [];
+  if (r.ok) state.agents = Array.isArray(r.data) ? r.data : [];
 }
 async function loadTasks() {
   const r = await api('/tasks');
   if (r.ok) {
-    state.tasks = r.data || [];
+    state.tasks = Array.isArray(r.data) ? r.data : [];
     renderTaskList();
   }
 }
@@ -1031,7 +1031,7 @@ async function loadTasksQuiet() {
     const cur = state.currentTaskId;
     const r = await api('/tasks');
     if (r.ok) {
-      state.tasks = r.data || [];
+      state.tasks = Array.isArray(r.data) ? r.data : [];
       renderTaskList();
       if (cur) refreshChatHead();
     }
@@ -1290,14 +1290,21 @@ function applyTaskToView(task, isInitialRender) {
   // 使用 DocumentFragment 一次性批量挂载历史轮次（极大减少 DOM reflow / 重排卡顿）
   const frag = document.createDocumentFragment();
   for (let i = HIDE; i < total; i++) {
-    const turnEl = buildTurnElement(task.id, turns[i]);
+    const turn = turns[i];
+    const turnEl = buildTurnElement(task.id, turn);
     frag.appendChild(turnEl);
+
+    // 如果是用户发送的轮次且后面关联了编排计划
+    if (turn.role === 'user' && task.plan && (i === total - 1 || (turn.subtaskIds && turn.subtaskIds.length))) {
+      const planCard = createPlanCardElement(task.plan);
+      frag.appendChild(planCard);
+    }
   }
   scroll.appendChild(frag);
 
-  // 编排计划卡片（若有）
-  if (task.plan) {
-    renderPlanCard(task.plan, false);
+  // 兜底：若有 plan 但未挂在任何 user 轮次后，挂在末尾
+  if (task.plan && !scroll.querySelector('.plan-card')) {
+    scroll.appendChild(createPlanCardElement(task.plan));
   }
 
   // 滚动到底部（单次完成）
@@ -1621,12 +1628,11 @@ function handleToolEvent(turnId, tool) {
 
 // ---------- 编排计划卡片 (Plan Card) ----------
 let planRowEls = {};
-function renderPlanCard(plan, live) {
-  document.querySelectorAll('.plan-card[data-live="1"]').forEach(x => x.remove());
+
+function createPlanCardElement(plan) {
   const card = document.createElement('div');
-  card.className = 'plan-card'; card.dataset.live = '1';
+  card.className = 'plan-card';
   card.innerHTML = '<h4><span>📋 编排计划 · ' + esc(plan.strategy || '协同模式') + '</span><span style="font-size:11.5px;color:var(--tx3)">' + (plan.subtasks || []).length + ' 个子任务</span></h4>';
-  planRowEls = {};
   for (const s of plan.subtasks || []) {
     const row = document.createElement('div');
     row.className = 'plan-row'; row.dataset.sid = s.id;
@@ -1640,6 +1646,13 @@ function renderPlanCard(plan, live) {
     planRowEls[s.id] = row;
     card.appendChild(row);
   }
+  return card;
+}
+
+function renderPlanCard(plan, live) {
+  document.querySelectorAll('.plan-card[data-live="1"]').forEach(x => x.remove());
+  const card = createPlanCardElement(plan);
+  card.dataset.live = '1';
   const scroll = $('chat-scroll');
   scroll.appendChild(card);
   if (live) smartScrollBottom();
