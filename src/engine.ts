@@ -351,7 +351,9 @@ export class TaskEngine {
             changed = true
           }
         }
-        if (changed && t.memberAgentIds.length > 1) {
+        // 仅当明确 @ 了 ≥2 个不同智能体时才视为多智能体协同，升级为编排模式；
+        // 恰 @ 1 个智能体保持原模式（直通/单人），避免「@某一智能体」被群成员数放大成跨多智能体流水线
+        if (changed && t.memberAgentIds.length > 1 && mentions.mentionedAgentIds.length >= 2) {
           t.mode = 'orchestrate'
         }
       })
@@ -415,6 +417,9 @@ export class TaskEngine {
     // 3. 只有当任务本身是 orchestrate 模式且有多成员、并且用户没有被强制走主智能体时才走编排。
 
     const hasExplicitAgentMention = mentions.mentionedAgentIds.length > 0
+    // 本轮是否明确 @ 了“恰好一个”智能体 —— 用户只想把这件事交给那一个智能体，
+    // 不应被任务已有的多成员/编排模式放大成跨多智能体流水线
+    const singleExplicitMention = mentions.mentionedAgentIds.length === 1
 
     if (!hasExplicitAgentMention && task.mode === 'orchestrate') {
       // 未指定智能体时，优先由主智能体进行分析应答
@@ -433,6 +438,26 @@ export class TaskEngine {
     for (const issue of issues) {
       this.taskLog(taskId, 'warn', `成员「${issue.name}」不可用: ${issue.error}`)
     }
+
+    // @ 了恰好一个智能体：定向直通该智能体（即使任务本身是多成员编排任务）
+    if (singleExplicitMention && hasExplicitAgentMention) {
+      const onlyId = mentions.mentionedAgentIds[0]
+      // 只解析被 @ 的那一个智能体
+      const single = await this.resolver.resolveMembers([onlyId])
+      const singleTarget = single.targets.get(onlyId)
+      if (singleTarget) {
+        await this.runChatTurn(taskId, text, mentions, new Map([[onlyId, singleTarget]]), signal)
+      } else {
+        const err = single.issues.find((x) => x.agentId === onlyId)?.error || '该智能体不可用'
+        this.appendSystemTurn(taskId, `⚠️ 被 @ 的智能体「${this.store.getAgent(onlyId)?.name || onlyId}」暂不可用: ${err}`)
+        this.store.mutateTask(taskId, (t) => { t.status = 'failed' })
+        this.emit(taskId, { type: 'task_status', status: 'failed' })
+      }
+      const fresh = this.store.getTask(taskId)!
+      this.emit(taskId, { type: 'task_end', task: fresh })
+      return
+    }
+
     if (targets.size === 0) {
       this.appendSystemTurn(taskId, `⚠️ 没有可用的子智能体成员：\n${issues.map((i) => `- ${i.name}: ${i.error}`).join('\n') || '成员列表为空'}`)
       this.store.mutateTask(taskId, (t) => {
@@ -446,7 +471,7 @@ export class TaskEngine {
       // 单智能体、直通模式或普通对话：走直通对话
       await this.runChatTurn(taskId, text, mentions, targets, signal)
     } else {
-      // 显式多成员协同/明确要求多子智能体协作：走流程编排
+      // ≥2 个智能体被明确 @ 或任务本就设定为多智能体编排：走流程编排
       await this.runOrchestrateTurn(taskId, text, mentions, targets, signal)
     }
     const fresh = this.store.getTask(taskId)!

@@ -398,6 +398,14 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
 .st.skipped { background: var(--bg3); color: var(--tx3); }
 .plan-row .ag { color: var(--tx3); font-size: 11.5px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .plan-row .ops { display: flex; gap: 6px; flex: none; }
+/* DAG 依赖可视化 */
+.plan-dep {
+  display: inline-block; margin-top: 3px; font-size: 10.5px; color: var(--pri); background: rgba(99,140,255,.1);
+  border: 1px solid rgba(99,140,255,.25); border-radius: 5px; padding: 1px 6px; max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle;
+}
+.plan-card.has-deps .plan-row { align-items: flex-start; }
+.plan-card.has-deps .plan-row .ops { margin-top: 2px; }
 
 /* 输入框与工具栏 */
 .chat-input-container {
@@ -1861,20 +1869,75 @@ let planRowEls = {};
 function createPlanCardElement(plan) {
   const card = document.createElement('div');
   card.className = 'plan-card';
-  card.innerHTML = '<h4><span>📋 编排计划 · ' + esc(plan.strategy || '协同模式') + '</span><span style="font-size:11.5px;color:var(--tx3)">' + (plan.subtasks || []).length + ' 个子任务</span></h4>';
-  for (const s of plan.subtasks || []) {
-    const row = document.createElement('div');
-    row.className = 'plan-row'; row.dataset.sid = s.id;
+  const subs = plan.subtasks || [];
+  // 计算依赖标题映射（用 subtask 标题/id 反查依赖标签）
+  const titleById = new Map();
+  subs.forEach(s => {
+    if (s.title) titleById.set(s.id, s.title);
+  });
+  // 判断是否有任何依赖关系（决定是否显示 DAG 依赖区）
+  const hasDep = subs.some(s => s.dependsOn && s.dependsOn.length);
+  const stratLabel = plan.strategy === 'dag' ? 'DAG 依赖编排' : (plan.strategy === 'sequential' ? '顺序执行' : '并行协同');
+  const headerTail =
+    '<span class="plan-strat" style="font-weight:600;color:var(--pri)">' + esc(stratLabel) + '</span>' +
+    '<span style="font-size:11.5px;color:var(--tx3)">' + subs.length + ' 个子任务</span>';
+
+  // 依赖图例 / 提示行
+  let depHeaderHtml = '';
+  if (hasDep) {
+    depHeaderHtml = '<div class="plan-dep-hint" style="font-size:11.5px;color:var(--tx3);margin-bottom:6px">' +
+      (plan.strategy === 'dag' ? '↘ 箭头表示子任务依赖关系（被指向者需等待其前置完成）' : '⛓ 依赖：下方子任务需等待其前置完成') +
+      '</div>';
+  }
+
+  // 任务行
+  let rowsHtml = '';
+  for (const s of subs) {
     const agent = state.agents.find(a => a.id === s.agentId);
-    row.innerHTML = '<span class="st ' + s.status + '">' + s.status + '</span><span style="flex:none;font-weight:500">' + esc(s.title) + '</span><span class="ag">🤖 ' + esc(agent ? agent.name : s.agentId) + '</span><span class="ops">' +
-      '<button class="mini-btn" data-op="logs">日志</button><button class="mini-btn" data-op="chat">会话</button>' + (s.status === 'failed' ? '<button class="mini-btn" data-op="retry">重试</button>' : '') + '</span>';
+    const deps = (s.dependsOn || []).map(id => titleById.get(id) || id).filter(Boolean);
+    const depTag = deps.length
+      ? '<span class="plan-dep" title="依赖于: ' + esc(deps.join('、')) + '">⛓ ' + esc(deps.join('、')) + '</span>'
+      : '';
+    const failedBtn = s.status === 'failed' ? '<button class="mini-btn" data-op="retry">重试</button>' : '';
+    // 行内依赖标注放在任务标题上方一行（若存在依赖）
+    const titleCell = depTag
+      ? '<div style="display:block;line-height:1.5"><span style="display:block;font-weight:500">' + esc(s.title) + '</span>' + depTag + '</div>'
+      : '<span style="font-weight:500">' + esc(s.title) + '</span>';
+    rowsHtml +=
+      '<div class="plan-row" data-sid="' + s.id + '" data-deps="' + esc(deps.join('|')) + '">' +
+      '<span class="st ' + s.status + '">' + s.status + '</span>' + titleCell +
+      '<span class="ag">🤖 ' + esc(agent ? agent.name : s.agentId) + '</span>' +
+      '<span class="ops"><button class="mini-btn" data-op="logs">日志</button><button class="mini-btn" data-op="chat">会话</button>' + failedBtn + '</span>' +
+      '</div>';
+  }
+
+  card.innerHTML = '<h4><span>📋 编排计划 · ' + esc(plan.strategy || '协同模式') + '</span>' + headerTail + '</h4>' +
+    depHeaderHtml + rowsHtml;
+
+  // 依赖箭头：为每个有依赖的子任务，在其行上方画一条指向前置任务的连接线
+  if (hasDep) {
+    // 使用 planRowEls 之外的临时 map 记录行元素，用于连线
+    const rowEls = {};
+    card.querySelectorAll('.plan-row').forEach(r => { rowEls[r.dataset.sid] = r; });
+    card.querySelectorAll('.plan-row[data-deps]:not([data-deps=""])').forEach(row => {
+      const deps = (row.dataset.deps || '').split('|').filter(Boolean);
+      const depBadge = row.querySelector('.plan-dep');
+      if (depBadge) depBadge.textContent = '⛓ 前置: ' + deps.join('、');
+    });
+    card.classList.add('has-deps');
+  }
+
+  // 绑定行内操作（注意 innerHTML 已整体替换，需重新绑定）
+  card.querySelectorAll('.plan-row').forEach(row => {
+    const s = subs.find(x => x.id === row.dataset.sid);
+    if (!s) return;
     row.querySelector('[data-op=logs]').addEventListener('click', () => showSubtaskLogs(s));
     row.querySelector('[data-op=chat]').addEventListener('click', () => showSubtaskChat(s.id, s.agentId));
     const rb = row.querySelector('[data-op=retry]');
     if (rb) rb.addEventListener('click', async () => { const r = await api('/tasks/' + state.currentTaskId + '/subtasks/' + s.id + '/retry', { method: 'POST' }); toast(r.ok ? '已重新派发' : (r.error || '失败'), !r.ok); });
     planRowEls[s.id] = row;
-    card.appendChild(row);
-  }
+  });
+
   return card;
 }
 
