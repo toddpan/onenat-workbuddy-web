@@ -263,6 +263,29 @@ export class DshClient {
     }
   }
 
+  /** 下载整个技能目录归档 (.tgz)，返回原始 Response 供流式转发 */
+  public async downloadSkillArchive(
+    target: DshTarget,
+    name: string,
+    opts?: { root?: string; cwd?: string },
+  ): Promise<{ ok: boolean; res?: Response; name?: string; error?: string; unsupported?: boolean }> {
+    const q = toQuery(opts)
+    try {
+      const res = await fetch(`${clean(target.baseUrl)}/skills/${encodeURIComponent(name)}/archive${q}`, {
+        headers: this.headersAuth(target.apiKey),
+        signal: AbortSignal.timeout(120_000),
+      })
+      if (res.status === 404 || res.status === 501) return { ok: false, unsupported: true, error: '远端 dsh-web-service 未安装 /skills 端点' }
+      if (!res.ok || !res.body) {
+        const json: any = await res.json().catch(() => ({}))
+        return { ok: false, error: json?.error || `HTTP ${res.status}` }
+      }
+      return { ok: true, res, name: `${name}.tgz` }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || '下载技能归档失败' }
+    }
+  }
+
   /** 上传技能（multipart：file=技能压缩包 .zip/.tgz，字段 root/name） */
   public async uploadSkill(
     target: DshTarget,
