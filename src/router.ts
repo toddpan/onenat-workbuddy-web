@@ -465,18 +465,23 @@ export class WorkBuddyRouter {
         this.sendJson(res, 200, { ok: false, error: target.error })
         return true
       }
-      const r = await this.client.getSkillBody(target, name, {
+      const r = await this.client.downloadSkillArchive(target, name, {
         root: url.searchParams.get('root') || undefined,
         cwd: url.searchParams.get('cwd') || agent.workDir || undefined,
       })
       if (r.unsupported) this.sendJson(res, 200, { ok: false, error: r.error, data: { unsupported: true } })
-      else if (!r.ok) this.sendJson(res, 200, { ok: false, error: r.error })
+      else if (!r.ok || !r.res?.body) this.sendJson(res, 200, { ok: false, error: r.error || '下载失败' })
       else {
+        const ascii = name.replace(/[^\x20-\x7e]/g, '_') || 'skill'
         res.statusCode = 200
-        res.setHeader('Content-Type', 'text/markdown; charset=utf-8')
-        res.setHeader('Content-Disposition', `attachment; filename="${name}.md"`)
+        res.setHeader('Content-Type', r.res.headers.get('content-type') || 'application/gzip')
+        const len = r.res.headers.get('content-length')
+        if (len) res.setHeader('Content-Length', len)
+        res.setHeader('Content-Disposition', `attachment; filename="${ascii}.tgz"`)
         res.setHeader('Cache-Control', 'no-store')
-        res.end(r.content)
+        const stream = Readable.fromWeb(r.res.body as any)
+        stream.on('error', () => res.destroy())
+        stream.pipe(res)
       }
       return true
     }

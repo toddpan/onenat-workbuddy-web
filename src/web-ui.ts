@@ -2758,7 +2758,7 @@ async function loadSkillCenter() {
       return r.blob();
     }).then(b => {
       const url = URL.createObjectURL(b);
-      const link = document.createElement('a'); link.href = url; link.download = name + '.md';
+      const link = document.createElement('a'); link.href = url; link.download = name + '.tgz';
       document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
     }).catch(() => toast('下载失败', true));
   }));
@@ -2791,7 +2791,7 @@ function skillRowHtml(s, bound, i) {
     '<span class="sub" style="flex:none">' + (s.size ? (s.size > 1024 ? (s.size / 1024).toFixed(1) + 'KB' : s.size + 'B') : '') + '</span></div>' +
     '<div class="desc">' + esc(s.description || '') + (s.path ? '<br><span class="mono" style="color:var(--tx3);font-size:11px">' + esc(s.path) + '</span>' : '') + '</div>' +
     '<div class="ops" style="margin-top:6px"><button class="mini-btn" data-sk="preview" data-name="' + esc(s.name) + '">预览</button>' +
-    '<button class="mini-btn" data-sk="dl" data-name="' + esc(s.name) + '">下载</button>' +
+    '<button class="mini-btn" data-sk="dl" data-name="' + esc(s.name) + '">打包下载</button>' +
     '<button class="mini-btn danger" data-sk="del" data-name="' + esc(s.name) + '">删除</button></div></div>';
 }
 
