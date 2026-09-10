@@ -141,7 +141,7 @@ export interface SubAgent {
   /** 远端工作目录（绝对路径）：该成员所有远端会话的 cwd，即其文件工具根目录与附件落盘处；留空用远端默认 */
   workDir?: string
   resources: AgentResourceBinding[]
-  /** 绑定的「已安装」技能名（kebab-case），会话派发时自动注入全文 */
+  /** 绑定的「已安装」技能名（kebab-case）；派发时在提示词写入 /名 手势，由远端宿主原生加载技能正文 */
   skills?: string[]
   tags?: string[]
   description?: string
@@ -209,6 +209,8 @@ export interface TaskTurn {
   reasoning?: string
   /** 本轮工具调用过程（对齐 DSH ui-chat 的 turn-process 展示） */
   tools?: TurnToolCall[]
+  /** 本轮远端返回的真实 token 账本（含缓存命中），供前端展示缓存率 */
+  usage?: Record<string, number>
   streaming?: boolean
   subtaskIds?: string[]
   at: number
@@ -306,6 +308,7 @@ export type TaskEvent =
   | { type: 'turn_delta'; turnId: string; delta: string; seq: number }
   | { type: 'turn_reasoning'; turnId: string; delta: string; seq: number }
   | { type: 'turn_tool'; turnId: string; tool: TurnToolCall; seq: number }
+  | { type: 'turn_usage'; turnId: string; usage: Record<string, number>; seq: number }
   | { type: 'turn_end'; turn: TaskTurn }
   | { type: 'plan_update'; plan: TaskPlan }
   | { type: 'subtask_status'; subtask: PlanSubtask }

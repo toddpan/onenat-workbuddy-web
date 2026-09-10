@@ -28,8 +28,23 @@ export class TaskEngine {
   private client = new DshClient()
   private activeJobs = new Map<string, AbortController>()
   private hub = new Map<string, Set<(e: TaskEvent) => void>>()
-  /** (taskId:agentId) → 首次派发的资源提示词块（会话长持时只注入一次） */
-  private blockCache = new Map<string, string>()
+  /**
+   * 资源提示词块缓存：键 = taskId:agentId:agent.updatedAt（改绑定/技能即自动失效），
+   * 值 = 块内容 + 合成时间；TTL 5 分钟兜底远端侧变更（技能文件更新等）。
+   * 仅用于避免重复合成；直通路径命中后不重发块（靠远端会话历史延续）。
+   */
+  private blockCache = new Map<string, { block: string; at: number }>()
+  private static readonly BLOCK_CACHE_TTL = 5 * 60_000
+
+  private blockCacheKey(taskId: string, agent: { id: string; updatedAt?: number }): string {
+    return `${taskId}:${agent.id}:${agent.updatedAt || 0}`
+  }
+
+  private blockCacheFresh(taskId: string, agent: { id: string; updatedAt?: number }): { block: string } | null {
+    const e = this.blockCache.get(this.blockCacheKey(taskId, agent))
+    if (!e || Date.now() - e.at >= TaskEngine.BLOCK_CACHE_TTL) return null
+    return { block: e.block }
+  }
 
   constructor(
     private store: WorkStore,
@@ -237,7 +252,9 @@ export class TaskEngine {
 
   public async deleteTask(taskId: string): Promise<boolean> {
     await this.cancelTask(taskId, '任务已删除')
-    this.blockCache.delete(taskId)
+    for (const k of [...this.blockCache.keys()]) {
+      if (k.startsWith(taskId + ':')) this.blockCache.delete(k)
+    }
     return this.store.deleteTask(taskId)
   }
 
@@ -558,25 +575,23 @@ export class TaskEngine {
     this.store.appendTurn(taskId, turn)
     this.emit(taskId, { type: 'turn_start', turn })
 
-    const blockKey = `${taskId}:${agent.id}`
     let fullPrompt = text
     const hasDynamicResources = mentions.mentionedResourceBindings.length > 0
+    const cachedBlock = hasDynamicResources ? null : this.blockCacheFresh(taskId, agent)
 
-    if (!this.blockCache.has(blockKey) || hasDynamicResources) {
+    if (!cachedBlock) {
       const composed = await this.composer.compose(agent, {
         resolvedAt: Date.now(),
         extraResources: mentions.mentionedResourceBindings,
       })
       const block = composed.block
       if (block) {
-        if (!hasDynamicResources) this.blockCache.set(blockKey, block)
+        if (!hasDynamicResources) this.blockCache.set(this.blockCacheKey(taskId, agent), { block, at: Date.now() })
         fullPrompt = `${block}\n\n[当前用户消息]:\n${text}`
-      } else {
-        if (!hasDynamicResources) this.blockCache.set(blockKey, ' ')
+      } else if (!hasDynamicResources) {
+        this.blockCache.set(this.blockCacheKey(taskId, agent), { block: '', at: Date.now() })
       }
       for (const w of composed.warnings) this.emit(taskId, { type: 'log', level: 'warn', msg: w })
-    } else if (this.blockCache.get(blockKey) !== ' ') {
-      fullPrompt = text
     }
 
     // 工具调用过程追踪（对齐 DSH ui-chat turn-process）
@@ -635,6 +650,12 @@ export class TaskEngine {
             emitTool(t)
           })
         },
+        onUsage: (usage) => {
+          if (usage && typeof usage === 'object') {
+            this.store.updateTurn(taskId, turn.id, (tt) => { tt.usage = { ...usage } })
+            this.emit(taskId, { type: 'turn_usage', turnId: turn.id, usage, seq: streamSeq++ })
+          }
+        },
       },
       signal,
     )
@@ -644,6 +665,7 @@ export class TaskEngine {
       if (result.ok && result.content) tt.text = result.content
       else if (!result.ok && !tt.text) tt.text = ''
       if (result.reasoning) tt.reasoning = result.reasoning
+      if (result.usage && typeof result.usage === 'object') tt.usage = { ...result.usage }
     })
     const finalTurn = this.store.getTask(taskId)!.turns.find((x) => x.id === turn.id)!
     this.emit(taskId, { type: 'turn_end', turn: finalTurn })
@@ -895,22 +917,21 @@ export class TaskEngine {
     }
     subLog(`远程会话${session.reused ? '复用' : '新建'} ${session.remoteSessionId} @ ${target.baseUrl}`)
 
-    const blockKey = `${taskId}:${agent.id}`
     const parts: string[] = []
     const hasDynamicResources = extraResources && extraResources.length > 0
+    const cachedBlock = hasDynamicResources ? null : this.blockCacheFresh(taskId, agent)
 
-    if (!this.blockCache.has(blockKey) || hasDynamicResources) {
+    if (!cachedBlock) {
       const composed = await this.composer.compose(agent, {
         resolvedAt: Date.now(),
         extraResources,
       })
       const block = composed.block
-      if (!hasDynamicResources) this.blockCache.set(blockKey, block || ' ')
+      if (!hasDynamicResources) this.blockCache.set(this.blockCacheKey(taskId, agent), { block, at: Date.now() })
       if (block) parts.push(block)
       for (const w of composed.warnings) this.emit(taskId, { type: 'log', subtaskId: sub.id, level: 'warn', msg: w })
-    } else {
-      const cached = this.blockCache.get(blockKey)
-      if (cached && cached !== ' ') parts.push(cached)
+    } else if (cachedBlock.block) {
+      parts.push(cachedBlock.block)
     }
     for (const u of upstream) parts.push(u)
     parts.push(`[当前子任务指令]:\n${sub.prompt}`)

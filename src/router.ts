@@ -95,6 +95,182 @@ export class WorkBuddyRouter {
     }
   }
 
+  /** 任务实时统计缓存：taskId → { at, result }；3s TTL 防止轮询打穿远端 */
+  private statsCache = new Map<string, { at: number; result: { httpStatus: number; payload: any } }>()
+  private statsInflight = new Map<string, Promise<{ httpStatus: number; payload: any }>>()
+
+  /**
+   * 聚合任务下所有成员远端会话的实时统计（字段语义对齐 DSH web StatsLine）：
+   * 轮/步、LLM 与工具调用墙钟、首 token 均值与解码吞吐、缓存命中、token 账本。
+   * 成员离线或远端版本过低（无 stats 接口）时跳过该成员，不阻断整体。
+   */
+  private async getTaskStats(taskId: string): Promise<{ httpStatus: number; payload: any }> {
+    const cached = this.statsCache.get(taskId)
+    if (cached && Date.now() - cached.at < 3000) return cached.result
+    const inflight = this.statsInflight.get(taskId)
+    if (inflight) return inflight
+    const job = (async () => {
+      const task = this.store.getTask(taskId)
+      if (!task) {
+        return { httpStatus: 404, payload: { ok: false, error: 'Task not found' } }
+      }
+      const bindings = Object.entries(task.sessions || {})
+      const empty = {
+        turns: 0, steps: 0, llmMs: 0, toolMs: 0,
+        ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0,
+        inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0,
+      }
+      const results = await Promise.all(bindings.map(async ([agentId, binding]) => {
+        try {
+          const agent = this.store.getAgent(agentId)
+          if (!agent) return null
+          const target = await this.resolver.resolve(agent)
+          if (!target.online || !target.baseUrl) return null
+          const r = await this.client.getSessionStats(target, binding.remoteSessionId)
+          if (!r.ok || !r.stats) return { agentId, ok: false, supported: r.supported !== false, error: r.error }
+          return { agentId, ok: true, supported: true, stats: r.stats }
+        } catch (err: any) {
+          return { agentId, ok: false, supported: true, error: err?.message }
+        }
+      }))
+      const totals = { ...empty }
+      let sessionsOk = 0
+      let sessionsTotal = 0
+      let supported = false
+      for (const r of results) {
+        if (!r) continue
+        sessionsTotal += 1
+        if (r.ok) {
+          supported = true
+          sessionsOk += 1
+          const st = r.stats
+          if (st) {
+            for (const k of Object.keys(empty) as Array<keyof typeof empty>) {
+              totals[k] += st[k] || 0
+            }
+          }
+        } else if (r.supported) {
+          supported = true
+        }
+      }
+      // 无绑定（纯本地 DSH 任务）或全部成员远端过旧时不支持
+      if (bindings.length === 0) supported = false
+      const payload = {
+        ok: true,
+        data: {
+          taskId,
+          supported,
+          sessionsOk,
+          sessionsTotal,
+          stats: supported ? totals : undefined,
+        },
+      }
+      const result = { httpStatus: 200, payload }
+      this.statsCache.set(taskId, { at: Date.now(), result })
+      return result
+    })()
+    this.statsInflight.set(taskId, job)
+    try {
+      return await job
+    } finally {
+      this.statsInflight.delete(taskId)
+    }
+  }
+
+  /** 技能目录缓存：taskId|q → { at, result }（10s TTL；技能变更低频，前端每次触发带 q 过滤） */
+  private skillsCache = new Map<string, { at: number; result: { httpStatus: number; payload: any } }>()
+  private skillsInflight = new Map<string, Promise<{ httpStatus: number; payload: any }>>()
+
+  /**
+   * 聚合任务成员的技能目录（对齐 harness "/" 触发源的 skills/list）：
+   * 按技能名去重合并各成员目录，标注该技能在哪些成员可用。
+   * 成员已有远端会话 → 会话作用域目录（/sessions/:id/skills，按会话 cwd）；
+   * 尚无会话（新建任务未派发）→ 回退成员默认技能根（GET /skills?cwd=workDir，与新会话目录一致）。
+   * 远端不可达的成员跳过；全部不可用（supported=false）时前端隐藏 "/" 弹层
+   * （不影响手输 /name——宿主手势注入仍然生效）。
+   */
+  private async getTaskSkills(taskId: string, q: string): Promise<{ httpStatus: number; payload: any }> {
+    const key = taskId + '|' + q.toLowerCase()
+    const cached = this.skillsCache.get(key)
+    if (cached && Date.now() - cached.at < 10_000) return cached.result
+    const inflight = this.skillsInflight.get(key)
+    if (inflight) return inflight
+    const job = (async () => {
+      const task = this.store.getTask(taskId)
+      if (!task) {
+        return { httpStatus: 404, payload: { ok: false, error: 'Task not found' } }
+      }
+      const memberIds = task.memberAgentIds?.length ? task.memberAgentIds : Object.keys(task.sessions || {})
+      const perMember = await Promise.all(memberIds.map(async (agentId) => {
+        try {
+          const agent = this.store.getAgent(agentId)
+          const agentName = agent?.name || agentId
+          if (!agent) return null
+          const target = await this.resolver.resolve(agent)
+          if (!target.online || !target.baseUrl) return { agentId, agentName, ok: false, supported: true, skills: [] }
+          const binding = task.sessions?.[agentId]
+          if (binding?.remoteSessionId) {
+            const r = await this.client.getSessionSkills(target, binding.remoteSessionId, q)
+            if (!r.ok) return { agentId, agentName, ok: false, supported: r.supported !== false, skills: [] }
+            return { agentId, agentName, ok: true, supported: true, skills: r.skills || [] }
+          }
+          // 无会话绑定：回退默认技能根（cwd 用成员工作目录，等价新会话目录）
+          const r = await this.client.listSkills(target, { cwd: agent.workDir || undefined, search: q || undefined })
+          if (!r.ok) return { agentId, agentName, ok: false, supported: r.unsupported !== true, skills: [] }
+          return { agentId, agentName, ok: true, supported: true, skills: r.skills || [] }
+        } catch {
+          return null
+        }
+      }))
+      const byName = new Map<string, { name: string; description?: string; whenToUse?: string; modelInvocable?: boolean; userInvocable?: boolean; agents: string[] }>()
+      let sessionsOk = 0
+      let sessionsTotal = 0
+      let supported = false
+      for (const r of perMember) {
+        if (!r) continue
+        sessionsTotal += 1
+        if (!r.supported) continue
+        supported = true
+        if (!r.ok) continue
+        sessionsOk += 1
+        for (const sk of r.skills) {
+          if (!sk?.name) continue
+          const existing = byName.get(sk.name)
+          if (existing) {
+            if (!existing.agents.includes(r.agentName)) existing.agents.push(r.agentName)
+            if (!existing.description && sk.description) existing.description = sk.description
+          } else {
+            byName.set(sk.name, {
+              name: sk.name,
+              description: sk.description,
+              whenToUse: sk.whenToUse,
+              modelInvocable: sk.modelInvocable !== false,
+              userInvocable: sk.userInvocable !== false,
+              agents: [r.agentName],
+            })
+          }
+        }
+      }
+      const skills = [...byName.values()]
+        .sort((a, b) => a.name.localeCompare(b.name))
+      const result = {
+        httpStatus: 200,
+        payload: {
+          ok: true,
+          data: { taskId, q, supported, sessionsOk, sessionsTotal, count: skills.length, skills },
+        },
+      }
+      this.skillsCache.set(key, { at: Date.now(), result })
+      return result
+    })()
+    this.skillsInflight.set(key, job)
+    try {
+      return await job
+    } finally {
+      this.skillsInflight.delete(key)
+    }
+  }
+
   public async dispatch(req: IncomingMessage, res: ServerResponse, prefix: string): Promise<boolean> {
     const rawUrl = req.url || '/'
     const method = (req.method || 'GET').toUpperCase()
@@ -649,6 +825,23 @@ export class WorkBuddyRouter {
       const body = await this.parseBody(req)
       const out = await this.engine.sendUserMessage(taskId, String(body.message || ''))
       this.sendJson(res, out.ok ? 202 : 400, out)
+      return true
+    }
+    // 任务实时统计：聚合各成员远端会话的轮/步/耗时/吞吐/token 账本（3s 缓存 + 并发去重）
+    const statsMatch = /^\/api\/tasks\/([^/]+)\/stats$/.exec(p)
+    if (statsMatch && method === 'GET') {
+      const taskId = decodeURIComponent(statsMatch[1])
+      const out = await this.getTaskStats(taskId)
+      this.sendJson(res, out.httpStatus, out.payload)
+      return true
+    }
+    // 输入框 "/" 技能候选：聚合各成员会话作用域技能目录（按名去重，标注可用成员）
+    const taskSkillsMatch = /^\/api\/tasks\/([^/]+)\/skills$/.exec(p)
+    if (taskSkillsMatch && method === 'GET') {
+      const taskId = decodeURIComponent(taskSkillsMatch[1])
+      const q = (urlObj.searchParams.get('q') || '').trim()
+      const out = await this.getTaskSkills(taskId, q)
+      this.sendJson(res, out.httpStatus, out.payload)
       return true
     }
     // 重命名会话（对齐 DSH web 的 session.rename 动词）
