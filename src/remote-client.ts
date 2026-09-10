@@ -39,6 +39,7 @@ export interface StreamEventHandlers {
   onReasoning?: (delta: string) => void
   onToolCall?: (info: { id?: string; name?: string; arguments?: any }) => void
   onToolResult?: (info: { id?: string; name?: string; result?: any; isError?: boolean }) => void
+  onUsage?: (usage: Record<string, number>) => void
   onLog?: (msg: string, level?: SubtaskLogEntry['level']) => void
 }
 
@@ -52,6 +53,8 @@ export interface PromptResult {
   via?: 'sse' | 'sync' | 'poll'
   /** 远端不支持 prompt-stream（旧版）⇒ 调用方降级同步 prompt */
   sseUnsupported?: boolean
+  /** 远端返回的真实 token 账本（含缓存命中），供前端展示缓存率 */
+  usage?: Record<string, number>
 }
 
 function clean(url: string): string {
@@ -467,6 +470,78 @@ export class DshClient {
   }
 
   /**
+   * 会话作用域技能目录（对齐 harness skills/list：按会话 cwd 解析技能根）。
+   * 需要 dsh-web-service ≥ 0.1.5（GET /sessions/:id/skills）；旧版返回 supported=false。
+   * 「装载到上下文」由远端 DSH 核心完成：用户消息中空白符边界的 /name 手势
+   * （tool-skill pre-step）会注入技能正文，这里只取清单。
+   */
+  public async getSessionSkills(target: DshTarget, sessionId: string, q?: string): Promise<{
+    ok: boolean
+    supported?: boolean
+    cwd?: string
+    skills?: Array<{ name: string; description?: string; whenToUse?: string; modelInvocable?: boolean; userInvocable?: boolean }>
+    error?: string
+  }> {
+    try {
+      const query = q ? `?search=${encodeURIComponent(q)}` : ''
+      const res = await fetch(`${clean(target.baseUrl)}/sessions/${encodeURIComponent(sessionId)}/skills${query}`, {
+        headers: this.headers(target.apiKey),
+        signal: AbortSignal.timeout(12_000),
+      })
+      const json: any = await res.json().catch(() => ({}))
+      if (res.status === 404 || res.status === 501) return { ok: false, supported: false, error: '远端 dsh-web-service 版本过低，无会话技能目录' }
+      if (!res.ok || !json?.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
+      return {
+        ok: true,
+        supported: true,
+        cwd: json.data?.cwd,
+        skills: Array.isArray(json.data?.skills) ? json.data.skills : [],
+      }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || '查询会话技能失败' }
+    }
+  }
+
+  /**
+   * 会话实时统计（轮/步/LLM 与工具耗时/首 token/吞吐/token 账本）。
+   * 需要 dsh-web-service ≥ 0.1.5（GET /sessions/:id/stats）；旧版返回 supported=false 供调用方降级隐藏。
+   */
+  public async getSessionStats(target: DshTarget, sessionId: string): Promise<{
+    ok: boolean
+    supported?: boolean
+    stats?: Record<string, number>
+    error?: string
+  }> {
+    try {
+      const res = await fetch(`${clean(target.baseUrl)}/sessions/${encodeURIComponent(sessionId)}/stats`, {
+        headers: this.headers(target.apiKey),
+        signal: AbortSignal.timeout(12_000),
+      })
+      const json: any = await res.json().catch(() => ({}))
+      if (res.status === 404 || res.status === 501) return { ok: false, supported: false, error: '远端 dsh-web-service 版本过低，不含统计接口' }
+      if (!res.ok || !json?.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
+      const d = json.data || {}
+      const stats: Record<string, number> = {
+        turns: d.turns || 0,
+        steps: d.steps || 0,
+        llmMs: d.llmMs || 0,
+        toolMs: d.toolMs || 0,
+        ttftMs: d.ttftMs || 0,
+        ttftSteps: d.ttftSteps || 0,
+        decodeMs: d.decodeMs || 0,
+        decodeTokens: d.decodeTokens || 0,
+        inputTokens: d.usage?.inputTokens || 0,
+        cacheReadTokens: d.usage?.cacheReadTokens || 0,
+        cacheWriteTokens: d.usage?.cacheWriteTokens || 0,
+        outputTokens: d.usage?.outputTokens || 0,
+      }
+      return { ok: true, supported: true, stats }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || '查询会话统计失败' }
+    }
+  }
+
+  /**
    * SSE 流式派发 prompt。解析 `event: X\ndata: Y` 帧。
    * 远端返回 404/501（旧版无此路由）时返回 sseUnsupported=true 供调用方降级。
    */
@@ -500,6 +575,7 @@ export class DshClient {
       let done = false
       let sawTurnEnd = false
       let loggedFirstReasoning = false
+      let usage: Record<string, number> | undefined
       handlers.onLog?.('远端 SSE 流已连接，指令已提交', 'info')
       while (!done) {
         const chunk = await reader.read()
@@ -541,6 +617,14 @@ export class DshClient {
             case 'tool_result':
               handlers.onToolResult?.(data || {})
               break
+            case 'usage':
+              // 远端透传的真实 token 账本（含缓存命中）
+              if (data?.usage && typeof data.usage === 'object') {
+                const u = { ...data.usage }
+                usage = u
+                handlers.onUsage?.(u)
+              }
+              break
             case 'error':
               return { ok: false, content, reasoning, error: data?.message || '远端执行错误' }
             case 'turn_end': {
@@ -560,7 +644,7 @@ export class DshClient {
       if (!sawTurnEnd && !content) {
         return { ok: false, error: 'SSE 流在产出任何内容前结束', sseUnsupported: false }
       }
-      return { ok: true, content, reasoning: reasoning || undefined, via: 'sse' }
+      return { ok: true, content, reasoning: reasoning || undefined, via: 'sse', usage }
     } catch (err: any) {
       if (err?.name === 'AbortError') return { ok: false, content, reasoning, error: '已中止', timedOut: true }
       return { ok: false, content, reasoning, error: err?.message || 'SSE 流失败' }
@@ -584,7 +668,8 @@ export class DshClient {
       })
       const json: any = await res.json().catch(() => ({}))
       if (!res.ok || !json?.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
-      return { ok: true, content: json.data?.content || '', reasoning: json.data?.reasoning, via: 'sync' }
+      const usage = json.data?.usage && typeof json.data.usage === 'object' ? { ...json.data.usage } : undefined
+      return { ok: true, content: json.data?.content || '', reasoning: json.data?.reasoning, via: 'sync', usage }
     } catch (err: any) {
       const msg = err?.message || 'prompt 失败'
       const isTimeout = err?.name === 'AbortError' || /abort|timeout/i.test(msg)

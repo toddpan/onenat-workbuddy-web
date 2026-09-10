@@ -228,16 +228,6 @@ export class OnenatDirectory {
   }
 
   /** 下载应用技能文件全文（url 已自带 key） */
-  public async fetchSkillText(url: string, maxBytes = 16 * 1024): Promise<string> {
-    const res = await fetch(url, { signal: AbortSignal.timeout(12_000) })
-    if (!res.ok) throw new Error(`技能下载 HTTP ${res.status}`)
-    const text = await res.text()
-    if (text.length > maxBytes) {
-      return text.slice(0, maxBytes) + `\n…(截断，全文 ${text.length} 字节: ${url})`
-    }
-    return text
-  }
-
   /**
    * 读取映射实例的有效凭证（映射覆盖优先，回退应用默认）。
    * ONENAT 侧限速 5 次/分 ⇒ 本地缓存 10 分钟。

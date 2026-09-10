@@ -1,7 +1,7 @@
 /**
  * @dsh-external/onenat-workbuddy - Interactive Web Console UI
  *
- * 单页控制台: 工作台(任务多轮聊天) / 子智能体 / 资源目录 / 编排看板 / 设置
+ * 单页控制台: 工作台(任务多轮聊天) / 子智能体 / 资源目录 / 设置
  *
  * 深度集成 DSH Web 架构设计与性能优化：
  *  1. 会话列表管理：按时间分组（今天/前7天/更早/已归档）、即时搜索过滤、状态脉冲指示、子智能体成员徽章；
@@ -18,7 +18,8 @@ export function renderWebUi(prefix: string): string {
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#090e17">
 <title>OneNat WorkBuddy · 多智能体协作工作台</title>
 <style>
 :root {
@@ -36,8 +37,8 @@ export function renderWebUi(prefix: string): string {
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { height: 100%; width: 100%; }
-body { background: var(--bg); color: var(--tx); font-family: var(--font); font-size: 14px; overflow: hidden; -webkit-font-smoothing: antialiased; }
-button { font-family: inherit; cursor: pointer; border: none; outline: none; }
+body { background: var(--bg); color: var(--tx); font-family: var(--font); font-size: 14px; overflow: hidden; -webkit-font-smoothing: antialiased; -webkit-tap-highlight-color: transparent; overscroll-behavior: none; }
+button { font-family: inherit; cursor: pointer; border: none; outline: none; touch-action: manipulation; }
 input, textarea, select { font-family: inherit; font-size: 13px; background: var(--bg); border: 1px solid var(--line); color: var(--tx); border-radius: var(--rad-sm); padding: 8px 10px; outline: none; width: 100%; }
 input:focus, textarea:focus, select:focus { border-color: var(--pri); }
 textarea { resize: vertical; min-height: 56px; }
@@ -47,7 +48,7 @@ textarea { resize: vertical; min-height: 56px; }
 ::-webkit-scrollbar-track { background: transparent; }
 
 /* ---- Layout ---- */
-#app { display: flex; flex-direction: column; height: 100vh; width: 100vw; overflow: hidden; }
+#app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; width: 100vw; overflow: hidden; }
 header {
   background: var(--bg2); border-bottom: 1px solid var(--line); height: 52px;
   display: flex; align-items: center; gap: 16px; padding: 0 18px; flex: none; z-index: 30;
@@ -64,7 +65,9 @@ nav { display: flex; gap: 2px; }
 nav button {
   background: transparent; color: var(--tx2); padding: 6px 12px; border-radius: var(--rad-sm);
   font-size: 13px; font-weight: 500; transition: all .15s ease;
+  display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
 }
+nav button .ic { font-size: 1.05em; line-height: 1; }
 nav button:hover { color: var(--tx); background: var(--bg3); }
 nav button.on { color: var(--pri); background: var(--pri-light); font-weight: 600; }
 .hspacer { flex: 1; }
@@ -243,6 +246,9 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
 .msg.user .meta { justify-content: flex-end; }
 .msg .meta .tag-model {
   background: var(--bg3); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; font-size: 10px; color: var(--tx2);
+}
+.msg .meta .tag-cache {
+  background: rgba(99, 140, 255, 0.10); border: 1px solid rgba(99, 140, 255, 0.35); border-radius: 4px; padding: 0 5px; font-size: 10px; color: var(--pri); white-space: nowrap;
 }
 
 /* DSH Web 规范 Markdown 内容区 */
@@ -484,7 +490,7 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
 .btn-send:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; }
 .btn-stop {
   background: transparent; border: 1px solid var(--err); color: var(--err); border-radius: var(--rad-sm);
-  padding: 7px 14px; display: none; font-weight: 600; font-size: 12px; flex: none;
+  padding: 9px 14px; display: none; font-weight: 600; font-size: 12px; flex: none;
 }
 .btn-stop:hover { background: var(--err); color: #fff; }
 .mini-btn {
@@ -500,6 +506,46 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
 .cfg-sel {
   width: auto; max-width: 220px; min-width: 130px; font-size: 11.5px !important;
   padding: 4px 8px !important; border-radius: 6px !important; flex: none;
+}
+
+/* 主调度模型选择：自定义弹层（原生 select 的移动端全屏弹窗体验差：字大、选项折行、样式失控） */
+.model-picker { position: relative; flex: none; }
+.model-btn {
+  display: inline-block; text-align: left; cursor: pointer; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; max-width: 62vw; min-width: 150px;
+}
+.model-pop {
+  position: absolute; bottom: calc(100% + 10px); right: 0; z-index: 70;
+  width: 420px; max-width: calc(100vw - 20px); max-height: 54vh; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  background: var(--bg2); border: 1px solid var(--line2); border-radius: 12px;
+  box-shadow: 0 14px 44px rgba(0,0,0,.6); padding: 6px; display: none;
+}
+.model-pop.on { display: block; }
+.model-pop-head {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  padding: 8px 10px 6px; font-size: 11px; color: var(--tx3);
+  border-bottom: 1px solid var(--line); margin-bottom: 4px;
+}
+.model-group {
+  padding: 8px 10px 3px; font-size: 10.5px; font-weight: 700; color: var(--pri);
+  text-transform: uppercase; letter-spacing: .05em;
+}
+.model-item {
+  display: flex; align-items: center; gap: 8px; padding: 10px; border-radius: 8px;
+  cursor: pointer; font-size: 12.5px; color: var(--tx);
+}
+.model-item:hover { background: var(--bg-hover); }
+.model-item.on { color: var(--pri); background: var(--pri-light); }
+.model-item .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-item .ck { flex: none; visibility: hidden; font-weight: 700; }
+.model-item.on .ck { visibility: visible; }
+.model-empty { padding: 14px; color: var(--tx3); font-size: 12px; text-align: center; }
+
+/* 任务实时统计条（轮/步 · LLM/工具耗时 · 首 token/吞吐 · 缓存命中 · token 账本），对齐 DSH web StatsLine */
+.task-stats {
+  flex: none; padding: 4px 18px 7px; font-size: 11px; color: var(--tx3); line-height: 1.5;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center;
+  user-select: none; border-top: 1px solid var(--line);
 }
 
 /* 附件上传面板 */
@@ -549,6 +595,7 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
 .card .desc { color: var(--tx2); font-size: 12.5px; margin-top: 6px; line-height: 1.6; }
 .card .ops { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 .mono { font-family: var(--mono); font-size: 12px; color: var(--tx2); }
+.tbl-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 table.res { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.res th { text-align: left; color: var(--tx3); font-weight: 500; font-size: 12px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
 table.res td { padding: 9px 10px; border-bottom: 1px solid var(--bg3); }
@@ -607,6 +654,16 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 
 /* @ 提及自动联想浮层 (Mentions Popup) */
 .chat-input-container { position: relative; }
+/* 回到底部悬浮按钮：锚定输入区上缘，长对话/手机端快速跳底部 */
+.jump-bottom {
+  position: absolute; bottom: 100%; right: 16px; margin-bottom: 10px; z-index: 12;
+  display: none; align-items: center; gap: 4px;
+  background: var(--bg3); border: 1px solid var(--line2); color: var(--tx2);
+  font-size: 12px; padding: 8px 13px; border-radius: 999px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.5);
+}
+.jump-bottom.on { display: inline-flex; }
+.jump-bottom:hover { color: var(--pri); border-color: var(--pri); }
 .mention-popup {
   position: absolute; bottom: 100%; left: 16px; width: 340px; max-height: 280px;
   background: var(--bg2); border: 1px solid var(--line2); border-radius: 10px;
@@ -653,25 +710,50 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 
 /* ============================================================
    移动端响应式适配 (≤768px)
-   侧栏变抽屉 · 头部压缩 · 输入区自适应 · 弹窗/抽屉全屏 · 表格横向滚动
+   主导航下沉为底部 Tab 栏 · 侧栏变抽屉 · 聊天头部两行自适应 ·
+   输入区 16px 防 iOS 聚焦缩放 · 弹窗/抽屉全屏 · 表格容器横向滚动 ·
+   dvh 动态视口（微信/移动浏览器地址栏收展不裁切）· 触摸目标 ≥32px
    ============================================================ */
 @media (max-width: 768px) {
-  /* ---- 顶部导航 ---- */
-  header { padding: 0 10px; gap: 8px; height: 48px; }
-  .brand { gap: 7px; }
-  .brand .logo { width: 26px; height: 26px; font-size: 13px; }
-  .brand span { font-size: 12.5px; }
+  /* ---- 视口与输入基础 ---- */
+  #app { height: 100vh; height: 100dvh; }
+  input, textarea, select { font-size: 16px; } /* ≥16px 防止 iOS 聚焦自动放大 */
+  textarea { min-height: 42px; }
+
+  /* ---- 顶部：品牌压缩 + ONENAT 状态胶囊退化为状态点 ---- */
+  header { padding: 0 10px; gap: 8px; height: 46px; }
+  .brand { gap: 6px; min-width: 0; flex: 1; }
+  .brand .logo { width: 24px; height: 24px; font-size: 12px; flex: none; }
+  .brand span { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .brand small { display: none; }
-  nav { overflow-x: auto; max-width: 68vw; scrollbar-width: none; }
+  .chip { display: inline-flex; padding: 5px 7px; gap: 4px; flex: none; }
+  .chip #onenat-text { display: none; }
+
+  /* ---- 主导航下沉为底部 Tab 栏（移动端标准导航模式） ---- */
+  nav {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 46;
+    display: flex; align-items: stretch; max-width: none; overflow: visible; gap: 0;
+    background: var(--bg2); border-top: 1px solid var(--line);
+    padding-bottom: env(safe-area-inset-bottom);
+    box-shadow: 0 -6px 20px rgba(0,0,0,.4);
+  }
   nav::-webkit-scrollbar { display: none; }
-  nav button { padding: 5px 7px; font-size: 11.5px; white-space: nowrap; }
-  .chip { display: none; }
+  nav button {
+    flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 2px; margin: 4px 3px 2px; padding: 5px 2px; min-height: 46px;
+    font-size: 10.5px !important; border-radius: 10px;
+  }
+  nav button .ic { font-size: 17px; }
+  main { padding-bottom: calc(62px + env(safe-area-inset-bottom)); }
+  /* 软键盘弹出（body.kb-open）时隐藏底部 Tab 栏，空间让给消息区 */
+  body.kb-open nav { display: none; }
+  body.kb-open main { padding-bottom: 0; }
 
   /* ---- 工作台：侧栏变抽屉 ---- */
   #view-work { position: relative; }
   .task-side {
     position: absolute; top: 0; left: 0; bottom: 0; z-index: 20;
-    width: 80vw; max-width: 330px; border-right: 1px solid var(--line2);
+    width: 82vw; max-width: 330px; border-right: 1px solid var(--line2);
     transform: translateX(-100%); transition: transform .22s ease;
     box-shadow: 6px 0 24px rgba(0,0,0,.55);
   }
@@ -681,38 +763,56 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
     z-index: 15; opacity: 0; pointer-events: none; transition: opacity .18s ease;
   }
   #view-work.side-open .side-backdrop { opacity: 1; pointer-events: auto; }
-  .side-toggle { display: inline-flex; align-items: center; }
+  .side-toggle { display: inline-flex; align-items: center; min-height: 32px; padding: 4px 10px; }
   .side-toggle .st-hamb { font-size: 16px; }
+  .btn-new { padding: 8px 12px; font-size: 12.5px; }
 
-  /* ---- 聊天头部 ---- */
-  .chat-head { padding: 0 12px 0 8px; gap: 6px; height: 48px; }
-  .chat-head .title { max-width: 38vw; font-size: 13px; }
-  .chat-head .mini-btn { padding: 4px 7px; font-size: 12px; white-space: nowrap; }
-  .chat-head .mini-btn.danger { padding: 4px 7px; }
-  .badge { font-size: 10px; padding: 2px 7px; }
+  /* ---- 聊天头部：单行紧凑（☰ + 标题 + ✏️ + 模式徽章；停止在输入框旁，归档/删除在会话抽屉里） ---- */
+  .chat-head { flex-wrap: wrap; height: auto; min-height: 44px; padding: 6px 10px; row-gap: 4px; column-gap: 8px; align-items: center; justify-content: flex-start; }
+  .side-toggle { order: -1; }
+  .chat-head .title { flex: 1 1 auto; min-width: 0; max-width: none; font-size: 13.5px; }
+  .chat-head .hspacer { display: none; }
+  .chat-head .mini-btn { min-height: 30px; padding: 5px 9px; font-size: 12px; white-space: nowrap; flex: none; }
+  .chat-head .badge { display: inline-flex; }
+  .chat-head .badge.mode { flex: 0 1 auto; min-width: 0; max-width: 40vw; }
+  .badge { display: inline-flex; align-items: center; min-height: 26px; font-size: 10.5px; padding: 3px 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; box-sizing: border-box; }
 
   /* ---- 消息区 ---- */
-  .chat-scroll { padding: 12px 12px 20px; }
+  .chat-scroll { padding: 12px 12px 32px; }
   .msg { gap: 8px; margin-bottom: 16px; }
   .msg .avatar { width: 28px; height: 28px; font-size: 12px; border-radius: 7px; }
   .msg.agent .bubble, .msg.system .bubble { padding-left: 10px; }
   .msg.user .content { padding: 8px 11px; }
   .msg .content { font-size: 13px; }
+  .msg .meta { flex-wrap: wrap; row-gap: 2px; }
   .markdown h1 { font-size: 15px; }
   .markdown h2 { font-size: 14px; }
   .markdown h3 { font-size: 13.5px; }
   .md-code-block pre { font-size: 11.5px; }
+  .md-code-copy { padding: 5px 10px; font-size: 11px; }
+  .hist-more-btn { padding: 9px 16px; }
+  .tw-row { padding: 6px 8px; }
+  .rz-head { padding: 9px 10px; }
 
-  /* ---- 输入区 ---- */
+  /* ---- 输入区：输入行 + 紧凑工具条（横向滚动，模型下拉不再全宽堆叠） ---- */
   .chat-input { padding: 8px 10px 6px; gap: 8px; }
-  .chat-input textarea { font-size: 14px; min-height: 40px; }
-  .btn-send { padding: 8px 14px; font-size: 13px; }
-  .btn-stop { padding: 6px 11px; }
-  .composer-bar { padding: 5px 10px calc(7px + env(safe-area-inset-bottom)); }
-  .cfg-sel { max-width: 100%; width: 100%; }
+  .chat-input textarea { font-size: 16px; min-height: 40px; max-height: 132px; }
+  .btn-send { padding: 8px 14px; font-size: 13.5px; min-height: 40px; }
+  .btn-stop { padding: 8px 12px; font-size: 13px; min-height: 40px; }
+  .composer-bar { padding: 5px 10px 7px; gap: 6px; flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .composer-bar::-webkit-scrollbar { display: none; }
+  .composer-bar .hspacer { display: none; }
+  .composer-bar .member-chips { flex: none; flex-wrap: nowrap; }
+  .cfg-sel { width: auto !important; min-width: 170px; max-width: 62vw; flex: 0 0 auto; font-size: 16px !important; padding: 6px 8px !important; min-height: 34px; }
+  .model-btn { max-width: 62vw; }
+  .model-pop { position: fixed; left: 10px; right: 10px; bottom: calc(64px + env(safe-area-inset-bottom)); width: auto; max-width: none; max-height: 58vh; }
+  .jump-bottom { right: 12px; padding: 8px 11px; font-size: 12px; }
+  .jump-bottom .jb-t { display: none; }
+  .task-stats { padding: 4px 10px 5px; font-size: 10.5px; }
 
   /* ---- 提及浮层 ---- */
   .mention-popup { width: calc(100vw - 24px); left: 12px; }
+  .mention-item { padding: 11px 12px; }
 
   /* ---- 计划卡片 ---- */
   .plan-card { padding: 10px 12px; }
@@ -720,12 +820,14 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
   .plan-row .st { width: 58px; }
   .plan-row .ag { width: 100%; order: 3; }
   .plan-row .ops { margin-left: auto; }
+  .plan-row .ops .mini-btn { min-height: 30px; padding: 5px 10px; }
 
   /* ---- 通用面板 ---- */
   .panel { padding: 14px 12px; }
   .panel-head { flex-wrap: wrap; gap: 8px; }
   .panel-head h2 { font-size: 15px; }
   .panel-head .sub { width: 100%; font-size: 12px; }
+  .panel-head .btn { min-height: 34px; }
   .grid2, .grid3 { grid-template-columns: 1fr; }
 
   /* ---- 卡片: 标签与操作按钮换行，避免溢出 ---- */
@@ -733,43 +835,59 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
   .card .row1 { flex-wrap: wrap; gap: 6px; }
   .card .row1 h3 { font-size: 15px; }
   .card .ops { flex-wrap: wrap; gap: 7px; }
-  .card .ops .btn { font-size: 12px; padding: 6px 10px; }
+  .card .ops .btn { font-size: 12.5px; padding: 8px 11px; min-height: 34px; }
+  .card .desc { word-break: break-word; }
+  .card .desc .mono { word-break: break-all; }
   .bind-row, .agent-check { padding: 10px; }
 
-  /* ---- 表格横向滚动 ---- */
-  table.res { min-width: 620px; }
-  .card:has(table.res) { overflow-x: auto; }
-  /* 宽表自适应：单元格单行 + 容器横向滚动，避免窄屏把列压成逐字竖排/文字墙 */
+  /* ---- 资源目录表：容器横向滚动（不依赖 :has()，兼容旧内核） ---- */
+  table.res { min-width: 640px; }
+  table.res th, table.res td { white-space: nowrap; padding: 9px 10px; }
+  table.res .dot2 { margin-left: 6px; margin-right: 0; }
   .md-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   .md-table { width: auto; font-size: 12px; }
   .md-table th, .md-table td { white-space: nowrap; padding: 6px 9px; }
 
   /* ---- 弹窗 / 抽屉 ---- */
-  .modal { max-width: 96vw; max-height: 92vh; }
-  .modal-head { padding: 12px 14px; }
-  .modal-body { padding: 14px; }
-  .modal-foot { padding: 10px 14px; }
-  .drawer { width: 100vw; max-width: 100vw; }
+  .modal-mask { padding: 12px; }
+  .modal { width: 100%; max-width: 100%; max-height: calc(100dvh - 24px); }
+  .modal-foot { flex-wrap: wrap; }
+  .modal-foot .btn { min-height: 38px; }
+  .drawer { width: 100vw; max-width: 100vw; height: 100vh; height: 100dvh; }
   .drawer-head { padding: 0 14px; height: 48px; }
   .drawer-body { padding: 12px 14px; }
-  #upload-panel { right: 10px; bottom: 78px; width: calc(100vw - 20px); max-width: 100%; }
+  .db-row { padding: 11px 12px; }
+  #upload-panel { right: 10px; bottom: calc(66px + env(safe-area-inset-bottom)); width: calc(100vw - 20px); max-width: 100%; }
   .pre-block { max-height: 60vh; }
 
-  /* ---- Toast ---- */
-  .toast { max-width: 90vw; font-size: 12.5px; }
+  /* ---- Toast / 问答卡片（避开底部 Tab 栏） ---- */
+  .toast { bottom: calc(62px + env(safe-area-inset-bottom)); max-width: 90vw; font-size: 12.5px; }
+  .ask-opt { padding: 12px 14px; }
+  .ask-btn-submit { min-height: 40px; }
+}
+
+/* 触屏设备无 hover：会话条目操作按钮常显（改为条目内第三行，右对齐），并整体紧凑化 */
+@media (max-width: 768px) and (hover: none) {
+  .task-item { padding: 7px 9px; gap: 2px; }
+  .task-item .t { font-size: 12px; }
+  .task-item .row-sub { font-size: 10.5px; padding-left: 13px; }
+  .task-item .acts {
+    display: flex; position: static; margin: 1px 0 0; justify-content: flex-end;
+    background: transparent; box-shadow: none; padding: 0; gap: 2px;
+  }
+  .task-item .acts button { font-size: 13px; padding: 2px 7px; }
 }
 </style>
 </head>
 <body>
 <div id="app">
   <header>
-    <div class="brand"><div class="logo">⚡</div><span>OneNat WorkBuddy</span><small>多智能体协作工作台</small></div>
+    <div class="brand"><div class="logo">⚡</div><span id="brand-title">OneNat WorkBuddy</span><small>多智能体协作工作台</small></div>
     <nav id="nav">
-      <button data-v="work" class="on">💬 工作台</button>
-      <button data-v="agents">🤖 子智能体</button>
-      <button data-v="resources">🗂 资源目录</button>
-      <button data-v="board">📊 编排看板</button>
-      <button data-v="settings">⚙️ 设置</button>
+      <button data-v="work" class="on"><span class="ic">💬</span><span class="lb">工作台</span></button>
+      <button data-v="agents"><span class="ic">🤖</span><span class="lb">子智能体</span></button>
+      <button data-v="resources"><span class="ic">🗂</span><span class="lb">资源目录</span></button>
+      <button data-v="settings"><span class="ic">⚙️</span><span class="lb">设置</span></button>
     </nav>
     <div class="hspacer"></div>
     <div class="chip" id="onenat-chip"><span class="dot" id="onenat-dot"></span><span id="onenat-text">ONENAT 连接中…</span></div>
@@ -796,9 +914,6 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <button class="mini-btn" id="btn-rename-task" style="display:none" title="重命名会话">✏️</button>
           <span class="badge mode" id="chat-mode" style="display:none"></span>
           <span class="hspacer"></span>
-          <button class="btn-stop" id="btn-stop">■ 停止</button>
-          <button class="mini-btn" id="btn-arch-task" style="display:none" title="归档会话">🗄️ 归档</button>
-          <button class="mini-btn danger" id="btn-del-task" style="display:none">删除</button>
         </div>
         <div class="chat-scroll" id="chat-scroll">
           <div class="chat-empty" id="chat-empty">
@@ -816,18 +931,29 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
             </div>
             <div class="mention-popup-list" id="mention-list"></div>
           </div>
+          <div class="mention-popup" id="skill-popup">
+            <div class="mention-popup-head">
+              <span>技能 (/) · 发送后由 DSH 装载技能正文</span>
+              <span>↑↓ 选择 · Enter 插入</span>
+            </div>
+            <div class="mention-popup-list" id="skill-list"></div>
+          </div>
+          <button class="jump-bottom" id="btn-jump-bottom" title="回到底部">⬇<span class="jb-t"> 回到底部</span></button>
           <div class="chat-input">
             <button class="mini-btn" id="btn-attach" title="上传附件到工作区" style="padding:10px 12px">📎</button>
             <input type="file" id="file-input" multiple style="display:none" />
             <textarea id="input" placeholder="输入消息…（@ 指定智能体/注入资源，Enter 发送）"></textarea>
+            <button class="btn-stop" id="btn-stop" title="停止生成">■ 停止</button>
             <button class="btn-send" id="btn-send">发送</button>
           </div>
           <div class="composer-bar">
             <span class="hspacer"></span>
-            <select class="cfg-sel" id="chat-model" title="主调度模型（主任务拆解用，不影响成员子智能体）" style="display:none">
-              <option value="">主调度默认模型</option>
-            </select>
+            <div class="model-picker" id="model-picker">
+              <button class="cfg-sel model-btn" id="chat-model-btn" title="主调度模型（主任务拆解用，不影响成员子智能体）">⚙ 主调度默认模型</button>
+              <div class="model-pop" id="model-pop"></div>
+            </div>
           </div>
+          <div class="task-stats" id="task-stats" style="display:none"></div>
         </div>
       </section>
     </div>
@@ -837,11 +963,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
     </div></div>
     <div class="view" id="view-resources"><div class="panel">
       <div class="panel-head"><h2>资源目录</h2><span class="sub" id="res-sub"></span><span class="hspacer"></span><button class="btn" id="btn-res-refresh">↻ 强制刷新</button></div>
-      <div class="card" style="padding:0"><table class="res" id="res-table"><thead><tr><th>资源</th><th>类型</th><th>公网入口（实时解析）</th><th>内网目标</th><th>技能</th></tr></thead><tbody></tbody></table></div>
-    </div></div>
-    <div class="view" id="view-board"><div class="panel">
-      <div class="panel-head"><h2>编排看板</h2><span class="sub">orchestrate 模式任务的计划与子任务执行视图</span></div>
-      <div id="board-list"></div>
+      <div class="card" style="padding:0"><div class="tbl-wrap"><table class="res" id="res-table"><thead><tr><th>资源</th><th>类型</th><th>公网入口（实时解析）</th><th>内网目标</th><th>技能</th></tr></thead><tbody></tbody></table></div></div>
     </div></div>
     <div class="view" id="view-settings"><div class="panel" style="max-width:760px">
       <div class="panel-head"><h2>设置</h2></div>
@@ -1176,7 +1298,6 @@ function switchView(v) {
   document.querySelectorAll('.view').forEach(x => x.classList.toggle('on', x.id === 'view-' + v));
   if (v === 'resources') renderResources();
   if (v === 'agents') renderAgents();
-  if (v === 'board') renderBoard();
   if (v === 'settings') renderSettings();
 }
 
@@ -1199,6 +1320,44 @@ document.addEventListener('click', (e) => {
 });
 // 窗口从手机切回桌面时清理抽屉状态
 window.addEventListener('resize', () => { if (!isMobile()) closeSidebar(); });
+
+// 手机端软键盘处理：输入框聚焦时给 body 加 kb-open（CSS 隐藏底部 Tab 栏，
+// 空间让给消息区）；键盘收起后若消息区原本贴底则跟随到底，避免停在半空。
+if ($('input')) {
+  const kbInput = $('input');
+  kbInput.addEventListener('focus', () => { if (isMobile()) document.body.classList.add('kb-open'); });
+  kbInput.addEventListener('blur', () => {
+    document.body.classList.remove('kb-open');
+    const cs = $('chat-scroll');
+    if (cs && cs.scrollHeight - cs.scrollTop - cs.clientHeight < 160) cs.scrollTop = cs.scrollHeight;
+  });
+}
+// 触屏上点击发送/附件/停止/回到底部时不让输入框失焦（软键盘保持展开）
+['btn-send', 'btn-attach', 'btn-stop', 'btn-jump-bottom'].forEach((bid) => {
+  const el = $(bid); if (!el) return;
+  el.addEventListener('mousedown', (e) => e.preventDefault());
+});
+
+// 手机端底部 Tab 使用短标签（桌面保持全称）
+const NAV_LABELS = {
+  work: { full: '工作台', short: '工作台' },
+  agents: { full: '子智能体', short: '智能体' },
+  resources: { full: '资源目录', short: '资源' },
+  settings: { full: '设置', short: '设置' },
+};
+function applyNavLabels() {
+  const short = isMobile();
+  document.querySelectorAll('#nav button').forEach(b => {
+    const lb = b.querySelector('.lb');
+    const cfg = NAV_LABELS[b.dataset.v];
+    if (lb && cfg) lb.textContent = short ? cfg.short : cfg.full;
+  });
+  // 手机端品牌名缩短，避免顶部截断成 "OneNat W…"
+  const bt = $('brand-title');
+  if (bt) bt.textContent = short ? 'WorkBuddy' : 'OneNat WorkBuddy';
+}
+window.addEventListener('resize', applyNavLabels);
+applyNavLabels();
 
 // ---------- 初始化引导 ----------
 async function boot() {
@@ -1446,10 +1605,8 @@ async function openTask(taskId) {
     // 乐观换壳（标题、按钮状态、骨架屏），绝不卡顿
     const ce = $('chat-empty'); if (ce) ce.style.display = 'none';
     if ($('chat-title')) $('chat-title').textContent = taskSummary.title || '加载中…';
-    if ($('btn-del-task')) $('btn-del-task').style.display = '';
     if ($('btn-add-member')) $('btn-add-member').style.display = '';
     if ($('btn-rename-task')) $('btn-rename-task').style.display = '';
-    if ($('btn-arch-task')) $('btn-arch-task').style.display = taskSummary.archivedAt ? 'none' : '';
     setSending(!!(taskSummary.running || taskSummary.status === 'running'));
     const scroll = $('chat-scroll');
     if (scroll) scroll.innerHTML = '<div class="chat-loading"><span>⏳</span><span>正在加载会话内容…</span></div>';
@@ -1467,16 +1624,16 @@ async function openTask(taskId) {
   state.taskCache.set(taskId, freshTask);
   applyTaskToView(freshTask, !cachedTask);
   connectStream(taskId);
+  startTaskStatsPolling();
+  ensureSkillList(); // "/" 技能候选预热（对齐 harness warm 钩子：打开会话即拉目录）
 }
 
 /** 将任务数据渲染到对话视图（支持高性能批量/分块装配） */
 function applyTaskToView(task, isInitialRender) {
   const ce = $('chat-empty'); if (ce) ce.style.display = 'none';
   if ($('chat-title')) $('chat-title').textContent = task.title || '未命名任务';
-  if ($('btn-del-task')) $('btn-del-task').style.display = '';
   if ($('btn-add-member')) $('btn-add-member').style.display = '';
   if ($('btn-rename-task')) $('btn-rename-task').style.display = '';
-  if ($('btn-arch-task')) $('btn-arch-task').style.display = task.archivedAt ? 'none' : '';
   refreshChatHead(task);
   setSending(task.status === 'running');
 
@@ -1528,12 +1685,11 @@ function applyTaskToView(task, isInitialRender) {
 function resetChatView() {
   $('chat-scroll').innerHTML = '<div class="chat-empty" id="chat-empty"><div style="font-size:36px">⚡</div><div>从左侧选择任务，或新建一个任务会话</div></div>';
   $('chat-title').textContent = '选择或新建任务';
-  $('btn-del-task').style.display = 'none';
-  $('btn-add-member').style.display = 'none';
-  $('btn-rename-task').style.display = 'none';
-  $('btn-arch-task').style.display = 'none';
-  $('chat-mode').style.display = 'none';
-  $('member-chips').innerHTML = '';
+  if ($('btn-add-member')) $('btn-add-member').style.display = 'none';
+  if ($('btn-rename-task')) $('btn-rename-task').style.display = 'none';
+  if ($('chat-mode')) $('chat-mode').style.display = 'none';
+  const mc = $('member-chips'); if (mc) mc.innerHTML = '';
+  resetTaskStats();
 }
 
 function refreshChatHead(taskMaybe) {
@@ -1574,6 +1730,7 @@ function scheduleStreamFlush() {
     for (const ev of batch) {
       const el = state.turnEls[ev.turnId];
       if (!el) continue;
+      if (el.kind === 'settled') continue; // turn_end 已收敛为最终 markdown，丢弃迟到的流式块
       if (el.kind !== 'stream' && ev.kind !== 'delta') continue;
       if (ev.kind === 'reasoning') {
         const blk = ensureLiveBlock(el, 'reasoning', ev.turnId);
@@ -1674,15 +1831,25 @@ function connectStream(taskId) {
     } catch {}
   });
 
+  es.addEventListener('turn_usage', e => {
+    try {
+      const ev = JSON.parse(e.data);
+      const el = state.turnEls[ev.turnId];
+      if (el) applyUsageBadge(el, ev.usage);
+    } catch {}
+  });
+
   es.addEventListener('turn_end', e => {
     try {
       const ev = JSON.parse(e.data);
       const el = state.turnEls[ev.turn.id];
       if (el) {
         finalizeTurnBlocks(el, ev.turn, taskId);
+        applyUsageBadge(el, ev.turn.usage);
       }
       smartScrollBottom();
       loadTasksQuiet();
+      loadTaskStats();
     } catch {}
   });
 
@@ -1754,6 +1921,24 @@ function scrollBottom() {
   s.scrollTop = s.scrollHeight;
 }
 
+// ---------- 回到底部悬浮按钮 ----------
+(function initJumpBottom() {
+  const btn = $('btn-jump-bottom');
+  const s = $('chat-scroll');
+  if (!btn || !s) return;
+  let ticking = false;
+  s.addEventListener('scroll', () => {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => {
+      ticking = false;
+      const away = s.scrollHeight - s.scrollTop - s.clientHeight;
+      btn.classList.toggle('on', away > 400);
+    });
+  });
+  btn.addEventListener('click', () => { scrollBottom(); btn.classList.remove('on'); });
+})();
+
 // ---------- 消息组件构建器 ----------
 
 /**
@@ -1803,17 +1988,20 @@ function createBlock(kind) {
     const el = document.createElement('div');
     el.className = 'blk blk-text content markdown';
     el.dataset.kind = 'text';
-    const state = { streamingText: '' };
+    const state = { streamingText: '', lastPaint: 0 };
+    const paint = () => {
+      state.lastPaint = Date.now();
+      el.innerHTML = md(state.streamingText);
+      const cur = document.createElement('span'); cur.className = 'cursor';
+      el.appendChild(cur);
+    };
     return {
       el, kind,
-      /** 流式追加纯文本（转义，暂不渲染 markdown） */
+      /** 流式追加：节流渲染 markdown（≥400ms 一次，收尾由 finalizeTurnBlocks 兜底全量重渲） */
       append(delta) {
         state.streamingText += delta;
-        el.textContent = '';
-        const cur = document.createElement('span'); cur.className = 'cursor';
-        el.appendChild(document.createTextNode(state.streamingText));
-        el.appendChild(cur);
         el.contentState = { streaming: true, text: state.streamingText };
+        if (Date.now() - state.lastPaint >= 400) paint();
       },
       /** 完成后渲染 markdown */
       fill(html) {
@@ -1991,6 +2179,39 @@ function renderNormalToolRow(el, t) {
   el.querySelector('.tw-detail').textContent = parts.join('\\n') || '（无详情）';
 }
 
+/** 由 token 账本计算缓存命中率（0-100），无可计费输入返回 null */
+function cacheHitPercent(usage) {
+  if (!usage) return null;
+  const read = Number(usage.cacheReadTokens) || 0;
+  const miss = Number(usage.uncachedInputTokens) || Number(usage.inputTokens) || 0;
+  const write = Number(usage.cacheWriteTokens) || 0;
+  const denom = read + miss + write;
+  if (denom <= 0) return null;
+  return Math.round((read / denom) * 100);
+}
+
+/** 生成缓存命中徽标 HTML；无 usage 返回空串 */
+function usageBadgeHtml(usage) {
+  if (!usage || typeof usage !== 'object') return '';
+  const pct = cacheHitPercent(usage);
+  const miss = Number(usage.uncachedInputTokens) || Number(usage.inputTokens) || 0;
+  const read = Number(usage.cacheReadTokens) || 0;
+  const out = Number(usage.outputTokens) || 0;
+  if (pct === null) return '';
+  const tooltip = '缓存命中 ' + read.toLocaleString() + ' 词 · 冷读 ' + miss.toLocaleString() + ' 词 · 输出 ' + out.toLocaleString() + ' 词';
+  return '<span class="tag-cache" title="' + esc(tooltip) + '">缓存 ' + pct + '%</span>';
+}
+
+/** 更新 turn 元素 meta 里的缓存徽标（流式实时或回放时写入） */
+function applyUsageBadge(el, usage) {
+  const meta = el && el.wrap && el.wrap.querySelector('.meta');
+  if (!meta) return;
+  const old = meta.querySelector('.tag-cache');
+  if (old) old.remove();
+  const badge = usageBadgeHtml(usage);
+  if (badge) meta.insertAdjacentHTML('beforeend', badge);
+}
+
 function buildTurnElement(taskId, turn) {
   const wrap = document.createElement('div');
   const roleClass = turn.role === 'user' ? 'user' : (turn.role === 'system' ? 'system' : 'agent');
@@ -2005,11 +2226,12 @@ function buildTurnElement(taskId, turn) {
 
   const agent = state.agents.find(a => a.id === turn.agentId);
   const modelBadge = agent && agent.model ? '<span class="tag-model">' + esc(String(agent.model).split('/').pop()) + '</span>' : '';
+  const cacheBadge = usageBadgeHtml(turn.usage);
 
   wrap.innerHTML =
     '<div class="avatar">' + avatar + '</div>' +
     '<div class="bubble">' +
-    '<div class="meta"><b>' + name + '</b>' + modelBadge + '<span>' + fmtTime(turn.at) + '</span></div>' +
+    '<div class="meta"><b>' + name + '</b>' + modelBadge + cacheBadge + '<span>' + fmtTime(turn.at) + '</span></div>' +
     '<div class="blocks"></div>' +
     '</div>';
 
@@ -2199,6 +2421,8 @@ function appendLogLine(ev) {
 }
 
 function setSending(on) {
+  // 运行中：发送键让位给停止键（位于输入框旁），视觉上只有一个主动作
+  $('btn-send').style.display = on ? 'none' : '';
   $('btn-send').disabled = on;
   $('btn-stop').style.display = on ? 'inline-block' : 'none';
 }
@@ -2501,56 +2725,298 @@ function initMentionPopup() {
   });
 }
 
-// ---------- 主调度模型选择 ----------
-async function loadPlannerOptions() {
-  const msel = $('chat-model');
-  msel.style.display = '';
-  msel.disabled = true;
-  const r = await api('/planner/options');
-  if (!r.ok || !r.data) { msel.disabled = false; return; }
-  const d = r.data;
-  const curModel = (d.current || {}).model || '';
-  const groups = {};
-  for (const m of d.models || []) { (groups[m.provider] = groups[m.provider] || []).push(m); }
-  let mhtml = '';
-  if (curModel && !Object.keys(groups).some(pv => (groups[pv] || []).some(m => pv + '/' + m.id === curModel))) {
-    mhtml += '<option value="' + esc(curModel) + '" selected>' + esc(curModel + '（已保存）') + '</option>';
-  }
-  let first = true;
-  for (const pv of Object.keys(groups)) {
-    mhtml += '<optgroup label="' + esc(pv) + '">';
-    for (const m of groups[pv]) {
-      const v = pv + '/' + m.id;
-      const selAttr = curModel ? (v === curModel ? ' selected' : '') : (first ? ' selected' : '');
-      mhtml += '<option value="' + esc(v) + '"' + selAttr + '>' + esc(m.id + (m.isDefault ? ' ★' : '')) + '</option>';
-      first = false;
+// ---------- 输入框 "/" 技能候选（对齐 harness ui-skill 触发源：候选来自会话技能目录，
+// 选中插入字面 /name 随消息发送，远端 DSH 宿主 tool-skill pre-step 识别手势后把技能正文注入模型上下文） ----------
+const skillPick = { taskId: '', list: [], fetchedAt: 0, matched: [], active: 0, span: null, supported: true };
+
+/** 预热/刷新当前任务的技能目录（单次拉取全量，键入时本地过滤——对齐 harness 每会话一次 RPC） */
+async function ensureSkillList() {
+  const taskId = state.currentTaskId;
+  if (!taskId) return false;
+  if (skillPick.taskId !== taskId) { skillPick.taskId = taskId; skillPick.list = []; skillPick.fetchedAt = 0; skillPick.supported = true; }
+  if (skillPick.list.length || Date.now() - skillPick.fetchedAt < 60_000 || !skillPick.supported) return skillPick.supported;
+  try {
+    const r = await api('/tasks/' + taskId + '/skills');
+    if (r.ok) {
+      skillPick.supported = r.data.supported !== false;
+      skillPick.list = r.data.skills || [];
+      skillPick.fetchedAt = Date.now();
     }
-    mhtml += '</optgroup>';
-  }
-  msel.innerHTML = mhtml;
-  msel.disabled = false;
-  msel.title = '主调度模型（主任务拆解用）· ' + Object.keys(groups).length + ' 个提供商 / ' + (d.models || []).length + ' 个模型';
+  } catch {}
+  return skillPick.supported;
 }
-$('chat-model').addEventListener('change', async () => {
-  const mv = $('chat-model').value;
-  const r = await api('/planner/config', { method: 'POST', body: JSON.stringify({ model: mv || '' }) });
-  if (r.ok) toast('✓ 主调度模型已更新为「' + (r.data.model || '默认') + '」');
-  else toast(r.error || '保存失败', true);
+
+function initSkillPopup() {
+  const input = $('input');
+  const popup = $('skill-popup');
+  const listEl = $('skill-list');
+  if (!input || !popup || !listEl) return;
+
+  function hideSkillPopup() {
+    popup.classList.remove('on');
+    skillPick.matched = [];
+    skillPick.span = null;
+  }
+
+  /** 光标处的 / 触发 token（简化 harness detect.ts：词边界 + URL 排除）。注意：本文件是外层模板串，正则反斜杠需双写 */
+  function detectSlash() {
+    const text = input.value;
+    const caret = input.selectionStart;
+    if (caret === null || caret === undefined) return null;
+    let start = caret;
+    while (start > 0 && !/\\s/.test(text.charAt(start - 1))) start--;
+    if (text.charAt(start) !== '/') return null;
+    const prev = start > 0 ? text.charAt(start - 1) : '';
+    if (prev === '/' || prev === ':') return null; // URL 的 // 与 scheme:/
+    const token = text.slice(start, caret);
+    const query = token.slice(1);
+    if (query.includes('/') || query.length > 64) return null;
+    return { start, end: caret, query };
+  }
+
+  function filterSkills(query) {
+    const q = query.toLowerCase();
+    if (!q) return skillPick.list.slice(0, 30);
+    const starts = skillPick.list.filter(s => s.name.toLowerCase().startsWith(q));
+    const seen = new Set(starts.map(s => s.name));
+    for (const s of skillPick.list) {
+      if (seen.has(s.name)) continue;
+      if (s.name.toLowerCase().includes(q) || (s.description || '').toLowerCase().includes(q)) starts.push(s);
+    }
+    return starts.slice(0, 30);
+  }
+
+  function renderSkillList() {
+    if (!skillPick.matched.length) {
+      listEl.innerHTML = '<div class="mention-empty">无匹配技能</div>';
+      return;
+    }
+    let html = '';
+    skillPick.matched.forEach((item, idx) => {
+      const active = idx === skillPick.active ? ' active' : '';
+      const userOnly = item.userInvocable === false ? '<span class="tag">仅模型</span>' : '';
+      const agents = (item.agents || []).join('、');
+      html += '<div class="mention-item' + active + '" data-idx="' + idx + '">' +
+        '<span class="icon">🎯</span>' +
+        '<div class="info">' +
+          '<div class="name">' + esc(item.name) + '</div>' +
+          '<div class="desc">' + esc(item.description || '') + (agents ? ' · 可用: ' + esc(agents) : '') + '</div>' +
+        '</div>' +
+        userOnly +
+      '</div>';
+    });
+    listEl.innerHTML = html;
+    listEl.querySelectorAll('.mention-item').forEach(el => {
+      el.addEventListener('click', () => {
+        pickSkill(skillPick.matched[+el.dataset.idx]);
+      });
+    });
+    const activeEl = listEl.querySelector('.mention-item.active');
+    if (activeEl && typeof activeEl.scrollIntoView === 'function') activeEl.scrollIntoView({ block: 'nearest' });
+  }
+
+  function pickSkill(item) {
+    if (!item || !skillPick.span) return;
+    const s = skillPick.span;
+    const before = input.value.slice(0, s.start);
+    const after = input.value.slice(input.selectionEnd);
+    const insertText = '/' + item.name + ' ';
+    input.value = before + insertText + after;
+    const newPos = before.length + insertText.length;
+    input.selectionStart = newPos;
+    input.selectionEnd = newPos;
+    hideSkillPopup();
+    input.focus();
+  }
+
+  input.addEventListener('input', async () => {
+    const hit = detectSlash();
+    if (!hit) { hideSkillPopup(); return; }
+    skillPick.span = hit;
+    const ok = await ensureSkillList();
+    if (!ok) { hideSkillPopup(); return; }
+    // 输入期间 span 可能因继续键入而变化，重新检测
+    const fresh = detectSlash();
+    if (!fresh) { hideSkillPopup(); return; }
+    skillPick.span = fresh;
+    skillPick.matched = filterSkills(fresh.query);
+    if (!skillPick.matched.length) { hideSkillPopup(); return; }
+    skillPick.active = 0;
+    renderSkillList();
+    popup.classList.add('on');
+  });
+
+  input.addEventListener('keydown', e => {
+    const isOpen = popup.classList.contains('on') && skillPick.matched.length > 0;
+    if (!isOpen) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      skillPick.active = (skillPick.active + 1) % skillPick.matched.length;
+      renderSkillList();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      skillPick.active = (skillPick.active - 1 + skillPick.matched.length) % skillPick.matched.length;
+      renderSkillList();
+    } else if (e.key === 'Tab' || e.key === 'Enter') {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      pickSkill(skillPick.matched[skillPick.active]);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      hideSkillPopup();
+    }
+  });
+
+  document.addEventListener('click', e => {
+    if (!popup.contains(e.target) && e.target !== input) hideSkillPopup();
+  });
+}
+initSkillPopup();
+
+// ---------- 主调度模型选择（自定义弹层：原生 select 的移动端全屏弹窗字大折行且样式失控） ----------
+const modelState = { groups: {}, cur: '', loaded: false };
+function modelBtnLabel(v) { return '⚙ ' + (v || '主调度默认模型'); }
+function renderModelPop() {
+  const pop = $('model-pop');
+  const cur = modelState.cur;
+  const known = Object.keys(modelState.groups).some(pv => (modelState.groups[pv] || []).some(m => pv + '/' + m.id === cur));
+  let html = '<div class="model-pop-head"><span>主调度模型（主任务拆解用）</span><span>点选即生效</span></div>';
+  html += '<div class="model-item' + (!cur ? ' on' : '') + '" data-v=""><span class="n">主调度默认模型</span><span class="ck">✓</span></div>';
+  if (cur && !known) {
+    html += '<div class="model-item on" data-v="' + esc(cur) + '"><span class="n">' + esc(cur + '（已保存）') + '</span><span class="ck">✓</span></div>';
+  }
+  for (const pv of Object.keys(modelState.groups)) {
+    html += '<div class="model-group">' + esc(pv) + '</div>';
+    for (const m of modelState.groups[pv]) {
+      const v = pv + '/' + m.id;
+      html += '<div class="model-item' + (v === cur ? ' on' : '') + '" data-v="' + esc(v) + '"><span class="n">' + esc(m.id + (m.isDefault ? ' ★' : '')) + '</span><span class="ck">✓</span></div>';
+    }
+  }
+  if (!Object.keys(modelState.groups).length && !cur) html += '<div class="model-empty">暂无可选模型</div>';
+  pop.innerHTML = html;
+  pop.querySelectorAll('.model-item').forEach(it => it.addEventListener('click', () => selectModel(it.dataset.v)));
+}
+async function loadPlannerOptions() {
+  const btn = $('chat-model-btn');
+  btn.disabled = true;
+  const r = await api('/planner/options');
+  if (!r.ok || !r.data) { btn.disabled = false; return; }
+  const d = r.data;
+  modelState.cur = (d.current || {}).model || '';
+  modelState.groups = {};
+  for (const m of d.models || []) { (modelState.groups[m.provider] = modelState.groups[m.provider] || []).push(m); }
+  modelState.loaded = true;
+  btn.disabled = false;
+  btn.textContent = modelBtnLabel(modelState.cur);
+  btn.title = '主调度模型（主任务拆解用）· ' + Object.keys(modelState.groups).length + ' 个提供商 / ' + (d.models || []).length + ' 个模型';
+  renderModelPop();
+}
+function closeModelPop() { $('model-pop').classList.remove('on'); }
+$('chat-model-btn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const pop = $('model-pop');
+  if (pop.classList.contains('on')) { closeModelPop(); return; }
+  renderModelPop();
+  pop.classList.add('on');
 });
+document.addEventListener('click', (e) => {
+  const pop = $('model-pop');
+  if (pop.classList.contains('on') && !pop.contains(e.target) && e.target !== $('chat-model-btn')) closeModelPop();
+});
+async function selectModel(v) {
+  modelState.cur = v;
+  $('chat-model-btn').textContent = modelBtnLabel(v);
+  closeModelPop();
+  const r = await api('/planner/config', { method: 'POST', body: JSON.stringify({ model: v || '' }) });
+  if (r.ok) toast('✓ 主调度模型已更新为「' + (v || '默认') + '」');
+  else toast(r.error || '保存失败', true);
+}
 loadPlannerOptions();
 
-// 会话删除 / 重命名 / 归档
-$('btn-del-task').addEventListener('click', async () => {
-  if (!state.currentTaskId) return;
-  if (!confirm('确定删除该任务及其全部会话记录？')) return;
-  const id = state.currentTaskId;
-  await api('/tasks/' + id, { method: 'DELETE' });
-  state.taskCache.delete(id);
-  state.currentTaskId = null;
-  disconnectStream();
-  resetChatView();
-  loadTasks();
-});
+// ---------- 任务实时统计条（对齐 DSH web StatsLine：轮/步 · LLM/工具耗时 · 首 token/吞吐 · 缓存命中 · token 账本） ----------
+const statsState = { timer: null, inFlight: false, lastRendered: '' };
+function fmtStatsDuration(ms) {
+  const s = ms / 1000;
+  if (s < 60) return (Math.round(s * 10) / 10) + '秒';
+  const whole = Math.round(s);
+  return Math.floor(whole / 60) + '分' + (whole % 60) + '秒';
+}
+function fmtStatsTokens(n) {
+  if (n >= 1e9) return (Math.round(n / 1e8) / 10) + 'G';
+  if (n >= 1e6) return (Math.round(n / 1e5) / 10) + 'M';
+  if (n >= 1e3) return (Math.round(n / 100) / 10) + 'K';
+  return String(n);
+}
+function fmtCacheHit(read, billedInput) {
+  if (!(billedInput > 0)) return null;
+  const pct = (read / billedInput) * 100;
+  if (pct >= 99.95) return '100';
+  const rounded = Math.round(pct * 10) / 10;
+  return rounded < 100 ? String(Math.round(pct)) : rounded.toFixed(1);
+}
+function renderTaskStats(stats) {
+  const el = $('task-stats');
+  if (!stats || (!stats.steps && !stats.outputTokens && !stats.inputTokens && !stats.cacheReadTokens)) {
+    el.style.display = 'none';
+    el.textContent = '';
+    return;
+  }
+  const groups = [];
+  if (stats.steps > 0) {
+    groups.push(stats.turns + ' 轮 · ' + stats.steps + ' 步');
+    const durations = [];
+    if (stats.llmMs > 0) durations.push('LLM ' + fmtStatsDuration(stats.llmMs));
+    if (stats.toolMs > 0) durations.push('工具调用 ' + fmtStatsDuration(stats.toolMs));
+    if (durations.length) groups.push(durations.join(' · '));
+    const speeds = [];
+    if (stats.ttftSteps > 0) speeds.push('首 token 平均 ' + fmtStatsDuration(stats.ttftMs / stats.ttftSteps));
+    if (stats.decodeMs > 0) speeds.push(Math.round(stats.decodeTokens / (stats.decodeMs / 1000)) + ' tok/s');
+    if (speeds.length) groups.push(speeds.join(' · '));
+  }
+  const billedInput = (stats.inputTokens || 0) + (stats.cacheReadTokens || 0) + (stats.cacheWriteTokens || 0);
+  const hasTokens = billedInput > 0 || (stats.outputTokens || 0) > 0;
+  if (hasTokens) {
+    const hit = fmtCacheHit(stats.cacheReadTokens || 0, billedInput);
+    if (hit !== null) groups.push('缓存命中 ' + hit + '%');
+    groups.push('输入 ' + fmtStatsTokens(billedInput) + ' tok · 输出 ' + fmtStatsTokens(stats.outputTokens || 0) + ' tok');
+  }
+  const line = groups.join(' | ');
+  if (!line) { el.style.display = 'none'; return; }
+  if (line !== statsState.lastRendered) {
+    statsState.lastRendered = line;
+    el.textContent = line;
+    el.title = line;
+  }
+  el.style.display = '';
+}
+async function loadTaskStats() {
+  const taskId = state.currentTaskId;
+  if (!taskId || statsState.inFlight) return;
+  statsState.inFlight = true;
+  try {
+    const r = await api('/tasks/' + taskId + '/stats');
+    // 期间切走了会话则丢弃
+    if (r.ok && state.currentTaskId === taskId) renderTaskStats(r.data && r.data.supported ? r.data.stats : null);
+  } catch {}
+  statsState.inFlight = false;
+}
+function resetTaskStats() {
+  if (statsState.timer) { clearInterval(statsState.timer); statsState.timer = null; }
+  statsState.lastRendered = '';
+  const el = $('task-stats');
+  if (el) { el.style.display = 'none'; el.textContent = ''; }
+}
+// 打开会话时启动轮询（5s），关闭/切换时重置；SSE turn_end 处也会即时刷新
+function startTaskStatsPolling() {
+  resetTaskStats();
+  loadTaskStats();
+  statsState.timer = setInterval(loadTaskStats, 5000);
+}
+
+// 会话重命名（删除/归档入口在会话抽屉的会话条目上）
 $('btn-rename-task').addEventListener('click', () => {
   const t = state.tasks.find(x => x.id === state.currentTaskId);
   if (t) promptRenameTask(t);
@@ -2558,16 +3024,6 @@ $('btn-rename-task').addEventListener('click', () => {
 $('chat-title').addEventListener('dblclick', () => {
   const t = state.tasks.find(x => x.id === state.currentTaskId);
   if (t) promptRenameTask(t);
-});
-$('btn-arch-task').addEventListener('click', async () => {
-  const id = state.currentTaskId;
-  if (!id) return;
-  const r = await api('/tasks/' + id + '/archive', { method: 'POST', body: JSON.stringify({ archived: true }) });
-  if (r.ok) {
-    toast('🗄️ 已归档');
-    await loadTasks();
-    renderTaskList();
-  } else toast(r.error || '归档失败', true);
 });
 
 // ---------- 一键新建任务（免弹窗，自动生成会话并即刻开聊，参考 DSH 体验） ----------
@@ -2641,7 +3097,7 @@ function renderAgents() {
       '<span class="tag">' + esc(a.agentPreset || 'cordis') + '</span>' +
       (a.model ? '<span class="tag">' + esc(a.model) + '</span>' : '') +
       (a.workDir ? '<span class="tag" title="远端工作目录">📁 ' + esc(a.workDir) + '</span>' : '') +
-      (skillNames.length ? '<span class="tag" title="绑定技能（会话自动注入全文）">🎯 ' + skillNames.length + ' 技能</span>' : '') + '</div>' +
+      (skillNames.length ? '<span class="tag" title="绑定技能（派发时手势加载）">🎯 ' + skillNames.length + ' 技能</span>' : '') + '</div>' +
       '<div class="desc">DSH 实体: <span class="mono">' + esc(dshDesc) + '</span><br>绑定资源: ' + esc(resDesc) +
       '<br>绑定技能: <span class="mono">' + (skillNames.length ? skillNames.map(s => '<span class="tag" style="margin:2px 4px 2px 0">🎯 ' + esc(s) + '</span>').join('') : '<span class="sub">无</span>') + '</span>' +
       (a.systemPrompt ? '<br>角色: ' + esc(a.systemPrompt.slice(0, 80)) : '') + '</div>' +
@@ -2719,7 +3175,7 @@ async function loadSkillCenter() {
     '<div style="display:flex;gap:8px;align-items:center"><input type="file" id="sk-file" accept=".zip,.tgz,.tar.gz,.gz" style="flex:1">' +
     '<button class="mini-btn" id="sk-up" style="padding:10px 14px">⬆ 上传</button></div>' +
     '<div class="hint">解压后自动识别技能名；同名覆盖。上传到该节点的「用户技能」目录。</div></div></div>' +
-    '<div class="field"><label>已安装技能（' + skills.length + ' 个）· 勾选 = 绑定到该子智能体（派发时自动注入全文，最多 8 个）</label>' +
+    '<div class="field"><label>已安装技能（' + skills.length + ' 个）· 勾选 = 绑定到该子智能体（派发时以 /名 手势提示 DSH 加载，技能须已安装在节点上，最多 8 个）</label>' +
     '<div id="sk-list" style="display:flex;flex-direction:column;gap:8px">' +
     (rows || '<div class="card"><span class="sub">该节点暂无技能，上传一个技能包开始。</span></div>') + '</div></div>' +
     '<div class="ops" style="display:flex;gap:10px;margin-top:14px"><button class="btn pri" id="sk-save">保存绑定</button><button class="btn" id="sk-close">关闭</button></div>';
@@ -2812,7 +3268,7 @@ function openAgentDrawer(agent) {
       '<input id="ag-direct" placeholder="http://host:port/api/v1" style="display:none;margin-top:8px">' +
       '<div class="hint">列表来自资源目录中 type=http-api 且带 dsh-web-service 技能的映射。</div></div>' +
     '<div class="field"><label>API Key（可选）</label><input id="ag-key" value="' + esc(agent && agent.apiKey || '') + '"></div>' +
-    '<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px"><button class="mini-btn" id="ag-sync" style="padding:6px 10px">↻ 同步远端选项</button><span class="hint" id="ag-opts-hint" style="margin:0">预设 / 提供商 / 模型可从远端 DSH 拉取后下拉选择</span></div>' +
+    '<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px"><button class="mini-btn" id="ag-sync" style="padding:6px 10px;flex:none;white-space:nowrap">↻ 同步远端选项</button><span class="hint" id="ag-opts-hint" style="margin:0">预设 / 提供商 / 模型可从远端 DSH 拉取后下拉选择</span></div>' +
     '<div class="grid3">' +
     '<div class="field"><label>模式预设 agentPreset</label><input id="ag-preset" value="' + esc(agent && agent.agentPreset || 'cordis') + '"></div>' +
     '<div class="field"><label>Provider</label><input id="ag-provider" value="' + esc(agent && agent.provider || '') + '" placeholder="远端默认"></div>' +
@@ -2968,38 +3424,6 @@ function collectAgent(existing) {
   payload.workDir = $('ag-workdir').value.trim() || '';
   if (existing && existing.id) payload.id = existing.id;
   return payload;
-}
-
-// ---------- 编排看板视图 ----------
-function renderBoard() {
-  const el = $('board-list'); el.innerHTML = '';
-  const orchTasks = state.tasks.filter(t => t.plan || t.mode === 'orchestrate');
-  if (!orchTasks.length) {
-    el.innerHTML = '<div class="card"><span style="color:var(--tx3)">暂无编排任务。在工作台新建任务时选择多个子智能体即为协同编排模式。</span></div>';
-    return;
-  }
-  for (const t of orchTasks) {
-    const card = document.createElement('div'); card.className = 'card';
-    const subs = (t.plan && t.plan.subtasks) || [];
-    const done = subs.filter(s => s.status === 'completed').length;
-    card.innerHTML = '<div class="row1"><h3>' + esc(t.title) + '</h3><span class="s ' + statusColor(t.running ? 'running' : t.status) + '" style="width:9px;height:9px;border-radius:50%"></span>' +
-      '<span class="tag">' + (t.plan ? esc(t.plan.strategy) : '—') + '</span><span class="tag">' + done + '/' + subs.length + ' 完成</span>' +
-      '<span class="tag ' + statusColor(t.status) + '">' + esc(t.status) + '</span></div>' +
-      '<div style="margin-top:10px">' + subs.map(s => {
-        const ag = state.agents.find(a => a.id === s.agentId);
-        return '<div class="plan-row"><span class="st ' + s.status + '">' + s.status + '</span><span style="flex:none;font-weight:500">' + esc(s.title) + '</span><span class="ag">🤖 ' + esc(ag ? ag.name : s.agentId) + (s.error ? ' · ' + esc(s.error.slice(0, 60)) : '') + '</span>' +
-          '<span class="ops"><button class="mini-btn" data-sid="' + s.id + '" data-op="logs">日志</button><button class="mini-btn" data-sid="' + s.id + '" data-op="chat">会话</button></span></div>';
-      }).join('') + '</div>' +
-      (t.summary ? '<div class="desc" style="margin-top:10px"><b>结论:</b> ' + esc(t.summary.finalConclusion || '').slice(0, 300) + '</div>' : '');
-    card.querySelectorAll('[data-op=logs]').forEach(b => b.addEventListener('click', () => {
-      const s = subs.find(x => x.id === b.dataset.sid); if (s) showSubtaskLogs(s);
-    }));
-    card.querySelectorAll('[data-op=chat]').forEach(b => b.addEventListener('click', () => {
-      const s = subs.find(x => x.id === b.dataset.sid);
-      showSubtaskChat(b.dataset.sid, s ? s.agentId : undefined);
-    }));
-    el.appendChild(card);
-  }
 }
 
 function showSubtaskLogs(s) {
