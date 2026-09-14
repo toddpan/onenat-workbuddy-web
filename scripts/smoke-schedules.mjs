@@ -207,7 +207,7 @@ async function main() {
   const runRes = await req('POST', `${PREFIX}/api/schedules/${sid}/run`)
   const run = runRes.json?.data
   check('手动触发返回 run', runRes.status === 200 && Boolean(run?.id))
-  check('每个目标子智能体各自派生任务会话', (run?.items || []).length === 2 && run.items.every((i) => Boolean(i.taskId)), run?.items?.map((i) => `${i.agentName}→${i.taskId}`).join(' , '))
+  check('单任务派发：每个目标子智能体各占一条派发项且指向同一会话', (run?.items || []).length === 2 && run.items.every((i) => Boolean(i.taskId)) && new Set(run.items.map((i) => i.taskId)).size === 1, run?.items?.map((i) => `${i.agentName}→${i.taskId}`).join(' , '))
   const manualFlag = run?.manual === true
   check('触发记录标记 manual=true', manualFlag)
   const detail1 = await req('GET', `${PREFIX}/api/schedules/${sid}`)
@@ -219,7 +219,7 @@ async function main() {
   check('触发记录含耗时 durationMs', typeof detail1.json?.data?.runs?.[0]?.durationMs === 'number')
   const tasksAfter = await req('GET', `${PREFIX}/api/tasks`)
   const schedTasks = (tasksAfter.json?.data || []).filter((t) => (t.title || '').includes('冒烟定时任务'))
-  check('派生的任务出现在任务列表（⏰ 标题）', schedTasks.length >= 2, schedTasks.map((t) => t.id).join(','))
+  check('派生的任务出现在任务列表（⏰ 标题，单任务）', schedTasks.length >= 1, schedTasks.map((t) => t.id).join(','))
 
   // ---------- 6. 启停 ----------
   const off = await req('POST', `${PREFIX}/api/schedules/${sid}/toggle`)
