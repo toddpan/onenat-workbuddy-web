@@ -17,7 +17,7 @@ import { Planner, type PlanDraft } from './planner.js'
 import type { OnenatDirectory } from './onenat.js'
 import type { WorkStore } from './store.js'
 import type { SubtaskLogEntry } from './types.js'
-import type { AgentResourceBinding, ExtractedMentions, PlanSubtask, SubAgent, TaskEvent, TaskTurn, TurnToolCall, WorkTask } from './types.js'
+import type { AgentResourceBinding, ExtractedFileMention, ExtractedMentions, PlanSubtask, SubAgent, TaskEvent, TaskTurn, TurnToolCall, WorkTask } from './types.js'
 
 export interface CreateTaskInput {
   title?: string
@@ -62,9 +62,11 @@ export class TaskEngine {
   ) {}
 
   /** 从用户消息中提取 @子智能体 与 @资源（支持包含空格名称的最长前缀匹配与同名多实体解析） */
+  /** 从用户消息中提取 @子智能体、@资源 以及 @文件（支持 @智能体:文件路径、@[智能体:文件路径] 及独立 @文件路径） */
   public extractMentions(text: string): ExtractedMentions {
     const mentionedAgentIds: string[] = []
     const mentionedResourceBindings: AgentResourceBinding[] = []
+    const mentionedFiles: ExtractedFileMention[] = []
     const agents = this.store.getAgents()
     const endpoints = this.directory.listEndpoints()
 
@@ -98,12 +100,85 @@ export class TaskEngine {
     let i = 0
     while (i < text.length) {
       if (text[i] === '@') {
+        const startPos = i
         const rest = text.slice(i + 1)
         let matched = false
+
+        // 优先检查方括号包裹，如 @[136-执行者:logs/app.log] 或 @[src/index.ts]
+        const bracketMatch = /^\[([^\]]+)\]/.exec(rest)
+        if (bracketMatch) {
+          const inner = bracketMatch[1].trim()
+          const colonIdx = inner.indexOf(':') !== -1 ? inner.indexOf(':') : inner.indexOf('：')
+          if (colonIdx !== -1) {
+            const prefix = inner.slice(0, colonIdx).trim()
+            const filePath = inner.slice(colonIdx + 1).trim()
+            const matchedAgent = agents.find(
+              (a) => a.name.toLowerCase() === prefix.toLowerCase() || a.id.toLowerCase() === prefix.toLowerCase(),
+            )
+            if (matchedAgent && filePath) {
+              const raw = text.slice(startPos, startPos + 1 + bracketMatch[0].length)
+              mentionedFiles.push({
+                raw,
+                agentId: matchedAgent.id,
+                agentName: matchedAgent.name,
+                path: filePath,
+                filename: filePath.split(/[\/\\]/).pop() || filePath,
+              })
+              if (!mentionedAgentIds.includes(matchedAgent.id)) {
+                mentionedAgentIds.push(matchedAgent.id)
+              }
+              i = startPos + 1 + bracketMatch[0].length
+              continue
+            }
+          } else if (inner.includes('/') || inner.includes('\\') || inner.includes('.')) {
+            // 方括号内纯路径 @[src/index.ts]
+            const raw = text.slice(startPos, startPos + 1 + bracketMatch[0].length)
+            const defaultAgent = agents[0]
+            if (defaultAgent) {
+              mentionedFiles.push({
+                raw,
+                agentId: defaultAgent.id,
+                agentName: defaultAgent.name,
+                path: inner,
+                filename: inner.split(/[\/\\]/).pop() || inner,
+              })
+              if (!mentionedAgentIds.includes(defaultAgent.id)) {
+                mentionedAgentIds.push(defaultAgent.id)
+              }
+              i = startPos + 1 + bracketMatch[0].length
+              continue
+            }
+          }
+        }
 
         // 优先在词典中查找最长前缀匹配（支持名称中含有空格、短横线、中文等）
         for (const entry of dict) {
           if (rest.startsWith(entry.name)) {
+            const afterName = rest.slice(entry.name.length)
+            // 检查紧随其后是否是冒号 : 或 ：，即 @智能体名:文件路径 形式
+            if (entry.type === 'agent' && (afterName.startsWith(':') || afterName.startsWith('：'))) {
+              const afterColon = afterName.slice(1)
+              const pathMatch = /^([^\s,，。!！?？;；]+)/.exec(afterColon)
+              if (pathMatch && pathMatch[1].trim()) {
+                const filePath = pathMatch[1].trim()
+                const raw = text.slice(startPos, startPos + 1 + entry.name.length + 1 + pathMatch[0].length)
+                const a = entry.data
+                mentionedFiles.push({
+                  raw,
+                  agentId: a.id,
+                  agentName: a.name,
+                  path: filePath,
+                  filename: filePath.split(/[\/\\]/).pop() || filePath,
+                })
+                if (!mentionedAgentIds.includes(a.id)) {
+                  mentionedAgentIds.push(a.id)
+                }
+                matched = true
+                i = startPos + raw.length
+                break
+              }
+            }
+
             matched = true
             i += 1 + entry.name.length // 跳过当前 @ 和名称
 
@@ -145,9 +220,51 @@ export class TaskEngine {
 
         if (!matched) {
           // 兜底：若未在已知字典精确匹配，尝试提取紧随的连续非标点单词
-          const fallbackMatch = /^([^\s@,，。!！?？:：;；]+)/.exec(rest)
+          const fallbackMatch = /^([^\s@,，。!！?？;；]+)/.exec(rest)
           if (fallbackMatch) {
             const rawTag = fallbackMatch[1].trim()
+            const colonIdx = rawTag.indexOf(':') !== -1 ? rawTag.indexOf(':') : rawTag.indexOf('：')
+            if (colonIdx !== -1) {
+              const prefix = rawTag.slice(0, colonIdx).trim()
+              const filePath = rawTag.slice(colonIdx + 1).trim()
+              const matchedAgent = agents.find(
+                (a) => a.name.toLowerCase() === prefix.toLowerCase() || a.id.toLowerCase() === prefix.toLowerCase(),
+              )
+              if (matchedAgent && filePath) {
+                const raw = text.slice(startPos, startPos + 1 + fallbackMatch[0].length)
+                mentionedFiles.push({
+                  raw,
+                  agentId: matchedAgent.id,
+                  agentName: matchedAgent.name,
+                  path: filePath,
+                  filename: filePath.split(/[\/\\]/).pop() || filePath,
+                })
+                if (!mentionedAgentIds.includes(matchedAgent.id)) {
+                  mentionedAgentIds.push(matchedAgent.id)
+                }
+                i = startPos + 1 + fallbackMatch[1].length
+                continue
+              }
+            } else if ((rawTag.startsWith('/') || rawTag.startsWith('./') || rawTag.includes('.')) && (rawTag.includes('/') || rawTag.includes('\\'))) {
+              // 独立文件路径 @src/index.ts 或 @/tmp/a.log
+              const defaultAgent = agents[0]
+              if (defaultAgent) {
+                const raw = text.slice(startPos, startPos + 1 + fallbackMatch[0].length)
+                mentionedFiles.push({
+                  raw,
+                  agentId: defaultAgent.id,
+                  agentName: defaultAgent.name,
+                  path: rawTag,
+                  filename: rawTag.split(/[\/\\]/).pop() || rawTag,
+                })
+                if (!mentionedAgentIds.includes(defaultAgent.id)) {
+                  mentionedAgentIds.push(defaultAgent.id)
+                }
+                i = startPos + 1 + fallbackMatch[1].length
+                continue
+              }
+            }
+
             i += 1 + fallbackMatch[1].length
 
             const matchedAgent = agents.find(
@@ -190,6 +307,7 @@ export class TaskEngine {
     return {
       mentionedAgentIds,
       mentionedResourceBindings,
+      mentionedFiles: mentionedFiles.length > 0 ? mentionedFiles : undefined,
       cleanText: text,
     }
   }
@@ -543,6 +661,80 @@ export class TaskEngine {
     this.emit(taskId, { type: 'task_end', task: fresh })
   }
 
+  /**
+   * 根据发往的目标智能体（targetAgent），动态转换消息/指令中的 @文件 引用：
+   * 1. 若文件属于当前目标智能体本机 -> 转换为本机本地文件路径（相对或绝对路径）；
+   * 2. 若文件属于其他远程智能体 -> 转换为可直接通过 HTTP 下载的真实 URL，并生成 [跨节点文件引用] 指引段落（含 curl 下载指令）。
+   */
+  public async transformFileMentionsForAgent(
+    text: string,
+    mentions: ExtractedMentions | undefined,
+    targetAgent: SubAgent,
+  ): Promise<{ text: string; extraSections: string[] }> {
+    const files = mentions?.mentionedFiles || []
+    if (!files.length) return { text, extraSections: [] }
+
+    let resultText = text
+    const localFiles: ExtractedFileMention[] = []
+    const remoteFiles: Array<{ mention: ExtractedFileMention; downloadUrl: string; authHeader?: string }> = []
+
+    for (const file of files) {
+      if (file.agentId === targetAgent.id) {
+        // 本地文件：替换 @agent:path 为本地 path
+        localFiles.push(file)
+        resultText = resultText.split(file.raw).join(file.path)
+      } else {
+        // 跨节点远程文件：生成下载 URL
+        const ownerAgent = this.store.getAgent(file.agentId)
+        let downloadUrl = ''
+        let authHeader: string | undefined = undefined
+
+        if (ownerAgent) {
+          const ownerTarget = await this.resolver.resolve(ownerAgent).catch(() => undefined)
+          if (ownerTarget?.online && ownerTarget.baseUrl) {
+            const base = ownerTarget.baseUrl.replace(/\/+$/, '')
+            downloadUrl = `${base}/fs/download?path=${encodeURIComponent(file.path)}`
+            if (ownerTarget.apiKey) {
+              authHeader = `-H "Authorization: Bearer ${ownerTarget.apiKey}"`
+            }
+          }
+        }
+
+        if (!downloadUrl) {
+          // 降级使用工作区代理下载路径
+          downloadUrl = `/api/agents/fs/download?agent=${encodeURIComponent(file.agentId)}&path=${encodeURIComponent(file.path)}`
+        }
+
+        remoteFiles.push({ mention: file, downloadUrl, authHeader })
+        resultText = resultText.split(file.raw).join(`[文件: ${file.filename}](${downloadUrl})`)
+      }
+    }
+
+    const extraSections: string[] = []
+
+    if (localFiles.length > 0) {
+      const lines = localFiles.map(
+        (f) => `- 文件「${f.filename}」: 路径为 \`${f.path}\`（位于当前智能体本机工作区，可直接使用文件读取/执行工具）`,
+      )
+      extraSections.push(`[本地文件清单]:\n${lines.join('\n')}`)
+    }
+
+    if (remoteFiles.length > 0) {
+      const lines = remoteFiles.map((rf) => {
+        const cmd = `curl -s ${rf.authHeader ? rf.authHeader + ' ' : ''}"${rf.downloadUrl}" -o "${rf.mention.filename}"`
+        return (
+          `- 文件「${rf.mention.filename}」（位于远程智能体「${rf.mention.agentName}」的主机上）:\n` +
+          `  下载地址: ${rf.downloadUrl}\n` +
+          `  获取指令: ${cmd}\n` +
+          `  说明: 该文件位于远程智能体「${rf.mention.agentName}」电脑上，请使用上述指令下载到本地工作区后再行分析。`
+        )
+      })
+      extraSections.push(`[跨节点远程文件清单（需要下载）]:\n${lines.join('\n')}`)
+    }
+
+    return { text: resultText, extraSections }
+  }
+
   // ---------- chat 直通 ----------
 
   private async runChatTurn(
@@ -583,8 +775,9 @@ export class TaskEngine {
     this.store.appendTurn(taskId, turn)
     this.emit(taskId, { type: 'turn_start', turn })
 
-    let fullPrompt = text
-    const hasDynamicResources = mentions.mentionedResourceBindings.length > 0
+    const transformed = await this.transformFileMentionsForAgent(text, mentions, agent)
+    let fullPrompt = transformed.text
+    const hasDynamicResources = mentions.mentionedResourceBindings.length > 0 || (mentions.mentionedFiles && mentions.mentionedFiles.length > 0)
     const cachedBlock = hasDynamicResources ? null : this.blockCacheFresh(taskId, agent)
 
     if (!cachedBlock) {
@@ -593,13 +786,21 @@ export class TaskEngine {
         extraResources: mentions.mentionedResourceBindings,
       })
       const block = composed.block
-      if (block) {
+      const extraFileSection = transformed.extraSections.join('\n\n')
+      const allPrefixes = [block, extraFileSection].filter(Boolean).join('\n\n')
+      if (allPrefixes) {
         if (!hasDynamicResources) this.blockCache.set(this.blockCacheKey(taskId, agent), { block, at: Date.now() })
-        fullPrompt = `${block}\n\n[当前用户消息]:\n${text}`
+        fullPrompt = `${allPrefixes}\n\n[当前用户消息]:\n${transformed.text}`
       } else if (!hasDynamicResources) {
         this.blockCache.set(this.blockCacheKey(taskId, agent), { block: '', at: Date.now() })
       }
       for (const w of composed.warnings) this.emit(taskId, { type: 'log', level: 'warn', msg: w })
+    } else {
+      const extraFileSection = transformed.extraSections.join('\n\n')
+      const allPrefixes = [cachedBlock.block, extraFileSection].filter(Boolean).join('\n\n')
+      if (allPrefixes) {
+        fullPrompt = `${allPrefixes}\n\n[当前用户消息]:\n${transformed.text}`
+      }
     }
 
     // 工具调用过程追踪（对齐 DSH ui-chat turn-process）
@@ -959,7 +1160,7 @@ export class TaskEngine {
         upstream.push(`### 上游子任务《${dep.title}》产出摘要\n${dep.result.content.slice(0, 800)}`)
       }
     }
-    await this.runSubtask(task, sub, agent, target, upstream, mentions.mentionedResourceBindings, signal)
+    await this.runSubtask(task, sub, agent, target, upstream, mentions.mentionedResourceBindings, signal, mentions)
   }
 
   /** 执行单个子任务（供 DAG 与单项重试共用） */
@@ -971,6 +1172,7 @@ export class TaskEngine {
     upstream: string[],
     extraResources: AgentResourceBinding[],
     signal: AbortSignal,
+    mentions?: ExtractedMentions,
   ): Promise<void> {
     const taskId = task.id
     this.store.mutateSubtask(taskId, sub.id, (s) => {
@@ -998,8 +1200,10 @@ export class TaskEngine {
     }
     subLog(`远程会话${session.reused ? '复用' : '新建'} ${session.remoteSessionId} @ ${target.baseUrl}`)
 
+    const transformed = await this.transformFileMentionsForAgent(sub.prompt, mentions, agent)
+
     const parts: string[] = []
-    const hasDynamicResources = extraResources && extraResources.length > 0
+    const hasDynamicResources = (extraResources && extraResources.length > 0) || (mentions?.mentionedFiles && mentions.mentionedFiles.length > 0)
     const cachedBlock = hasDynamicResources ? null : this.blockCacheFresh(taskId, agent)
 
     if (!cachedBlock) {
@@ -1014,8 +1218,11 @@ export class TaskEngine {
     } else if (cachedBlock.block) {
       parts.push(cachedBlock.block)
     }
+    if (transformed.extraSections.length > 0) {
+      parts.push(transformed.extraSections.join('\n\n'))
+    }
     for (const u of upstream) parts.push(u)
-    parts.push(`[当前子任务指令]:\n${sub.prompt}`)
+    parts.push(`[当前子任务指令]:\n${transformed.text}`)
     const fullPrompt = parts.join('\n\n')
 
     let deltaCount = 0
@@ -1398,10 +1605,10 @@ export class TaskEngine {
     taskId: string,
     agentId: string | undefined,
     filePath: string,
-  ): Promise<{ ok: boolean; res?: Response; name?: string; agentName?: string; error?: string }> {
+  ): Promise<{ ok: boolean; res?: any; name?: string; agentName?: string; error?: string }> {
     const task = this.store.getTask(taskId)
     if (!task) return { ok: false, error: '任务不存在' }
-    if (!filePath?.trim()) return { ok: false, error: '缺少 path 参数' }
+    if (!filePath || !filePath.trim()) return { ok: false, error: '缺少 path 参数' }
     let aid = agentId?.trim()
     if (!aid) {
       const bound = Object.keys(task.sessions || {})

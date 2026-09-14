@@ -4395,7 +4395,7 @@ function classifyFileIcon(name, type) {
   }
 }
 
-/** 一键将文件引用填入对话输入框（对齐截图 @文件 功能） */
+/** 一键将文件引用填入对话输入框（格式为 @智能体名:文件路径，发送前按目标节点自动转换为本地路径或下载URL） */
 function atFileToChat(filePath, fileName) {
   switchView('work');
   const inp = $('input');
@@ -4407,11 +4407,14 @@ function atFileToChat(filePath, fileName) {
         refPath = refPath.slice(1);
       }
     }
-    const insertText = '@' + (refPath || fileName) + ' ';
+    const currentAgent = state.agents.find(a => a.id === filesState.agentId);
+    const agentName = currentAgent ? currentAgent.name : (filesState.agentId || '智能体');
+    const finalPath = refPath || fileName;
+    const insertText = '@' + agentName + ':' + finalPath + ' ';
     const val = inp.value || '';
     inp.value = val ? (val.endsWith(' ') ? val + insertText : val + ' ' + insertText) : insertText;
     inp.focus();
-    toast('✓ 已将 @' + (refPath || fileName) + ' 引用填入对话输入框');
+    toast('✓ 已将 @' + agentName + ':' + finalPath + ' 引用填入对话输入框');
   }
 }
 
