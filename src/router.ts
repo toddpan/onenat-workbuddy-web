@@ -711,7 +711,7 @@ export class WorkBuddyRouter {
         return true
       }
       const contentType = String(req.headers['content-type'] || '')
-      const raw = await readRawBuffer(req, 100 * 1024 * 1024)
+      const raw = await readRawBuffer(req, UPLOAD_MAX_BYTES)
       if (raw.length === 0) {
         this.sendJson(res, 400, { ok: false, error: '请求体为空：请以 multipart/form-data 上传技能压缩包' })
         return true
@@ -1080,7 +1080,7 @@ export class WorkBuddyRouter {
     if (attachMatch && method === 'POST') {
       const taskId = decodeURIComponent(attachMatch[1])
       const contentType = String(req.headers['content-type'] || '')
-      const raw = await readRawBuffer(req, 100 * 1024 * 1024)
+      const raw = await readRawBuffer(req, UPLOAD_MAX_BYTES)
       if (raw.length === 0) {
         this.sendJson(res, 400, { ok: false, error: '请求体为空：请以 multipart/form-data 上传文件' })
         return true
@@ -1425,6 +1425,9 @@ export function normalizeDshRef(input: any): DshRef | { error: string } {
 // ---------- 附件上传辅助 ----------
 
 /** 读取原始请求体（Buffer，带大小上限） */
+/** 上传类请求体统一上限：2GB（大文件请走 resumable 分片接口，避免整包驻留内存） */
+const UPLOAD_MAX_BYTES = 2 * 1024 * 1024 * 1024
+
 function readRawBuffer(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
