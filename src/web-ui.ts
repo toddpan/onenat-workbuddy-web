@@ -944,6 +944,85 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .run-card { background: var(--bg2); border: 1px solid var(--line); border-radius: var(--rad-sm); padding: 10px 12px; margin-bottom: 10px; }
 .run-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 12.5px; flex-wrap: wrap; }
 .run-item .mini-btn { margin-left: auto; }
+
+/* ---- 远程工作空间文件管理 ---- */
+.files-panel { display: flex; flex-direction: column; height: 100%; max-width: 100% !important; padding: 0 !important; }
+.files-head { padding: 12px 18px 8px; border-bottom: 1px solid var(--line); }
+.files-crumb-bar {
+  display: flex; align-items: center; gap: 2px; padding: 6px 18px; background: rgba(15,23,42,.6);
+  border-bottom: 1px solid var(--line); font-size: 13px; overflow-x: auto; white-space: nowrap; flex: none;
+}
+.files-crumb {
+  display: inline-flex; align-items: center; gap: 4px; color: var(--tx2); cursor: pointer; padding: 3px 7px;
+  border-radius: var(--rad-sm); transition: all .15s; font-size: 12.5px;
+}
+.files-crumb:hover { color: var(--pri); background: var(--bg3); }
+.files-crumb.active { color: var(--tx); font-weight: 600; cursor: default; }
+.files-crumb-sep { color: var(--tx3); font-size: 11px; padding: 0 2px; }
+
+.files-action-bar {
+  display: flex; align-items: center; gap: 10px; padding: 10px 18px; border-bottom: 1px solid var(--line);
+  background: var(--bg2); flex-wrap: wrap; flex: none;
+}
+.files-search-box {
+  display: flex; align-items: center; gap: 6px; background: var(--bg); border: 1px solid var(--line);
+  border-radius: var(--rad-sm); padding: 5px 10px; width: 220px;
+}
+.files-search-box input {
+  border: none; background: transparent; padding: 0; font-size: 12.5px; width: 100%; color: var(--tx);
+}
+.files-body-wrap {
+  flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; background: var(--bg); min-height: 200px;
+}
+.files-body-wrap.drop-hover {
+  outline: 2px dashed var(--pri); outline-offset: -4px; background: rgba(56,189,248,.04);
+}
+.files-table-wrap {
+  flex: 1; overflow-y: auto; overflow-x: auto;
+}
+.files-table {
+  width: 100%; border-collapse: collapse; font-size: 13px; text-align: left;
+}
+.files-table th {
+  position: sticky; top: 0; background: var(--bg2); z-index: 5; padding: 9px 16px;
+  border-bottom: 1px solid var(--line); color: var(--tx3); font-weight: 600; font-size: 12px;
+}
+.files-row {
+  border-bottom: 1px solid rgba(32,46,72,.3); transition: background .12s;
+}
+.files-row:hover { background: var(--bg-hover); }
+.files-cell {
+  padding: 8px 16px; vertical-align: middle; color: var(--tx2);
+}
+.files-cell-name {
+  color: var(--tx); font-weight: 500; display: flex; align-items: center; gap: 8px; cursor: pointer;
+}
+.files-cell-name:hover { color: var(--pri); }
+.files-icon { font-size: 16px; flex: none; width: 20px; text-align: center; }
+.files-actions {
+  display: flex; align-items: center; justify-content: flex-end; gap: 6px;
+}
+.btn-at-file {
+  background: rgba(56,189,248,.12); color: var(--pri); border: 1px solid rgba(56,189,248,.35);
+  border-radius: 999px; padding: 3px 10px; font-size: 11.5px; font-weight: 600; display: inline-flex;
+  align-items: center; gap: 3px; cursor: pointer; transition: all .15s;
+}
+.btn-at-file:hover {
+  background: var(--pri); color: #090e17; border-color: var(--pri); box-shadow: 0 0 10px rgba(56,189,248,.4);
+}
+.files-footer {
+  padding: 6px 18px; background: var(--bg2); border-top: 1px solid var(--line); display: flex;
+  align-items: center; font-size: 12px; color: var(--tx3); flex: none;
+}
+.files-empty-box {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 48px 16px; color: var(--tx3); gap: 10px;
+}
+.code-preview-box {
+  background: rgba(2,6,23,.7); border: 1px solid var(--line); border-radius: 8px;
+  padding: 12px 14px; font-family: var(--mono); font-size: 12px; line-height: 1.55;
+  color: var(--tx); overflow: auto; max-height: 520px; white-space: pre-wrap; word-break: break-all;
+}
 </style>
 </head>
 <body>
@@ -952,6 +1031,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
     <div class="brand"><div class="logo">⚡</div><span id="brand-title">OneNat WorkBuddy</span><small>多智能体协作工作台</small></div>
     <nav id="nav">
       <button data-v="work" class="on"><span class="ic">💬</span><span class="lb">工作台</span></button>
+      <button data-v="files"><span class="ic">📁</span><span class="lb">文件管理</span></button>
       <button data-v="agents"><span class="ic">🤖</span><span class="lb">子智能体</span></button>
       <button data-v="schedules"><span class="ic">⏰</span><span class="lb">定时任务</span></button>
       <button data-v="resources"><span class="ic">🗂</span><span class="lb">资源目录</span></button>
@@ -1026,6 +1106,51 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
         </div>
       </section>
     </div>
+    <div class="view" id="view-files"><div class="panel files-panel">
+      <div class="panel-head files-head">
+        <h2>📁 远程工作空间文件管理</h2>
+        <span class="sub">浏览、上传与管理远程主智能体 / 子智能体工作区文件 · 支持一键「@文件」引用到对话</span>
+        <span class="hspacer"></span>
+        <div style="display:flex;align-items:center;gap:6px">
+          <label style="font-size:12px;color:var(--tx3);white-space:nowrap">智能体:</label>
+          <select id="files-agent-select" class="cfg-sel" style="max-width:220px"></select>
+        </div>
+      </div>
+      <div class="files-crumb-bar" id="files-crumb-bar"></div>
+      <div class="files-action-bar">
+        <div class="files-search-box">
+          <span style="color:var(--tx3);font-size:13px">🔍</span>
+          <input id="files-search" placeholder="按文件名搜索..." />
+          <span id="files-search-clear" style="display:none;cursor:pointer;color:var(--tx3);font-size:12px">✕</span>
+        </div>
+        <button class="btn" id="btn-files-hidden" style="padding:6px 10px;font-size:12px">显示隐藏项</button>
+        <span class="hspacer"></span>
+        <button class="btn" id="btn-files-refresh" title="刷新文件列表">🔄 刷新</button>
+        <button class="btn pri" id="btn-files-upload" title="上传文件到当前目录">⬆️ 上传文件</button>
+        <button class="btn" id="btn-files-mkdir" title="新建文件夹">📁 新建文件夹</button>
+        <input type="file" id="files-file-input" multiple style="display:none" />
+      </div>
+      <div class="files-body-wrap" id="files-drop-area">
+        <div class="files-table-wrap">
+          <table class="files-table">
+            <thead>
+              <tr>
+                <th style="width:45%">名称</th>
+                <th style="width:15%">大小</th>
+                <th style="width:20%">修改时间</th>
+                <th style="width:20%;text-align:right">操作</th>
+              </tr>
+            </thead>
+            <tbody id="files-list"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="files-footer">
+        <span id="files-stats">0 个项目</span>
+        <span class="hspacer"></span>
+        <span id="files-current-path-text" style="color:var(--tx3);font-size:11.5px;font-family:var(--mono)"></span>
+      </div>
+    </div></div>
     <div class="view" id="view-agents"><div class="panel">
       <div class="panel-head"><h2>子智能体池</h2><span class="sub">绑定 ONENAT 上的 DSH 实体（稳定 ID，端口变化不影响）· 配置模式/模型/提示词/可用资源</span><span class="hspacer"></span><button class="btn pri" id="btn-new-agent">＋ 新建子智能体</button></div>
       <div id="agent-list"></div>
@@ -1378,6 +1503,7 @@ ${AUTH_ENABLED ? `var logoutBtn = document.getElementById('logout-btn');
 if (logoutBtn) logoutBtn.addEventListener('click', doLogout);` : ''}function switchView(v) {
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
   document.querySelectorAll('.view').forEach(x => x.classList.toggle('on', x.id === 'view-' + v));
+  if (v === 'files') renderFilesView();
   if (v === 'resources') renderResources();
   if (v === 'agents') renderAgents();
   if (v === 'schedules') renderSchedules();
@@ -1424,6 +1550,7 @@ if ($('input')) {
 // 手机端底部 Tab 使用短标签（桌面保持全称）
 const NAV_LABELS = {
   work: { full: '工作台', short: '工作台' },
+  files: { full: '文件管理', short: '文件' },
   agents: { full: '子智能体', short: '智能体' },
   schedules: { full: '定时任务', short: '定时' },
   resources: { full: '资源目录', short: '资源' },
@@ -4230,6 +4357,460 @@ function renderScheduleDetail(s, tab, keepScroll) {
     }));
   }
   if (keepScroll) body.scrollTop = scrollTop;
+}
+
+// ---------- 远程工作空间文件管理视图 ----------
+const filesState = {
+  agentId: '',
+  path: '',
+  home: '',
+  parent: '',
+  entries: [],
+  truncated: false,
+  showHidden: false,
+  searchKeyword: '',
+  loading: false,
+  error: '',
+  initialized: false,
+};
+
+function classifyFileIcon(name, type) {
+  if (type === 'dir') return '📁';
+  if (type === 'link') return '🔗';
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  switch (ext) {
+    case 'ts': case 'tsx': case 'js': case 'jsx': case 'mjs': case 'cjs': return '⚡';
+    case 'py': case 'python': return '🐍';
+    case 'sh': case 'bash': case 'zsh': return '🐚';
+    case 'json': case 'yaml': case 'yml': case 'toml': case 'xml': return '⚙️';
+    case 'md': case 'markdown': case 'txt': case 'log': return '📝';
+    case 'html': case 'htm': case 'css': case 'scss': case 'less': return '🌐';
+    case 'png': case 'jpg': case 'jpeg': case 'gif': case 'webp': case 'svg': case 'ico': return '🖼️';
+    case 'zip': case 'tar': case 'gz': case 'tgz': case '7z': case 'rar': return '📦';
+    case 'pdf': return '📕';
+    case 'mp3': case 'wav': case 'flac': return '🎵';
+    case 'mp4': case 'webm': case 'mov': return '🎬';
+    case 'rs': case 'go': case 'java': case 'c': case 'cpp': case 'h': case 'hpp': return '📄';
+    default: return '📄';
+  }
+}
+
+/** 一键将文件引用填入对话输入框（对齐截图 @文件 功能） */
+function atFileToChat(filePath, fileName) {
+  switchView('work');
+  const inp = $('input');
+  if (inp) {
+    let refPath = filePath;
+    if (filesState.home && refPath.startsWith(filesState.home)) {
+      refPath = refPath.slice(filesState.home.length);
+      while (refPath.startsWith('/') || refPath.startsWith('\\\\')) {
+        refPath = refPath.slice(1);
+      }
+    }
+    const insertText = '@' + (refPath || fileName) + ' ';
+    const val = inp.value || '';
+    inp.value = val ? (val.endsWith(' ') ? val + insertText : val + ' ' + insertText) : insertText;
+    inp.focus();
+    toast('✓ 已将 @' + (refPath || fileName) + ' 引用填入对话输入框');
+  }
+}
+
+/** 在线预览文件（文本/代码/图片/Markdown） */
+async function previewFile(agentId, filePath, fileName) {
+  openDrawer('📄 文件预览 · ' + fileName);
+  const body = $('drawer-body');
+  body.innerHTML = '<div style="padding:32px;text-align:center;color:var(--tx3)">正在加载文件内容…</div>';
+
+  const ext = (fileName.split('.').pop() || '').toLowerCase();
+  const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico'].includes(ext);
+  const downloadUrl = API + '/agents/fs/download?agent=' + encodeURIComponent(agentId) + '&path=' + encodeURIComponent(filePath);
+  const inlineUrl = downloadUrl + '&inline=1';
+
+  let actionsHtml = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--line);flex-wrap:wrap">' +
+    '<button class="btn-at-file" id="fp-at">@文件 引用到对话</button>' +
+    '<button class="btn" id="fp-copy-path" style="padding:4px 10px;font-size:12px">📋 复制路径</button>' +
+    '<span class="hspacer"></span>' +
+    '<a class="btn pri" href="' + downloadUrl + '" download="' + esc(fileName) + '" style="text-decoration:none;padding:5px 12px;font-size:12.5px;display:inline-flex;align-items:center;gap:4px">⬇️ 下载文件</a>' +
+  '</div>';
+
+  if (isImage) {
+    body.innerHTML = actionsHtml +
+      '<div style="text-align:center;padding:16px;background:rgba(0,0,0,.3);border-radius:8px;overflow:auto">' +
+      '<img src="' + inlineUrl + '" style="max-width:100%;max-height:480px;border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.5)" alt="' + esc(fileName) + '">' +
+      '</div>' +
+      '<div style="margin-top:10px;color:var(--tx3);font-size:12px;font-family:var(--mono);word-break:break-all">' + esc(filePath) + '</div>';
+  } else {
+    try {
+      const res = await fetch(inlineUrl);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const text = await res.text();
+      body.innerHTML = actionsHtml +
+        '<div class="code-preview-box">' + esc(text) + '</div>' +
+        '<div style="margin-top:10px;color:var(--tx3);font-size:12px;font-family:var(--mono);word-break:break-all">' + esc(filePath) + '</div>';
+    } catch (e) {
+      body.innerHTML = actionsHtml +
+        '<div style="padding:32px;text-align:center;color:var(--tx3)">' +
+        '<div style="font-size:36px;margin-bottom:8px">📦</div>' +
+        '<div style="font-size:13.5px;color:var(--tx)">二进制文件或无法直接在线预览</div>' +
+        '<div style="margin-top:8px;font-size:12px;font-family:var(--mono)">' + esc(filePath) + '</div>' +
+        '</div>';
+    }
+  }
+
+  const atBtn = $('fp-at');
+  if (atBtn) atBtn.addEventListener('click', () => { closeDrawer(); atFileToChat(filePath, fileName); });
+  const copyBtn = $('fp-copy-path');
+  if (copyBtn) copyBtn.addEventListener('click', () => {
+    navigator.clipboard.writeText(filePath).then(() => toast('✓ 已复制文件路径'));
+  });
+}
+
+/** 渲染面包屑路径导航 */
+function renderFilesCrumbs() {
+  const bar = $('files-crumb-bar');
+  if (!bar) return;
+  const cur = filesState.path || filesState.home || '/';
+  const parts = cur.split('/').flatMap(x => x.split('\\\\')).filter(Boolean);
+  const isWindows = cur.includes(':');
+  const rootLabel = isWindows ? (parts[0] || '盘符') : '🏠 根目录';
+
+  let html = '<span class="files-crumb' + (parts.length === 0 ? ' active' : '') + '" data-p="' + (isWindows ? (parts[0] + '/') : '/') + '"><span>' + rootLabel + '</span></span>';
+
+  let acc = isWindows ? (parts[0] + '/') : '/';
+  const startIdx = isWindows ? 1 : 0;
+  for (let i = startIdx; i < parts.length; i++) {
+    const p = parts[i];
+    acc = acc.endsWith('/') ? (acc + p) : (acc + '/' + p);
+    const isLast = i === parts.length - 1;
+    html += '<span class="files-crumb-sep">/</span>';
+    html += '<span class="files-crumb' + (isLast ? ' active' : '') + '" data-p="' + esc(acc) + '"><span>' + esc(p) + '</span></span>';
+  }
+  bar.innerHTML = html;
+  bar.querySelectorAll('.files-crumb:not(.active)').forEach(el => {
+    el.addEventListener('click', () => loadFilesDir(el.dataset.p));
+  });
+}
+
+/** 渲染文件列表表格 */
+function renderFilesTable() {
+  const tbody = $('files-list');
+  if (!tbody) return;
+  const kw = filesState.searchKeyword.toLowerCase().trim();
+
+  let filtered = (filesState.entries || []).filter(e => {
+    if (!filesState.showHidden && e.hidden) return false;
+    if (kw && !e.name.toLowerCase().includes(kw)) return false;
+    return true;
+  });
+
+  if (filesState.loading) {
+    tbody.innerHTML = '<tr><td colspan="4"><div class="files-empty-box"><span class="cursor"></span><span>正在读取远程文件列表…</span></div></td></tr>';
+    return;
+  }
+
+  if (filesState.error) {
+    tbody.innerHTML = '<tr><td colspan="4"><div class="files-empty-box" style="color:var(--err)"><span>⚠️ 无法读取工作空间</span><span>' + esc(filesState.error) + '</span></div></td></tr>';
+    return;
+  }
+
+  if (!filtered.length) {
+    tbody.innerHTML = '<tr><td colspan="4"><div class="files-empty-box"><span>📁</span><span>' + (kw ? '未找到匹配的文件或文件夹' : '当前目录为空') + '</span></div></td></tr>';
+    $('files-stats').textContent = '0 个项目';
+    return;
+  }
+
+  let rowsHtml = '';
+  // 如果不是根目录，增加返回上一级行
+  if (filesState.parent && filesState.path !== filesState.parent) {
+    rowsHtml += '<tr class="files-row" data-parent="1">' +
+      '<td class="files-cell files-cell-name"><span class="files-icon">📁</span><span>..（返回上级）</span></td>' +
+      '<td class="files-cell">—</td><td class="files-cell">—</td><td class="files-cell" style="text-align:right">—</td>' +
+    '</tr>';
+  }
+
+  for (const item of filtered) {
+    const isDir = item.type === 'dir';
+    const icon = classifyFileIcon(item.name, item.type);
+    const sizeText = isDir ? '—' : (item.size != null ? fmtSize(item.size) : '—');
+    const mtimeText = item.mtime ? fmtDateTime(item.mtime) : '—';
+    const downloadUrl = API + '/agents/fs/download?agent=' + encodeURIComponent(filesState.agentId) + '&path=' + encodeURIComponent(item.path);
+
+    rowsHtml += '<tr class="files-row" data-path="' + esc(item.path) + '" data-name="' + esc(item.name) + '" data-type="' + esc(item.type || 'file') + '">' +
+      '<td class="files-cell files-cell-name">' +
+        '<span class="files-icon">' + icon + '</span>' +
+        '<span style="' + (item.hidden ? 'opacity:.6' : '') + '">' + esc(item.name) + '</span>' +
+      '</td>' +
+      '<td class="files-cell">' + sizeText + '</td>' +
+      '<td class="files-cell" style="font-size:12px;color:var(--tx3)">' + mtimeText + '</td>' +
+      '<td class="files-cell" style="text-align:right">' +
+        '<div class="files-actions">' +
+          '<button class="btn-at-file" data-op="at" title="将 @' + esc(item.name) + ' 引用填入输入框">@文件</button>' +
+          (!isDir ? '<button class="mini-btn" data-op="preview" title="在线预览">👁️</button>' : '') +
+          (!isDir ? '<a class="mini-btn" href="' + downloadUrl + '" download="' + esc(item.name) + '" title="下载文件" style="text-decoration:none">⬇️</a>' : '') +
+          '<button class="mini-btn danger" data-op="del" title="删除">🗑️</button>' +
+        '</div>' +
+      '</td>' +
+    '</tr>';
+  }
+
+  tbody.innerHTML = rowsHtml;
+
+  // 绑定行点击
+  tbody.querySelectorAll('.files-row').forEach(row => {
+    if (row.dataset.parent) {
+      row.addEventListener('click', () => loadFilesDir(filesState.parent));
+      return;
+    }
+    const itemPath = row.dataset.path;
+    const itemName = row.dataset.name;
+    const itemType = row.dataset.type;
+
+    // 点击行名称进入目录或预览
+    const nameCell = row.querySelector('.files-cell-name');
+    if (nameCell) {
+      nameCell.addEventListener('click', e => {
+        e.stopPropagation();
+        if (itemType === 'dir') loadFilesDir(itemPath);
+        else previewFile(filesState.agentId, itemPath, itemName);
+      });
+    }
+
+    // @文件 按钮
+    const atBtn = row.querySelector('[data-op="at"]');
+    if (atBtn) {
+      atBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        atFileToChat(itemPath, itemName);
+      });
+    }
+
+    // 预览按钮
+    const prevBtn = row.querySelector('[data-op="preview"]');
+    if (prevBtn) {
+      prevBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        previewFile(filesState.agentId, itemPath, itemName);
+      });
+    }
+
+    // 删除按钮
+    const delBtn = row.querySelector('[data-op="del"]');
+    if (delBtn) {
+      delBtn.addEventListener('click', async e => {
+        e.stopPropagation();
+        const label = itemType === 'dir' ? '文件夹及其内容' : '文件';
+        if (!confirm('确定在远程主机上删除此' + label + '「' + itemName + '」？此操作不可恢复。')) return;
+        const r = await api('/agents/fs/remove?agent=' + encodeURIComponent(filesState.agentId) + '&path=' + encodeURIComponent(itemPath), { method: 'DELETE' });
+        if (!r.ok) { toast(r.error || '删除失败', true); return; }
+        toast('✓ 已删除 ' + itemName);
+        loadFilesDir(filesState.path);
+      });
+    }
+  });
+
+  const dirCount = filtered.filter(x => x.type === 'dir').length;
+  const fileCount = filtered.filter(x => x.type !== 'dir').length;
+  $('files-stats').textContent = (dirCount ? dirCount + ' 个文件夹 · ' : '') + fileCount + ' 个文件';
+  $('files-current-path-text').textContent = filesState.path || filesState.home || '';
+}
+
+/** 加载指定目录的文件 */
+async function loadFilesDir(dirPath) {
+  if (!filesState.agentId) return;
+  filesState.loading = true;
+  filesState.error = '';
+  renderFilesTable();
+
+  const url = '/agents/fs/list?agent=' + encodeURIComponent(filesState.agentId) +
+    (dirPath ? '&path=' + encodeURIComponent(dirPath) : '') + '&all=1';
+  const r = await api(url);
+  filesState.loading = false;
+
+  if (!r.ok) {
+    filesState.error = r.error || '加载目录失败';
+    renderFilesTable();
+    return;
+  }
+
+  filesState.path = r.data.path || dirPath || '';
+  filesState.home = r.data.home || '';
+  filesState.parent = r.data.parent || '';
+  filesState.entries = r.data.entries || [];
+  filesState.truncated = Boolean(r.data.truncated);
+
+  renderFilesCrumbs();
+  renderFilesTable();
+}
+
+/** 初始化并渲染文件管理视图 */
+async function renderFilesView() {
+  const sel = $('files-agent-select');
+  if (!sel) return;
+
+  // 刷新子智能体列表
+  if (!state.agents.length) await loadAgents();
+
+  const agents = state.agents.filter(a => a.enabled !== false);
+  if (!agents.length) {
+    $('files-list').innerHTML = '<tr><td colspan="4"><div class="files-empty-box"><span>🤖</span><span>尚未创建任何子智能体，请先在「子智能体」页创建。</span></div></td></tr>';
+    return;
+  }
+
+  // 保持当前选中的智能体或默认第一个
+  if (!filesState.agentId || !agents.some(a => a.id === filesState.agentId)) {
+    filesState.agentId = agents[0].id;
+  }
+
+  let opts = '';
+  for (const a of agents) {
+    const dirBasename = a.workDir ? a.workDir.split('/').pop().split('\\\\').pop() : '';
+    opts += '<option value="' + esc(a.id) + '"' + (a.id === filesState.agentId ? ' selected' : '') + '>' +
+      esc(a.name) + (dirBasename ? ' (' + esc(dirBasename) + ')' : '') +
+    '</option>';
+  }
+  sel.innerHTML = opts;
+
+  if (!filesState.initialized) {
+    filesState.initialized = true;
+
+    sel.addEventListener('change', () => {
+      filesState.agentId = sel.value;
+      filesState.path = '';
+      loadFilesDir('');
+    });
+
+    // 搜索过滤
+    const searchInp = $('files-search');
+    const clearBtn = $('files-search-clear');
+    if (searchInp) {
+      searchInp.addEventListener('input', () => {
+        filesState.searchKeyword = searchInp.value;
+        if (clearBtn) clearBtn.style.display = searchInp.value ? 'inline-block' : 'none';
+        renderFilesTable();
+      });
+    }
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => {
+        searchInp.value = '';
+        filesState.searchKeyword = '';
+        clearBtn.style.display = 'none';
+        renderFilesTable();
+      });
+    }
+
+    // 隐藏文件开关
+    const hideBtn = $('btn-files-hidden');
+    if (hideBtn) {
+      hideBtn.addEventListener('click', () => {
+        filesState.showHidden = !filesState.showHidden;
+        hideBtn.classList.toggle('pri', filesState.showHidden);
+        hideBtn.textContent = filesState.showHidden ? '✓ 显示隐藏项' : '显示隐藏项';
+        renderFilesTable();
+      });
+    }
+
+    // 刷新按钮
+    const refreshBtn = $('btn-files-refresh');
+    if (refreshBtn) {
+      refreshBtn.addEventListener('click', () => loadFilesDir(filesState.path));
+    }
+
+    // 新建文件夹按钮
+    const mkdirBtn = $('btn-files-mkdir');
+    if (mkdirBtn) {
+      mkdirBtn.addEventListener('click', async () => {
+        if (!filesState.path) { toast('请先加载目录', true); return; }
+        const name = prompt('在当前目录下新建文件夹：\\n' + filesState.path, '');
+        if (!name || !name.trim()) return;
+        const r = await api('/agents/fs/mkdir', {
+          method: 'POST',
+          body: JSON.stringify({ agent: filesState.agentId, path: filesState.path, name: name.trim() })
+        });
+        if (!r.ok) { toast(r.error || '创建文件夹失败', true); return; }
+        toast('✓ 已创建文件夹「' + name.trim() + '」');
+        loadFilesDir(filesState.path);
+      });
+    }
+
+    // 上传文件按钮与拖放
+    const uploadBtn = $('btn-files-upload');
+    const fileInp = $('files-file-input');
+    if (uploadBtn && fileInp) {
+      uploadBtn.addEventListener('click', () => {
+        if (!filesState.path) { toast('请先选择目录', true); return; }
+        fileInp.click();
+      });
+      fileInp.addEventListener('change', async () => {
+        const files = Array.from(fileInp.files || []);
+        fileInp.value = '';
+        if (!files.length || !filesState.path) return;
+        await uploadFilesToAgent(filesState.agentId, filesState.path, files);
+      });
+    }
+
+    // 拖放区域
+    const dropArea = $('files-drop-area');
+    if (dropArea) {
+      let dragDepth = 0;
+      dropArea.addEventListener('dragenter', e => {
+        if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
+        e.preventDefault();
+        dragDepth++;
+        dropArea.classList.add('drop-hover');
+      });
+      dropArea.addEventListener('dragover', e => {
+        if (!Array.from(e.dataTransfer.types || []).includes('Files')) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+        dropArea.classList.add('drop-hover');
+      });
+      dropArea.addEventListener('dragleave', () => {
+        dragDepth = Math.max(0, dragDepth - 1);
+        if (!dragDepth) dropArea.classList.remove('drop-hover');
+      });
+      dropArea.addEventListener('drop', async e => {
+        e.preventDefault();
+        dragDepth = 0;
+        dropArea.classList.remove('drop-hover');
+        const files = Array.from(e.dataTransfer?.files || []);
+        if (!files.length || !filesState.path) return;
+        await uploadFilesToAgent(filesState.agentId, filesState.path, files);
+      });
+    }
+  }
+
+  // 加载初始目录
+  if (!filesState.path) {
+    loadFilesDir('');
+  } else {
+    renderFilesCrumbs();
+    renderFilesTable();
+  }
+}
+
+/** 向上批量上传文件到远程目录 */
+async function uploadFilesToAgent(agentId, destPath, files) {
+  toast('正在上传 ' + files.length + ' 个文件到工作空间…');
+  let successCount = 0;
+  for (const f of files) {
+    try {
+      const fd = new FormData();
+      fd.append('files', f, f.name);
+      const res = await fetch(API + '/agents/fs/upload?agent=' + encodeURIComponent(agentId) + '&path=' + encodeURIComponent(destPath), {
+        method: 'POST',
+        body: fd,
+      });
+      const json = await res.json().catch(() => ({}));
+      if (res.ok && json.ok) successCount++;
+      else toast('文件「' + f.name + '」上传失败: ' + (json.error || 'HTTP ' + res.status), true);
+    } catch (e) {
+      toast('文件「' + f.name + '」上传网络错误', true);
+    }
+  }
+  if (successCount > 0) {
+    toast('✓ 已成功上传 ' + successCount + '/' + files.length + ' 个文件');
+    loadFilesDir(destPath);
+  }
 }
 
 // ---------- 设置视图 ----------
