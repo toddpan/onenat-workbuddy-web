@@ -448,7 +448,10 @@ body.task-running .msg.system.sys-planning .content::after {
   opacity: 0.45; cursor: default;
 }
 .ask-opt input[type="radio"], .ask-opt input[type="checkbox"] {
-  margin-top: 3px; accent-color: var(--pri); cursor: pointer; transform: scale(1.1);
+  /* 全局 input 规则（width:100% + 边框 + 内边距）会把 radio/checkbox 拉成占满整行的大盒子，
+     挤压选项文字成竖排——这里显式还原为原生控件外观 */
+  width: auto; height: auto; flex: none; padding: 0; border: none; background: none; border-radius: 0;
+  margin: 3px 0 0; accent-color: var(--pri); cursor: pointer; transform: scale(1.1);
 }
 .ask-opt-main { flex: 1; min-width: 0; }
 .ask-opt-label { font-size: 13.5px; font-weight: 500; color: var(--tx); }
