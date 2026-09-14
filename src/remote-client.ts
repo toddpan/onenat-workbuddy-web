@@ -67,6 +67,35 @@ function clean(url: string): string {
 }
 
 /**
+ * SSE 帧分隔：必须容忍 CRLF。
+ * 若中间链路（反代/隧道/某些网关）把行尾改写成 `\r\n`，帧分隔就是 `\r\n\r\n`，
+ * 用 `indexOf('\n\n')` 一个帧都切不出来（表现为「一个字的增量都没收到」）。
+ */
+const SSE_FRAME_SEP = /\r?\n\r?\n/
+
+/**
+ * 解析单个 SSE 帧。按规范逐行取值：
+ *   - 忽略注释行（`:` 开头，心跳）与空行；
+ *   - 支持多行 `data:`（规范允许服务端把长载荷拆成多行，需按换行拼接后再 JSON.parse）；
+ *   - `event` / `data` 后的单个前导空格按规范剥离。
+ */
+export function parseSseFrame(frame: string): { event?: string; data: string } {
+  let event: string | undefined
+  const dataLines: string[] = []
+  for (const raw of String(frame).split('\n')) {
+    const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw
+    if (!line || line.startsWith(':')) continue
+    const colon = line.indexOf(':')
+    const field = colon < 0 ? line : line.slice(0, colon)
+    let value = colon < 0 ? '' : line.slice(colon + 1)
+    if (value.startsWith(' ')) value = value.slice(1)
+    if (field === 'event') event = value.trim()
+    else if (field === 'data') dataLines.push(value)
+  }
+  return { event, data: dataLines.join('\n') }
+}
+
+/**
  * 长静默 SSE 兜底 dispatcher：长工具执行 / 上下文压缩期间流上没有任何帧，
  * undici 默认 bodyTimeout=300s 会按「chunk 间空闲」掐断连接 → 长回合必断流。
  * bodyTimeout=0 关闭该超时（headersTimeout 保留，防远端彻底失联）。undici 不可用时优雅降级为默认行为。
@@ -859,12 +888,11 @@ export class DshClient {
         const chunk = await reader.read()
         if (chunk.done) break
         buffer += decoder.decode(chunk.value, { stream: true })
-        let idx: number
-        while ((idx = buffer.indexOf('\n\n')) >= 0) {
-          const frame = buffer.slice(0, idx)
-          buffer = buffer.slice(idx + 2)
-          const evName = /^event:\s*(.+)$/m.exec(frame)?.[1]?.trim()
-          const dataRaw = /^data:\s*([\s\S]*)$/m.exec(frame)?.[1] ?? ''
+        let sep: RegExpExecArray | null
+        while ((sep = SSE_FRAME_SEP.exec(buffer)) !== null) {
+          const frame = buffer.slice(0, sep.index)
+          buffer = buffer.slice(sep.index + sep[0].length)
+          const { event: evName, data: dataRaw } = parseSseFrame(frame)
           let data: any = dataRaw
           try {
             data = JSON.parse(dataRaw)

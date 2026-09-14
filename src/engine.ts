@@ -824,10 +824,14 @@ export class TaskEngine {
       fullPrompt,
       {
         onDelta: (delta) => {
-          this.store.mutateTask(taskId, (t) => {
-            const tt = t.turns.find((x) => x.id === turn.id)
-            if (tt) tt.text += delta
-          })
+          // 内存即时可见 + 磁盘尾随合并：每个 delta 全量写盘会同步阻塞事件循环数毫秒，
+          // 长回合累计数秒（详见 WorkStore.scheduleSave），进而拖垮 SSE 收发
+          if (!this.store.appendTurnText(taskId, turn.id, delta)) {
+            this.store.mutateTask(taskId, (t) => {
+              const tt = t.turns.find((x) => x.id === turn.id)
+              if (tt) tt.text += delta
+            })
+          }
           this.emit(taskId, { type: 'turn_delta', turnId: turn.id, delta, seq: streamSeq++ })
         },
         onReasoning: (delta) => {

@@ -61,6 +61,8 @@
     "smoke": "node scripts/smoke-standalone.mjs",
     "smoke:e2e": "SMOKE_E2E=1 node scripts/smoke-standalone.mjs",
     "smoke:schedules": "node scripts/smoke-schedules.mjs",
+    "test:streaming": "node e2e-artifacts/run-streaming-tests.mjs",
+    "test:streaming:e2e": "node e2e-artifacts/e2e-workbuddy-turn.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "typecheck:standalone": "tsc -p tsconfig.server.json --noEmit"
   },
