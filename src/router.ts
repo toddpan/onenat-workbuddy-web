@@ -547,10 +547,11 @@ export class WorkBuddyRouter {
       this.sendJson(res, 200, { ok: true, data: saved })
       return true
     }
-    // 远端目录浏览（子智能体工作目录选择器）
+    // 远端目录浏览与工作区文件管理
     if (p === '/api/agents/fs/list' && method === 'GET') {
       const url = new URL(req.url || '/', 'http://localhost')
-      const agent = this.store.getAgent(String(url.searchParams.get('agent') || ''))
+      const agentId = String(url.searchParams.get('agent') || '')
+      const agent = this.store.getAgent(agentId)
       if (!agent) {
         this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
         return true
@@ -560,8 +561,106 @@ export class WorkBuddyRouter {
         this.sendJson(res, 502, { ok: false, error: target.error || '节点不可达' })
         return true
       }
-      const dirPath = url.searchParams.get('path') || undefined
-      const out = await this.client.fsList(target, dirPath || undefined)
+      const dirPath = url.searchParams.get('path') || agent.workDir || undefined
+      const all = url.searchParams.get('all') === '1' || url.searchParams.get('all') === 'true'
+      const out = await this.client.fsList(target, dirPath || undefined, all)
+      this.sendJson(res, out.ok ? 200 : 400, out.ok ? out : { ok: false, error: out.error })
+      return true
+    }
+    if (p === '/api/agents/fs/download' && method === 'GET') {
+      const url = new URL(req.url || '/', 'http://localhost')
+      const agentId = String(url.searchParams.get('agent') || '')
+      const agent = this.store.getAgent(agentId)
+      if (!agent) {
+        this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
+        return true
+      }
+      const target = await this.resolver.resolve(agent)
+      if (!target.online || !target.baseUrl) {
+        this.sendJson(res, 502, { ok: false, error: target.error || '节点不可达' })
+        return true
+      }
+      const filePath = String(url.searchParams.get('path') || '').trim()
+      if (!filePath) {
+        this.sendJson(res, 400, { ok: false, error: '缺少 path 参数' })
+        return true
+      }
+      const inline = url.searchParams.get('inline') === '1'
+      const out = await this.client.fsDownload(target, filePath, inline)
+      if (!out.ok || !out.res?.body) {
+        this.sendJson(res, 404, { ok: false, error: out.error || '文件下载失败' })
+        return true
+      }
+      const name = out.name || 'file'
+      res.statusCode = 200
+      const ct = out.res.headers.get('content-type') || 'application/octet-stream'
+      const cl = out.res.headers.get('content-length')
+      res.setHeader('Content-Type', ct)
+      if (cl) res.setHeader('Content-Length', cl)
+      res.setHeader('X-Content-Type-Options', 'nosniff')
+      const asciiFallback = name.replace(/[^\x20-\x7e]/g, '_') || 'download'
+      res.setHeader(
+        'Content-Disposition',
+        `${inline ? 'inline' : 'attachment'}; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+      )
+      Readable.fromWeb(out.res.body as any).pipe(res)
+      return true
+    }
+    if (p === '/api/agents/fs/upload' && method === 'POST') {
+      const url = new URL(req.url || '/', 'http://localhost')
+      const agentId = String(url.searchParams.get('agent') || '')
+      const destDir = String(url.searchParams.get('path') || '').trim()
+      const agent = this.store.getAgent(agentId)
+      if (!agent) {
+        this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
+        return true
+      }
+      if (!destDir) {
+        this.sendJson(res, 400, { ok: false, error: '缺少目标目录 path' })
+        return true
+      }
+      const target = await this.resolver.resolve(agent)
+      if (!target.online || !target.baseUrl) {
+        this.sendJson(res, 502, { ok: false, error: target.error || '节点不可达' })
+        return true
+      }
+      const contentType = String(req.headers['content-type'] || '')
+      const raw = await readRawBuffer(req, UPLOAD_MAX_BYTES)
+      if (raw.length === 0) {
+        this.sendJson(res, 400, { ok: false, error: '请求体为空' })
+        return true
+      }
+      let files: Array<{ filename: string; data: Buffer; mimeType?: string }> = []
+      if (/^multipart\/form-data/i.test(contentType)) {
+        files = parseMultipartFiles(raw, contentType)
+      } else {
+        const rawName = (url.searchParams.get('filename') || String(req.headers['x-filename'] || '')).trim()
+        files = [{ filename: sanitizeUploadName(rawName || `upload-${Date.now()}`), data: raw, mimeType: contentType }]
+      }
+      const out = await this.client.fsUpload(target, destDir, files)
+      this.sendJson(res, out.ok ? 200 : 400, out.ok ? out : { ok: false, error: out.error })
+      return true
+    }
+    if (p === '/api/agents/fs/remove' && (method === 'DELETE' || method === 'POST')) {
+      const url = new URL(req.url || '/', 'http://localhost')
+      const body = method === 'POST' ? await this.parseBody(req) : null
+      const agentId = String(url.searchParams.get('agent') || body?.agent || '')
+      const targetPath = String(url.searchParams.get('path') || body?.path || '').trim()
+      const agent = this.store.getAgent(agentId)
+      if (!agent) {
+        this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
+        return true
+      }
+      if (!targetPath) {
+        this.sendJson(res, 400, { ok: false, error: '缺少 path 参数' })
+        return true
+      }
+      const target = await this.resolver.resolve(agent)
+      if (!target.online || !target.baseUrl) {
+        this.sendJson(res, 502, { ok: false, error: target.error || '节点不可达' })
+        return true
+      }
+      const out = await this.client.fsRemove(target, targetPath)
       this.sendJson(res, out.ok ? 200 : 400, out.ok ? out : { ok: false, error: out.error })
       return true
     }

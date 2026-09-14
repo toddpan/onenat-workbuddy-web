@@ -304,20 +304,101 @@ export class DshClient {
     }
   }
 
-  /** 远端目录浏览（对齐 DSH directory-picker-browse：只返回目录行，hidden 标记） */
-  public async fsList(target: DshTarget, dirPath?: string): Promise<{
+  /** 远端目录与工作区文件浏览（all=true 时包含文件及元数据） */
+  public async fsList(
+    target: DshTarget,
+    dirPath?: string,
+    all?: boolean,
+  ): Promise<{
     ok: boolean
     error?: string
-    data?: { path: string; home: string; parent?: string; entries: Array<{ name: string; path: string; hidden: boolean }>; truncated: boolean }
+    data?: {
+      path: string
+      home: string
+      parent?: string
+      entries: Array<{ name: string; path: string; type?: 'dir' | 'file' | 'link'; size?: number; mtime?: number; hidden: boolean }>
+      truncated: boolean
+    }
   }> {
     try {
-      const url = `${clean(target.baseUrl)}/fs/list${dirPath ? `?path=${encodeURIComponent(dirPath)}` : ''}`
+      const q = new URLSearchParams()
+      if (dirPath) q.set('path', dirPath)
+      if (all) q.set('all', '1')
+      const qs = q.toString()
+      const url = `${clean(target.baseUrl)}/fs/list${qs ? `?${qs}` : ''}`
       const res = await fetch(url, { headers: this.headers(target.apiKey), signal: AbortSignal.timeout(15_000) })
       const json: any = await res.json().catch(() => ({}))
       if (!res.ok || !json?.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
       return { ok: true, data: json.data }
     } catch (err: any) {
       return { ok: false, error: err?.message || '目录浏览失败' }
+    }
+  }
+
+  /** 远端绝对路径文件下载/预览流（返回 Response） */
+  public async fsDownload(
+    target: DshTarget,
+    filePath: string,
+    inline?: boolean,
+  ): Promise<{ ok: boolean; res?: Response; name?: string; error?: string }> {
+    try {
+      const url = `${clean(target.baseUrl)}/fs/download?path=${encodeURIComponent(filePath)}${inline ? '&inline=1' : ''}`
+      const res = await fetch(url, {
+        headers: this.headers(target.apiKey),
+        signal: AbortSignal.timeout(60_000),
+      })
+      if (!res.ok) {
+        const json: any = await res.json().catch(() => ({}))
+        return { ok: false, error: json?.error || `HTTP ${res.status}` }
+      }
+      const name = filePath.split(/[\\/]/).pop() || 'file'
+      return { ok: true, res, name }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || '文件读取失败' }
+    }
+  }
+
+  /** 远端删除文件或目录 */
+  public async fsRemove(target: DshTarget, targetPath: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const url = `${clean(target.baseUrl)}/fs/remove?path=${encodeURIComponent(targetPath)}`
+      const res = await fetch(url, {
+        method: 'DELETE',
+        headers: this.headers(target.apiKey),
+        signal: AbortSignal.timeout(15_000),
+      })
+      const json: any = await res.json().catch(() => ({}))
+      if (!res.ok || !json?.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
+      return { ok: true }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || '删除失败' }
+    }
+  }
+
+  /** 向远端目录直接上传文件 */
+  public async fsUpload(
+    target: DshTarget,
+    destDir: string,
+    files: Array<{ filename: string; data: Buffer; mimeType?: string }>,
+  ): Promise<{ ok: boolean; files?: Array<{ name: string; path: string; size: number }>; error?: string }> {
+    try {
+      const fd = new FormData()
+      for (const f of files) {
+        const blob = new Blob([new Uint8Array(f.data)], { type: f.mimeType || 'application/octet-stream' })
+        fd.append('files', blob, f.filename)
+      }
+      const url = `${clean(target.baseUrl)}/fs/upload?path=${encodeURIComponent(destDir)}`
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: this.headersAuth(target.apiKey),
+        body: fd,
+        signal: AbortSignal.timeout(120_000),
+      })
+      const json: any = await res.json().catch(() => ({}))
+      if (!res.ok || !json?.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
+      return { ok: true, files: json.data?.files || [] }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || '上传失败' }
     }
   }
 
