@@ -7,7 +7,6 @@
  * 任何失败回退静态三段拆解，保证任务永不卡死在规划阶段。
  */
 
-import type { Context } from 'cordis'
 import { DshClient, type DshTarget } from './remote-client.js'
 import type { AgentResolver } from './resolver.js'
 import type { WorkStore } from './store.js'
@@ -16,6 +15,15 @@ import type { PlanSubtask, SubAgent, TaskSummary } from './types.js'
 export interface PlannerMember {
   agent: SubAgent
   resourceSummary: string
+}
+
+/**
+ * 运行宿主信息（DSH 插件模式 / 独立部署模式共用）。
+ * 仅用于拼自身控制台地址，不依赖任何宿主 API。
+ */
+export interface PlannerHost {
+  /** 本服务监听端口（用于回显控制台 URL） */
+  webServerPort?: number
 }
 
 export interface PlanDraft {
@@ -30,10 +38,9 @@ export class Planner {
   constructor(
     private store: WorkStore,
     private resolver: AgentResolver,
-    ctx?: Context,
+    host?: PlannerHost,
   ) {
-    const webServer = ctx?.get?.('webServer') as any
-    const port = webServer?.port || 3080
+    const port = host?.webServerPort || 3080
     this.selfBaseUrl = `http://127.0.0.1:${port}/api/v1`
   }
 
@@ -79,7 +86,13 @@ export class Planner {
     objective: string,
     members: PlannerMember[],
     memberTargets: Map<string, DshTarget>,
-    opts?: { priorityAgentIds?: string[] },
+    opts?: {
+      priorityAgentIds?: string[]
+      /** 阶段/思考日志回传（进任务日志抽屉 + SSE log 事件） */
+      onLog?: (msg: string, level?: 'info' | 'warn') => void
+      /** 主调度思考过程增量（实时进规划消息的思考块） */
+      onReasoning?: (delta: string) => void
+    },
   ): Promise<{ plan: PlanDraft; plannerModel?: string } | { error: string; raw?: string }> {
     const picked = await this.pickTarget(memberTargets)
     if ('error' in picked) return { error: picked.error }
@@ -113,9 +126,56 @@ export class Planner {
       roster,
     ].filter(Boolean).join('\n')
 
-    // 主调度模型：设置页/聊天窗选择的 provider/model 透传给 /chat/completions
+    // 主调度模型：设置页/聊天窗选择的 provider/model 透传
     const plannerModel = this.store.getSettings().planner.model || undefined
-    const res = await this.client.chat(picked.target, [{ role: 'user', content: user }], { model: plannerModel })
+    const log = (m: string, lv: 'info' | 'warn' = 'info') => opts?.onLog?.(m, lv)
+    const t0 = Date.now()
+    log(`主调度目标: ${picked.source} @ ${picked.target.baseUrl}`)
+    log(`规划提示词 ${user.length} 字符 · 模型 ${plannerModel || '远端默认'}`)
+
+    // 流式优先：思考过程实时回传（规划可能是长思考，同步调用全程黑盒）
+    let res: { ok: boolean; content?: string; error?: string }
+    const created = await this.client.createSession(picked.target, `主调度规划 · ${new Date().toISOString().slice(11, 19)}`, plannerModel ? { model: plannerModel } : undefined)
+    if (created.ok && created.sessionId) {
+      const sessId = created.sessionId
+      log(`规划会话已创建 ${sessId}`)
+      let thinkChars = 0
+      let firstThinkMs = 0
+      const sse = await this.client.streamPrompt(picked.target, sessId, user, {
+        onReasoning: (delta) => {
+          if (!firstThinkMs) {
+            firstThinkMs = Date.now() - t0
+            log(`主调度开始思考（首思考 ${(firstThinkMs / 1000).toFixed(1)}s）`)
+          }
+          thinkChars += delta.length
+          opts?.onReasoning?.(delta)
+        },
+        onLog: (m, lv) => log(m, lv === 'warn' ? 'warn' : 'info'),
+      }, { remoteTimeoutMs: 900_000 })
+      const elapsedS = ((Date.now() - t0) / 1000).toFixed(1)
+      if (sse.ok && !sse.content) {
+        // 远端不推文本增量（provider 只在回合内落 assistant/message）⇒ history 对账，否则拆解必然空产出
+        log('规划流式通道无文本增量，改用会话历史对账…', 'warn')
+        const frag = user.length > 400 ? user.slice(-400) : user
+        const reconciled = await this.client.reconcileTurn(picked.target, sessId, frag, { attempts: 4, intervalMs: 1500 })
+        res = reconciled.ok ? { ok: true, content: reconciled.content || '' } : { ok: false, error: reconciled.error }
+      } else if (sse.ok) {
+        res = { ok: true, content: sse.content || '' }
+        log(`规划流式调用完成（耗时 ${elapsedS}s · 思考 ${thinkChars} 字 · 产出 ${(res.content || '').length} 字）`)
+      } else if (sse.sseUnsupported) {
+        log('远端不支持流式规划，回退同步调用…', 'warn')
+        const sync = await this.client.chat(picked.target, [{ role: 'user', content: user }], { model: plannerModel })
+        log(`同步规划调用完成（耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s · 产出 ${(sync.content || '').length} 字）`)
+        res = sync.ok ? { ok: true, content: sync.content || '' } : { ok: false, error: sync.error }
+      } else {
+        res = { ok: false, error: sse.error }
+        log(`流式规划调用失败: ${sse.error}`, 'warn')
+      }
+    } else {
+      log(`规划会话创建失败（${created.error}），回退同步调用…`, 'warn')
+      const sync = await this.client.chat(picked.target, [{ role: 'user', content: user }], { model: plannerModel })
+      res = sync.ok ? { ok: true, content: sync.content || '' } : { ok: false, error: sync.error }
+    }
     if (!res.ok || !res.content) return { error: `规划器调用失败: ${res.error}`, raw: res.content }
 
     const parsed = this.parsePlanJson(res.content)

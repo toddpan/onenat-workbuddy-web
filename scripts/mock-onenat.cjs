@@ -5,15 +5,25 @@
 const http = require('node:http')
 const fs = require('node:fs')
 
-const PORT = 18080
-const KEY = 'onk-mock-key-000'
+const PORT = Number(process.env.MOCK_ONENAT_PORT || 18080)
+const KEY = process.env.MOCK_ONENAT_KEY || 'onk-mock-key-000'
+/** 真实本地 DSH Web Service 端口（用于独立服务端到端冒烟；可用 DSH_WEB_PORT 覆盖） */
+const DSH_WEB_PORT = Number(process.env.DSH_WEB_PORT || 3080)
 const auth = (req) => {
   const h = req.headers.authorization || ''
   return h === 'Bearer ' + KEY || (req.url || '').includes('key=' + KEY)
 }
 
-const skillSsh = fs.readFileSync('/Users/tsbj/feyanggit/ngrok/onenat-app-ssh-usage.md', 'utf-8')
-const skillDsh = fs.readFileSync('/Users/tsbj/feyanggit/ngrok/dsh-web-service-skill.md', 'utf-8')
+// 技能样例文件缺失时降级为占位文本（不阻断本地联调）
+const readSkill = (p, fallback) => {
+  try {
+    return fs.readFileSync(p, 'utf-8')
+  } catch {
+    return fallback
+  }
+}
+const skillSsh = readSkill('/Users/tsbj/feyanggit/ngrok/onenat-app-ssh-usage.md', '# mock SSH 使用说明\n（未找到真实技能文件，占位内容）\n')
+const skillDsh = readSkill('/Users/tsbj/feyanggit/ngrok/dsh-web-service-skill.md', '# mock dsh-web-service 技能\n（未找到真实技能文件，占位内容）\n')
 
 const tunnels = [
   {
@@ -52,6 +62,22 @@ const tunnels = [
         },
         // 演练: 模拟客户端重连后公网端口漂移（DSH 经本机 socat/nginx 不变，这里直接改端口字段做断言）
         public_url_note: 'drift-drill',
+      },
+      {
+        // 真实本地 DSH Web Service（独立服务端到端冒烟用：地址即本机 3080，可直接派发任务）
+        id: 'map-dsh-live',
+        proto: 'tcp',
+        public_url: `tcp://127.0.0.1:${DSH_WEB_PORT}`,
+        local: `127.0.0.1:${DSH_WEB_PORT}`,
+        note: 'DSH 本机实例(真实在线)',
+        auth_override: false,
+        auth_type: 'bearer',
+        app: {
+          id: 'app-dsh-live', name: 'DSH Live', type: 'http-api', auth_type: 'bearer',
+          internal_url: `http://127.0.0.1:${DSH_WEB_PORT}`,
+          description: 'mock: 真实本地 DeepSeek Harness Web Service',
+          skills: [{ name: 'dsh-web-service', size: skillDsh.length, url: `http://127.0.0.1:${PORT}/api/v1/apps/app-dsh-live/skills/dsh-web-service/content?key=${KEY}` }],
+        },
       },
     ],
   },

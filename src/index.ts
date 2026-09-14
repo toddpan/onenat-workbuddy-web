@@ -16,6 +16,7 @@ import { AgentResolver } from './resolver.js'
 import { PromptComposer } from './prompt-composer.js'
 import { Planner } from './planner.js'
 import { TaskEngine } from './engine.js'
+import { ScheduleRunner } from './scheduler.js'
 import { WorkBuddyRouter } from './router.js'
 import { SshResourceStore } from './ssh-store.js'
 import { registerWorkBuddyTools } from './tools.js'
@@ -53,9 +54,13 @@ export function apply(ctx: Context, config: Config): void {
 
   const resolver = new AgentResolver(store, directory)
   const composer = new PromptComposer(directory)
-  const planner = new Planner(store, resolver, ctx)
+  const webServer = ctx.get('webServer') as any
+  const port = webServer?.port || 3080
+  const planner = new Planner(store, resolver, { webServerPort: port })
   const engine = new TaskEngine(store, directory, resolver, composer, planner)
-  const router = new WorkBuddyRouter(store, directory, resolver, composer, planner, engine, sshStore)
+  const scheduler = new ScheduleRunner(store, engine, (msg) => console.log(`[onenat-workbuddy] ${msg}`))
+  scheduler.start()
+  const router = new WorkBuddyRouter(store, directory, resolver, composer, planner, engine, sshStore, scheduler)
 
   ctx.effect(() => {
     return ctx.webServer.register({
@@ -72,13 +77,12 @@ export function apply(ctx: Context, config: Config): void {
     })
   }, '@dsh-external/onenat-workbuddy: webServer route')
 
-  registerWorkBuddyTools(ctx, store, directory, resolver, composer, planner, engine, sshStore, { pathPrefix: prefix })
+  registerWorkBuddyTools(ctx, store, directory, resolver, composer, planner, engine, sshStore, { pathPrefix: prefix, port })
 
   ctx.effect(() => () => {
+    scheduler.stop()
     directory.stopAutoRefresh()
   }, 'onenat-workbuddy: auto refresh disposer')
 
-  const webServer = ctx.get('webServer') as any
-  const port = webServer?.port || 3080
   console.log(`[onenat-workbuddy] Mounted. Console: http://127.0.0.1:${port}${prefix}  ONENAT: ${directory.endpoint || '(未配置)'}`)
 }
