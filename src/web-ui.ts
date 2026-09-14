@@ -610,6 +610,14 @@ body.task-running .msg.system.sys-planning .content::after {
 .up-row.error .up-bar-in { background: var(--err); }
 .up-status { color: var(--tx3); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .up-row.done .up-status { color: var(--ok); }
+/* 输入框拖放文件高亮 + 提示浮层 */
+.chat-input-container.drop-hover .chat-input { outline: 2px dashed var(--pri); outline-offset: -4px; border-radius: var(--rad-sm); }
+.chat-input-container.drop-hover::after {
+  content: '松开以上传附件（自动上传并填入文件路径）';
+  position: absolute; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center;
+  background: rgba(2, 132, 199, .12); color: var(--pri); font-size: 13px; font-weight: 600; pointer-events: none;
+  border-radius: var(--rad-sm);
+}
 .up-row.error .up-status { color: var(--err); }
 .up-bar.indet .up-bar-in {
   width: 100% !important;
@@ -2626,7 +2634,8 @@ function uploadAttachments(files) {
 
   const statusText = r => r.status === 'waiting' ? '排队中…'
     : r.status === 'uploading'
-      ? (r.pct >= 100 ? '⚡ 已到达服务器 · 正在分发到成员工作区…' : '上传中 ' + r.pct + '%')
+      ? (r.pct >= 100 ? '⚡ 已到达服务器 · 正在分发到成员工作区…'
+        : '上传中 ' + r.pct + '%' + (r.loaded != null ? '（' + fmtSize(r.loaded) + ' / ' + fmtSize(r.total || r.file.size) + '）' : ''))
     : r.status === 'done' ? '✓ 已上传' + (r.dest ? ' → ' + r.dest : '') + (r.memberCount > 1 ? '（已同步 ' + r.memberCount + ' 个成员）' : '')
     : '✗ 失败: ' + (r.err || '未知');
 
@@ -2661,7 +2670,7 @@ function uploadAttachments(files) {
           fd.append('files', r.file, r.file.name);
           const xhr = new XMLHttpRequest();
           xhr.open('POST', API + '/tasks/' + taskId + '/attachments');
-          xhr.upload.onprogress = e => { if (e.lengthComputable) { r.pct = Math.round(e.loaded / e.total * 100); renderRow(r); } };
+          xhr.upload.onprogress = e => { if (e.lengthComputable) { r.pct = Math.round(e.loaded / e.total * 100); r.loaded = e.loaded; r.total = e.total; renderRow(r); } };
           xhr.onload = () => {
             let j = null; try { j = JSON.parse(xhr.responseText); } catch (e) {}
             if (xhr.status >= 200 && xhr.status < 300 && j && j.ok) resolve(j);
@@ -2693,6 +2702,52 @@ function appendAttachmentLine(line) {
   inp.value = (inp.value ? inp.value.replace(/\\n$/, '') + '\\n' : '') + line;
   inp.focus();
 }
+
+// ---------- 输入框拖入 / 粘贴文件 → 自动上传（复用 uploadAttachments 逐文件进度面板） ----------
+(function setupInputFileDrop() {
+  const container = document.querySelector('.chat-input-container');
+  const input = $('input');
+  if (!container || !input) return;
+
+  // 拖入：counter 方式避免子元素 dragleave 抖动
+  let dragDepth = 0;
+  container.addEventListener('dragenter', e => {
+    if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
+    e.preventDefault();
+    dragDepth++;
+    container.classList.add('drop-hover');
+  });
+  container.addEventListener('dragover', e => {
+    if (!Array.from(e.dataTransfer.types || []).includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    container.classList.add('drop-hover');
+  });
+  container.addEventListener('dragleave', () => {
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) container.classList.remove('drop-hover');
+  });
+  container.addEventListener('drop', e => {
+    e.preventDefault();
+    dragDepth = 0;
+    container.classList.remove('drop-hover');
+    const files = Array.from(e.dataTransfer?.files || []);
+    if (!files.length) return;
+    if (!state.currentTaskId) { toast('请先选择或新建任务，再拖入附件', true); return; }
+    uploadAttachments(files);
+  });
+  // 拖拽被系统/浏览器取消时兜底清高亮
+  document.addEventListener('dragend', () => { dragDepth = 0; container.classList.remove('drop-hover'); });
+
+  // 粘贴：剪贴板里有文件时拦截并自动上传（纯文本粘贴不受影响）
+  input.addEventListener('paste', e => {
+    const files = Array.from(e.clipboardData?.files || []);
+    if (!files.length) return;
+    e.preventDefault();
+    if (!state.currentTaskId) { toast('请先选择或新建任务，再粘贴附件', true); return; }
+    uploadAttachments(files);
+  });
+})();
 
 // ---------- @ 提及自动联想组件 (Mentions Auto-complete) ----------
 async function refreshMentionCandidates() {
