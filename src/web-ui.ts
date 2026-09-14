@@ -1215,6 +1215,7 @@ const state = {
   renderedTurnsCount: 0,
   initialVisibleLimit: 30, // 初始分块渲染轮数（加速首屏渲染）
   showAllTurns: false,
+  renderedFromIndex: 0, // 当前视图实际渲染的起始轮次下标（供断线回源补齐限定窗口）
 };
 
 // Markdown 结果缓存，消除反复正则计算
@@ -1852,6 +1853,9 @@ function applyTaskToView(task, isInitialRender) {
   const turns = task.turns || [];
   const total = turns.length;
   const HIDE = state.showAllTurns ? 0 : Math.max(0, total - state.initialVisibleLimit);
+  // 记录视图实际渲染的起始下标：断线回源补齐（reconcileViewWithServer）只能在这个窗口内补轮次，
+  // 否则会把被 initialVisibleLimit 折叠的旧轮次重复补到列表末尾
+  state.renderedFromIndex = HIDE;
 
   // 顶部“加载更早历史”按钮
   if (HIDE > 0) {
@@ -2107,6 +2111,13 @@ function connectStream(taskId) {
     setSending(false);
   });
 
+  // 重连补齐：EventSource 首次连接成功不算重连；此后每次 onopen 都意味着中间丢过帧，
+  // 必须回源用服务端权威文本校正（否则断连窗口内的 turn_end 会让气泡永久停在半截）
+  let sseOpened = false;
+  es.onopen = () => {
+    if (sseOpened) resyncCurrentTask();
+    sseOpened = true;
+  };
   es.onerror = () => {};
 }
 
@@ -2506,8 +2517,60 @@ function buildTurnElement(taskId, turn) {
 
 function appendLiveTurn(taskId, turn) {
   const scroll = $('chat-scroll');
+  // 幂等：同一轮次的 turn_start 重复到达（重连回放 / 视图刚重建）时复用已有气泡，不重复插入
+  const existing = state.turnEls[turn.id];
+  if (existing && existing.wrap && existing.wrap.parentNode) return;
   const el = buildTurnElement(taskId, turn);
   scroll.appendChild(el);
+  smartScrollBottom();
+}
+
+/**
+ * SSE 重连后回源补齐。
+ *
+ * 浏览器 EventSource 自动重连时**不会重放**断连期间的事件，若 turn_end 恰好落在断连窗口里，
+ * 页面就会永久停在半截正文（用户只能手动切会话/刷新才恢复）。
+ * 这里在重连成功（onopen 且非首次）时重新拉取会话详情，用服务端权威 turn.text 校正页面：
+ *   - 仍在流式（kind=stream）或页面文本短于权威文本的轮次 → 就地重建气泡；
+ *   - 页面上完全缺失的轮次 → 补齐。
+ */
+async function resyncCurrentTask() {
+  const taskId = state.currentTaskId;
+  if (!taskId) return;
+  const r = await api('/tasks/' + taskId);
+  if (!r.ok || !r.data || state.currentTaskId !== taskId) return;
+  state.taskCache.set(taskId, r.data);
+  reconcileViewWithServer(taskId, r.data);
+}
+
+/** 用服务端权威任务状态校正当前视图（见 resyncCurrentTask） */
+function reconcileViewWithServer(taskId, task) {
+  const scroll = $('chat-scroll');
+  if (!scroll || state.currentTaskId !== taskId) return;
+  // 只比对「正文语义字符」：markdown 语法字符在渲染时被消化，直接比长度会误判。
+  // 注意本文件整体处于模板字符串内，正则里的反斜杠与反引号必须按模板串转义（\\x60 = 反引号）
+  const norm = (s) => String(s == null ? '' : s).replace(/[\\x60*|#>~_()\\[\\]\\-\\s]/g, '');
+  const turns = task.turns || [];
+  const from = state.renderedFromIndex || 0; // 视图按 initialVisibleLimit 只渲染末尾若干轮，勿把被折叠的旧轮补到末尾
+  for (let i = from; i < turns.length; i++) {
+    const turn = turns[i];
+    const el = state.turnEls[turn.id];
+    const inDom = el && el.wrap && el.wrap.parentNode;
+    if (!inDom) {
+      appendLiveTurn(taskId, turn);
+      continue;
+    }
+    const shown = norm(el.blocks ? el.blocks.textContent : '');
+    const auth = norm(turn.text);
+    const tail = auth.slice(-40);
+    const complete = auth.length > 0 && (shown.includes(auth) || (tail && shown.endsWith(tail)));
+    // 仍在流式的轮次一律按服务端快照重建；已收敛的轮次仅在页面明确缺内容且更短时重建
+    const stale = el.kind === 'stream' ? !complete : (!complete && auth.length > shown.length);
+    if (stale) {
+      const fresh = buildTurnElement(taskId, turn);
+      el.wrap.replaceWith(fresh);
+    }
+  }
   smartScrollBottom();
 }
 
@@ -2519,24 +2582,30 @@ function finalizeTurnBlocks(el, turn, taskId) {
   blocks.querySelectorAll('.cursor').forEach(c => c.remove());
 
   // 1) 正文：收集全部流式 text 块（主调度规划轮的阶段日志与思考块交错，会产生多个 text 块），
-  //    以 store 最终文本为准整体收敛进第一个 text 块渲染 markdown，移除多余块
+  //    以服务端权威文本 turn.text 为准整体收敛进第一个 text 块渲染 markdown，移除多余块。
+  //
+  //    ⚠️ 曾经丢内容的根因：中途加入会话（断线重连 / 打开正在执行的会话 / 刷新页面）时，
+  //    buildTurnElement 生成的 text 块**没有 contentState**（正文只活在 DOM 里），
+  //    旧条件 [textBlk.contentState || textBlks.length > 1] 在「只有一个无 contentState 的块」时为假，
+  //    于是整段收尾被跳过 —— turn_end 携带的服务端全文被丢弃，气泡永久停在半截。
+  //    现在只要拿到权威 fullText 就无条件回填，与块的来源无关。
   const textBlks = Array.prototype.slice.call(blocks.querySelectorAll('.blk-text'));
   const textBlk = textBlks[0] || null;
   let streamText = '';
-  for (const b of textBlks) {
-    if (b.contentState) streamText += b.contentState.text;
-  }
+  for (const b of textBlks) streamText += b.contentState ? b.contentState.text : (b.textContent || '');
   const fullText = turn.text || streamText;
-  if (textBlk && (textBlk.contentState || textBlks.length > 1)) {
-    textBlk.classList.add('settled');
-    textBlk.innerHTML = turn.role === 'agent' ? md(withFileLinks(taskId, turn.agentId, fullText)) : md(fullText);
-    delete textBlk.contentState;
-  } else if (!textBlk && fullText) {
+  if (textBlk) {
+    if (fullText) {
+      textBlk.classList.add('settled');
+      textBlk.innerHTML = turn.role === 'agent' ? md(withFileLinks(taskId, turn.agentId, fullText)) : md(fullText);
+      delete textBlk.contentState;
+    }
+    for (const extra of textBlks.slice(1)) extra.remove();
+  } else if (fullText) {
     const te = createBlock('text');
     te.el.innerHTML = turn.role === 'agent' ? md(withFileLinks(taskId, turn.agentId, fullText)) : md(fullText);
     blocks.appendChild(te.el);
   }
-  for (const extra of textBlks.slice(1)) extra.remove();
 
   // 2) 思考：流式中已存在的块更新为完整文本与「已思考 N 字」终态；缺失则补充。
   //    覆盖 agent 与 system（主调度规划轮）——编排拆解的思考过程在收尾后同样可见

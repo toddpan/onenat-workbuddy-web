@@ -34,12 +34,19 @@ function normalizeUrl(u: string): string {
 export class WorkStore {
   private filePath: string
   private data: StorageData
+  /** 尾随合并落盘窗口：流式增量期间避免每个 delta 全量写盘阻塞事件循环 */
+  private static readonly TRAILING_SAVE_MS = 250
+  private saveTimer: NodeJS.Timeout | null = null
+  private dirty = false
 
   constructor(customPath?: string) {
     const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh')
     this.filePath = customPath || join(dshHome, 'onenat-workbuddy', 'store.json')
     this.data = { agents: [], tasks: [], schedules: [], settings: defaultSettings() }
     this.load()
+    // 进程退出前把尾随写入落盘（SIGKILL 除外），避免最后 250ms 的流式增量丢失。
+    // 只挂 'exit'：SIGINT/SIGTERM 走默认终止路径同样会触发 exit，且不会劫持 Ctrl-C 语义。
+    process.once('exit', () => { if (this.dirty) this.flush() })
   }
 
   /** 数据目录（store.json 所在目录）；分片上传暂存于其下 uploads/ */
@@ -68,6 +75,39 @@ export class WorkStore {
   }
 
   public save(): void {
+    this.flush()
+  }
+
+  /**
+   * 高频写入合并（流式增量专用）。
+   *
+   * 背景：每个 delta 都会走 mutateTask → save()，而 save() 是全量
+   * `JSON.stringify(data) + writeFileSync`。实测在 1.5MB 级 store 上单次约 3.5ms，
+   * 且**同步阻塞事件循环**：长回合（上千个 delta）可累计数秒阻塞，把远端 SSE 的读取
+   * 与浏览器方向的写入一起拖慢，静默段还会触发隧道/反代的空闲超时把流掐断
+   * （表现就是「流式卡住 / 内容收不全」）。
+   *
+   * 因此流式增量只改内存（内存态始终权威），磁盘写入按 TRAILING_SAVE_MS 尾随合并；
+   * 结构性变更（增删任务/智能体/成员等）仍走 save() 立即落盘。
+   */
+  public scheduleSave(): void {
+    this.dirty = true
+    if (this.saveTimer) return
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null
+      if (this.dirty) this.flush()
+    }, WorkStore.TRAILING_SAVE_MS)
+    // 常驻定时器不阻止进程退出（standalone server 由 http server 保持存活）
+    this.saveTimer.unref?.()
+  }
+
+  /** 立即落盘（结构性变更、回合边界、进程退出前） */
+  public flush(): void {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer)
+      this.saveTimer = null
+    }
+    this.dirty = false
     try {
       const dir = dirname(this.filePath)
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
@@ -75,6 +115,20 @@ export class WorkStore {
     } catch (err) {
       console.error('[onenat-workbuddy] Failed to save store:', err)
     }
+  }
+
+  /**
+   * 流式正文增量落库：内存即时生效（SSE/列表读取立刻可见），磁盘写入尾随合并。
+   * 返回 false 表示任务/轮次不存在（调用方无需关心）。
+   */
+  public appendTurnText(taskId: string, turnId: string, delta: string): boolean {
+    const task = this.data.tasks.find((t) => t.id === taskId)
+    const turn = task?.turns.find((t) => t.id === turnId)
+    if (!task || !turn) return false
+    turn.text = (turn.text || '') + delta
+    task.updatedAt = Date.now()
+    this.scheduleSave()
+    return true
   }
 
   // ---- Settings ----
