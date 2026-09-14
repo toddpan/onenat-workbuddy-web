@@ -2627,7 +2627,7 @@ function uploadAttachments(files) {
     document.body.appendChild(panel);
   }
   panel.style.display = 'block';
-  panel.innerHTML = '<div class="up-head"><b>📎 上传附件到工作区</b><span class="up-count"></span><span class="hspacer"></span><button class="mini-btn" id="up-close">✕</button></div><div class="up-rows"></div>';
+  panel.innerHTML = '<div class="up-head"><b>📎 上传附件到工作区（分片·断点续传）</b><span class="up-count"></span><span class="hspacer"></span><button class="mini-btn" id="up-close">✕</button></div><div class="up-rows"></div>';
   $('up-close').addEventListener('click', () => { panel.style.display = 'none'; });
   const rowsEl = panel.querySelector('.up-rows');
   const rows = files.map(f => ({ file: f, status: 'waiting', pct: 0 }));
@@ -2635,9 +2635,12 @@ function uploadAttachments(files) {
   const statusText = r => r.status === 'waiting' ? '排队中…'
     : r.status === 'uploading'
       ? (r.pct >= 100 ? '⚡ 已到达服务器 · 正在分发到成员工作区…'
-        : '上传中 ' + r.pct + '%' + (r.loaded != null ? '（' + fmtSize(r.loaded) + ' / ' + fmtSize(r.total || r.file.size) + '）' : ''))
+        : '上传中 ' + r.pct + '%' + (r.loaded != null ? '（' + fmtSize(r.loaded) + ' / ' + fmtSize(r.total || r.file.size) + '）' : '')
+          + (r.resumedFrom ? ' · 已续传' : ''))
     : r.status === 'done' ? '✓ 已上传' + (r.dest ? ' → ' + r.dest : '') + (r.memberCount > 1 ? '（已同步 ' + r.memberCount + ' 个成员）' : '')
-    : '✗ 失败: ' + (r.err || '未知');
+    : r.status === 'error'
+      ? '✗ 失败: ' + (r.err || '未知') + (r.received ? '（已传 ' + fmtSize(r.received) + '，重试将从断点续传）' : '')
+    : '';
 
   function renderRow(r) {
     let el = r.el;
@@ -2645,9 +2648,14 @@ function uploadAttachments(files) {
       el = document.createElement('div');
       el.className = 'up-row';
       el.innerHTML = '<div class="up-line"><span class="up-name"></span><span class="up-size"></span></div>' +
-        '<div class="up-bar"><div class="up-bar-in"></div></div><div class="up-status"></div>';
+        '<div class="up-bar"><div class="up-bar-in"></div></div><div class="up-status"></div>' +
+        '<button class="mini-btn up-retry" style="display:none;margin-top:4px">↻ 断点续传重试</button>';
       rowsEl.appendChild(el);
       r.el = el;
+      el.querySelector('.up-retry').addEventListener('click', () => {
+        el.querySelector('.up-retry').style.display = 'none';
+        uploadOne(r);
+      });
     }
     el.className = 'up-row ' + r.status;
     el.querySelector('.up-name').textContent = '📄 ' + r.file.name;
@@ -2656,43 +2664,116 @@ function uploadAttachments(files) {
     el.querySelector('.up-bar-in').style.width = (r.status === 'done' ? 100 : r.pct) + '%';
     el.querySelector('.up-bar').classList.toggle('indet', r.status === 'uploading' && r.pct >= 100);
     el.querySelector('.up-status').textContent = statusText(r);
+    el.querySelector('.up-retry').style.display = r.status === 'error' ? '' : 'none';
     const done = rows.filter(x => x.status === 'done').length;
     panel.querySelector('.up-count').textContent = done + '/' + rows.length;
   }
   rows.forEach(renderRow);
 
-  (async () => {
-    for (const r of rows) {
-      r.status = 'uploading'; renderRow(r);
+  // ---- 分片断点续传核心：init → PUT 分片（XHR 进度）→ complete ----
+  const CHUNK = 4 * 1024 * 1024;
+  const resumeKey = f => 'wb-upload:' + taskId + ':' + f.name + ':' + f.size + ':' + (f.lastModified || 0);
+  const fetchJson = (path, opts) => fetch(API + path, opts).then(async res => ({ status: res.status, json: await res.json().catch(() => ({})) }));
+
+  async function putChunk(uploadId, offset, blob, onChunkProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('PUT', API + '/tasks/' + taskId + '/attachments/resumable/' + encodeURIComponent(uploadId) + '?offset=' + offset);
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+      xhr.upload.onprogress = e => { if (e.lengthComputable) onChunkProgress(e.loaded); };
+      xhr.onload = () => {
+        let j = null; try { j = JSON.parse(xhr.responseText); } catch (e) {}
+        if (xhr.status === 409) return resolve({ conflict: true, received: (j && j.data && j.data.received) || 0 });
+        if (xhr.status >= 200 && xhr.status < 300 && j && j.ok) return resolve({ received: j.data.received });
+        reject(new Error((j && j.error) || 'HTTP ' + xhr.status));
+      };
+      xhr.onerror = () => reject(new Error('网络错误'));
+      xhr.send(blob);
+    });
+  }
+
+  async function uploadOne(r) {
+    const f = r.file;
+    r.status = 'uploading'; r.err = null; renderRow(r);
+    let uploadId = null; let received = 0;
+    try {
+      // 断点恢复：localStorage 里存着上次中断的 uploadId → 查服务端接收量
+      const key = resumeKey(f);
+      let resumedFrom = 0;
       try {
-        const json = await new Promise((resolve, reject) => {
-          const fd = new FormData();
-          fd.append('files', r.file, r.file.name);
-          const xhr = new XMLHttpRequest();
-          xhr.open('POST', API + '/tasks/' + taskId + '/attachments');
-          xhr.upload.onprogress = e => { if (e.lengthComputable) { r.pct = Math.round(e.loaded / e.total * 100); r.loaded = e.loaded; r.total = e.total; renderRow(r); } };
-          xhr.onload = () => {
-            let j = null; try { j = JSON.parse(xhr.responseText); } catch (e) {}
-            if (xhr.status >= 200 && xhr.status < 300 && j && j.ok) resolve(j);
-            else reject(new Error((j && j.error) || 'HTTP ' + xhr.status));
-          };
-          xhr.onerror = () => reject(new Error('网络错误'));
-          xhr.send(fd);
+        const saved = JSON.parse(localStorage.getItem(key) || 'null');
+        if (saved && saved.uploadId) {
+          const st = await fetchJson('/tasks/' + taskId + '/attachments/resumable/' + encodeURIComponent(saved.uploadId));
+          if (st.status === 200 && st.json?.ok) {
+            uploadId = saved.uploadId;
+            received = st.json.data.received || 0;
+            resumedFrom = received;
+          }
+        }
+      } catch (e) { /* 恢复失败 → 全新上传 */ }
+      if (!uploadId) {
+        const init = await fetchJson('/tasks/' + taskId + '/attachments/resumable/init', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: f.name, size: f.size, mimeType: f.type || undefined }),
         });
-        const okResults = (json.data.results || []).filter(rr => rr.ok);
-        const dest = okResults.flatMap(rr => (rr.files || []).map(f => f.path))[0];
-        r.dest = dest;
-        r.memberCount = okResults.length;
-        r.status = 'done'; r.pct = 100; renderRow(r);
-        appendAttachmentLine('[附件' + (r.memberCount > 1 ? '·' + r.memberCount + '成员' : '') + '] ' + (r.dest || r.file.name) + ' (' + fmtSize(r.file.size) + ')');
-      } catch (e) {
-        r.status = 'error'; r.err = e.message || String(e); renderRow(r);
+        if (!(init.status < 300 && init.json?.ok)) throw new Error(init.json?.error || 'init HTTP ' + init.status);
+        uploadId = init.json.data.uploadId;
+        received = init.json.data.received || 0;
       }
+      r.resumedFrom = resumedFrom;
+      try { localStorage.setItem(key, JSON.stringify({ uploadId })); } catch (e) {}
+
+      // 分片循环：offset 冲突(409)以服务端为准；网络错误对账后续传
+      let failCount = 0;
+      while (received < f.size) {
+        const end = Math.min(received + CHUNK, f.size);
+        const sent = await putChunk(uploadId, received, f.slice(received, end), loaded => {
+          r.pct = Math.min(99, Math.floor((received + loaded) * 100 / f.size));
+          r.loaded = received + loaded; r.total = f.size;
+          renderRow(r);
+        }).then(
+          v => { failCount = 0; return v; },
+          err => {
+            if (++failCount >= 3) throw err;
+            return { conflict: false, retry: true };
+          },
+        );
+        if (sent.retry) {
+          // 对账服务端接收量后从断点继续
+          const st = await fetchJson('/tasks/' + taskId + '/attachments/resumable/' + encodeURIComponent(uploadId));
+          received = (st.status === 200 && st.json?.ok) ? (st.json.data.received || 0) : received;
+          continue;
+        }
+        received = sent.conflict ? (sent.received || received) : sent.received;
+        r.pct = Math.min(99, Math.floor(received * 100 / f.size));
+        r.loaded = received; r.total = f.size;
+        renderRow(r);
+      }
+
+      // 完成（服务端在此阶段向成员节点分片中继）
+      r.pct = 100; renderRow(r);
+      const done = await fetchJson('/tasks/' + taskId + '/attachments/resumable/' + encodeURIComponent(uploadId) + '/complete', { method: 'POST' });
+      if (!(done.status < 300 && done.json?.ok)) throw new Error(done.json?.error || 'complete HTTP ' + done.status);
+      const okResults = ((done.json.data || {}).results || []).filter(rr => rr.ok);
+      r.dest = okResults.flatMap(rr => (rr.files || []).map(x => x.path))[0];
+      r.memberCount = okResults.length;
+      r.status = 'done'; r.pct = 100; renderRow(r);
+      try { localStorage.removeItem(key); } catch (e) {}
+      appendAttachmentLine('[附件' + (r.memberCount > 1 ? '·' + r.memberCount + '成员' : '') + '] ' + (r.dest || f.name) + ' (' + fmtSize(f.size) + ')');
+    } catch (e) {
+      r.status = 'error';
+      r.err = e.message || String(e);
+      r.received = received; // 断点位置（提示可续传重试）
+      renderRow(r);
     }
+  }
+
+  (async () => {
+    for (const r of rows) await uploadOne(r);
     const okRows = rows.filter(r => r.status === 'done');
     if (okRows.length) {
       toast('已上传 ' + okRows.length + '/' + rows.length + ' 个附件，路径已填入输入框');
-    } else toast('附件上传失败', true);
+    } else toast('附件上传失败（可点「断点续传重试」从断点继续）', true);
     if (rows.every(r => r.status === 'done')) setTimeout(() => { panel.style.display = 'none'; }, 2500);
   })();
 }
