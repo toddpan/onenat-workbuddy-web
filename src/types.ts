@@ -179,9 +179,18 @@ export interface MentionItem {
   ref?: { kind: 'mapping' | 'app' | 'direct'; mappingId?: string; appId?: string; apiBaseUrl?: string }
 }
 
+export interface ExtractedFileMention {
+  raw: string
+  agentId: string
+  agentName: string
+  path: string
+  filename: string
+}
+
 export interface ExtractedMentions {
   mentionedAgentIds: string[]
   mentionedResourceBindings: AgentResourceBinding[]
+  mentionedFiles?: ExtractedFileMention[]
   cleanText: string
 }
 
