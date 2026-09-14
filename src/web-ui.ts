@@ -711,6 +711,8 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
   overflow: hidden; margin-bottom: 8px;
 }
 .mention-popup.on { display: flex; }
+/* 抽屉等容器内向下弹出的变体 */
+.mention-popup.below { bottom: auto; top: 100%; margin-bottom: 0; margin-top: 8px; }
 .mention-popup-head {
   padding: 8px 12px; background: var(--bg3); border-bottom: 1px solid var(--line);
   font-size: 11px; font-weight: 600; color: var(--tx3); display: flex; justify-content: space-between;
@@ -3627,6 +3629,112 @@ function findTaskIdOfSubtask(subId) {
 }
 
 // ---------- 定时任务视图 ----------
+/**
+ * 定时任务指令框的 @ 提及联想（对齐主输入框交互：@ 触发、↑↓/Tab/Enter 选择、Esc 关闭）。
+ * 与主输入框的差异：Enter 仅在弹窗打开时插入候选（否则换行），不触发发送。
+ */
+function setupScheduleMention(input, popup, listEl) {
+  if (!input || !popup || !listEl) return;
+  let cursorStart = 0;
+  let matched = [];
+  let activeIdx = 0;
+  let hideTimer = null;
+
+  function hide() { popup.classList.remove('on'); matched = []; }
+
+  function render() {
+    if (!matched.length) { listEl.innerHTML = '<div class="mention-empty">无匹配的智能体或资源</div>'; return; }
+    listEl.innerHTML = matched.map((item, idx) => {
+      const active = idx === activeIdx ? ' active' : '';
+      const icon = item.type === 'agent' ? '🤖' : (item.kind === 'ssh' ? '🖥️' : (item.kind === 'http' ? '🌐' : '📦'));
+      const tagClass = item.type === 'agent' ? 'agent' : 'resource';
+      const tagText = item.type === 'agent' ? '智能体' : (item.kind ? item.kind.toUpperCase() : '资源');
+      return '<div class="mention-item' + active + '" data-idx="' + idx + '">' +
+        '<span class="icon">' + icon + '</span>' +
+        '<div class="info"><div class="name">' + esc(item.name) + '</div>' +
+        (item.detail ? '<div class="desc">' + esc(item.detail) + '</div>' : '') + '</div>' +
+        '<span class="tag ' + tagClass + '">' + esc(tagText) + '</span></div>';
+    }).join('');
+    listEl.querySelectorAll('.mention-item').forEach(el => {
+      el.addEventListener('mousedown', e => { e.preventDefault(); insert(matched[+el.dataset.idx]); });
+    });
+    const act = listEl.querySelector('.mention-item.active');
+    if (act && act.scrollIntoView) act.scrollIntoView({ block: 'nearest' });
+  }
+
+  function insert(item) {
+    if (!item) return;
+    const text = input.value;
+    const before = text.slice(0, cursorStart);
+    const after = text.slice(input.selectionEnd);
+    const insertText = '@' + item.name + ' ';
+    input.value = before + insertText + after;
+    const pos = before.length + insertText.length;
+    input.selectionStart = input.selectionEnd = pos;
+    hide();
+    input.focus();
+  }
+
+  input.addEventListener('input', () => {
+    const before = input.value.slice(0, input.selectionStart);
+    const m = /@([^@]*)$/.exec(before);
+    if (!m) { hide(); return; }
+    cursorStart = m.index;
+    const q = m[1].toLowerCase().trim();
+    refreshMentionCandidates().then(() => {
+      matched = mentionCandidates.filter(c => {
+        if (!q) return true;
+        const n = (c.name || '').toLowerCase(); const id = (c.id || '').toLowerCase(); const d = (c.detail || '').toLowerCase();
+        return n.startsWith(q) || n.includes(q) || id.includes(q) || d.includes(q);
+      });
+      if (!matched.length) { hide(); return; }
+      activeIdx = 0;
+      render();
+      popup.classList.add('on');
+    });
+  });
+
+  input.addEventListener('keydown', e => {
+    const open = popup.classList.contains('on') && matched.length > 0;
+    if (!open) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); activeIdx = (activeIdx + 1) % matched.length; render(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); activeIdx = (activeIdx - 1 + matched.length) % matched.length; render(); }
+    else if (e.key === 'Tab' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); insert(matched[activeIdx]); }
+    else if (e.key === 'Escape') { hide(); }
+  });
+  input.addEventListener('blur', () => { hideTimer = setTimeout(hide, 150); });
+  input.addEventListener('focus', () => { clearTimeout(hideTimer); });
+}
+
+/**
+ * 从指令文本解析 @ 提及（与服务端 extractMentions 同策略：候选按名称长度降序做最长前缀匹配）。
+ * 返回 { agentIds, unknown } —— unknown 是 @ 到但无法解析为子智能体的片段（提示用户）。
+ */
+function parseScheduleMentions(text) {
+  const dict = [];
+  for (const a of (state.agents || [])) {
+    if (a.name) dict.push({ type: 'agent', name: a.name, id: a.id });
+    if (a.id) dict.push({ type: 'agent', name: a.id, id: a.id });
+  }
+  dict.sort((x, y) => y.name.length - x.name.length);
+  const agentIds = []; const unknown = new Set();
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] !== '@') { i++; continue; }
+    const rest = text.slice(i + 1);
+    const hit = dict.find(e => rest.startsWith(e.name));
+    if (hit) {
+      if (!agentIds.includes(hit.id)) agentIds.push(hit.id);
+      i += 1 + hit.name.length;
+    } else {
+      const seg = /@([^\s@]+)/.exec(rest);
+      if (seg) { unknown.add(seg[1]); i += 1 + seg[1].length; }
+      else i++;
+    }
+  }
+  return { agentIds, unknown: Array.from(unknown) };
+}
+
 $('btn-new-schedule').addEventListener('click', () => openScheduleDrawer(null));
 async function loadSchedules() {
   const r = await api('/schedules');
@@ -3732,15 +3840,8 @@ function openScheduleDrawer(s, tpl) {
   const isEdit = Boolean(s);
   const prefill = tpl || {};
   openDrawer(isEdit ? '编辑定时任务' : (prefill.id ? '新建定时任务（模板: ' + prefill.name + '）' : '新建定时任务'));
-  const agentChecks = state.agents.map(a => {
-    const checked = isEdit && (s.agentIds || []).includes(a.id) ? ' checked' : '';
-    return '<label class="sched-agent"><input type="checkbox" class="sc-agent" data-id="' + esc(a.id) + '"' + checked + ' style="width:16px;height:16px">' +
-      '<span>' + esc(a.name) + '</span>' + (a.enabled === false ? '<span class="tag err">停用</span>' : '') + '</label>';
-  }).join('');
   $('drawer-body').innerHTML =
     '<div class="field"><label>任务标题</label><input id="sc-name" value="' + esc(s ? s.name : (prefill.name || '')) + '" placeholder="如: 每日站会摘要"></div>' +
-    '<div class="field"><label>目标子智能体（可多选；触发时各自独立创建会话并派发同一份任务文本）</label>' +
-    '<div id="sc-agents" style="display:flex;flex-direction:column;gap:6px">' + (agentChecks || '<span class="sub">请先在「子智能体」页创建</span>') + '</div></div>' +
     '<div class="field"><label>调度（Host 本地时区 · 错过的触发点不补跑）</label>' +
     '<select id="sc-kind">' +
     '<option value="daily"' + (!s || s.rule.kind === 'daily' ? ' selected' : '') + '>每天（固定时刻，可多个）</option>' +
@@ -3752,10 +3853,19 @@ function openScheduleDrawer(s, tpl) {
     '</select>' +
     '<div id="sc-rule-box" style="margin-top:8px"></div>' +
     '<div class="hint" id="sc-preview" style="margin-top:6px;color:var(--pri)"></div></div>' +
-    '<div class="field"><label>指令（触发时原样派发给每个子智能体）</label>' +
-    '<textarea id="sc-message" style="min-height:110px" placeholder="如: 汇总今天的日程与未完成任务，生成一份摘要报告…">' + esc(s ? s.message : (prefill.message || '')) + '</textarea></div>' +
+    '<div class="field"><label>指令（用 @ 提及子智能体与资源，与新建任务同语义）</label>' +
+    '<div style="position:relative">' +
+    '<textarea id="sc-message" style="min-height:110px" placeholder="如: 让 @苦力兔 把 @136 上的日志收集过来，分析系统运行情况&#10;输入 @ 唤起子智能体 / 资源联想">' + esc(s ? s.message : (prefill.message || '')) + '</textarea>' +
+    '<div class="mention-popup below" id="sc-mention-popup" style="left:0;right:0;width:auto">' +
+    '<div class="mention-popup-head">提及子智能体或资源</div>' +
+    '<div class="mention-popup-list" id="sc-mention-list"></div>' +
+    '</div></div>' +
+    '<div class="hint">触发时自动解析 @提及：被 @ 的子智能体进入执行（@ 多个 = 协同编排），@ 的资源把入口与凭证按绑定策略注入提示词。</div></div>' +
     '<div class="field"><label>备注（可选）</label><input id="sc-desc" value="' + esc(s && s.description || (prefill.description || '')) + '"></div>' +
     '<div class="ops" style="display:flex;gap:10px;margin-top:14px"><button class="btn pri" id="sc-save">' + (isEdit ? '保存' : '创建定时任务') + '</button><button class="btn" id="sc-cancel">取消</button></div>';
+
+  // @ 提及联想（候选与主输入框共用 /mentions/candidates）
+  setupScheduleMention($('sc-message'), $('sc-mention-popup'), $('sc-mention-list'));
 
   // 模板预填规则（仅新建且模板带规则时）
   if (!isEdit && prefill.rule) s = { rule: prefill.rule };
@@ -3853,8 +3963,19 @@ function openScheduleDrawer(s, tpl) {
 function collectSchedule(existing) {
   const name = $('sc-name').value.trim();
   if (!name) { toast('缺少名称', true); return null; }
-  const agentIds = Array.from(document.querySelectorAll('#sc-agents .sc-agent:checked')).map(cb => cb.dataset.id);
-  if (!agentIds.length) { toast('至少选择一个子智能体', true); return null; }
+  const message = $('sc-message').value.trim();
+  if (!message) { toast('指令不能为空', true); return null; }
+  // 从指令的 @ 提及解析目标子智能体（与触发时服务端 extractMentions 同策略）
+  const parsed = parseScheduleMentions(message);
+  let agentIds = parsed.agentIds;
+  if (!agentIds.length && existing && (existing.agentIds || []).length) {
+    // 编辑旧任务且指令里没有 @ 智能体：回退到原有目标，避免静默丢目标
+    agentIds = existing.agentIds;
+  }
+  if (!agentIds.length) { toast('请在指令中用 @ 提及至少一个子智能体（如 @苦力兔）', true); return null; }
+  if (parsed.unknown.length) {
+    toast('⚠️ 这些 @ 未匹配到子智能体（将按资源处理）: ' + parsed.unknown.join('、'), true);
+  }
   const kind = $('sc-kind').value;
   let rule;
   if (kind === 'daily') {
@@ -3874,8 +3995,6 @@ function collectSchedule(existing) {
     const v = $('sc-at').value;
     rule = { kind: 'once', at: v ? new Date(v).getTime() : NaN };
   }
-  const message = $('sc-message').value.trim();
-  if (!message) { toast('任务文本不能为空', true); return null; }
   const payload = { name, agentIds, rule, message, enabled: existing ? existing.enabled : true };
   const desc = $('sc-desc').value.trim();
   if (desc) payload.description = desc;

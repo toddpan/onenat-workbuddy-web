@@ -70,7 +70,7 @@ export class ScheduleRunner {
     }
   }
 
-  /** 触发一次（定时或手动）。为每个目标子智能体独立创建任务会话并派发固定任务文本。 */
+  /** 触发一次（定时或手动）。指令原样创建一个任务会话（@ 提及由引擎解析：单人多轮直通 / 多人协同编排）。 */
   public async fire(scheduleId: string, manual: boolean): Promise<ScheduleRun | undefined> {
     const s = this.store.getSchedule(scheduleId)
     if (!s) return undefined
@@ -86,40 +86,40 @@ export class ScheduleRunner {
         items: [],
       }
       const runStart = Date.now()
-      // 所有目标子智能体并行派发（互不阻塞；失败按次数重试）
-      const settled = await Promise.all(
-        s.agentIds.map(async (agentId) => {
-          const agent = this.store.getAgent(agentId)
-          if (!agent) {
-            return { agentId, agentName: agentId, error: '子智能体不存在（可能已删除）' } as ScheduleRunItem
-          }
-          let lastErr = ''
-          for (let attempt = 1; attempt <= 1 + DISPATCH_RETRIES; attempt++) {
-            try {
-              const task = await this.engine.createTask({
-                title: `⏰ ${s.name}`,
-                memberAgentIds: [agent.id],
-                mode: 'chat',
-                message: s.message,
-              })
-              return {
-                agentId: agent.id,
-                agentName: agent.name,
-                taskId: task.id,
-                taskTitle: task.title,
-                attempts: attempt,
-              } as ScheduleRunItem
-            } catch (err: any) {
-              lastErr = err?.message || String(err)
-              if (attempt <= DISPATCH_RETRIES && RETRY_DELAY_MS > 0) {
-                await new Promise((r) => setTimeout(r, RETRY_DELAY_MS))
-              }
+      // 过滤已删除的子智能体
+      const validAgents = s.agentIds
+        .map((aid) => this.store.getAgent(aid))
+        .filter((a): a is NonNullable<typeof a> => Boolean(a))
+      // 单任务派发：指令原样交给 TaskEngine（与「新建任务」输入框同语义）——
+      // 引擎 extractMentions 解析 @子智能体（@多个=协同编排）与 @资源（入口/凭证按绑定策略注入提示词）
+      const items: ScheduleRunItem[] = []
+      if (!validAgents.length) {
+        items.push({ agentId: s.agentIds[0] || '', agentName: s.agentIds[0] || '（无目标）', error: '子智能体不存在（可能已删除）' })
+      } else {
+        let lastErr = ''
+        for (let attempt = 1; attempt <= 1 + DISPATCH_RETRIES; attempt++) {
+          try {
+            const task = await this.engine.createTask({
+              title: `⏰ ${s.name}`,
+              memberAgentIds: validAgents.map((a) => a.id),
+              message: s.message,
+            })
+            for (const a of validAgents) {
+              items.push({ agentId: a.id, agentName: a.name, taskId: task.id, taskTitle: task.title, attempts: attempt })
+            }
+            break
+          } catch (err: any) {
+            lastErr = err?.message || String(err)
+            if (attempt <= DISPATCH_RETRIES && RETRY_DELAY_MS > 0) {
+              await new Promise((r) => setTimeout(r, RETRY_DELAY_MS))
             }
           }
-          return { agentId: agent.id, agentName: agent.name, error: lastErr, attempts: 1 + DISPATCH_RETRIES } as ScheduleRunItem
-        }),
-      )
-      run.items = settled
+        }
+        if (!items.length) {
+          items.push({ agentId: validAgents[0].id, agentName: validAgents[0].name, error: lastErr, attempts: 1 + DISPATCH_RETRIES })
+        }
+      }
+      run.items = items
       run.durationMs = Date.now() - runStart
       this.store.mutateSchedule(scheduleId, (t) => {
         t.runs.unshift(run)
