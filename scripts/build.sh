@@ -75,6 +75,26 @@ if [ ! -e node_modules/ssh2 ]; then
   fi
 fi
 
+# undici（SSE 长静默 dispatcher：bodyTimeout=0 防长工具执行期间流被 300s chunk 间超时掐断）
+# 已声明在 package.json dependencies；本地无网时从 checkout pnpm store 链接，都没有则跳过（运行时优雅降级默认 fetch）
+if [ ! -e node_modules/undici ]; then
+  UNDICI_SRC=""
+  for candidate in "$CHECKOUT"/node_modules/.pnpm/undici@7*/node_modules/undici "$CHECKOUT/node_modules/undici"; do
+    if [ -d "$candidate" ]; then UNDICI_SRC="$candidate"; break; fi
+  done
+  if [ -n "$UNDICI_SRC" ]; then
+    node -e "
+      const fs = require('fs');
+      const path = require('path');
+      fs.mkdirSync('node_modules', { recursive: true });
+      fs.symlinkSync(path.resolve(process.argv[1]), path.resolve('node_modules/undici'), process.platform === 'win32' ? 'junction' : 'dir');
+    " "$UNDICI_SRC"
+    echo "=== undici linked from $UNDICI_SRC ==="
+  else
+    echo "=== undici not found (SSE 长静默段将使用 undici 默认 300s chunk 超时) ==="
+  fi
+fi
+
 STD_SCHEMA=$(find "$CHECKOUT/node_modules/.pnpm" -maxdepth 1 -type d -iname '@standard-schema+spec@*' 2>/dev/null | head -1)
 if [ -n "$STD_SCHEMA" ]; then
   node -e "

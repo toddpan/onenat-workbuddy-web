@@ -4,7 +4,10 @@
  * 相比 dsh-remote-orchestrator 的 RemoteDshClient 升级:
  *  1. 一切调用吃 { baseUrl, apiKey }（由 ResourceDirectory 实时解析而来），不再吃裸 agent（D1）
  *  2. 新增 streamPrompt: 消费远端 /sessions/:id/prompt-stream SSE（delta/reasoning/tool_call/turn_end）
+ *     —— fetch 挂 undici dispatcher（bodyTimeout=0）：长工具执行 / 上下文压缩期间无 SSE 帧的静默段
+ *        不再触发 undici 默认 300s「chunk 间超时」把连接掐断（长回合 SSE 断流的根因）
  *  3. 保留同步 prompt + waitForSessionResult 轮询兜底（远端不支持 SSE 或流中断时降级，D5）
+ *     —— 轮询对账升级：按回合起点重建整轮文本（reconstructTurnFromHistory），不再只取最后一条 assistant 消息
  *  4. 新增 chat: OpenAI 兼容 /chat/completions（LLM Planner 用）
  */
 
@@ -51,6 +54,8 @@ export interface PromptResult {
   timedOut?: boolean
   /** 实际生效的派发通道 */
   via?: 'sse' | 'sync' | 'poll'
+  /** SSE 是否收到 turn_end（false = 流提前终结，content 可能不完整，调用方应对账兜底） */
+  complete?: boolean
   /** 远端不支持 prompt-stream（旧版）⇒ 调用方降级同步 prompt */
   sseUnsupported?: boolean
   /** 远端返回的真实 token 账本（含缓存命中），供前端展示缓存率 */
@@ -59,6 +64,81 @@ export interface PromptResult {
 
 function clean(url: string): string {
   return url.replace(/\/+$/, '')
+}
+
+/**
+ * 长静默 SSE 兜底 dispatcher：长工具执行 / 上下文压缩期间流上没有任何帧，
+ * undici 默认 bodyTimeout=300s 会按「chunk 间空闲」掐断连接 → 长回合必断流。
+ * bodyTimeout=0 关闭该超时（headersTimeout 保留，防远端彻底失联）。undici 不可用时优雅降级为默认行为。
+ */
+let longIdleDispatcher: any | null | undefined = null
+async function getLongIdleDispatcher(): Promise<any | undefined> {
+  if (longIdleDispatcher !== null) return longIdleDispatcher ?? undefined
+  try {
+    const undici: any = await import('undici')
+    longIdleDispatcher = new undici.Agent({ bodyTimeout: 0, headersTimeout: 120_000 })
+  } catch {
+    longIdleDispatcher = undefined
+  }
+  return longIdleDispatcher ?? undefined
+}
+
+/** 从 history 消息提取纯文本（string 或 content blocks 数组） */
+function messageText(raw: any): string {
+  if (typeof raw === 'string') return raw
+  if (Array.isArray(raw)) return raw.filter((b: any) => b?.type === 'text').map((b: any) => b.text || '').join('\n')
+  return ''
+}
+
+/** 注入型 user 消息（宿主自动注入，非真实用户输入，不能作为回合起点）：compaction checkpoint / 技能目录提醒 / 运行时上下文快照 */
+const INJECTED_USER_PREFIXES = [
+  'This is an automatically generated checkpoint',
+  '<system-reminder>',
+  'Current runtime context.',
+]
+
+/**
+ * 按回合起点重建整轮 assistant 文本。
+ * 优先定位「包含本次提交 prompt 片段」的最后一条 user 消息作为回合起点（注入消息不含用户文本，天然排除）；
+ * 找不到时退化为最后一条非注入型 user 消息。回合内所有非空 assistant 文本按序拼接。
+ */
+export function reconstructTurnFromHistory(
+  messages: any[],
+  promptFragment?: string,
+): { text: string; matched: boolean } {
+  const isInjected = (t: string) => INJECTED_USER_PREFIXES.some((p) => t.startsWith(p))
+  let startIdx = -1
+  if (promptFragment) {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]
+      if (m?.role !== 'user') continue
+      const t = messageText(m.content)
+      if (t && t.includes(promptFragment)) {
+        startIdx = i
+        break
+      }
+    }
+  }
+  if (startIdx < 0) {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]
+      if (m?.role !== 'user') continue
+      const t = messageText(m.content)
+      if (t && !isInjected(t)) {
+        startIdx = i
+        break
+      }
+    }
+  }
+  if (startIdx < 0) return { text: '', matched: false }
+  const parts: string[] = []
+  for (let j = startIdx + 1; j < messages.length; j++) {
+    const m = messages[j]
+    if (m?.role !== 'assistant') continue
+    const t = messageText(m.content).trim()
+    if (t) parts.push(t)
+  }
+  return { text: parts.join('\n\n'), matched: true }
 }
 
 function toQuery(opts?: { root?: string; cwd?: string }): string {
@@ -542,6 +622,31 @@ export class DshClient {
   }
 
   /**
+   * 提交 ask_user_question 挂起问题的答复（远端宿主 waterfall 桥）。
+   * 需要 dsh-web-service ≥ 0.1.6（POST /sessions/:id/answers）；旧版返回 supported=false。
+   */
+  public async answerQuestion(
+    target: DshTarget,
+    sessionId: string,
+    answers: Array<{ id: string; selected: string[]; custom?: string }>,
+  ): Promise<{ ok: boolean; supported?: boolean; error?: string }> {
+    try {
+      const res = await fetch(`${clean(target.baseUrl)}/sessions/${encodeURIComponent(sessionId)}/answers`, {
+        method: 'POST',
+        headers: this.headers(target.apiKey),
+        body: JSON.stringify({ answers }),
+        signal: AbortSignal.timeout(12_000),
+      })
+      const json: any = await res.json().catch(() => ({}))
+      if (res.status === 404 || res.status === 501) return { ok: false, supported: false, error: '远端 dsh-web-service 版本过低，无问题答复接口' }
+      if (!res.ok || !json?.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
+      return { ok: true, supported: true }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || '提交问题答复失败' }
+    }
+  }
+
+  /**
    * SSE 流式派发 prompt。解析 `event: X\ndata: Y` 帧。
    * 远端返回 404/501（旧版无此路由）时返回 sseUnsupported=true 供调用方降级。
    */
@@ -555,12 +660,15 @@ export class DshClient {
     let content = ''
     let reasoning = ''
     try {
+      const dispatcher = await getLongIdleDispatcher()
       const res = await fetch(`${clean(target.baseUrl)}/sessions/${encodeURIComponent(sessionId)}/prompt-stream`, {
         method: 'POST',
         headers: this.headers(target.apiKey),
         body: JSON.stringify({ prompt, timeoutMs: options?.remoteTimeoutMs ?? 1_800_000 }),
         signal: options?.signal,
-      })
+        // bodyTimeout=0：长工具执行/压缩期间无帧的静默段不断流（undici 缺失时无此键，退回默认）
+        ...(dispatcher ? { dispatcher } : {}),
+      } as any)
       if (res.status === 404 || res.status === 501) {
         return { ok: false, error: `远端不支持 prompt-stream (HTTP ${res.status})`, sseUnsupported: true }
       }
@@ -626,7 +734,7 @@ export class DshClient {
               }
               break
             case 'error':
-              return { ok: false, content, reasoning, error: data?.message || '远端执行错误' }
+              return { ok: false, content, reasoning, complete: false, error: data?.message || '远端执行错误' }
             case 'turn_end': {
               const r = data?.reason
               const reason = typeof r === 'string' ? r : r && typeof r === 'object' && typeof r.kind === 'string' ? r.kind : r != null ? JSON.stringify(r) : 'completed'
@@ -644,10 +752,11 @@ export class DshClient {
       if (!sawTurnEnd && !content) {
         return { ok: false, error: 'SSE 流在产出任何内容前结束', sseUnsupported: false }
       }
-      return { ok: true, content, reasoning: reasoning || undefined, via: 'sse', usage }
+      // complete=false：流被远端/网络提前收掉且未收到 turn_end，内容可能缺尾，交由调用方对账
+      return { ok: true, content, reasoning: reasoning || undefined, via: 'sse', usage, complete: sawTurnEnd }
     } catch (err: any) {
-      if (err?.name === 'AbortError') return { ok: false, content, reasoning, error: '已中止', timedOut: true }
-      return { ok: false, content, reasoning, error: err?.message || 'SSE 流失败' }
+      if (err?.name === 'AbortError') return { ok: false, content, reasoning, complete: false, error: '已中止', timedOut: true }
+      return { ok: false, content, reasoning, complete: false, error: err?.message || 'SSE 流失败' }
     }
   }
 
@@ -701,7 +810,7 @@ export class DshClient {
   public async waitForSessionResult(
     target: DshTarget,
     sessionId: string,
-    options?: { maxMs?: number; intervalMs?: number; signal?: AbortSignal; onLog?: (msg: string, level?: SubtaskLogEntry['level']) => void },
+    options?: { maxMs?: number; intervalMs?: number; signal?: AbortSignal; onLog?: (msg: string, level?: SubtaskLogEntry['level']) => void; promptFragment?: string },
   ): Promise<PromptResult> {
     const maxMs = options?.maxMs ?? 1_800_000
     const intervalMs = options?.intervalMs ?? 15_000
@@ -718,25 +827,59 @@ export class DshClient {
         lastStatus = st.status || ''
       }
       if (st.status && st.status !== 'running') {
-        const hist = await this.getHistory(target, sessionId)
+        const hist = await this.getHistory(target, sessionId, 200)
         if (!hist.ok) return { ok: false, error: hist.error }
         const messages = hist.messages || []
+        // 优先按回合起点重建整轮文本：回合内往往有多条 assistant 消息（逐步叙述），
+        // 只取最后一条会把整轮压缩成结尾总结，造成与远端会话展示不一致
+        const rec = reconstructTurnFromHistory(messages, options?.promptFragment)
+        if (rec.text.trim()) return { ok: true, content: rec.text, via: 'poll' }
+        // 退化：取最后一条非空 assistant 消息（旧行为）
         for (let i = messages.length - 1; i >= 0; i--) {
           const m = messages[i]
           if (m?.role !== 'assistant') continue
-          const raw = m.content
-          const text =
-            typeof raw === 'string'
-              ? raw
-              : Array.isArray(raw)
-                ? raw.filter((b: any) => b?.type === 'text').map((b: any) => b.text || '').join('\n')
-                : ''
+          const text = messageText(m.content)
           if (text && text.trim()) return { ok: true, content: text, reasoning: m.reasoning, via: 'poll' }
         }
         return { ok: false, error: '会话已结束但未提取到助手回复' }
       }
     }
     return { ok: false, error: `等待远程会话完成超时 (>${Math.round(maxMs / 60_000)} 分钟)` }
+  }
+
+  /**
+   * 回合已结束但流上没有拿到任何文本时的对账通道。
+   *
+   * 背景：dsh-web-service 的 prompt-stream 只把 assistant/chunk(text-delta) 与 assistant/delta
+   * 转成 `delta` 事件；对不逐字流式产出的 provider（只在 turn 内落一条 assistant/message），
+   * 远端只发 usage + turn_end + done —— 正文一个字都不在流上（已实测 dsh-web-service 1.0.0）。
+   * 客户端不能把「零文本 + turn_end」当成空回复，必须回查 history 重建整轮文本。
+   *
+   * 立即查一次，未命中再短退避重试（应对消息落库滞后）；全部未命中返回 ok:false，
+   * 由调用方保留原流式结果（真正的空回复不因此报错）。
+   */
+  public async reconcileTurn(
+    target: DshTarget,
+    sessionId: string,
+    promptFragment?: string,
+    options?: { attempts?: number; intervalMs?: number; signal?: AbortSignal },
+  ): Promise<PromptResult> {
+    const attempts = options?.attempts ?? 4
+    const intervalMs = options?.intervalMs ?? 1200
+    let lastError = '回合已结束但未从历史中提取到助手回复'
+    for (let i = 0; i < attempts; i++) {
+      if (options?.signal?.aborted) return { ok: false, error: '已中止' }
+      if (i > 0) await new Promise((r) => setTimeout(r, intervalMs))
+      const hist = await this.getHistory(target, sessionId, 200)
+      if (!hist.ok) {
+        lastError = hist.error || '会话历史读取失败'
+        continue
+      }
+      const messages = hist.messages || []
+      const rec = reconstructTurnFromHistory(messages, promptFragment)
+      if (rec.text.trim()) return { ok: true, content: rec.text, via: 'poll', complete: true }
+    }
+    return { ok: false, error: lastError }
   }
 
   /** OpenAI 兼容 /chat/completions（Planner 用，非流式） */

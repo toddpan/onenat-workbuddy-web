@@ -11,7 +11,7 @@ import type { PromptResult, DshTarget } from './remote-client.js'
 import { DshClient } from './remote-client.js'
 import type { AgentResolver } from './resolver.js'
 import type { PromptComposer } from './prompt-composer.js'
-import { Planner } from './planner.js'
+import { Planner, type PlanDraft } from './planner.js'
 import type { OnenatDirectory } from './onenat.js'
 import type { WorkStore } from './store.js'
 import type { SubtaskLogEntry } from './types.js'
@@ -22,6 +22,11 @@ export interface CreateTaskInput {
   memberAgentIds: string[]
   mode?: 'chat' | 'orchestrate'
   message?: string
+}
+
+/** 取 prompt 尾部片段：降级轮询时供远端 history 定位本次回合的起点 user 消息（注入消息不含用户文本，天然排除） */
+function turnFragment(prompt: string): string {
+  return prompt.length > 400 ? prompt.slice(-400) : prompt
 }
 
 export class TaskEngine {
@@ -430,11 +435,12 @@ export class TaskEngine {
     return { ok: true, turn }
   }
 
-  private appendSystemTurn(taskId: string, text: string): void {
+  private appendSystemTurn(taskId: string, text: string): TaskTurn {
     const turn: TaskTurn = { id: `turn-${randomUUID().slice(0, 8)}`, seq: 0, role: 'system', text, at: Date.now() }
     this.store.appendTurn(taskId, turn)
     this.emit(taskId, { type: 'turn_start', turn })
     this.emit(taskId, { type: 'turn_end', turn })
+    return turn
   }
 
   /** 任务级持久日志（规划器/成员/会话事件），同时推 SSE */
@@ -627,7 +633,9 @@ export class TaskEngine {
         onToolCall: (info) => {
           const id = String(info.id || `tool-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`)
           toolStarts.set(id, Date.now())
-          const tool: TurnToolCall = { id, name: String(info.name || 'unknown'), args: summarize(info.arguments, 400), status: 'running', at: Date.now() }
+          const isAskTool = info.name === 'ask_user_question' || info.name === 'ask-user-question'
+          // ask_user_question 的 args 必须完整：截断的 JSON 会让前端交互卡解析失败，用户无法答复
+          const tool: TurnToolCall = { id, name: String(info.name || 'unknown'), args: summarize(info.arguments, isAskTool ? 65_536 : 400), status: 'running', at: Date.now() }
           this.store.updateTurn(taskId, turn.id, (tt) => {
             tt.tools = tt.tools || []
             tt.tools.push(tool)
@@ -643,7 +651,8 @@ export class TaskEngine {
             let t = id ? tt.tools.find((x) => x.id === id) : undefined
             if (!t) t = [...tt.tools].reverse().find((x) => x.status === 'running')
             if (!t) return
-            t.result = summarize(info.result, 2000)
+            const isAskResult = t.name === 'ask_user_question' || t.name === 'ask-user-question'
+            t.result = summarize(info.result, isAskResult ? 65_536 : 2000)
             t.status = info.isError ? 'error' : 'done'
             const startedAt = toolStarts.get(t.id)
             if (startedAt) t.ms = Date.now() - startedAt
@@ -662,10 +671,19 @@ export class TaskEngine {
 
     this.store.updateTurn(taskId, turn.id, (tt) => {
       tt.streaming = false
-      if (result.ok && result.content) tt.text = result.content
-      else if (!result.ok && !tt.text) tt.text = ''
+      // 收尾回填：轮询整轮重建的结果覆盖流式累积；但若流式累积反而更长（对账退化只取到尾部），保留流式版本避免丢内容
+      if (result.ok && result.content) {
+        if (!tt.text || result.content.length >= tt.text.length) tt.text = result.content
+      } else if (!result.ok && !tt.text) tt.text = ''
       if (result.reasoning) tt.reasoning = result.reasoning
       if (result.usage && typeof result.usage === 'object') tt.usage = { ...result.usage }
+      // 工具对账：SSE 断流后 tool_result 无法到达，把卡在 running 的工具落为 error 并注明原因，避免永久转圈
+      for (const t of tt.tools || []) {
+        if (t.status === 'running') {
+          t.status = 'error'
+          if (!t.result) t.result = '⚠️ SSE 流中断，工具结果未能回传（远端回合已结束，结果未知）'
+        }
+      }
     })
     const finalTurn = this.store.getTask(taskId)!.turns.find((x) => x.id === turn.id)!
     this.emit(taskId, { type: 'turn_end', turn: finalTurn })
@@ -712,17 +730,78 @@ export class TaskEngine {
           .join('、'),
       }))
 
-    // 2. LLM 规划（失败兜底静态三段）
-    this.appendSystemTurn(taskId, '🎯 主调度正在拆解主任务并规划子任务流水线…')
-    let draft: { strategy: 'parallel' | 'sequential' | 'dag'; subtasks: Array<{ title: string; prompt: string; agentId: string; dependsOn: string[] }> }
-    const planned = await this.planner.planTask(text, rosterMembers, targets, {
-      priorityAgentIds: mentions.mentionedAgentIds,
-    })
+    // 2. LLM 规划（失败兜底静态三段）。
+    // 规划消息采用真流式生命周期：turn_start → 思考流(turn_reasoning) 与阶段日志(turn_delta) 增量推送 → 收敛后 turn_end。
+    // 此前 appendSystemTurn 立即补发 turn_end，前端把规划消息标记为 settled，主调度的全部思考事件被丢弃，用户只能干等。
+    const planTurn: TaskTurn = {
+      id: `turn-${randomUUID().slice(0, 8)}`,
+      seq: 0,
+      role: 'system',
+      agentName: '🎯 主调度规划',
+      text: '🎯 主调度正在拆解主任务并规划子任务流水线…',
+      streaming: true,
+      at: Date.now(),
+    }
+    this.store.appendTurn(taskId, planTurn)
+    this.emit(taskId, { type: 'turn_start', turn: planTurn })
+
+    let draft: PlanDraft
+    let plannerSeq = 0
+    let plannerThinkBuf = ''
+    let planTextBuf = planTurn.text
+    const stageLines: string[] = []
+    let planSettled = false
+    const planT0 = Date.now()
+    // 阶段日志镜像进规划气泡（▸ 行，实时可读）；任务日志抽屉仍保留全量记录
+    const planStage = (msg: string): void => {
+      stageLines.push(msg)
+      const line = '\n▸ ' + msg
+      planTextBuf += line
+      this.store.updateTurn(taskId, planTurn.id, (tt) => { tt.text = planTextBuf })
+      this.emit(taskId, { type: 'turn_delta', turnId: planTurn.id, delta: line, seq: plannerSeq++ })
+    }
+    // 收敛规划消息：写入最终结论行 + 阶段日志流水 + 完整思考文本，补发 turn_end
+    const settlePlanTurn = (head: string): void => {
+      if (planSettled) return
+      planSettled = true
+      const finalText = head + (stageLines.length ? '\n\n' + stageLines.map((l) => '▸ ' + l).join('\n') : '')
+      this.store.updateTurn(taskId, planTurn.id, (tt) => {
+        tt.streaming = false
+        tt.text = finalText
+        tt.reasoning = plannerThinkBuf || undefined
+      })
+      const finalTurn = this.store.getTask(taskId)!.turns.find((x) => x.id === planTurn.id)
+      if (finalTurn) this.emit(taskId, { type: 'turn_end', turn: finalTurn })
+    }
+    const strategyLabel = (s: PlanDraft['strategy']): string =>
+      s === 'sequential' ? '顺序执行' : s === 'dag' ? 'DAG 依赖编排' : '并行协同'
+
+    let planned: Awaited<ReturnType<Planner['planTask']>>
+    try {
+      planned = await this.planner.planTask(text, rosterMembers, targets, {
+        priorityAgentIds: mentions.mentionedAgentIds,
+        onLog: (msg, level) => {
+          this.taskLog(taskId, level || 'info', `[主调度] ${msg}`)
+          planStage(msg)
+        },
+        onReasoning: (delta) => {
+          plannerThinkBuf += delta
+          this.store.updateTurn(taskId, planTurn.id, (tt) => { tt.reasoning = plannerThinkBuf })
+          this.emit(taskId, { type: 'turn_reasoning', turnId: planTurn.id, delta, seq: plannerSeq++ })
+        },
+      })
+    } catch (err: any) {
+      planned = { error: `规划器异常: ${err?.message || err}` }
+      this.taskLog(taskId, 'warn', `规划阶段异常: ${err?.message || err}`)
+    }
     if ('plan' in planned) {
       draft = planned.plan
+      const thinkNote = plannerThinkBuf ? ` · 主调度思考 ${plannerThinkBuf.length} 字` : ''
+      settlePlanTurn(`✅ 拆解完成 — ${strategyLabel(draft.strategy)} · ${draft.subtasks.length} 个子任务 · 耗时 ${((Date.now() - planT0) / 1000).toFixed(1)}s${thinkNote}`)
       this.taskLog(taskId, 'info', `规划完成（${planned.plan.strategy}，${planned.plan.subtasks.length} 个子任务）`)
     } else {
       draft = Planner.fallbackPlan(text, rosterMembers)
+      settlePlanTurn(`⚠️ LLM 规划不可用（${planned.error}），已回退静态三段拆解`)
       this.taskLog(taskId, 'warn', `规划器不可用（${planned.error}），已回退静态三段拆解`)
       if (planned.raw) {
         this.taskLog(taskId, 'warn', `规划器原始输出（前 500 字）: ${planned.raw.slice(0, 500).replace(/\s+/g, ' ')}`)
@@ -966,7 +1045,12 @@ export class TaskEngine {
     this.store.mutateSubtask(taskId, sub.id, (s) => {
       if (result.ok && result.content && result.content.trim()) {
         s.status = 'completed'
-        s.result = { content: result.content, reasoning: result.reasoning }
+        // 防覆盖：轮询整轮重建应比流式累积更完整；若流式版本反而更长（对账退化），保留更长的一份避免丢内容
+        const prev = s.result?.content || ''
+        s.result = {
+          content: result.content.length >= prev.length ? result.content : prev,
+          reasoning: result.reasoning || s.result?.reasoning,
+        }
       } else if (!result.ok && result.content) {
         // 流式已产出部分内容但最终失败：保留部分产出并标记失败
         s.status = 'failed'
@@ -1041,7 +1125,15 @@ export class TaskEngine {
     signal: AbortSignal,
   ): Promise<PromptResult> {
     const sse = await this.client.streamPrompt(target, sessionId, prompt, handlers, { signal })
-    if (sse.ok) return sse
+    // 完整收到 turn_end 且有文本：流式结果即整轮内容，直接采用
+    if (sse.ok && sse.complete !== false && sse.content) return sse
+    // 流完整结束但零文本：远端只发了 usage/turn_end（部分 provider 不推 assistant/chunk text-delta，
+    // dsh-web-service 也不把 assistant/message 正文放进流）⇒ 回查 history 对账整轮文本
+    if (sse.ok && sse.complete !== false && !sse.content) {
+      handlers.onLog?.('流式通道无文本增量（远端未推 delta），改用会话历史对账整轮结果...', 'warn')
+      const reconciled = await this.client.reconcileTurn(target, sessionId, turnFragment(prompt), { signal })
+      return reconciled.ok ? reconciled : sse
+    }
     if (sse.sseUnsupported) {
       handlers.onLog?.('远端不支持 SSE 流式，降级同步等待...', 'warn')
       const sync = await this.client.prompt(target, sessionId, prompt, { signal })
@@ -1050,15 +1142,22 @@ export class TaskEngine {
         const polled = await this.client.waitForSessionResult(target, sessionId, {
           signal,
           onLog: handlers.onLog,
+          promptFragment: turnFragment(prompt),
         })
         return polled
       }
       return sync
     }
-    // SSE 中途失败但已产出部分内容 → 转轮询兜底
-    if (sse.content) {
-      const polled = await this.client.waitForSessionResult(target, sessionId, { signal, onLog: handlers.onLog })
-      if (polled.ok && polled.content && polled.content.length > sse.content.length) return polled
+    // SSE 断损兜底（D5）：断流时已产出部分内容、或流被提前收掉未收到 turn_end、
+    // 或提交后流异常终结 —— 远端回合多半仍在继续，轮询对账拿回完整整轮结果
+    if (!signal.aborted && (sse.content || sse.complete === false || /SSE 流/.test(sse.error || ''))) {
+      handlers.onLog?.('SSE 流中断/提前结束，转轮询对账整轮结果...', 'warn')
+      const polled = await this.client.waitForSessionResult(target, sessionId, {
+        signal,
+        onLog: handlers.onLog,
+        promptFragment: turnFragment(prompt),
+      })
+      if (polled.ok && polled.content && polled.content.length > (sse.content?.length || 0)) return polled
       return sse
     }
     if (signal.aborted) return { ok: false, error: '已中止' }

@@ -1,0 +1,19 @@
+{
+  "//": "独立部署（Standalone Web Service）构建配置：只编译 DSH 无关的服务端图，产物 dist/ 不含 cordis / @deepseek-ai/* 依赖",
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2023", "DOM"],
+    "strict": true,
+    "types": ["node"],
+    "outDir": "dist",
+    "rootDir": "src",
+    "declaration": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "sourceMap": true
+  },
+  "include": ["src/server.ts", "src/tool-ops.ts"]
+}
