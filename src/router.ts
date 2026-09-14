@@ -1106,6 +1106,48 @@ export class WorkBuddyRouter {
       }
       return true
     }
+    // 分片断点续传上传（init / status+chunk / complete）
+    const resumInitMatch = /^\/api\/tasks\/([^/]+)\/attachments\/resumable\/init$/.exec(p)
+    if (resumInitMatch && method === 'POST') {
+      const taskId = decodeURIComponent(resumInitMatch[1])
+      const body = await this.parseBody(req)
+      const result = await this.engine.resumableInit(taskId, String(body?.name || ''), Number(body?.size) || 0, body?.mimeType ? String(body.mimeType) : undefined)
+      this.sendJson(res, result.ok ? 200 : 400, { ok: result.ok, data: result.ok ? { uploadId: result.uploadId, received: result.received } : undefined, error: result.error })
+      return true
+    }
+    const resumChunkMatch = /^\/api\/tasks\/([^/]+)\/attachments\/resumable\/([^/]+)$/.exec(p)
+    if (resumChunkMatch && (method === 'GET' || method === 'PUT')) {
+      const taskId = decodeURIComponent(resumChunkMatch[1])
+      const uploadId = decodeURIComponent(resumChunkMatch[2])
+      if (method === 'GET') {
+        const st = await this.engine.resumableStatus(taskId, uploadId)
+        this.sendJson(res, st.ok ? 200 : 404, { ok: st.ok, data: st.ok ? { name: st.name, size: st.size, received: st.received } : undefined, error: st.error })
+        return true
+      }
+      const url = new URL(req.url || '/', 'http://localhost')
+      const offset = Number(url.searchParams.get('offset'))
+      const raw = await readRawBuffer(req, 8 * 1024 * 1024)
+      const result = await this.engine.resumableAppend(taskId, uploadId, raw, offset)
+      if (result.ok) {
+        this.sendJson(res, 200, { ok: true, data: { received: result.received } })
+      } else {
+        this.sendJson(res, result.code === 'OFFSET_MISMATCH' ? 409 : 400, { ok: false, error: result.error, data: { received: result.received } })
+      }
+      return true
+    }
+    const resumDoneMatch = /^\/api\/tasks\/([^/]+)\/attachments\/resumable\/([^/]+)\/complete$/.exec(p)
+    if (resumDoneMatch && method === 'POST') {
+      const taskId = decodeURIComponent(resumDoneMatch[1])
+      const uploadId = decodeURIComponent(resumDoneMatch[2])
+      try {
+        const result = await this.engine.resumableComplete(taskId, uploadId)
+        if (!result.ok) this.sendJson(res, 409, { ok: false, error: result.error })
+        else this.sendJson(res, 200, { ok: true, data: result })
+      } catch (err: any) {
+        this.sendJson(res, 500, { ok: false, error: err?.message || String(err) })
+      }
+      return true
+    }
     // 会话工作区文件下载（代理成员远端 DSH，支持 AI 回复中的绝对/相对路径）
     const dlMatch = /^\/api\/tasks\/([^/]+)\/files\/download$/.exec(p)
     if (dlMatch && method === 'GET') {

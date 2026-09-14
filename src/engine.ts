@@ -7,6 +7,8 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { mkdir, writeFile, appendFile, stat, readFile, readdir, rm } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { PromptResult, DshTarget } from './remote-client.js'
 import { DshClient } from './remote-client.js'
 import type { AgentResolver } from './resolver.js'
@@ -1218,6 +1220,177 @@ export class TaskEngine {
       }),
     )
     return { ok: true, results }
+  }
+
+  // ---------- 分片断点续传上传（浏览器 → 本服务暂存 → complete 时分片中继到成员节点） ----------
+
+  private uploadStagePaths(uploadId: string): { dir: string; part: string; meta: string } | undefined {
+    const id = String(uploadId || '').replace(/[^A-Za-z0-9._-]/g, '')
+    if (!id || id.length > 120) return undefined
+    const dir = join(this.store.dataDir, 'uploads')
+    return { dir, part: join(dir, id + '.part'), meta: join(dir, id + '.json') }
+  }
+
+  private async stageReceived(part: string): Promise<number> {
+    try {
+      return (await stat(part)).size
+    } catch {
+      return 0
+    }
+  }
+
+  /** 初始化分片上传（顺手清理 24h 前的残留暂存） */
+  public async resumableInit(
+    taskId: string,
+    name: string,
+    size: number,
+    mimeType?: string,
+  ): Promise<{ ok: boolean; uploadId?: string; received?: number; error?: string }> {
+    if (!this.store.getTask(taskId)) return { ok: false, error: '任务不存在' }
+    const safeName = String(name || '').split(/[\\/]/).pop() || `upload-${Date.now()}`
+    const safeSize = Math.max(0, Math.floor(Number(size) || 0))
+    if (safeSize > 2 * 1024 * 1024 * 1024) return { ok: false, error: '文件超过 2GB 上限' }
+    const uploadId = `up-${randomUUID().replace(/-/g, '').slice(0, 20)}`
+    const paths = this.uploadStagePaths(uploadId)!
+    try {
+      await mkdir(paths.dir, { recursive: true })
+      // 残留清理（best-effort）
+      try {
+        const old = await readdir(paths.dir)
+        for (const f of old) {
+          const fp = join(paths.dir, f)
+          try {
+            if (Date.now() - (await stat(fp)).mtimeMs > 24 * 3600_000) await rm(fp, { force: true })
+          } catch { /* 单文件失败忽略 */ }
+        }
+      } catch { /* 目录不存在等 */ }
+      await writeFile(paths.part, Buffer.alloc(0))
+      await writeFile(paths.meta, JSON.stringify({ taskId, name: safeName, size: safeSize, mimeType: mimeType || undefined, createdAt: Date.now() }))
+      return { ok: true, uploadId, received: 0 }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || String(err) }
+    }
+  }
+
+  /** 查询接收进度（断点恢复点；received 以 .part 实际字节数为权威） */
+  public async resumableStatus(
+    taskId: string,
+    uploadId: string,
+  ): Promise<{ ok: boolean; name?: string; size?: number; received?: number; error?: string }> {
+    const paths = this.uploadStagePaths(uploadId)
+    if (!paths) return { ok: false, error: '非法 uploadId' }
+    try {
+      const meta = JSON.parse(await readFile(paths.meta, 'utf-8'))
+      if (meta.taskId !== taskId) return { ok: false, error: '上传会话不属于该任务' }
+      return { ok: true, name: meta.name, size: meta.size, received: await this.stageReceived(paths.part) }
+    } catch {
+      return { ok: false, error: '上传会话不存在或已完成/清理' }
+    }
+  }
+
+  /** 追加分片（offset 不匹配时返回 OFFSET_MISMATCH + 服务端实际接收量） */
+  public async resumableAppend(
+    taskId: string,
+    uploadId: string,
+    chunk: Buffer,
+    offset: number,
+  ): Promise<{ ok: boolean; received?: number; code?: string; error?: string }> {
+    const paths = this.uploadStagePaths(uploadId)
+    if (!paths) return { ok: false, error: '非法 uploadId' }
+    if (chunk.length === 0) return { ok: false, error: '分片内容为空' }
+    const st = await this.resumableStatus(taskId, uploadId)
+    if (!st.ok) return { ok: false, error: st.error }
+    const received = st.received || 0
+    if (offset !== received) return { ok: false, code: 'OFFSET_MISMATCH', received, error: `offset 不匹配：服务端已接收 ${received} 字节` }
+    try {
+      await appendFile(paths.part, chunk)
+      return { ok: true, received: received + chunk.length }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || String(err) }
+    }
+  }
+
+  /** 完成并向各成员节点分片中继（成员并行；单成员失败保留暂存可重试） */
+  public async resumableComplete(taskId: string, uploadId: string): Promise<{
+    ok: boolean
+    error?: string
+    results?: Array<{ agentId: string; agentName: string; ok: boolean; error?: string; files?: Array<{ name: string; path: string; size: number }> }>
+  }> {
+    const paths = this.uploadStagePaths(uploadId)
+    if (!paths) return { ok: false, error: '非法 uploadId' }
+    const st = await this.resumableStatus(taskId, uploadId)
+    if (!st.ok) return { ok: false, error: st.error }
+    const size = st.size || 0
+    const received = st.received || 0
+    if (size > 0 && received !== size) return { ok: false, error: `文件未传完：已接收 ${received}/${size} 字节` }
+    const task = this.store.getTask(taskId)
+    if (!task) return { ok: false, error: '任务不存在' }
+    const meta = JSON.parse(await readFile(paths.meta, 'utf-8'))
+    const handle = await import('node:fs/promises').then((m) => m.open(paths.part, 'r'))
+    try {
+      const readSlice = async (offset: number, length: number) => {
+        const buf = Buffer.alloc(length)
+        const { bytesRead } = await handle.read(buf, 0, length, offset)
+        return bytesRead === length ? buf : buf.subarray(0, bytesRead)
+      }
+      const { targets } = await this.resolver.resolveMembers(task.memberAgentIds)
+      const results = await Promise.all(
+        task.memberAgentIds.map(async (agentId) => {
+          const agent = this.store.getAgent(agentId)
+          const target = targets.get(agentId)
+          if (!agent || !target) return { agentId, agentName: agent?.name || agentId, ok: false, error: '节点不可用' }
+          const session = await this.ensureSession(taskId, agent, target)
+          if (!session.ok || !session.remoteSessionId) {
+            return { agentId, agentName: agent.name, ok: false, error: session.error || '会话创建失败' }
+          }
+          const up = await this.client.uploadFileResumable(
+            target,
+            session.remoteSessionId,
+            { filename: meta.name, mimeType: meta.mimeType, size: received },
+            readSlice,
+            { chunkSize: 4 * 1024 * 1024 },
+          ).catch((e: any) => ({ ok: false as const, error: e?.message || String(e) }))
+          // 旧版节点无 resumable 端点 → 降级走原 multipart（≤100MB，与旧接口上限一致）
+          let result = up
+          if (!up.ok && /Endpoint not found|HTTP 404|404/.test(up.error || '')) {
+            if (received <= 100 * 1024 * 1024) {
+              const data = await readSlice(0, received)
+              result = await this.client.uploadFiles(target, session.remoteSessionId, [{ filename: meta.name, mimeType: meta.mimeType, data }])
+            }
+          }
+          if (!result.ok) {
+            this.taskLog(taskId, 'error', `附件分片中继失败（${agent.name}）: ${result.error}`)
+            return { agentId, agentName: agent.name, ok: false, error: result.error }
+          }
+          const saved = result.files || []
+          this.taskLog(taskId, 'info', `附件已上传（${agent.name}）: ${saved.map((f) => f.path).join(', ')}`)
+          this.store.mutateTask(taskId, (t) => {
+            t.attachments = t.attachments || []
+            for (const f of saved) {
+              t.attachments.push({
+                name: f.name,
+                path: f.path,
+                size: f.size,
+                mimeType: f.mimeType,
+                agentId,
+                agentName: agent.name,
+                remoteSessionId: session.remoteSessionId!,
+                uploadedAt: Date.now(),
+              })
+            }
+          })
+          return { agentId, agentName: agent.name, ok: true, files: saved.map((f) => ({ name: f.name, path: f.path, size: f.size })) }
+        }),
+      )
+      // 全部成员成功才清理暂存；部分失败保留（24h 后由 resumableInit 兜底清理，可重试 complete）
+      if (results.every((r) => r.ok)) {
+        await rm(paths.part, { force: true })
+        await rm(paths.meta, { force: true })
+      }
+      return { ok: true, results }
+    } finally {
+      await handle.close().catch(() => {})
+    }
   }
 
   /** 解析下载请求 → 远端流。返回 Response 供 router 转发。 */

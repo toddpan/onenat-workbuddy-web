@@ -215,6 +215,95 @@ export class DshClient {
     }
   }
 
+  /**
+   * 分片断点续传上传（目标节点需支持 /sessions/:id/files/resumable 协议）。
+   * readSlice(offset, len) 由调用方提供分片数据（通常从本地暂存文件按需读取）；
+   * offset 不匹配（409）或网络失败时自动向服务端对账 received 并续传。
+   */
+  public async uploadFileResumable(
+    target: DshTarget,
+    sessionId: string,
+    file: { filename: string; mimeType?: string; size: number },
+    readSlice: (offset: number, length: number) => Promise<Buffer>,
+    opts?: { chunkSize?: number; onProgress?: (received: number) => void },
+  ): Promise<{ ok: boolean; files?: Array<{ name: string; path: string; size: number; mimeType?: string }>; error?: string }> {
+    const base = clean(target.baseUrl)
+    const chunkSize = Math.max(256 * 1024, opts?.chunkSize || 4 * 1024 * 1024)
+    try {
+      // init
+      const initUrl = `${base}/sessions/${sessionId}/files/resumable?name=${encodeURIComponent(file.filename)}&size=${file.size}` +
+        (file.mimeType ? `&mimeType=${encodeURIComponent(file.mimeType)}` : '')
+      const initRes = await fetch(initUrl, { method: 'POST', headers: this.headersAuth(target.apiKey), signal: AbortSignal.timeout(20_000) })
+      const initJson: any = await initRes.json().catch(() => ({}))
+      if (!initRes.ok || !initJson?.ok) return { ok: false, error: initJson?.error || `init HTTP ${initRes.status}` }
+      const uploadId = String(initJson.data.uploadId)
+      let received = Number(initJson.data.received) || 0
+      let failCount = 0
+
+      // 分片循环（offset 不一致 / 网络失败 → 对账后重试当前分片）
+      while (received < file.size) {
+        const len = Math.min(chunkSize, file.size - received)
+        const chunk = await readSlice(received, len)
+        const putRes = await fetch(`${base}/sessions/${sessionId}/files/resumable/${uploadId}?offset=${received}`, {
+          method: 'PUT',
+          headers: { ...this.headersAuth(target.apiKey), 'Content-Type': 'application/octet-stream' },
+          body: new Uint8Array(chunk),
+          signal: AbortSignal.timeout(120_000),
+        }).catch(() => undefined)
+        const json: any = putRes ? await putRes.json().catch(() => ({})) : {}
+        if (putRes?.status === 409) {
+          // 服务端实际接收量对账（可能领先：上次分片已落盘但响应丢失）
+          received = Number(json?.data?.received) || (await this.resumableStatus(target, sessionId, uploadId))
+          failCount = 0
+          opts?.onProgress?.(received)
+          continue
+        }
+        if (!putRes || !putRes.ok || !json?.ok) {
+          // 网络/服务端错误 → 对账后续传当前分片；连续无进展 3 次放弃
+          const resumed = await this.resumableStatus(target, sessionId, uploadId)
+          if (resumed > received) {
+            received = resumed
+            failCount = 0
+            opts?.onProgress?.(received)
+            continue
+          }
+          if (++failCount < 3) continue
+          return { ok: false, error: json?.error || (putRes ? `chunk HTTP ${putRes.status}` : '网络错误') }
+        }
+        received = Number(json.data.received) || received + chunk.length
+        failCount = 0
+        opts?.onProgress?.(received)
+      }
+
+      // complete
+      const doneRes = await fetch(`${base}/sessions/${sessionId}/files/resumable/${uploadId}/complete`, {
+        method: 'POST',
+        headers: this.headersAuth(target.apiKey),
+        signal: AbortSignal.timeout(30_000),
+      })
+      const doneJson: any = await doneRes.json().catch(() => ({}))
+      if (!doneRes.ok || !doneJson?.ok) return { ok: false, error: doneJson?.error || `complete HTTP ${doneRes.status}` }
+      return { ok: true, files: doneJson.data?.files || [] }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || '分片上传失败' }
+    }
+  }
+
+  /** 查询远端分片上传已接收字节数（异常时返回 -1） */
+  public async resumableStatus(target: DshTarget, sessionId: string, uploadId: string): Promise<number> {
+    try {
+      const res = await fetch(`${clean(target.baseUrl)}/sessions/${sessionId}/files/resumable/${encodeURIComponent(uploadId)}`, {
+        headers: this.headersAuth(target.apiKey),
+        signal: AbortSignal.timeout(15_000),
+      })
+      const json: any = await res.json().catch(() => ({}))
+      if (!res.ok || !json?.ok) return -1
+      return Number(json.data?.received) || 0
+    } catch {
+      return -1
+    }
+  }
+
   /** 远端目录浏览（对齐 DSH directory-picker-browse：只返回目录行，hidden 标记） */
   public async fsList(target: DshTarget, dirPath?: string): Promise<{
     ok: boolean

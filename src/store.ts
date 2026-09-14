@@ -42,6 +42,11 @@ export class WorkStore {
     this.load()
   }
 
+  /** 数据目录（store.json 所在目录）；分片上传暂存于其下 uploads/ */
+  public get dataDir(): string {
+    return dirname(this.filePath)
+  }
+
   private load(): void {
     try {
       if (existsSync(this.filePath)) {
