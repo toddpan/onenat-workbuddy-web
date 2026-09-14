@@ -13,7 +13,8 @@
  * 注意: 嵌入式 JS 全程不使用外层反引号模板串冲突字符，避免转义问题。
  */
 
-export function renderWebUi(prefix: string): string {
+export function renderWebUi(prefix: string, opts?: { auth?: boolean }): string {
+  const AUTH_ENABLED = opts?.auth === true
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -261,6 +262,15 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
 }
 .msg.user .content p { margin: 0; }
 
+@keyframes sysWaitPulse { 0%, 100% { opacity: 1 } 50% { opacity: .4 } }
+@keyframes sysWaitDots { 0% { content: '' } 25% { content: '·' } 50% { content: '··' } 75%, 100% { content: '···' } }
+body.task-running .msg.system.sys-planning .content {
+  animation: sysWaitPulse 1.7s ease-in-out infinite;
+}
+body.task-running .msg.system.sys-planning .content::after {
+  content: ''; display: inline-block; width: 1.4em; text-align: left; color: var(--warn);
+  animation: sysWaitDots 1.6s steps(1, end) infinite;
+}
 .markdown { overflow-wrap: anywhere; }
 .markdown h1 { font-size: 18px; font-weight: 700; margin: 20px 0 10px; color: var(--tx); border-bottom: 1px solid var(--line); padding-bottom: 6px; }
 .markdown h2 { font-size: 16px; font-weight: 600; margin: 18px 0 8px; color: var(--tx); }
@@ -364,6 +374,12 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
   font-family: var(--mono); background: rgba(0,0,0,.15);
 }
 
+/* 主调度规划气泡（system 轮次）：拆解结论 + ▸ 阶段日志流水 + 可折叠思考流 */
+.msg.system .blk-text p { margin: 2px 0; font-size: 13px; }
+.msg.system .blk-text p:first-child { margin-top: 0; }
+.msg.system .rz { background: rgba(15, 23, 42, 0.55); }
+.msg.system .rz-body { max-height: 260px; }
+
 /* 工具调用树组件 */
 .tws { margin: 4px 0 8px; }
 .tws-head {
@@ -451,16 +467,40 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
 }
 .plan-card h4 { font-size: 13px; color: var(--acc); margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; }
 .plan-row {
-  display: flex; align-items: center; gap: 10px; padding: 7px 0; border-top: 1px dashed var(--line); font-size: 12.5px;
+  display: flex; align-items: center; gap: 10px; padding: 7px 4px; border-top: 1px dashed var(--line); font-size: 12.5px;
+  border-radius: 6px; position: relative; transition: background .3s ease;
 }
 .plan-row .st {
   flex: none; width: 68px; text-align: center; font-size: 10.5px; border-radius: 999px; padding: 2px 0; font-weight: 500;
+  transition: background .35s ease, color .35s ease;
 }
 .st.pending { background: var(--bg3); color: var(--tx3); }
 .st.running { background: var(--warn-light); color: var(--warn); }
 .st.completed { background: var(--ok-light); color: var(--ok); }
 .st.failed { background: var(--err-light); color: var(--err); }
 .st.skipped { background: var(--bg3); color: var(--tx3); }
+
+/* ---- 编排进行中的等待动效：running 行流光扫过 + 状态芯片呼吸 + 头部齿轮 ---- */
+@keyframes planFlow { 0% { background-position: 120% 0 } 100% { background-position: -120% 0 } }
+@keyframes stBreath { 0%, 100% { opacity: 1 } 50% { opacity: .45 } }
+@keyframes gearSpin { to { transform: rotate(360deg) } }
+@keyframes planBarPulse { 0%, 100% { opacity: .35; transform: scaleY(.7) } 50% { opacity: 1; transform: scaleY(1) } }
+.plan-row.row-running {
+  background-image: linear-gradient(90deg, rgba(251,191,36,0) 0%, rgba(251,191,36,.10) 45%, rgba(251,191,36,.16) 55%, rgba(251,191,36,0) 100%);
+  background-size: 220% 100%;
+  animation: planFlow 2.2s linear infinite;
+}
+.plan-row.row-running::before {
+  content: ''; position: absolute; left: -4px; top: 18%; bottom: 18%; width: 3px; border-radius: 2px;
+  background: var(--warn); animation: planBarPulse 1.3s ease-in-out infinite;
+}
+.plan-row.row-running .st.running { animation: stBreath 1.5s ease-in-out infinite; }
+.plan-row.row-pending { opacity: .62; }
+.plan-card .plan-gear { display: none; margin-right: 6px; }
+.plan-card.plan-active .plan-gear {
+  display: inline-flex; color: var(--warn);
+  animation: gearSpin 2.2s linear infinite;
+}
 .plan-row .ag { color: var(--tx3); font-size: 11.5px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .plan-row .ops { display: flex; gap: 6px; flex: none; }
 /* DAG 依赖可视化 */
@@ -877,6 +917,20 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
   }
   .task-item .acts button { font-size: 13px; padding: 2px 7px; }
 }
+/* ---- 定时任务详情（页签式，对齐 KB 任务详情页） ---- */
+.sched-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+.sched-tab { background: transparent; color: var(--tx2); padding: 8px 14px; font-size: 13px; border-bottom: 2px solid transparent; border-radius: 0; }
+.sched-tab:hover { color: var(--tx); }
+.sched-tab.on { color: var(--pri); border-bottom-color: var(--pri); font-weight: 600; }
+.sched-grid { display: grid; grid-template-columns: 110px 1fr; gap: 8px 12px; font-size: 13px; }
+.sched-grid .k { color: var(--tx3); }
+.sched-agent { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--rad-sm); cursor: pointer; }
+.sched-agent:hover { border-color: var(--line2); }
+.sched-tpl { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; cursor: pointer; transition: border-color .15s; }
+.sched-tpl:hover { border-color: var(--pri); }
+.run-card { background: var(--bg2); border: 1px solid var(--line); border-radius: var(--rad-sm); padding: 10px 12px; margin-bottom: 10px; }
+.run-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 12.5px; flex-wrap: wrap; }
+.run-item .mini-btn { margin-left: auto; }
 </style>
 </head>
 <body>
@@ -886,11 +940,13 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
     <nav id="nav">
       <button data-v="work" class="on"><span class="ic">💬</span><span class="lb">工作台</span></button>
       <button data-v="agents"><span class="ic">🤖</span><span class="lb">子智能体</span></button>
+      <button data-v="schedules"><span class="ic">⏰</span><span class="lb">定时任务</span></button>
       <button data-v="resources"><span class="ic">🗂</span><span class="lb">资源目录</span></button>
       <button data-v="settings"><span class="ic">⚙️</span><span class="lb">设置</span></button>
     </nav>
     <div class="hspacer"></div>
     <div class="chip" id="onenat-chip"><span class="dot" id="onenat-dot"></span><span id="onenat-text">ONENAT 连接中…</span></div>
+    ${AUTH_ENABLED ? '<button class="mini-btn" id="logout-btn" title="退出登录">⎋ 退出</button>' : ''}
   </header>
   <main>
     <div class="view on" id="view-work">
@@ -961,6 +1017,10 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
       <div class="panel-head"><h2>子智能体池</h2><span class="sub">绑定 ONENAT 上的 DSH 实体（稳定 ID，端口变化不影响）· 配置模式/模型/提示词/可用资源</span><span class="hspacer"></span><button class="btn pri" id="btn-new-agent">＋ 新建子智能体</button></div>
       <div id="agent-list"></div>
     </div></div>
+    <div class="view" id="view-schedules"><div class="panel">
+      <div class="panel-head"><h2>定时任务</h2><span class="sub">按规则定时把固定任务文本派发给一个或多个子智能体 · Host 侧调度（关闭页面不影响触发，错过的触发点不补跑）</span><span class="hspacer"></span><button class="btn pri" id="btn-new-schedule">＋ 新建定时任务</button></div>
+      <div id="schedule-list"></div>
+    </div></div>
     <div class="view" id="view-resources"><div class="panel">
       <div class="panel-head"><h2>资源目录</h2><span class="sub" id="res-sub"></span><span class="hspacer"></span><button class="btn" id="btn-res-refresh">↻ 强制刷新</button></div>
       <div class="card" style="padding:0"><div class="tbl-wrap"><table class="res" id="res-table"><thead><tr><th>资源</th><th>类型</th><th>公网入口（实时解析）</th><th>内网目标</th><th>技能</th></tr></thead><tbody></tbody></table></div></div>
@@ -1005,6 +1065,8 @@ const state = {
   resources: [],
   agents: [],
   tasks: [],
+  schedules: [],
+  scheduleTemplates: null,
   taskCache: new Map(), // taskId -> WorkTask (完整缓存，支持 0ms 瞬间切换)
   settings: null,
   currentTaskId: null,
@@ -1036,6 +1098,7 @@ function toast(msg, isErr) {
 }
 async function api(path, opts) {
   const res = await fetch(API + path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts || {}));
+  ${AUTH_ENABLED ? "if (res.status === 401 && path.indexOf('/auth/') !== 0) { location.replace(PREFIX + '/'); return { ok: false, error: '未登录' }; }" : ''}
   let json = null; try { json = await res.json(); } catch (e) {}
   if (!json) json = { ok: false, error: 'HTTP ' + res.status };
   return json;
@@ -1043,10 +1106,15 @@ async function api(path, opts) {
 /** multipart 上传（不设 Content-Type，让浏览器自动带 boundary） */
 async function apiPostMulti(path, formData) {
   const res = await fetch(API + path, { method: 'POST', body: formData });
+  ${AUTH_ENABLED ? "if (res.status === 401) { location.replace(PREFIX + '/'); return { ok: false, error: '未登录' }; }" : ''}
   let json = null; try { json = await res.json(); } catch (e) {}
   if (!json) json = { ok: false, error: 'HTTP ' + res.status };
   return json;
 }
+${AUTH_ENABLED ? `async function doLogout() {
+  try { await fetch(API + '/auth/logout', { method: 'POST' }); } catch (e) {}
+  location.replace(PREFIX + '/');
+}` : ''}
 function fmtTime(ts) {
   if (!ts) return '';
   const d = new Date(ts);
@@ -1293,11 +1361,13 @@ function lastLine(s) {
 document.querySelectorAll('#nav button').forEach(btn => {
   btn.addEventListener('click', () => switchView(btn.dataset.v));
 });
-function switchView(v) {
+${AUTH_ENABLED ? `var logoutBtn = document.getElementById('logout-btn');
+if (logoutBtn) logoutBtn.addEventListener('click', doLogout);` : ''}function switchView(v) {
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
   document.querySelectorAll('.view').forEach(x => x.classList.toggle('on', x.id === 'view-' + v));
   if (v === 'resources') renderResources();
   if (v === 'agents') renderAgents();
+  if (v === 'schedules') renderSchedules();
   if (v === 'settings') renderSettings();
 }
 
@@ -1342,6 +1412,7 @@ if ($('input')) {
 const NAV_LABELS = {
   work: { full: '工作台', short: '工作台' },
   agents: { full: '子智能体', short: '智能体' },
+  schedules: { full: '定时任务', short: '定时' },
   resources: { full: '资源目录', short: '资源' },
   settings: { full: '设置', short: '设置' },
 };
@@ -1362,7 +1433,7 @@ applyNavLabels();
 // ---------- 初始化引导 ----------
 async function boot() {
   initMentionPopup();
-  await Promise.all([loadResources(), loadAgents(), loadTasks(), loadSettings()]);
+  await Promise.all([loadResources(), loadAgents(), loadTasks(), loadSettings(), loadSchedules()]);
   await refreshMentionCandidates();
   renderTaskList();
   setInterval(loadTasksQuiet, 4000);
@@ -1502,9 +1573,6 @@ function createTaskItemElement(t, archived) {
   div.className = 'task-item' + (isSelected ? ' on' : '') + (archived ? ' archived' : '');
   div.title = (archived ? '已归档 · ' : '') + t.title + (t.lastPreview ? '\\n最新: ' + t.lastPreview : '');
 
-  const modeBadge = t.mode === 'orchestrate'
-    ? '<span class="mode-badge">⚡编排</span>'
-    : '<span class="mode-badge chat">💬直通</span>';
 
   const memberNames = (t.memberAgentIds || []).map(id => {
     const a = state.agents.find(x => x.id === id);
@@ -1517,7 +1585,6 @@ function createTaskItemElement(t, archived) {
     '<div class="row-top">' +
     '<span class="s ' + statusColor(t.running ? 'running' : t.status) + '"></span>' +
     '<span class="t">' + esc(t.title) + '</span>' +
-    modeBadge +
     '</div>' +
     '<div class="row-sub">' + subText + '</div>' +
     '<span class="acts">' +
@@ -1766,6 +1833,7 @@ function upsertLiveTool(el, tool) {
   const turnMeta = {
     agentName: el.dataset?.agentName || el.wrap?.dataset?.agentName || '',
     agentId: el.dataset?.agentId || el.wrap?.dataset?.agentId || '',
+    taskId: state.currentTaskId,
   };
   let row = el.blocks.querySelector('.blk-tool[data-tid="' + tool.id + '"]');
   if (!row) {
@@ -2076,6 +2144,7 @@ function renderAskUserCard(el, t, turnMeta) {
     qHtml += '<div class="ask-q" data-qid="' + esc(q.id || String(qIdx)) + '">' +
       '<div class="ask-q-title">' + qTitle + '</div>' +
       '<div class="ask-options">' + optHtml + '</div>' +
+      '<input class="ask-custom" type="text" placeholder="自定义回答（可选，多选时为补充说明）" style="margin-top:6px;font-size:12px">' +
     '</div>';
   });
 
@@ -2083,8 +2152,9 @@ function renderAskUserCard(el, t, turnMeta) {
   const footHtml = isDone
     ? (t.result ? '<div class="ask-result-hint" style="font-size:11.5px;color:var(--tx3);margin-top:4px">答复内容: ' + esc(t.result) + '</div>' : '')
     : '<div class="ask-actions">' +
-        '<span style="font-size:11.5px;color:var(--tx3);margin-right:auto">点击选项后提交答复</span>' +
-        '<button class="ask-btn-submit" type="button">📤 确认并提交选择</button>' +
+        '<span style="font-size:11.5px;color:var(--tx3);margin-right:auto">选择后提交答复；答复会直接回传给子智能体</span>' +
+        '<button class="ask-btn-skip" type="button">跳过</button>' +
+        '<button class="ask-btn-submit" type="button">📤 提交答复</button>' +
       '</div>';
 
   el.innerHTML = '<div class="ask-card' + (isDone ? ' submitted' : '') + '">' +
@@ -2119,40 +2189,63 @@ function renderAskUserCard(el, t, turnMeta) {
 
     const submitBtn = card.querySelector('.ask-btn-submit');
     if (submitBtn) {
-      submitBtn.addEventListener('click', async () => {
+      const collectAnswers = () => {
         const answers = [];
         card.querySelectorAll('.ask-q').forEach(qEl => {
-          const checked = qEl.querySelectorAll('input:checked');
-          const vals = Array.from(checked).map(c => c.value);
-          if (vals.length) answers.push(vals.join('、'));
+          const qid = qEl.dataset.qid;
+          const selected = Array.from(qEl.querySelectorAll('input:checked')).map(c => c.value);
+          const customEl = qEl.querySelector('.ask-custom');
+          const custom = customEl && customEl.value.trim() !== '' ? customEl.value.trim() : undefined;
+          if (selected.length || custom) {
+            answers.push(custom ? { id: qid, selected, custom } : { id: qid, selected });
+          } else {
+            answers.push({ id: qid, selected: [] });
+          }
         });
-        if (!answers.length) {
-          toast('请至少选择一个选项', true);
+        return answers;
+      };
+      const markSubmitted = () => {
+        card.classList.add('submitted');
+        card.querySelectorAll('input, button').forEach(i => { i.disabled = true; });
+        const st = card.querySelector('.ask-status');
+        if (st) st.textContent = '✓ 已提交答复';
+      };
+      const sendAnswer = async (answers, skip) => {
+        if (!skip && answers.every(a => a.selected.length === 0 && !a.custom)) {
+          toast('请至少选择一个选项、填写自定义回答，或点「跳过」', true);
           return;
         }
         submitBtn.disabled = true;
         submitBtn.textContent = '提交中…';
-        card.classList.add('submitted');
-        card.querySelectorAll('input').forEach(i => { i.disabled = true; });
         const st = card.querySelector('.ask-status');
-        if (st) st.textContent = '✓ 已提交选择';
-
-        const agName = (turnMeta && turnMeta.agentName) || '';
-        const msg = (agName ? '@' + agName + ' ' : '') + '已确认选择：' + answers.join('；');
-
-        if (state.currentTaskId) {
-          toast('✓ 已提交选择，智能体继续执行中…');
+        if (st) st.textContent = '⏳ 提交中…';
+        const agentId = (turnMeta && turnMeta.agentId) || '';
+        const r = await api('/tasks/' + state.currentTaskId + '/ask-answer', {
+          method: 'POST',
+          body: JSON.stringify({ agentId, answers }),
+        });
+        if (r.ok) {
+          markSubmitted();
+          toast('✓ 答复已回传，子智能体继续执行中…');
           setSending(true);
-          const r = await api('/tasks/' + state.currentTaskId + '/messages', {
-            method: 'POST',
-            body: JSON.stringify({ message: msg }),
-          });
-          if (!r.ok) {
-            toast(r.error || '提交失败', true);
-            setSending(false);
-          }
+        } else {
+          submitBtn.disabled = false;
+          submitBtn.textContent = '📤 提交答复';
+          if (st) st.textContent = '⏳ 等待选择';
+          toast(r.error || '答复提交失败', true);
         }
+      };
+      submitBtn.addEventListener('click', () => {
+        if (!state.currentTaskId) { toast('请先选择任务', true); return; }
+        sendAnswer(collectAnswers(), false);
       });
+      const skipBtn = card.querySelector('.ask-btn-skip');
+      if (skipBtn) {
+        skipBtn.addEventListener('click', () => {
+          if (!state.currentTaskId) { toast('请先选择任务', true); return; }
+          sendAnswer(collectAnswers().map(a => ({ id: a.id, selected: [] })), true);
+        });
+      }
     }
   }
 }
@@ -2216,13 +2309,16 @@ function buildTurnElement(taskId, turn) {
   const wrap = document.createElement('div');
   const roleClass = turn.role === 'user' ? 'user' : (turn.role === 'system' ? 'system' : 'agent');
   const isOrch = turn.agentName === '🎯 总调度汇总';
-  wrap.className = 'msg ' + roleClass + (isOrch ? ' orchestrator' : '');
+  const isPlanningWait = roleClass === 'system' && /正在拆解|规划子任务|流水线/.test(turn.text || '');
+  wrap.className = 'msg ' + roleClass + (isOrch ? ' orchestrator' : '') + (isPlanningWait ? ' sys-planning' : '');
   wrap.dataset.turnId = turn.id;
   wrap.dataset.agentName = turn.agentName || '';
   wrap.dataset.agentId = turn.agentId || '';
 
-  const avatar = turn.role === 'user' ? '你' : (turn.role === 'system' ? '⚠' : (isOrch ? '🎯' : '🤖'));
-  const name = turn.role === 'user' ? '你' : (turn.role === 'system' ? '系统' : esc(turn.agentName || '子智能体'));
+  // 系统轮次带 agentName（如「🎯 主调度规划」）时以该身份展示，区别于告警类系统消息
+  const isNamedSys = roleClass === 'system' && Boolean(turn.agentName);
+  const avatar = turn.role === 'user' ? '你' : (roleClass === 'system' ? (isNamedSys ? '🎯' : '⚠') : (isOrch ? '🎯' : '🤖'));
+  const name = turn.role === 'user' ? '你' : esc(turn.agentName || (roleClass === 'system' ? '系统' : '子智能体'));
 
   const agent = state.agents.find(a => a.id === turn.agentId);
   const modelBadge = agent && agent.model ? '<span class="tag-model">' + esc(String(agent.model).split('/').pop()) + '</span>' : '';
@@ -2238,9 +2334,10 @@ function buildTurnElement(taskId, turn) {
   const blocks = wrap.querySelector('.blocks');
   const turnMeta = { agentName: turn.agentName, agentId: turn.agentId, taskId };
 
-  // 非流式（历史回放）：按「思考 → 工具调用 → 正文」的稳定顺序渲染
+  // 非流式（历史回放）：按「思考 → 工具调用 → 正文」的稳定顺序渲染。
+  // 思考块对 agent 与 system（主调度规划轮）都渲染 —— 编排拆解的思考/推理日志需要回放可见
   if (!turn.streaming) {
-    if (turn.reasoning && turn.role === 'agent') {
+    if (turn.reasoning && (turn.role === 'agent' || turn.role === 'system')) {
       const rb = createBlock('reasoning'); rb.fill(turn.reasoning); blocks.appendChild(rb.el);
     }
     if (turn.tools && turn.tools.length) {
@@ -2281,24 +2378,38 @@ function finalizeTurnBlocks(el, turn, taskId) {
   // 移除残留光标
   blocks.querySelectorAll('.cursor').forEach(c => c.remove());
 
-  // 1) 正文：从留在页面上的 text 块取回流式文本，渲染成 markdown
+  // 1) 正文：收集全部流式 text 块（主调度规划轮的阶段日志与思考块交错，会产生多个 text 块），
+  //    以 store 最终文本为准整体收敛进第一个 text 块渲染 markdown，移除多余块
+  const textBlks = Array.prototype.slice.call(blocks.querySelectorAll('.blk-text'));
+  const textBlk = textBlks[0] || null;
   let streamText = '';
-  const textBlk = blocks.querySelector('.blk-text');
-  if (textBlk && textBlk.contentState) streamText = textBlk.contentState.text;
+  for (const b of textBlks) {
+    if (b.contentState) streamText += b.contentState.text;
+  }
   const fullText = turn.text || streamText;
-  if (textBlk && textBlk.contentState) {
+  if (textBlk && (textBlk.contentState || textBlks.length > 1)) {
     textBlk.classList.add('settled');
     textBlk.innerHTML = turn.role === 'agent' ? md(withFileLinks(taskId, turn.agentId, fullText)) : md(fullText);
     delete textBlk.contentState;
-  } else if (fullText && !blocks.querySelector('.blk-text')) {
+  } else if (!textBlk && fullText) {
     const te = createBlock('text');
     te.el.innerHTML = turn.role === 'agent' ? md(withFileLinks(taskId, turn.agentId, fullText)) : md(fullText);
     blocks.appendChild(te.el);
   }
+  for (const extra of textBlks.slice(1)) extra.remove();
 
-  // 2) 思考：若最终有 reasoning 但页面流式未生成块，则补充
-  if (turn.reasoning && !blocks.querySelector('.blk-reasoning')) {
-    const rb = createBlock('reasoning'); rb.fill(turn.reasoning); blocks.appendChild(rb.el);
+  // 2) 思考：流式中已存在的块更新为完整文本与「已思考 N 字」终态；缺失则补充。
+  //    覆盖 agent 与 system（主调度规划轮）——编排拆解的思考过程在收尾后同样可见
+  if (turn.reasoning) {
+    const existing = blocks.querySelector('.blk-reasoning');
+    if (existing) {
+      const body = existing.querySelector('.rz-body');
+      const sum = existing.querySelector('.rz-sum');
+      if (body) body.textContent = turn.reasoning;
+      if (sum) sum.textContent = '已思考 ' + turn.reasoning.length + ' 字';
+    } else {
+      const rb = createBlock('reasoning'); rb.fill(turn.reasoning); blocks.appendChild(rb.el);
+    }
   }
 
   // 3) 工具：确保最终工具列表的每一行都在页面上
@@ -2309,6 +2420,11 @@ function finalizeTurnBlocks(el, turn, taskId) {
         const tb = createBlock('tool'); tb.upsert(t, turnMeta); blocks.appendChild(tb.el);
       }
     }
+  }
+
+  // 4) 规划等待动效收敛：终态文本不再是「正在拆解」类等待语时移除脉冲点，避免完成后仍显示等待中
+  if (el.wrap && el.wrap.classList.contains('sys-planning') && !/正在拆解|规划子任务|流水线/.test(turn.text || '')) {
+    el.wrap.classList.remove('sys-planning');
   }
 }
 
@@ -2352,15 +2468,18 @@ function createPlanCardElement(plan) {
     const titleCell = depTag
       ? '<div style="display:block;line-height:1.5"><span style="display:block;font-weight:500">' + esc(s.title) + '</span>' + depTag + '</div>'
       : '<span style="font-weight:500">' + esc(s.title) + '</span>';
+    const rowStateCls = s.status === 'running' ? ' row-running' : (s.status === 'pending' ? ' row-pending' : '');
     rowsHtml +=
-      '<div class="plan-row" data-sid="' + s.id + '" data-deps="' + esc(deps.join('|')) + '">' +
+      '<div class="plan-row' + rowStateCls + '" data-sid="' + s.id + '" data-deps="' + esc(deps.join('|')) + '">' +
       '<span class="st ' + s.status + '">' + s.status + '</span>' + titleCell +
       '<span class="ag">🤖 ' + esc(agent ? agent.name : s.agentId) + '</span>' +
       '<span class="ops"><button class="mini-btn" data-op="logs">日志</button><button class="mini-btn" data-op="chat">会话</button>' + failedBtn + '</span>' +
       '</div>';
   }
 
-  card.innerHTML = '<h4><span>📋 编排计划 · ' + esc(plan.strategy || '协同模式') + '</span>' + headerTail + '</h4>' +
+  const hasActive = subs.some(x => x.status === 'running' || x.status === 'pending');
+  if (hasActive) card.classList.add('plan-active');
+  card.innerHTML = '<h4><span><span class="plan-gear">⚙</span>📋 编排计划 · ' + esc(plan.strategy || '协同模式') + '</span>' + headerTail + '</h4>' +
     depHeaderHtml + rowsHtml;
 
   // 依赖箭头：为每个有依赖的子任务，在其行上方画一条指向前置任务的连接线
@@ -2405,6 +2524,13 @@ function updatePlanRow(sub) {
   const st = row.querySelector('.st');
   st.className = 'st ' + sub.status;
   st.textContent = sub.status;
+  row.classList.toggle('row-running', sub.status === 'running');
+  row.classList.toggle('row-pending', sub.status === 'pending');
+  const card = row.closest('.plan-card');
+  if (card) {
+    const stillActive = [...card.querySelectorAll('.st')].some(x => x.classList.contains('running') || x.classList.contains('pending'));
+    card.classList.toggle('plan-active', stillActive);
+  }
 }
 
 const logBuffer = [];
@@ -2421,10 +2547,12 @@ function appendLogLine(ev) {
 }
 
 function setSending(on) {
-  // 运行中：发送键让位给停止键（位于输入框旁），视觉上只有一个主动作
+  // 运行中：发送键让位给停止键（位于输入框旁），视觉上只有一个主动作；
+  // body.task-running 同时驱动「规划中」系统消息的等待动效
   $('btn-send').style.display = on ? 'none' : '';
   $('btn-send').disabled = on;
   $('btn-stop').style.display = on ? 'inline-block' : 'none';
+  document.body.classList.toggle('task-running', on);
 }
 
 // ---------- 发送消息与附件 ----------
@@ -3496,6 +3624,354 @@ async function showSubtaskChat(subtaskId, agentId) {
 function findTaskIdOfSubtask(subId) {
   for (const t of state.tasks) { if ((t.plan && t.plan.subtasks || []).some(s => s.id === subId)) return t.id; }
   return state.currentTaskId;
+}
+
+// ---------- 定时任务视图 ----------
+$('btn-new-schedule').addEventListener('click', () => openScheduleDrawer(null));
+async function loadSchedules() {
+  const r = await api('/schedules');
+  if (r.ok) state.schedules = Array.isArray(r.data) ? r.data : [];
+  if (!state.scheduleTemplates) {
+    const t = await api('/schedule-templates');
+    if (t.ok) state.scheduleTemplates = Array.isArray(t.data) ? t.data : [];
+  }
+}
+const WEEK_CN = '日一二三四五六';
+function ruleText(rule) {
+  if (!rule) return '';
+  if (rule.kind === 'daily') return '每天 ' + (rule.times || []).join('、');
+  if (rule.kind === 'weekly') {
+    const days = [...new Set(rule.days || [])].sort((a, b) => a - b);
+    if (days.length === 5 && days.every(d => d >= 1 && d <= 5)) return '每工作日 ' + rule.time;
+    return '每周' + days.map(d => WEEK_CN[d]).join('、') + ' ' + rule.time;
+  }
+  if (rule.kind === 'hourly') return '每小时的第 ' + rule.minute + ' 分';
+  if (rule.kind === 'monthly') return '每月 ' + [...new Set(rule.days || [])].sort((a, b) => a - b).join('、') + ' 号 ' + rule.time;
+  if (rule.kind === 'interval') {
+    const m = rule.minutes || 0;
+    if (m >= 1440 && m % 1440 === 0) return '每 ' + (m / 1440) + ' 天';
+    if (m >= 60 && m % 60 === 0) return '每 ' + (m / 60) + ' 小时';
+    return '每 ' + m + ' 分钟';
+  }
+  if (rule.kind === 'once') return '一次性 · ' + fmtDateTime(rule.at);
+  return String(rule.kind || '');
+}
+const TASK_STATUS_CN = { draft: '草稿', running: '执行中', completed: '已完成', success: '已完成', partial_success: '部分成功', failed: '失败', cancelled: '已中止' };
+function agentNamesOf(s) {
+  const ids = s.agentIds || [];
+  const named = (s.agents || []);
+  return ids.map(id => { const a = named.find(x => x.id === id); return a ? a.name : id; }).join('、') || '—';
+}
+function renderSchedules() {
+  const el = $('schedule-list'); el.innerHTML = '';
+  // 模板区（一键创建：预填表单）
+  const tplList = state.scheduleTemplates || [];
+  if (tplList.length) {
+    const tplBox = document.createElement('div'); tplBox.className = 'card';
+    tplBox.innerHTML = '<div class="sub" style="margin-bottom:10px">📋 定时任务模板（点击即预填新建表单）</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px">' +
+      tplList.map((t, i) =>
+        '<div class="sched-tpl" data-tpl="' + i + '">' +
+        '<div style="display:flex;align-items:center;gap:6px"><b>' + (t.icon ? esc(t.icon) + ' ' : '') + esc(t.name) + '</b>' +
+        '<span class="tag" style="margin-left:auto">⏰ ' + esc(ruleText(t.rule)) + '</span></div>' +
+        '<div class="sub" style="margin-top:6px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">' + esc(t.description) + '</div>' +
+        '</div>').join('') + '</div>';
+    tplBox.querySelectorAll('[data-tpl]').forEach(node => {
+      node.addEventListener('click', () => openScheduleDrawer(null, tplList[Number(node.dataset.tpl)]));
+    });
+    el.appendChild(tplBox);
+  }
+  if (!state.schedules.length) {
+    el.insertAdjacentHTML('beforeend', '<div class="card"><span class="sub" style="color:var(--tx3)">还没有定时任务。点击「＋ 新建定时任务」或从上方模板开始—— 选择一个或多个子智能体，配置触发规则与固定任务文本，到点由 Host 自动派发执行。</span></div>');
+    return;
+  }
+  for (const s of state.schedules) {
+    const card = document.createElement('div'); card.className = 'card';
+    const successRate = s.totalRuns ? Math.round((s.successRuns || 0) * 100 / s.totalRuns) : null;
+    card.innerHTML = '<div class="row1"><h3>' + esc(s.name) + '</h3>' +
+      (s.enabled ? '<span class="tag ok">▶ 启用中</span>' : '<span class="tag err">⏸ 已暂停</span>') +
+      '<span class="tag">🕐 ' + esc(s.ruleText || ruleText(s.rule)) + '</span>' +
+      '<span class="tag">🤖 ' + esc(agentNamesOf(s)) + '</span>' +
+      (s.description ? '<span class="tag">' + esc(s.description) + '</span>' : '') + '</div>' +
+      '<div class="desc">任务文本: ' + esc(String(s.messagePreview || s.message || '').slice(0, 120)) +
+      '<br>上次触发: ' + (s.lastRunAt ? fmtDateTime(s.lastRunAt) : '从未') +
+      ' · 下次触发: ' + (s.enabled ? (s.nextRunAt ? fmtDateTime(s.nextRunAt) : '—') : '（已暂停）') +
+      ' · 已运行 <b>' + (s.totalRuns || 0) + '</b> 次' +
+      (successRate !== null ? ' · 派发成功率 ' + successRate + '%' : '') + '</div>' +
+      '<div class="ops"><button class="btn" data-op="detail">详情</button><button class="btn" data-op="edit">编辑</button>' +
+      '<button class="btn" data-op="run">▶ 立即执行</button><button class="btn" data-op="toggle">' + (s.enabled ? '停用' : '启用') + '</button>' +
+      '<button class="btn danger" data-op="del">删除</button></div>';
+    card.querySelector('[data-op=detail]').addEventListener('click', () => openScheduleDetail(s.id));
+    card.querySelector('[data-op=edit]').addEventListener('click', () => openScheduleDrawer(s));
+    card.querySelector('[data-op=run]').addEventListener('click', async () => {
+      toast('派发中…');
+      const r = await api('/schedules/' + s.id + '/run', { method: 'POST' });
+      if (!r.ok) { toast(r.error || '触发失败', true); return; }
+      const run = r.data || {};
+      const okCount = (run.items || []).filter(i => i.taskId).length;
+      toast('✓ 已派发 ' + okCount + '/' + (run.items || []).length + ' 个子智能体');
+      await loadSchedules(); renderSchedules();
+      openScheduleDetail(s.id);
+    });
+    card.querySelector('[data-op=toggle]').addEventListener('click', async () => {
+      const r = await api('/schedules/' + s.id + '/toggle', { method: 'POST' });
+      if (!r.ok) { toast(r.error || '操作失败', true); return; }
+      toast(r.data && r.data.enabled ? '✓ 已启用' : '已停用');
+      await loadSchedules(); renderSchedules();
+    });
+    card.querySelector('[data-op=del]').addEventListener('click', async () => {
+      if (!confirm('删除定时任务「' + s.name + '」？触发历史一并删除。')) return;
+      await api('/schedules/' + s.id, { method: 'DELETE' });
+      await loadSchedules(); renderSchedules(); toast('已删除');
+    });
+    el.appendChild(card);
+  }
+}
+
+function openScheduleDrawer(s, tpl) {
+  const isEdit = Boolean(s);
+  const prefill = tpl || {};
+  openDrawer(isEdit ? '编辑定时任务' : (prefill.id ? '新建定时任务（模板: ' + prefill.name + '）' : '新建定时任务'));
+  const agentChecks = state.agents.map(a => {
+    const checked = isEdit && (s.agentIds || []).includes(a.id) ? ' checked' : '';
+    return '<label class="sched-agent"><input type="checkbox" class="sc-agent" data-id="' + esc(a.id) + '"' + checked + ' style="width:16px;height:16px">' +
+      '<span>' + esc(a.name) + '</span>' + (a.enabled === false ? '<span class="tag err">停用</span>' : '') + '</label>';
+  }).join('');
+  $('drawer-body').innerHTML =
+    '<div class="field"><label>任务标题</label><input id="sc-name" value="' + esc(s ? s.name : (prefill.name || '')) + '" placeholder="如: 每日站会摘要"></div>' +
+    '<div class="field"><label>目标子智能体（可多选；触发时各自独立创建会话并派发同一份任务文本）</label>' +
+    '<div id="sc-agents" style="display:flex;flex-direction:column;gap:6px">' + (agentChecks || '<span class="sub">请先在「子智能体」页创建</span>') + '</div></div>' +
+    '<div class="field"><label>调度（Host 本地时区 · 错过的触发点不补跑）</label>' +
+    '<select id="sc-kind">' +
+    '<option value="daily"' + (!s || s.rule.kind === 'daily' ? ' selected' : '') + '>每天（固定时刻，可多个）</option>' +
+    '<option value="weekly"' + (s && s.rule.kind === 'weekly' ? ' selected' : '') + '>每周（勾选星期 + 时刻）</option>' +
+    '<option value="hourly"' + (s && s.rule.kind === 'hourly' ? ' selected' : '') + '>每小时（第 N 分）</option>' +
+    '<option value="monthly"' + (s && s.rule.kind === 'monthly' ? ' selected' : '') + '>每月（勾选日期 + 时刻）</option>' +
+    '<option value="interval"' + (s && s.rule.kind === 'interval' ? ' selected' : '') + '>间隔（每 N 分钟）</option>' +
+    '<option value="once"' + (s && s.rule.kind === 'once' ? ' selected' : '') + '>一次性（指定时刻）</option>' +
+    '</select>' +
+    '<div id="sc-rule-box" style="margin-top:8px"></div>' +
+    '<div class="hint" id="sc-preview" style="margin-top:6px;color:var(--pri)"></div></div>' +
+    '<div class="field"><label>指令（触发时原样派发给每个子智能体）</label>' +
+    '<textarea id="sc-message" style="min-height:110px" placeholder="如: 汇总今天的日程与未完成任务，生成一份摘要报告…">' + esc(s ? s.message : (prefill.message || '')) + '</textarea></div>' +
+    '<div class="field"><label>备注（可选）</label><input id="sc-desc" value="' + esc(s && s.description || (prefill.description || '')) + '"></div>' +
+    '<div class="ops" style="display:flex;gap:10px;margin-top:14px"><button class="btn pri" id="sc-save">' + (isEdit ? '保存' : '创建定时任务') + '</button><button class="btn" id="sc-cancel">取消</button></div>';
+
+  // 模板预填规则（仅新建且模板带规则时）
+  if (!isEdit && prefill.rule) s = { rule: prefill.rule };
+  const kindSel = $('sc-kind'), ruleBox = $('sc-rule-box'), previewEl = $('sc-preview');
+  function currentRule() {
+    const kind = kindSel.value;
+    const cur = (s && s.rule && s.rule.kind === kind) ? s.rule : {};
+    if (kind === 'daily') {
+      const times = String($('sc-times').value || '').split(/[,，]/).map(x => x.trim()).filter(Boolean);
+      return { kind, times };
+    }
+    if (kind === 'weekly') {
+      const days = Array.from(new Set(document.querySelectorAll('.sc-day:checked').flatMap(cb => cb.value.split(','))).values()).map(Number).filter(d => d >= 0 && d <= 6);
+      return { kind, days, time: $('sc-time').value.trim() };
+    }
+    if (kind === 'hourly') return { kind, minute: Number($('sc-minute').value) };
+    if (kind === 'monthly') {
+      const days = Array.from(document.querySelectorAll('.sc-mday:checked')).map(cb => Number(cb.value));
+      return { kind, days, time: $('sc-time').value.trim() };
+    }
+    if (kind === 'interval') return { kind, minutes: Number($('sc-minutes').value) };
+    const v = $('sc-at').value;
+    return { kind: 'once', at: v ? new Date(v).getTime() : NaN };
+  }
+  function renderRuleBox() {
+    const kind = kindSel.value;
+    const cur = (s && s.rule && s.rule.kind === kind) ? s.rule : {};
+    if (kind === 'daily') {
+      const times = cur.kind === 'daily' ? (cur.times || []).join(', ') : '09:00';
+      ruleBox.innerHTML = '<input id="sc-times" value="' + esc(times) + '" placeholder="多个时刻用英文逗号分隔，如 09:00, 18:30">' +
+        '<div class="hint">每天在这些时刻触发（Host 本地时区）。</div>';
+    } else if (kind === 'weekly') {
+      const days = cur.kind === 'weekly' ? (cur.days || []) : [1, 2, 3, 4, 5];
+      const time = cur.kind === 'weekly' ? cur.time : '09:00';
+      let checks = '<label style="display:inline-flex;align-items:center;gap:4px;margin:0 10px 6px 0"><input type="checkbox" class="sc-day" value="1,2,3,4,5" style="width:15px;height:15px">每工作日</label>';
+      for (let d = 0; d < 7; d++) {
+        checks += '<label style="display:inline-flex;align-items:center;gap:4px;margin:0 10px 6px 0"><input type="checkbox" class="sc-day" value="' + d + '"' + (days.includes(d) ? ' checked' : '') + ' style="width:15px;height:15px">周' + WEEK_CN[d] + '</label>';
+      }
+      ruleBox.innerHTML = '<div style="margin-bottom:8px">' + checks + '</div><input id="sc-time" value="' + esc(time) + '" placeholder="时刻 HH:mm">';
+    } else if (kind === 'hourly') {
+      const minute = cur.kind === 'hourly' ? cur.minute : 0;
+      ruleBox.innerHTML = '<div style="display:flex;align-items:center;gap:8px">每小时的第 <input id="sc-minute" type="number" min="0" max="59" value="' + esc(minute) + '" style="width:80px"> 分</div>';
+    } else if (kind === 'monthly') {
+      const days = cur.kind === 'monthly' ? (cur.days || []) : [1];
+      const time = cur.kind === 'monthly' ? cur.time : '09:00';
+      let checks = '';
+      for (let d = 1; d <= 31; d++) {
+        checks += '<label style="display:inline-flex;align-items:center;gap:3px;margin:0 8px 6px 0"><input type="checkbox" class="sc-mday" value="' + d + '"' + (days.includes(d) ? ' checked' : '') + ' style="width:14px;height:14px">' + d + '</label>';
+      }
+      ruleBox.innerHTML = '<div style="margin-bottom:8px;max-height:96px;overflow:auto">' + checks + '</div><input id="sc-time" value="' + esc(time) + '" placeholder="时刻 HH:mm">' +
+        '<div class="hint">当月不存在的日期（如 2 月 30 日）自动跳过。</div>';
+    } else if (kind === 'interval') {
+      const minutes = cur.kind === 'interval' ? cur.minutes : 60;
+      ruleBox.innerHTML = '<input id="sc-minutes" type="number" min="1" value="' + esc(minutes) + '" placeholder="间隔分钟数">' +
+        '<div class="hint">从保存时刻起每 N 分钟触发一次。</div>';
+    } else {
+      const at = cur.kind === 'once' ? new Date(cur.at - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '';
+      ruleBox.innerHTML = '<input id="sc-at" type="datetime-local" value="' + esc(at) + '">' +
+        '<div class="hint">到点触发一次后自动停用。</div>';
+    }
+    // 控件变化时实时更新自然语言预览
+    ruleBox.querySelectorAll('input').forEach(inp => {
+      inp.addEventListener('change', updatePreview);
+      inp.addEventListener('input', updatePreview);
+    });
+    updatePreview();
+  }
+  function updatePreview() {
+    try {
+      const text = ruleText(currentRule());
+      previewEl.textContent = '触发预览：' + text;
+    } catch { previewEl.textContent = ''; }
+  }
+  renderRuleBox();
+  let lastRule = (s && s.rule) || null;
+  const origUpdatePreview = updatePreview;
+  updatePreview = function () { try { lastRule = currentRule(); } catch { /* 半填状态忽略 */ } origUpdatePreview(); };
+  kindSel.addEventListener('change', () => { s = { rule: lastRule || (s && s.rule) }; renderRuleBox(); });
+  $('sc-cancel').addEventListener('click', closeDrawer);
+  $('sc-save').addEventListener('click', async () => {
+    const btn = $('sc-save');
+    if (btn.disabled) return;
+    const payload = collectSchedule(isEdit ? s : null);
+    if (!payload) return;
+    btn.disabled = true; btn.textContent = '保存中…';
+    try {
+      const r = await api('/schedules', { method: 'POST', body: JSON.stringify(payload) });
+      if (!r.ok) { toast(r.error || '保存失败', true); return; }
+      closeDrawer(); await loadSchedules(); renderSchedules(); toast('✓ 定时任务已保存');
+    } finally {
+      btn.disabled = false; btn.textContent = '保存';
+    }
+  });
+}
+function collectSchedule(existing) {
+  const name = $('sc-name').value.trim();
+  if (!name) { toast('缺少名称', true); return null; }
+  const agentIds = Array.from(document.querySelectorAll('#sc-agents .sc-agent:checked')).map(cb => cb.dataset.id);
+  if (!agentIds.length) { toast('至少选择一个子智能体', true); return null; }
+  const kind = $('sc-kind').value;
+  let rule;
+  if (kind === 'daily') {
+    const times = $('sc-times').value.split(/[,，]/).map(x => x.trim()).filter(Boolean);
+    rule = { kind: 'daily', times };
+  } else if (kind === 'weekly') {
+    const days = Array.from(new Set(document.querySelectorAll('.sc-day:checked').flatMap(cb => cb.value.split(','))).values()).map(Number).filter(d => d >= 0 && d <= 6);
+    rule = { kind: 'weekly', days, time: $('sc-time').value.trim() };
+  } else if (kind === 'hourly') {
+    rule = { kind: 'hourly', minute: Number($('sc-minute').value) };
+  } else if (kind === 'monthly') {
+    const days = Array.from(document.querySelectorAll('.sc-mday:checked')).map(cb => Number(cb.value));
+    rule = { kind: 'monthly', days, time: $('sc-time').value.trim() };
+  } else if (kind === 'interval') {
+    rule = { kind: 'interval', minutes: Number($('sc-minutes').value) };
+  } else {
+    const v = $('sc-at').value;
+    rule = { kind: 'once', at: v ? new Date(v).getTime() : NaN };
+  }
+  const message = $('sc-message').value.trim();
+  if (!message) { toast('任务文本不能为空', true); return null; }
+  const payload = { name, agentIds, rule, message, enabled: existing ? existing.enabled : true };
+  const desc = $('sc-desc').value.trim();
+  if (desc) payload.description = desc;
+  if (existing && existing.id) payload.id = existing.id;
+  return payload;
+}
+
+// ---------- 定时任务详情（页签：基本信息 / 执行记录，样式对齐 KB 任务详情页） ----------
+let scheduleDetailTimer = null;
+async function openScheduleDetail(id, tab) {
+  const r = await api('/schedules/' + id);
+  if (!r.ok) { toast(r.error || '加载失败', true); return; }
+  const s = r.data;
+  openDrawer('定时任务详情 · ' + s.name);
+  renderScheduleDetail(s, tab || 'info');
+  if (scheduleDetailTimer) clearInterval(scheduleDetailTimer);
+  scheduleDetailTimer = setInterval(async () => {
+    if (!$('drawer').classList.contains('on') || !$('sched-tabs')) { clearInterval(scheduleDetailTimer); scheduleDetailTimer = null; return; }
+    const fresh = await api('/schedules/' + id);
+    if (fresh.ok) renderScheduleDetail(fresh.data, $('sched-tabs').dataset.tab || 'info', true);
+  }, 5000);
+}
+function renderScheduleDetail(s, tab, keepScroll) {
+  if (!$('sched-tabs') && keepScroll) return;
+  const body = $('drawer-body');
+  const scrollTop = keepScroll ? body.scrollTop : 0;
+  body.innerHTML =
+    '<div class="sched-tabs" id="sched-tabs" data-tab="' + tab + '">' +
+    '<button class="sched-tab' + (tab === 'info' ? ' on' : '') + '" data-t="info">基本信息</button>' +
+    '<button class="sched-tab' + (tab === 'runs' ? ' on' : '') + '" data-t="runs">执行记录（' + (s.runs || []).length + '）</button>' +
+    '</div><div id="sched-tab-body"></div>';
+  body.querySelectorAll('.sched-tab').forEach(b => b.addEventListener('click', () => renderScheduleDetail(s, b.dataset.t)));
+  const tb = $('sched-tab-body');
+  if (tab === 'info') {
+    tb.innerHTML =
+      '<div class="sched-grid">' +
+      '<div class="k">任务名称</div><div>' + esc(s.name) + '</div>' +
+      '<div class="k">状态</div><div>' + (s.enabled ? '<span class="tag ok">启用</span>' : '<span class="tag err">停用</span>') + '</div>' +
+      '<div class="k">触发规则</div><div>' + esc(s.ruleText || ruleText(s.rule)) + '</div>' +
+      '<div class="k">目标子智能体</div><div>' + esc(agentNamesOf(s)) + '</div>' +
+      '<div class="k">累计触发</div><div>' + (s.totalRuns || 0) + ' 次' + (s.totalRuns ? ' · 派发成功率 ' + Math.round((s.successRuns || 0) * 100 / s.totalRuns) + '%' : '') + '</div>' +
+      '<div class="k">上次触发</div><div>' + (s.lastRunAt ? fmtDateTime(s.lastRunAt) : '从未') + '</div>' +
+      '<div class="k">下次触发</div><div>' + (s.enabled ? (s.nextRunAt ? fmtDateTime(s.nextRunAt) : '—') : '（已停用）') + '</div>' +
+      '<div class="k">备注</div><div>' + esc(s.description || '—') + '</div>' +
+      '<div class="k">创建时间</div><div>' + fmtDateTime(s.createdAt) + '</div>' +
+      '</div>' +
+      '<div class="field" style="margin-top:14px"><label>任务文本（每次触发派发给每个子智能体）</label>' +
+      '<div class="pre-block" style="max-height:180px;overflow:auto">' + esc(s.message || '') + '</div></div>' +
+      '<div class="ops" style="display:flex;gap:10px;margin-top:14px">' +
+      '<button class="btn pri" id="sd-run">▶ 立即执行</button>' +
+      '<button class="btn" id="sd-toggle">' + (s.enabled ? '停用' : '启用') + '</button>' +
+      '<button class="btn" id="sd-edit">编辑</button></div>';
+    $('sd-run').addEventListener('click', async () => {
+      toast('派发中…');
+      const rr = await api('/schedules/' + s.id + '/run', { method: 'POST' });
+      if (!rr.ok) { toast(rr.error || '触发失败', true); return; }
+      toast('✓ 已派发');
+      openScheduleDetail(s.id, 'runs');
+    });
+    $('sd-toggle').addEventListener('click', async () => {
+      const rr = await api('/schedules/' + s.id + '/toggle', { method: 'POST' });
+      if (!rr.ok) { toast(rr.error || '操作失败', true); return; }
+      toast(rr.data && rr.data.enabled ? '✓ 已启用' : '已停用');
+      await loadSchedules(); renderSchedules();
+      openScheduleDetail(s.id, tab);
+    });
+    $('sd-edit').addEventListener('click', () => { closeDrawer(); openScheduleDrawer(s); });
+  } else {
+    const runs = (s.runs || []);
+    if (!runs.length) {
+      tb.innerHTML = '<div class="hint" style="padding:12px 0">暂无触发记录。可点击列表中的「▶ 立即执行」手动触发一次。</div>';
+      return;
+    }
+    tb.innerHTML = runs.map(run => {
+      const items = (run.items || []).map(it => {
+        const st = it.taskStatus || (it.error ? 'failed' : 'unknown');
+        const stCls = st === 'running' ? 'warn' : (st === 'completed' || st === 'success' ? 'ok' : 'err');
+        const label = it.error ? ('派发失败: ' + it.error + (it.attempts > 1 ? '（已重试 ' + (it.attempts - 1) + ' 次）' : '')) : (TASK_STATUS_CN[st] || st);
+        return '<div class="run-item">' +
+          '<span class="mono">' + esc(it.agentName || it.agentId) + '</span>' +
+          '<span class="tag ' + stCls + '">' + esc(label) + '</span>' +
+          (it.taskId ? '<button class="mini-btn" data-task="' + esc(it.taskId) + '">查看会话 →</button>' : '') +
+          '</div>';
+      }).join('');
+      return '<div class="run-card">' +
+        '<div class="row1" style="margin-bottom:6px"><b style="font-size:12.5px">' + fmtDateTime(run.triggeredAt) + '</b>' +
+        (run.manual ? '<span class="tag">手动</span>' : '<span class="tag ok">定时</span>') +
+        (typeof run.durationMs === 'number' ? '<span class="tag">⏱ ' + (run.durationMs / 1000).toFixed(1) + 's</span>' : '') + '</div>' + items + '</div>';
+    }).join('');
+    tb.querySelectorAll('[data-task]').forEach(b => b.addEventListener('click', () => {
+      closeDrawer();
+      switchView('work');
+      openTask(b.dataset.task);
+    }));
+  }
+  if (keepScroll) body.scrollTop = scrollTop;
 }
 
 // ---------- 设置视图 ----------
