@@ -54,16 +54,27 @@ export class Planner {
     return byName || byRef || agents[0]
   }
 
+  /**
+   * 主智能体身份（同步，不解析远端入口）：
+   * 配置的规划器子智能体优先；未配置或配置已失效（agent 被删除/重建）时自动挑选默认（本地优先）。
+   *
+   * 这是「主智能体」的唯一判定入口：任务默认成员、消息路由（engine.processUserMessage 无 @ 分支）
+   * 与上传目标都必须与它同源，否则会出现「说话只到主智能体、附件却扇出全员」的不一致。
+   */
+  public pickMainAgent(): SubAgent | undefined {
+    const settings = this.store.getSettings()
+    const configured = settings.planner.agentId ? this.store.getAgent(settings.planner.agentId) : undefined
+    return configured || this.pickDefaultAgent()
+  }
+
   /** 解析规划器调用目标 —— 配置的子智能体；未配置时自动挑选默认（本地优先） */
   public async pickTarget(_memberTargets?: Map<string, DshTarget>): Promise<{ target: DshTarget; source: string; agent: SubAgent; auto: boolean } | { error: string }> {
     const settings = this.store.getSettings()
-    let agent = settings.planner.agentId ? this.store.getAgent(settings.planner.agentId) : undefined
+    const configured = settings.planner.agentId ? this.store.getAgent(settings.planner.agentId) : undefined
     // 配置的 agentId 失效（agent 已删除/重建）同样视为自动挑选
-    const auto = !agent
-    if (!agent) {
-      agent = this.pickDefaultAgent()
-      if (!agent) return { error: '没有可用的子智能体作为主调度（请先在子智能体页创建）' }
-    }
+    const auto = !configured
+    const agent = this.pickMainAgent()
+    if (!agent) return { error: '没有可用的子智能体作为主调度（请先在子智能体页创建）' }
     const target = await this.resolver.resolve(agent)
     if (!target.online || !target.baseUrl) return { error: `规划器子智能体「${agent.name}」不可用: ${target.error}` }
     return { target, source: agent.name + (auto ? '（自动）' : ''), agent, auto }

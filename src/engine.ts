@@ -345,15 +345,30 @@ export class TaskEngine {
 
   // ---------- 任务生命周期 ----------
 
+  /**
+   * 默认成员：调用方未显式指定成员时，任务只归属「主智能体」（Planner 配置的主调度，未配置时自动挑选）。
+   *
+   * 与消息路径 processUserMessage 的「未 @ 任何子智能体 → 主智能体应答」判定同源。
+   * 明确不要退化成「全部子智能体」：那会把一句普通提问扩散成全员编排，
+   * 并让一次附件上传把同一个文件扇出到所有节点（每个成员都会被建远端会话）。
+   */
+  public defaultMemberAgentIds(): string[] {
+    const main = this.planner.pickMainAgent()
+    return main ? [main.id] : []
+  }
+
   public async createTask(input: CreateTaskInput): Promise<WorkTask> {
-    if (!input.memberAgentIds?.length) throw new Error('至少指定一个子智能体成员')
-    const mode: WorkTask['mode'] = input.mode || (input.memberAgentIds.length > 1 ? 'orchestrate' : 'chat')
+    const explicit = Array.isArray(input.memberAgentIds) ? input.memberAgentIds.filter((id) => Boolean(id)) : []
+    // 未显式指定成员 → 归主智能体（唯一权威判定在 defaultMemberAgentIds，避免各调用方各写一套兜底）
+    const memberAgentIds = explicit.length ? [...new Set(explicit)] : this.defaultMemberAgentIds()
+    if (!memberAgentIds.length) throw new Error('没有可用的子智能体作为主智能体（请先在「子智能体」页添加子智能体）')
+    const mode: WorkTask['mode'] = input.mode || (memberAgentIds.length > 1 ? 'orchestrate' : 'chat')
     const task: WorkTask = {
       id: `task-${randomUUID().slice(0, 8)}`,
       title: input.title?.trim() || (input.message ? input.message.slice(0, 30) : '新任务'),
       mode,
       status: 'draft',
-      memberAgentIds: [...input.memberAgentIds],
+      memberAgentIds,
       turns: [],
       sessions: {},
       createdAt: Date.now(),
@@ -367,9 +382,11 @@ export class TaskEngine {
   }
 
   public updateMembers(taskId: string, memberAgentIds: string[]): WorkTask | undefined {
+    const ids = Array.isArray(memberAgentIds) ? [...new Set(memberAgentIds.filter((id) => Boolean(id)))] : []
+    if (!ids.length) throw new Error('至少保留一个成员子智能体')
     return this.store.mutateTask(taskId, (task) => {
       if (this.activeJobs.has(taskId)) throw new Error('任务执行中，暂不能变更成员')
-      task.memberAgentIds = [...memberAgentIds]
+      task.memberAgentIds = ids
       task.mode = task.memberAgentIds.length > 1 ? 'orchestrate' : task.mode
       return task
     })
@@ -1380,7 +1397,40 @@ export class TaskEngine {
   // ---------- 附件上传与文件下载 ----------
 
   /**
-   * 上传附件到任务各成员的远端会话工作区（chat 模式即唯一成员）。
+   * 附件上传的实际目标集合（与「本轮对话实际路由到的智能体」同源）：
+   *
+   * 1. 单成员任务 → 该成员；
+   * 2. 最近一轮是单目标路由（@一个子智能体 / 直通对话）→ 只给这一个，绝不扇出到本轮没参与的成员；
+   * 3. 编排路由且本轮计划已落盘 → 计划里真正参与执行的成员（这是唯一可能多目标的情况，且成员来自真实计划）；
+   * 4. 其余（新任务尚未发言 / 无路由记录 / 编排路由但计划缺失）→ 主智能体（defaultMemberAgentIds）。
+   *
+   * 第 4 条取代了历史实现里「按 task.memberAgentIds 全员扇出」的兜底：
+   * 老任务（无 @ 新建时被错误填成全部子智能体）在任何缺少明确路由证据的情况下都只投主智能体，
+   * 否则同一个文件会往每个成员节点各建一个远端会话、各写一份。
+   * 需要跨节点使用该文件时，消息里的 @文件 引用会按 transformFileMentionsForAgent 生成下载 URL。
+   */
+  public attachmentTargetAgentIds(task: WorkTask): string[] {
+    const members = (task.memberAgentIds || []).filter((id) => Boolean(id))
+    if (!members.length) return this.defaultMemberAgentIds()
+    if (members.length === 1) return members
+    const route = task.lastRoute
+    if (route && (route.kind === 'direct' || route.kind === 'chat') && route.agentId && members.includes(route.agentId)) {
+      return [route.agentId]
+    }
+    const planned = [...new Set(
+      (task.plan?.subtasks || [])
+        .map((s) => s.agentId)
+        .filter((id) => Boolean(id) && members.includes(id)),
+    )]
+    if (route?.kind === 'orchestrate' && planned.length) return planned
+    // 没有明确路由证据 → 只投主智能体（主智能体不是成员时退化为第一个成员），绝不整组扇出
+    const main = this.defaultMemberAgentIds()
+    if (main.length && members.includes(main[0])) return main
+    return [members[0]]
+  }
+
+  /**
+   * 上传附件到「本次实际目标智能体」的远端会话工作区（attachmentTargetAgentIds）。
    * 缺会话的成员会先建会话（ensureSession）；某成员失败不影响其他成员。
    */
   public async uploadAttachments(
@@ -1394,10 +1444,11 @@ export class TaskEngine {
     const task = this.store.getTask(taskId)
     if (!task) return { ok: false, error: '任务不存在' }
     if (!files.length) return { ok: false, error: '没有文件' }
-    const { targets } = await this.resolver.resolveMembers(task.memberAgentIds)
+    const targetIds = this.attachmentTargetAgentIds(task)
+    const { targets } = await this.resolver.resolveMembers(targetIds)
     // 成员并行分发（串行时多成员 × 隧道延迟叠加，客户端 100% 后长时间无响应）
     const results: Array<{ agentId: string; agentName: string; ok: boolean; error?: string; files?: Array<{ name: string; path: string; size: number }> }> = await Promise.all(
-      task.memberAgentIds.map(async (agentId) => {
+      targetIds.map(async (agentId) => {
         const agent = this.store.getAgent(agentId)
         const target = targets.get(agentId)
         if (!agent || !target) return { agentId, agentName: agent?.name || agentId, ok: false, error: '节点不可用' }
@@ -1521,7 +1572,7 @@ export class TaskEngine {
     }
   }
 
-  /** 完成并向各成员节点分片中继（成员并行；单成员失败保留暂存可重试） */
+  /** 完成并向本次实际目标节点（attachmentTargetAgentIds）分片中继（并行；单个失败保留暂存可重试） */
   public async resumableComplete(taskId: string, uploadId: string): Promise<{
     ok: boolean
     error?: string
@@ -1544,9 +1595,10 @@ export class TaskEngine {
         const { bytesRead } = await handle.read(buf, 0, length, offset)
         return bytesRead === length ? buf : buf.subarray(0, bytesRead)
       }
-      const { targets } = await this.resolver.resolveMembers(task.memberAgentIds)
+      const targetIds = this.attachmentTargetAgentIds(task)
+      const { targets } = await this.resolver.resolveMembers(targetIds)
       const results = await Promise.all(
-        task.memberAgentIds.map(async (agentId) => {
+        targetIds.map(async (agentId) => {
           const agent = this.store.getAgent(agentId)
           const target = targets.get(agentId)
           if (!agent || !target) return { agentId, agentName: agent?.name || agentId, ok: false, error: '节点不可用' }
