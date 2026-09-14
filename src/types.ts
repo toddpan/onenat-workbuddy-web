@@ -295,6 +295,81 @@ export interface TaskAttachment {
   uploadedAt: number
 }
 
+// ---------- 定时任务 ----------
+
+/**
+ * 触发规则（简单规则优先，Host 本地时区）：
+ *  daily    每天 fixed 时刻（可多个，HH:mm）
+ *  weekly   每周勾选星期（0=周日）+ 时刻 HH:mm
+ *  hourly   每小时的第 N 分（0-59）
+ *  monthly  每月勾选日期（1-31，当月不存在的日期自动跳过）+ 时刻 HH:mm
+ *  interval 每 N 分钟
+ *  once     指定时刻一次性（触发后自动停用）
+ */
+export type ScheduleRule =
+  | { kind: 'daily'; times: string[] }
+  | { kind: 'weekly'; days: number[]; time: string }
+  | { kind: 'hourly'; minute: number }
+  | { kind: 'monthly'; days: number[]; time: string }
+  | { kind: 'interval'; minutes: number }
+  | { kind: 'once'; at: number }
+
+/** 一次触发中单个子智能体的派发结果 */
+export interface ScheduleRunItem {
+  agentId: string
+  agentName: string
+  /** 派发生成的任务会话（可回看流式过程与产出） */
+  taskId?: string
+  taskTitle?: string
+  error?: string
+  /** 实际尝试的次数（含失败重试）；成功时 ≥1，失败时 = 重试上限 */
+  attempts?: number
+}
+
+/** 一次触发记录 */
+export interface ScheduleRun {
+  id: string
+  triggeredAt: number
+  /** true = 手动「立即执行」 */
+  manual?: boolean
+  /** 整次触发（全部目标派发完成）耗时毫秒 */
+  durationMs?: number
+  items: ScheduleRunItem[]
+}
+
+/** 内置定时任务模板（一键创建：预填名称/描述/任务文本/规则，可再改） */
+export interface ScheduleTemplate {
+  id: string
+  name: string
+  icon?: string
+  description: string
+  message: string
+  rule: ScheduleRule
+}
+
+export interface ScheduledTask {
+  id: string
+  name: string
+  description?: string
+  /** 目标子智能体（一个或多个；触发时各自独立建会话派发同一份任务文本） */
+  agentIds: string[]
+  /** 固定任务文本（触发时原样派发） */
+  message: string
+  rule: ScheduleRule
+  enabled: boolean
+  createdAt: number
+  updatedAt: number
+  lastRunAt?: number
+  /** 下次触发时间戳（Host 本地时区计算；停用时为空；错过的触发点不补跑） */
+  nextRunAt?: number
+  /** 触发历史（新→旧，最多保留 50 条） */
+  runs: ScheduleRun[]
+  /** 历史触发总次数（含手动；不受 runs 50 条滚动窗口影响） */
+  totalRuns?: number
+  /** 其中至少派发成功一个子智能体的次数 */
+  successRuns?: number
+}
+
 export interface SubtaskLogEntry {
   ts: number
   level: 'info' | 'warn' | 'error' | 'tool'
@@ -341,6 +416,7 @@ export interface WorkBuddySettings {
 export interface StorageData {
   agents: SubAgent[]
   tasks: WorkTask[]
+  schedules: ScheduledTask[]
   settings: WorkBuddySettings
 }
 

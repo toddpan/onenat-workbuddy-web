@@ -5,7 +5,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
-import type { AgentResourceBinding, DshRef, StorageData, SubAgent, WorkBuddySettings, WorkTask, PlanSubtask, TaskTurn } from './types.js'
+import type { AgentResourceBinding, DshRef, StorageData, SubAgent, WorkBuddySettings, WorkTask, PlanSubtask, TaskTurn, ScheduledTask } from './types.js'
 
 function defaultSettings(): WorkBuddySettings {
   return {
@@ -38,7 +38,7 @@ export class WorkStore {
   constructor(customPath?: string) {
     const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh')
     this.filePath = customPath || join(dshHome, 'onenat-workbuddy', 'store.json')
-    this.data = { agents: [], tasks: [], settings: defaultSettings() }
+    this.data = { agents: [], tasks: [], schedules: [], settings: defaultSettings() }
     this.load()
   }
 
@@ -49,6 +49,7 @@ export class WorkStore {
         this.data = {
           agents: Array.isArray(parsed.agents) ? parsed.agents : [],
           tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
+          schedules: Array.isArray(parsed.schedules) ? parsed.schedules : [],
           settings: {
             onenat: { ...defaultSettings().onenat, ...(parsed.settings?.onenat || {}) },
             planner: { ...defaultSettings().planner, ...(parsed.settings?.planner || {}) },
@@ -149,9 +150,68 @@ export class WorkStore {
         t.memberAgentIds = t.memberAgentIds.filter((x) => x !== id)
       }
     }
+    // 同步从定时任务目标里摘除
+    for (const s of this.data.schedules) {
+      if (s.agentIds.includes(id)) {
+        s.agentIds = s.agentIds.filter((x) => x !== id)
+      }
+    }
     const changed = this.data.agents.length !== before
     if (changed) this.save()
     return changed
+  }
+
+  // ---- ScheduledTasks（定时任务） ----
+
+  public getSchedules(): ScheduledTask[] {
+    return [...this.data.schedules].sort((a, b) => b.createdAt - a.createdAt)
+  }
+
+  public getSchedule(id: string): ScheduledTask | undefined {
+    return this.data.schedules.find((s) => s.id === id)
+  }
+
+  public upsertSchedule(input: Partial<ScheduledTask>): ScheduledTask {
+    const now = Date.now()
+    const existing = input.id ? this.data.schedules.find((s) => s.id === input.id) : undefined
+    const schedule: ScheduledTask = {
+      id: existing?.id || `sched-${Math.random().toString(36).slice(2, 10)}`,
+      name: String(input.name ?? existing?.name ?? '未命名定时任务'),
+      description: input.description ?? existing?.description,
+      agentIds: [...(input.agentIds ?? existing?.agentIds ?? [])],
+      message: String(input.message ?? existing?.message ?? ''),
+      rule: (input.rule as ScheduledTask['rule']) || existing?.rule || { kind: 'daily', times: ['09:00'] },
+      enabled: input.enabled ?? existing?.enabled ?? true,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+      lastRunAt: input.lastRunAt ?? existing?.lastRunAt,
+      nextRunAt: input.nextRunAt ?? existing?.nextRunAt,
+      runs: input.runs ?? existing?.runs ?? [],
+      totalRuns: input.totalRuns ?? existing?.totalRuns,
+      successRuns: input.successRuns ?? existing?.successRuns,
+    }
+    const idx = this.data.schedules.findIndex((s) => s.id === schedule.id)
+    if (idx >= 0) this.data.schedules[idx] = schedule
+    else this.data.schedules.push(schedule)
+    this.save()
+    return schedule
+  }
+
+  public deleteSchedule(id: string): boolean {
+    const before = this.data.schedules.length
+    this.data.schedules = this.data.schedules.filter((s) => s.id !== id)
+    const changed = this.data.schedules.length !== before
+    if (changed) this.save()
+    return changed
+  }
+
+  public mutateSchedule<T>(id: string, fn: (s: ScheduledTask) => T): T | undefined {
+    const schedule = this.data.schedules.find((s) => s.id === id)
+    if (!schedule) return undefined
+    const out = fn(schedule)
+    schedule.updatedAt = Date.now()
+    this.save()
+    return out
   }
 
   // ---- Tasks ----

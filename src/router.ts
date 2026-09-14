@@ -16,7 +16,10 @@ import type { WorkStore } from './store.js'
 import { DshClient } from './remote-client.js'
 import { SshInputError, execOnSshResource, maskSshResource, normalizeSshResource, testSshResource } from './ssh-resources.js'
 import type { SshResourceStore } from './ssh-store.js'
-import type { DshRef, SubAgent, WorkTask } from './types.js'
+import type { ScheduleRunner } from './scheduler.js'
+import { normalizeRule, nextRun, ruleText } from './scheduler.js'
+import { SCHEDULE_TEMPLATES } from './schedule-templates.js'
+import type { DshRef, SubAgent, WorkTask, ScheduledTask } from './types.js'
 import { renderWebUi } from './web-ui.js'
 
 export class WorkBuddyRouter {
@@ -30,6 +33,7 @@ export class WorkBuddyRouter {
     private planner: Planner,
     private engine: TaskEngine,
     private sshStore: SshResourceStore,
+    private scheduler?: ScheduleRunner,
   ) {}
 
   private sendJson(res: ServerResponse, statusCode: number, data: any): void {
@@ -92,6 +96,82 @@ export class WorkBuddyRouter {
         : undefined,
       summary: t.summary ? { status: t.summary.status, finalConclusion: t.summary.finalConclusion } : undefined,
       attachmentsCount: (t.attachments || []).length,
+    }
+  }
+
+  // ---------- 定时任务辅助 ----------
+
+  /** 校验 + 保存（create/update 共用） */
+  private upsertScheduleFromInput(body: any): ScheduledTask {
+    const name = String(body?.name || '').trim()
+    if (!name) throw new Error('缺少名称')
+    const agentIds = Array.isArray(body?.agentIds) ? Array.from(new Set((body.agentIds as any[]).map(String))) : []
+    if (!agentIds.length) throw new Error('至少指定一个子智能体')
+    for (const aid of agentIds) {
+      if (!this.store.getAgent(aid)) throw new Error(`子智能体不存在: ${aid}`)
+    }
+    const message = String(body?.message || '').trim()
+    if (!message) throw new Error('任务文本不能为空')
+    const existing = body?.id ? this.store.getSchedule(String(body.id)) : undefined
+    const rule = normalizeRule(body?.rule ?? existing?.rule)
+    // 编辑时保留触发历史；规则/启停变化后重算下次触发点
+    const enabled = body?.enabled === undefined ? (existing?.enabled ?? true) : Boolean(body.enabled)
+    const nextRunAt = enabled ? nextRun(rule, Date.now()) : undefined
+    return this.store.upsertSchedule({
+      id: body?.id ? String(body.id) : undefined,
+      name,
+      description: body?.description ? String(body.description) : undefined,
+      agentIds,
+      message,
+      rule,
+      enabled,
+      nextRunAt,
+      ...(existing ? { runs: existing.runs, lastRunAt: existing.lastRunAt, createdAt: existing.createdAt, totalRuns: existing.totalRuns, successRuns: existing.successRuns } : {}),
+    })
+  }
+
+  /** 列表摘要：剔除 runs（历史走详情） */
+  private scheduleSummary(s: ScheduledTask) {
+    const agents = s.agentIds.map((aid) => this.store.getAgent(aid)).filter(Boolean) as SubAgent[]
+    return {
+      id: s.id,
+      name: s.name,
+      description: s.description,
+      agentIds: s.agentIds,
+      agents: agents.map((a) => ({ id: a.id, name: a.name, enabled: a.enabled !== false })),
+      messagePreview: s.message.slice(0, 120),
+      rule: s.rule,
+      ruleText: ruleText(s.rule),
+      enabled: s.enabled,
+      createdAt: s.createdAt,
+      updatedAt: s.updatedAt,
+      lastRunAt: s.lastRunAt,
+      nextRunAt: s.nextRunAt,
+      runCount: (s.runs || []).length,
+      totalRuns: s.totalRuns || 0,
+      successRuns: s.successRuns || 0,
+    }
+  }
+
+  /** 详情：全量 runs，并把每次派发关联到当前任务会话状态（供前端跳转会话回看） */
+  private scheduleDetail(s: ScheduledTask) {
+    return {
+      ...this.scheduleSummary(s),
+      message: s.message,
+      runs: (s.runs || []).map((r) => ({
+        id: r.id,
+        triggeredAt: r.triggeredAt,
+        manual: r.manual === true,
+        durationMs: r.durationMs,
+        items: r.items.map((it) => {
+          const task = it.taskId ? this.store.getTask(it.taskId) : undefined
+          return {
+            ...it,
+            taskStatus: task?.status,
+            taskRunning: task ? this.engine.isRunning(task.id) : false,
+          }
+        }),
+      })),
     }
   }
 
@@ -271,7 +351,7 @@ export class WorkBuddyRouter {
     }
   }
 
-  public async dispatch(req: IncomingMessage, res: ServerResponse, prefix: string): Promise<boolean> {
+  public async dispatch(req: IncomingMessage, res: ServerResponse, prefix: string, opts?: { auth?: boolean }): Promise<boolean> {
     const rawUrl = req.url || '/'
     const method = (req.method || 'GET').toUpperCase()
     if (method === 'OPTIONS') {
@@ -292,7 +372,7 @@ export class WorkBuddyRouter {
       res.statusCode = 200
       res.setHeader('Content-Type', 'text/html; charset=utf-8')
       res.setHeader('Cache-Control', 'no-store')
-      res.end(renderWebUi(prefix))
+      res.end(renderWebUi(prefix, opts))
       return true
     }
 
@@ -336,6 +416,90 @@ export class WorkBuddyRouter {
         return true
       }
       this.sendJson(res, 200, { ok: true, data: ep })
+      return true
+    }
+
+    // ---------- 定时任务 ----------
+    if (p === '/api/schedule-templates' && method === 'GET') {
+      this.sendJson(res, 200, { ok: true, data: SCHEDULE_TEMPLATES })
+      return true
+    }
+    if (p === '/api/schedules' && method === 'GET') {
+      const list = this.store.getSchedules().map((s) => this.scheduleSummary(s))
+      this.sendJson(res, 200, { ok: true, data: list })
+      return true
+    }
+    if (p === '/api/schedules' && method === 'POST') {
+      const body = await this.parseBody(req)
+      try {
+        const saved = this.upsertScheduleFromInput(body)
+        this.sendJson(res, 200, { ok: true, data: this.scheduleSummary(saved) })
+      } catch (err: any) {
+        this.sendJson(res, 400, { ok: false, error: err?.message || String(err) })
+      }
+      return true
+    }
+    const schedMatch = /^\/api\/schedules\/([^/]+)$/.exec(p)
+    if (schedMatch) {
+      const id = decodeURIComponent(schedMatch[1])
+      if (method === 'GET') {
+        const s = this.store.getSchedule(id)
+        if (!s) {
+          this.sendJson(res, 404, { ok: false, error: '定时任务不存在' })
+          return true
+        }
+        this.sendJson(res, 200, { ok: true, data: this.scheduleDetail(s) })
+        return true
+      }
+      if (method === 'DELETE') {
+        const ok = this.store.deleteSchedule(id)
+        this.sendJson(res, 200, { ok: true, data: { deleted: ok } })
+        return true
+      }
+      if (method === 'PATCH' || method === 'PUT') {
+        const body = await this.parseBody(req)
+        try {
+          const saved = this.upsertScheduleFromInput({ ...body, id })
+          this.sendJson(res, 200, { ok: true, data: this.scheduleSummary(saved) })
+        } catch (err: any) {
+          this.sendJson(res, 400, { ok: false, error: err?.message || String(err) })
+        }
+        return true
+      }
+    }
+    const schedToggleMatch = /^\/api\/schedules\/([^/]+)\/toggle$/.exec(p)
+    if (schedToggleMatch && method === 'POST') {
+      const id = decodeURIComponent(schedToggleMatch[1])
+      const s = this.store.getSchedule(id)
+      if (!s) {
+        this.sendJson(res, 404, { ok: false, error: '定时任务不存在' })
+        return true
+      }
+      const enabled = !s.enabled
+      this.store.mutateSchedule(id, (t) => {
+        t.enabled = enabled
+        t.nextRunAt = enabled ? nextRun(t.rule, Date.now()) : undefined
+      })
+      this.sendJson(res, 200, { ok: true, data: this.scheduleSummary(this.store.getSchedule(id)!) })
+      return true
+    }
+    const schedRunMatch = /^\/api\/schedules\/([^/]+)\/run$/.exec(p)
+    if (schedRunMatch && method === 'POST') {
+      const id = decodeURIComponent(schedRunMatch[1])
+      if (!this.store.getSchedule(id)) {
+        this.sendJson(res, 404, { ok: false, error: '定时任务不存在' })
+        return true
+      }
+      if (!this.scheduler) {
+        this.sendJson(res, 500, { ok: false, error: '调度器未装配' })
+        return true
+      }
+      try {
+        const run = await this.scheduler.fire(id, true)
+        this.sendJson(res, 200, { ok: true, data: run })
+      } catch (err: any) {
+        this.sendJson(res, 500, { ok: false, error: err?.message || String(err) })
+      }
       return true
     }
 
@@ -842,6 +1006,41 @@ export class WorkBuddyRouter {
       const q = (urlObj.searchParams.get('q') || '').trim()
       const out = await this.getTaskSkills(taskId, q)
       this.sendJson(res, out.httpStatus, out.payload)
+      return true
+    }
+    // ask_user_question 挂起问题的答复回传（成员会话 → 远端宿主 waterfall 桥）
+    const askAnswerMatch = /^\/api\/tasks\/([^/]+)\/ask-answer$/.exec(p)
+    if (askAnswerMatch && method === 'POST') {
+      const taskId = decodeURIComponent(askAnswerMatch[1])
+      const body = await this.parseBody(req)
+      const task = this.store.getTask(taskId)
+      if (!task) {
+        this.sendJson(res, 404, { ok: false, error: 'Task not found' })
+        return true
+      }
+      const agentId = String(body?.agentId || '')
+      const binding = task.sessions?.[agentId]
+      if (!binding?.remoteSessionId) {
+        this.sendJson(res, 400, { ok: false, error: '该成员在任务中没有远端会话绑定', code: 'NO_SESSION' })
+        return true
+      }
+      const agent = this.store.getAgent(agentId)
+      if (!agent) {
+        this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
+        return true
+      }
+      const target = await this.resolver.resolve(agent)
+      if (!target.online || !target.baseUrl) {
+        this.sendJson(res, 502, { ok: false, error: target.error || '成员节点当前不可达' })
+        return true
+      }
+      const answers = Array.isArray(body?.answers) ? body.answers : []
+      const r = await this.client.answerQuestion(target, binding.remoteSessionId, answers)
+      if (!r.ok) {
+        this.sendJson(res, 502, { ok: false, error: r.error || '答复提交失败', supported: r.supported })
+        return true
+      }
+      this.sendJson(res, 200, { ok: true, data: { answered: answers.length } })
       return true
     }
     // 重命名会话（对齐 DSH web 的 session.rename 动词）
