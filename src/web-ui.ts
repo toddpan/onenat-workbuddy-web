@@ -3494,12 +3494,13 @@ $('chat-title').addEventListener('dblclick', () => {
 // ---------- 一键新建任务（免弹窗，自动生成会话并即刻开聊，参考 DSH 体验） ----------
 $('btn-new-task').addEventListener('click', createNewTaskDirectly);
 async function createNewTaskDirectly() {
-  const allIds = state.agents.map(a => a.id);
+  // 不指定成员：由服务端按「主智能体」默认归属（engine.defaultMemberAgentIds，与无 @ 消息的路由判定同源）。
+  // 历史实现传 state.agents.map(...) 全部子智能体，导致无 @ 的新任务被放大成全员编排，
+  // 且上传附件时会向所有成员节点扇出（每个成员都被建远端会话）。
   const r = await api('/tasks', {
     method: 'POST',
     body: JSON.stringify({
       title: '新任务',
-      memberAgentIds: allIds,
     })
   });
   if (!r.ok) {

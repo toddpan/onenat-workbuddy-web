@@ -1032,11 +1032,8 @@ export class WorkBuddyRouter {
     }
     if (p === '/api/tasks' && method === 'POST') {
       const body = await this.parseBody(req)
-      // 若未指定成员，自动使用全部可用子智能体或默认主智能体
-      if (!Array.isArray(body.memberAgentIds) || body.memberAgentIds.length === 0) {
-        const allAgents = this.store.getAgents()
-        body.memberAgentIds = allAgents.map(a => a.id)
-      }
+      // 未指定成员时不在此处兜底：默认成员的唯一权威是 engine.createTask → defaultMemberAgentIds（主智能体）。
+      // 历史实现曾在此填「全部可用子智能体」，导致无 @ 新建的任务变成全员编排，附件随之上传扇出到所有节点。
       try {
         const task = await this.engine.createTask(body)
         this.sendJson(res, 201, { ok: true, data: task })

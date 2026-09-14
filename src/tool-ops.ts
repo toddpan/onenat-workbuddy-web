@@ -160,7 +160,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       action: { type: 'string', description: '操作: list / create / send / delete / members / cancel' },
       taskId: { type: 'string', description: '任务 ID（send/delete/members/cancel 用）' },
       title: { type: 'string', description: '任务标题（create 可选）' },
-      memberAgentIds: { type: 'json', description: '成员子智能体 ID 数组（create/members 必填）' },
+      memberAgentIds: { type: 'json', description: '成员子智能体 ID 数组（create 可省略：省略即只归属主智能体；members 必填且非空）' },
       mode: { type: 'string', description: '模式: chat（单成员直通）或 orchestrate（多成员编排），缺省按成员数推断' },
       message: { type: 'string', description: '消息内容（create 可选首条消息；send 必填）' },
     },
