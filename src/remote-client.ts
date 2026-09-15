@@ -710,6 +710,34 @@ export class DshClient {
     }
   }
 
+  /**
+   * 更新远端会话的模型（PUT /sessions/:id，body {provider?, model?, reasoningEffort?}）。
+   * 空 model 表示清除覆盖、回退节点默认。
+   */
+  public async updateSessionModel(
+    target: DshTarget,
+    sessionId: string,
+    body: { provider?: string; model?: string; reasoningEffort?: string },
+  ): Promise<{ ok: boolean; error?: string; selected?: { provider: string; model: string } }> {
+    try {
+      const payload: Record<string, string> = {}
+      if (body.provider) payload.provider = body.provider
+      if (body.model) payload.model = body.model
+      if (body.reasoningEffort) payload.reasoningEffort = body.reasoningEffort
+      const res = await fetch(`${clean(target.baseUrl)}/sessions/${encodeURIComponent(sessionId)}`, {
+        method: 'PUT',
+        headers: this.headers(target.apiKey),
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(10_000),
+      })
+      const json: any = await res.json().catch(() => ({}))
+      if (!res.ok || !json?.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
+      return { ok: true, selected: json.data?.model?.selected }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || '更新会话模型失败' }
+    }
+  }
+
   public async cancelSession(target: DshTarget, sessionId: string): Promise<{ ok: boolean; error?: string }> {
     try {
       // 1. 尝试专用的 /cancel 路由

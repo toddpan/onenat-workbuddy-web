@@ -1,6 +1,6 @@
 {
   "name": "@dsh-external/onenat-workbuddy",
-  "version": "0.1.1",
+  "version": "2026.9.15",
   "description": "OneNat WorkBuddy — 基于 ONENAT 资源面 + 多 DSH 算力面的多智能体协作工作台（任务多轮聊天 / 子智能体 / 资源提示词注入 / LLM 编排）",
   "private": true,
   "repository": {
@@ -21,7 +21,7 @@
   "main": "./lib/index.js",
   "types": "./lib/types/index.d.ts",
   "bin": {
-    "onenat-workbuddy": "./dist/server.js"
+    "onenat-workbuddy": "./lib/server.js"
   },
   "files": [
     "lib",
@@ -61,6 +61,7 @@
     "smoke": "node scripts/smoke-standalone.mjs",
     "smoke:e2e": "SMOKE_E2E=1 node scripts/smoke-standalone.mjs",
     "smoke:schedules": "node scripts/smoke-schedules.mjs",
+    "version:bump": "node lib/date-version.js",
     "test:streaming": "node e2e-artifacts/run-streaming-tests.mjs",
     "test:streaming:e2e": "node e2e-artifacts/e2e-workbuddy-turn.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",

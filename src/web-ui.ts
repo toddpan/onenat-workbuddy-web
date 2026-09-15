@@ -13,8 +13,9 @@
  * 注意: 嵌入式 JS 全程不使用外层反引号模板串冲突字符，避免转义问题。
  */
 
-export function renderWebUi(prefix: string, opts?: { auth?: boolean }): string {
+export function renderWebUi(prefix: string, opts?: { auth?: boolean; version?: string }): string {
   const AUTH_ENABLED = opts?.auth === true
+  const VERSION = String(opts?.version || '')
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -206,6 +207,49 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
 .mchip .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); flex: none; }
 .mchip .x { cursor: pointer; color: var(--tx3); font-size: 11px; margin-left: 2px; }
 .mchip .x:hover { color: var(--err); }
+
+/* ---- 聊天头部主智能体选择器 ---- */
+.main-agent-picker { position: relative; flex: none; }
+.main-agent-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--bg3); border: 1px solid var(--line2); border-radius: var(--rad-sm);
+  color: var(--tx2); padding: 5px 11px; font-size: 12px; font-weight: 500;
+  cursor: pointer; white-space: nowrap; max-width: 280px;
+  transition: all .15s ease;
+}
+.main-agent-btn:hover { color: var(--pri); border-color: var(--pri); background: var(--bg-hover); }
+.main-agent-btn .ag-ico { font-size: 13px; line-height: 1; flex: none; }
+.main-agent-btn .ag-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.main-agent-btn .ag-arr { font-size: 10px; opacity: .7; flex: none; margin-left: 2px; }
+.main-agent-btn.ok {
+  border-color: rgba(52,211,153,.65) !important; color: #a7f3d0 !important;
+  transition: border-color .18s ease, color .18s ease;
+}
+
+.main-agent-pop {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 75;
+  width: 350px; max-width: calc(100vw - 24px); max-height: 54vh; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  background: var(--bg2); border: 1px solid var(--line2); border-radius: 10px;
+  box-shadow: 0 12px 38px rgba(0,0,0,.6); padding: 6px; display: none;
+}
+.main-agent-pop.on { display: block; }
+.main-agent-pop-head {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  padding: 6px 10px; font-size: 11px; color: var(--tx3);
+  border-bottom: 1px solid var(--line); margin-bottom: 4px;
+}
+.main-agent-item {
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px;
+  cursor: pointer; font-size: 12.5px; color: var(--tx); transition: background .12s ease;
+}
+.main-agent-item:hover { background: var(--bg-hover); }
+.main-agent-item.on { color: var(--pri); background: var(--pri-light); }
+.main-agent-item .ag-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.main-agent-item .ag-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.main-agent-item .ag-sub { font-size: 11px; color: var(--tx3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.main-agent-item.on .ag-sub { color: rgba(56, 189, 248, 0.75); }
+.main-agent-item .ag-ck { flex: none; visibility: hidden; font-weight: 700; color: var(--pri); }
+.main-agent-item.on .ag-ck { visibility: visible; }
 
 .chat-scroll {
   flex: 1; overflow-y: auto; padding: 18px 24px 28px; scroll-behavior: auto;
@@ -556,7 +600,39 @@ body.task-running .msg.system.sys-planning .content::after {
 .model-btn {
   display: inline-block; text-align: left; cursor: pointer; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; max-width: 62vw; min-width: 150px;
+  background: var(--bg3); border: 1px solid var(--line2); color: var(--tx2);
 }
+.model-btn:hover { color: var(--pri); border-color: var(--pri); }
+/* 成功类操作的就地反馈：不再弹底部 toast（会盖住输入区、打断视线），
+   改为「按钮/输入区脉冲 + 输入区上方一行淡出小字」——反馈贴近发生位置，不遮挡操作区。 */
+.model-btn.ok, .btn-at-file.ok {
+  border-color: rgba(52,211,153,.65) !important; color: #a7f3d0 !important;
+  transition: border-color .18s ease, color .18s ease;
+}
+/* 模型切换结果写进 composer 工具条（就地、不遮挡输入框），8s 后自动隐去 */
+.model-status { display: none; color: var(--tx3); font-size: 11px; max-width: 46vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-status.on { display: inline-block; }
+.model-status.ok { color: #6ee7b7; }
+.chat-input.ok-flash { animation: composerOkFlash 1s ease; }
+@keyframes composerOkFlash {
+  0% { box-shadow: inset 0 0 0 1px rgba(52,211,153,0), inset 0 0 0 rgba(52,211,153,0); }
+  22% { box-shadow: inset 0 0 0 1px rgba(52,211,153,.7), inset 0 0 24px rgba(52,211,153,.16); }
+  100% { box-shadow: inset 0 0 0 1px rgba(52,211,153,0), inset 0 0 0 rgba(52,211,153,0); }
+}
+.composer-hint {
+  position: absolute; bottom: 100%; left: 50%; margin-bottom: 12px; z-index: 46;
+  display: flex; align-items: center; gap: 6px; max-width: min(78%, 560px);
+  padding: 6px 12px; border-radius: 999px;
+  background: rgba(15,23,42,.96); border: 1px solid var(--line2);
+  color: var(--tx2); font-size: 12px; line-height: 1.4;
+  box-shadow: 0 6px 20px rgba(0,0,0,.42);
+  pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  opacity: 0; transform: translate(-50%, 6px);
+  transition: opacity .18s ease, transform .18s ease, border-color .18s ease, color .18s ease;
+}
+.composer-hint.on { opacity: 1; transform: translate(-50%, 0); }
+.composer-hint.ok { border-color: rgba(52,211,153,.45); color: #a7f3d0; }
+.composer-hint.err { border-color: var(--err); color: #fecaca; }
 .model-pop {
   position: absolute; bottom: calc(100% + 10px); right: 0; z-index: 70;
   width: 420px; max-width: calc(100vw - 20px); max-height: 54vh; overflow-y: auto; -webkit-overflow-scrolling: touch;
@@ -781,6 +857,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
   .brand small { display: none; }
   .chip { display: inline-flex; padding: 5px 7px; gap: 4px; flex: none; }
   .chip #onenat-text { display: none; }
+  .chip #version-text { font-family: var(--mono); font-size: 11px; white-space: nowrap; }
 
   /* ---- 主导航下沉为底部 Tab 栏（移动端标准导航模式） ---- */
   nav {
@@ -827,8 +904,10 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
   .chat-head .hspacer { display: none; }
   .chat-head .mini-btn { min-height: 30px; padding: 5px 9px; font-size: 12px; white-space: nowrap; flex: none; }
   .chat-head .badge { display: inline-flex; }
-  .chat-head .badge.mode { flex: 0 1 auto; min-width: 0; max-width: 40vw; }
+  .chat-head .badge.mode { flex: 0 1 auto; min-width: 0; max-width: 36vw; }
   .badge { display: inline-flex; align-items: center; min-height: 26px; font-size: 10.5px; padding: 3px 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; box-sizing: border-box; }
+  .main-agent-btn { max-width: 48vw; font-size: 11.5px; padding: 3px 8px; min-height: 28px; }
+  .main-agent-pop { position: fixed; left: 10px; right: 10px; top: 52px; width: auto; max-width: none; max-height: 56vh; }
 
   /* ---- 消息区 ---- */
   .chat-scroll { padding: 12px 12px 32px; }
@@ -915,6 +994,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 
   /* ---- Toast / 问答卡片（避开底部 Tab 栏） ---- */
   .toast { bottom: calc(62px + env(safe-area-inset-bottom)); max-width: 90vw; font-size: 12.5px; }
+  .composer-hint { max-width: calc(100vw - 24px); font-size: 11.5px; margin-bottom: 8px; }
   .ask-opt { padding: 12px 14px; }
   .ask-btn-submit { min-height: 40px; }
 }
@@ -1018,6 +1098,25 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   padding: 48px 16px; color: var(--tx3); gap: 10px;
 }
+/* ---- 批量操作：行选择复选框 + 批量操作条 ---- */
+.files-cell-check { width: 34px; padding: 8px 6px 8px 14px; text-align: center; }
+.files-check {
+  width: 15px; height: 15px; margin: 0; cursor: pointer; accent-color: var(--pri);
+  vertical-align: middle; opacity: 0; transition: opacity .12s ease;
+}
+.files-row:hover .files-check, .files-check:checked, .files-check:focus { opacity: 1; }
+.files-row.selected { background: var(--pri-light); }
+.files-row.selected .files-cell-name { color: var(--pri); }
+.files-check-all { width: 15px; height: 15px; margin: 0; cursor: pointer; accent-color: var(--pri); vertical-align: middle; }
+.batch-bar {
+  display: none; align-items: center; gap: 8px; padding: 8px 18px;
+  background: var(--pri-light); border-bottom: 1px solid rgba(56,189,248,.3); flex: none;
+  font-size: 12.5px;
+}
+.batch-bar.on { display: flex; }
+.batch-bar .batch-count { color: var(--pri); font-weight: 600; white-space: nowrap; }
+.batch-bar .btn { font-size: 12px; padding: 5px 11px; min-height: 30px; white-space: nowrap; }
+.batch-bar .btn.danger-batch:hover { color: var(--err); border-color: var(--err); }
 .code-preview-box {
   background: rgba(2,6,23,.7); border: 1px solid var(--line); border-radius: 8px;
   padding: 12px 14px; font-family: var(--mono); font-size: 12px; line-height: 1.55;
@@ -1039,6 +1138,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
     </nav>
     <div class="hspacer"></div>
     <div class="chip" id="onenat-chip"><span class="dot" id="onenat-dot"></span><span id="onenat-text">ONENAT 连接中…</span></div>
+    <div class="chip" id="version-chip" title="OneNat WorkBuddy 版本（日期发布）"><span class="ver-ic">🏷</span><span id="version-text">v${VERSION}</span></div>
     ${AUTH_ENABLED ? '<button class="mini-btn" id="logout-btn" title="退出登录">⎋ 退出</button>' : ''}
   </header>
   <main>
@@ -1063,6 +1163,14 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <button class="mini-btn" id="btn-rename-task" style="display:none" title="重命名会话">✏️</button>
           <span class="badge mode" id="chat-mode" style="display:none"></span>
           <span class="hspacer"></span>
+          <div class="main-agent-picker" id="main-agent-picker">
+            <button class="main-agent-btn" id="main-agent-btn" title="当前主智能体（点击切换）">
+              <span class="ag-ico">🤖</span>
+              <span class="ag-name" id="main-agent-btn-name">主智能体: 加载中…</span>
+              <span class="ag-arr">▾</span>
+            </button>
+            <div class="main-agent-pop" id="main-agent-pop"></div>
+          </div>
         </div>
         <div class="chat-scroll" id="chat-scroll">
           <div class="chat-empty" id="chat-empty">
@@ -1088,6 +1196,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
             <div class="mention-popup-list" id="skill-list"></div>
           </div>
           <button class="jump-bottom" id="btn-jump-bottom" title="回到底部">⬇<span class="jb-t"> 回到底部</span></button>
+          <div class="composer-hint" id="composer-hint"></div>
           <div class="chat-input">
             <button class="mini-btn" id="btn-attach" title="上传附件到工作区" style="padding:10px 12px">📎</button>
             <input type="file" id="file-input" multiple style="display:none" />
@@ -1097,8 +1206,9 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           </div>
           <div class="composer-bar">
             <span class="hspacer"></span>
+            <span class="model-status" id="model-status"></span>
             <div class="model-picker" id="model-picker">
-              <button class="cfg-sel model-btn" id="chat-model-btn" title="主调度模型（主任务拆解用，不影响成员子智能体）">⚙ 主调度默认模型</button>
+              <button class="cfg-sel model-btn" id="chat-model-btn" title="主调度模型 + 执行会话模型（点选即生效）">⚙ 主调度默认模型</button>
               <div class="model-pop" id="model-pop"></div>
             </div>
           </div>
@@ -1130,13 +1240,22 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
         <button class="btn" id="btn-files-mkdir" title="新建文件夹">📁 新建文件夹</button>
         <input type="file" id="files-file-input" multiple style="display:none" />
       </div>
+      <div class="batch-bar" id="files-batch-bar">
+        <span class="batch-count" id="files-batch-count">已选 0 项</span>
+        <button class="btn" id="btn-batch-at">💬 批量 @ 引用</button>
+        <button class="btn" id="btn-batch-download">⬇️ 批量下载</button>
+        <button class="btn danger-batch" id="btn-batch-del">🗑️ 批量删除</button>
+        <span class="hspacer"></span>
+        <button class="btn" id="btn-batch-clear" style="padding:5px 9px">✕ 取消选择</button>
+      </div>
       <div class="files-body-wrap" id="files-drop-area">
         <div class="files-table-wrap">
           <table class="files-table">
             <thead>
               <tr>
-                <th style="width:45%">名称</th>
-                <th style="width:15%">大小</th>
+                <th class="files-cell-check" style="width:34px;padding:9px 6px 9px 14px"><input type="checkbox" class="files-check-all" id="files-check-all" title="全选/取消全选" /></th>
+                <th style="width:40%">名称</th>
+                <th style="width:14%">大小</th>
                 <th style="width:20%">修改时间</th>
                 <th style="width:20%;text-align:right">操作</th>
               </tr>
@@ -1195,6 +1314,16 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 <script>
 const PREFIX = ${JSON.stringify(prefix)};
 const API = PREFIX + '/api';
+const VERSION = ${JSON.stringify(VERSION)};
+(function initVersion() {
+  var el = document.getElementById('version-text');
+  if (el && VERSION) el.textContent = 'v' + VERSION;
+  // 服务端版本号兜底刷新（页面缓存/直接打开 dist 等场景）
+  fetch(API + '/version').then(function (r) { return r.json(); }).then(function (j) {
+    var v = j && j.data && j.data.version;
+    if (v && el) el.textContent = 'v' + v;
+  }).catch(function () {});
+})();
 
 /**
  * 前端核心状态管理与缓存层（对齐 DSH Web Client Store 架构）
@@ -1235,8 +1364,48 @@ function toast(msg, isErr) {
   const t = $('toast'); t.textContent = msg; t.className = 'toast on' + (isErr ? ' err' : ''); t.style.display = 'block';
   clearTimeout(t._h); t._h = setTimeout(() => { t.style.display = 'none'; }, 3200);
 }
+/**
+ * 就地轻提示：在输入区上方淡出一行小字（不遮挡输入框与操作区），1.9s 自动淡出。
+ * 用于「已填入输入框 / 已切换」这类成功反馈——底部长驻 toast 会盖住 composer 且打断视线。
+ */
+function hintComposer(msg, isErr) {
+  const el = $('composer-hint');
+  if (!el || !msg) return;
+  el.textContent = msg;
+  el.className = 'composer-hint on ' + (isErr ? 'err' : 'ok');
+  clearTimeout(el._h);
+  el._h = setTimeout(() => { el.classList.remove('on'); }, isErr ? 4200 : 1900);
+}
+/** 输入区脉冲：内容被填入输入框时给一次「已就位」的视觉确认（不占位、不遮挡） */
+function pulseComposer() {
+  const el = document.querySelector('.chat-input');
+  if (!el) return;
+  el.classList.remove('ok-flash');
+  void el.offsetWidth; // 强制重排以重启动画
+  el.classList.add('ok-flash');
+  clearTimeout(el._f);
+  el._f = setTimeout(() => el.classList.remove('ok-flash'), 1100);
+}
+/** 按钮就地确认：临时把按钮文案换成成功态并高亮，随后自动还原（替代成功类 toast） */
+function flashBtnOk(btn, okText, restoreText, ms) {
+  if (!btn) return;
+  if (btn._okTimer) clearTimeout(btn._okTimer);
+  btn.textContent = okText;
+  btn.classList.add('ok');
+  btn._okTimer = setTimeout(() => {
+    btn.textContent = restoreText;
+    btn.classList.remove('ok');
+    btn._okTimer = null;
+  }, ms || 1600);
+}
 async function api(path, opts) {
-  const res = await fetch(API + path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts || {}));
+  let res;
+  try {
+    res = await fetch(API + path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts || {}));
+  } catch (e) {
+    // 网络层失败（服务重启间隙/连接被重置等）：不抛出，统一按业务失败处理，避免调用方中断卡死
+    return { ok: false, error: '网络错误: ' + (e && e.message ? e.message : 'fetch failed') };
+  }
   ${AUTH_ENABLED ? "if (res.status === 401 && path.indexOf('/auth/') !== 0) { location.replace(PREFIX + '/'); return { ok: false, error: '未登录' }; }" : ''}
   let json = null; try { json = await res.json(); } catch (e) {}
   if (!json) json = { ok: false, error: 'HTTP ' + res.status };
@@ -1574,10 +1743,16 @@ applyNavLabels();
 // ---------- 初始化引导 ----------
 async function boot() {
   initMentionPopup();
-  await Promise.all([loadResources(), loadAgents(), loadTasks(), loadSettings(), loadSchedules()]);
+  await Promise.all([loadResources(), loadAgents(), loadTasks(), loadSettings(), loadSchedules(), loadPlannerOptions()]);
   await refreshMentionCandidates();
   renderTaskList();
   setInterval(loadTasksQuiet, 4000);
+  // ONENAT 状态自愈：资源目录未加载成功时每 8s 重试（覆盖启动瞬间网络抖动/服务重启窗口），成功或超 2 分钟后停止
+  const heal = setInterval(async () => {
+    if (state.resources.length) { clearInterval(heal); return; }
+    await Promise.all([loadResources(), loadAgents(), loadTasks(), loadPlannerOptions()]);
+  }, 8000);
+  setTimeout(() => clearInterval(heal), 120000);
 }
 async function loadResources() {
   const r = await api('/resources');
@@ -1589,12 +1764,21 @@ async function loadResources() {
   } else {
     state.resources = [];
     $('onenat-dot').className = 'dot';
-    $('onenat-text').textContent = 'ONENAT 未连接: ' + (r.error || '').slice(0, 60);
+    const errMsg = r.error || '';
+    // 会话过期（服务重启后内存会话清空）≠ ONENAT 连接故障，避免误导
+    if (errMsg.indexOf('登录') >= 0 || errMsg.indexOf('会话') >= 0) {
+      $('onenat-text').textContent = 'ONENAT · 会话已过期，请重新登录';
+    } else {
+      $('onenat-text').textContent = 'ONENAT 未连接: ' + errMsg.slice(0, 60);
+    }
   }
 }
 async function loadAgents() {
   const r = await api('/agents');
-  if (r.ok) state.agents = Array.isArray(r.data) ? r.data : [];
+  if (r.ok) {
+    state.agents = Array.isArray(r.data) ? r.data : [];
+    if (mainAgentState.loaded) renderMainAgentPop();
+  }
 }
 async function loadTasks() {
   const r = await api('/tasks');
@@ -1904,6 +2088,8 @@ function resetChatView() {
 }
 
 function refreshChatHead(taskMaybe) {
+  const nameEl = $('main-agent-btn-name');
+  if (nameEl && mainAgentState.loaded) nameEl.textContent = mainAgentBtnLabel();
   const task = taskMaybe || state.taskCache.get(state.currentTaskId) || state.tasks.find(t => t.id === state.currentTaskId);
   if (!task) return;
   const modeEl = $('chat-mode');
@@ -2968,7 +3154,9 @@ function uploadAttachments(files) {
     for (const r of rows) await uploadOne(r);
     const okRows = rows.filter(r => r.status === 'done');
     if (okRows.length) {
-      toast('已上传 ' + okRows.length + '/' + rows.length + ' 个附件，路径已填入输入框');
+      // 上传面板已逐行显示结果，收尾改为输入区就地提示，避免底部 toast 再盖住输入框
+      pulseComposer();
+      hintComposer('已上传 ' + okRows.length + '/' + rows.length + ' 个附件，路径已填入输入框');
     } else toast('附件上传失败（可点「断点续传重试」从断点继续）', true);
     if (rows.every(r => r.status === 'done')) setTimeout(() => { panel.style.display = 'none'; }, 2500);
   })();
@@ -3341,14 +3529,135 @@ function initSkillPopup() {
 }
 initSkillPopup();
 
+// ---------- 主智能体与主调度模型选择 ----------
+const mainAgentState = {
+  loaded: false,
+  cur: '', // 配置的 agentId, '' 表示自动
+  auto: true,
+  resolvedAgentId: '',
+  resolvedAgentName: '',
+  agents: [],
+  source: '',
+  error: '',
+};
+
+function mainAgentBtnLabel() {
+  if (!mainAgentState.loaded) return '主智能体: 加载中…';
+  if (mainAgentState.error) return '⚠️ 主智能体异常';
+  if (mainAgentState.auto) {
+    return '主智能体: ' + (mainAgentState.resolvedAgentName || '自动') + '（自动）';
+  }
+  return '主智能体: ' + (mainAgentState.resolvedAgentName || mainAgentState.cur || '未命名');
+}
+
+function mainAgentBtnTitle() {
+  if (mainAgentState.error) return '⚠️ 规划器当前不可用：' + mainAgentState.error + '（点击切换）';
+  return '当前主智能体（点击切换）· ' + (mainAgentState.auto ? '自动策略：本地/在线节点优先' : '固定指定') + (mainAgentState.source ? ' · 来源: ' + mainAgentState.source : '');
+}
+
+function renderMainAgentPop() {
+  const pop = $('main-agent-pop');
+  if (!pop) return;
+  const isAuto = mainAgentState.auto;
+  const curId = mainAgentState.cur;
+  const resolvedName = mainAgentState.resolvedAgentName || '本地子智能体优先';
+  let html = '<div class="main-agent-pop-head"><span>主智能体（Planner / 默认应答）</span><span>点选即切换</span></div>';
+
+  // 1. 自动选择项
+  html += '<div class="main-agent-item' + (isAuto ? ' on' : '') + '" data-id="">' +
+    '<div class="ag-info">' +
+      '<div class="ag-title">⚡（自动）' + esc(resolvedName) + '</div>' +
+      '<div class="ag-sub">本地或在线 DSH 子智能体优先 · 智能动态兜底</div>' +
+    '</div>' +
+    '<span class="ag-ck">✓</span>' +
+  '</div>';
+
+  // 2. 全部子智能体列表
+  const allAgents = mainAgentState.agents || [];
+  if (allAgents.length) {
+    html += '<div class="model-group" style="margin-top:4px">指定子智能体</div>';
+    for (const a of allAgents) {
+      const isSelected = !isAuto && curId === a.id;
+      const detail = state.agents.find(x => x.id === a.id) || {};
+      const subParts = [];
+      if (detail.model) subParts.push('模型: ' + detail.model);
+      if (detail.workDir) subParts.push('目录: ' + detail.workDir);
+      if (detail.dshRef && detail.dshRef.kind === 'direct') subParts.push('直连');
+      else if (detail.dshRef && detail.dshRef.mappingId) subParts.push('ONENAT: ' + detail.dshRef.mappingId);
+      const subInfo = subParts.join(' · ') || '子智能体';
+
+      html += '<div class="main-agent-item' + (isSelected ? ' on' : '') + '" data-id="' + esc(a.id) + '">' +
+        '<div class="ag-info">' +
+          '<div class="ag-title">🤖 ' + esc(a.name || a.id) + '</div>' +
+          '<div class="ag-sub">' + esc(subInfo) + '</div>' +
+        '</div>' +
+        '<span class="ag-ck">✓</span>' +
+      '</div>';
+    }
+  } else if (!isAuto) {
+    html += '<div class="model-empty">暂无可用子智能体</div>';
+  }
+
+  if (mainAgentState.error) {
+    html += '<div class="model-empty" style="color:var(--err);font-size:11.5px">⚠️ ' + esc(mainAgentState.error) + '</div>';
+  }
+
+  pop.innerHTML = html;
+  pop.querySelectorAll('.main-agent-item').forEach(it => {
+    it.addEventListener('click', () => selectMainAgent(it.dataset.id));
+  });
+}
+
+function closeMainAgentPop() {
+  const p = $('main-agent-pop');
+  if (p) p.classList.remove('on');
+}
+
+if ($('main-agent-btn')) {
+  $('main-agent-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeModelPop();
+    const pop = $('main-agent-pop');
+    if (!pop) return;
+    if (pop.classList.contains('on')) { closeMainAgentPop(); return; }
+    renderMainAgentPop();
+    pop.classList.add('on');
+  });
+}
+
+async function selectMainAgent(agentId) {
+  const targetId = (agentId || '').trim();
+  const btn = $('main-agent-btn');
+  closeMainAgentPop();
+
+  const found = mainAgentState.agents.find(a => a.id === targetId);
+  const displayName = targetId ? (found ? found.name : targetId) : '自动（本地优先）';
+
+  const r = await api('/planner/config', {
+    method: 'POST',
+    body: JSON.stringify({ agentId: targetId })
+  });
+
+  if (r.ok) {
+    if (btn) flashBtnOk(btn, '✓ 已切为「' + displayName + '」', mainAgentBtnLabel());
+    hintComposer('✓ 主智能体已切到「' + displayName + '」');
+    await loadPlannerOptions();
+    if ($('set-planner-agent')) fillPlannerAgentSetting();
+    if (state.currentTaskId) refreshChatHead();
+  } else {
+    toast(r.error || '切换主智能体失败', true);
+  }
+}
+
 // ---------- 主调度模型选择（自定义弹层：原生 select 的移动端全屏弹窗字大折行且样式失控） ----------
 const modelState = { groups: {}, cur: '', loaded: false };
 function modelBtnLabel(v) { return '⚙ ' + (v || '主调度默认模型'); }
+function modelBtnTitle() { return '主调度模型 + 执行会话模型（点选即生效）'; }
 function renderModelPop() {
   const pop = $('model-pop');
   const cur = modelState.cur;
   const known = Object.keys(modelState.groups).some(pv => (modelState.groups[pv] || []).some(m => pv + '/' + m.id === cur));
-  let html = '<div class="model-pop-head"><span>主调度模型（主任务拆解用）</span><span>点选即生效</span></div>';
+  let html = '<div class="model-pop-head"><span>主调度 + 执行会话模型</span><span>点选即生效</span></div>';
   html += '<div class="model-item' + (!cur ? ' on' : '') + '" data-v=""><span class="n">主调度默认模型</span><span class="ck">✓</span></div>';
   if (cur && !known) {
     html += '<div class="model-item on" data-v="' + esc(cur) + '"><span class="n">' + esc(cur + '（已保存）') + '</span><span class="ck">✓</span></div>';
@@ -3365,39 +3674,116 @@ function renderModelPop() {
   pop.querySelectorAll('.model-item').forEach(it => it.addEventListener('click', () => selectModel(it.dataset.v)));
 }
 async function loadPlannerOptions() {
-  const btn = $('chat-model-btn');
-  btn.disabled = true;
+  const modelBtn = $('chat-model-btn');
+  const agentBtn = $('main-agent-btn');
+  if (modelBtn) modelBtn.disabled = true;
+  if (agentBtn) agentBtn.disabled = true;
+
   const r = await api('/planner/options');
-  if (!r.ok || !r.data) { btn.disabled = false; return; }
+  if (!r.ok || !r.data) {
+    if (modelBtn) modelBtn.disabled = false;
+    if (agentBtn) agentBtn.disabled = false;
+    return;
+  }
   const d = r.data;
+
+  // 1. 更新主智能体状态
+  mainAgentState.agents = d.agents || [];
+  mainAgentState.cur = (d.current || {}).agentId || '';
+  mainAgentState.auto = (d.current || {}).auto !== false;
+  mainAgentState.source = d.source || '';
+  mainAgentState.error = d.error || '';
+  const resolved = mainAgentState.agents.find(a => a.id === (d.current || {}).agentId);
+  mainAgentState.resolvedAgentName = resolved ? resolved.name : ((d.current || {}).agentId || '');
+  mainAgentState.loaded = true;
+
+  if (agentBtn) {
+    agentBtn.disabled = false;
+    const nameEl = $('main-agent-btn-name');
+    if (nameEl) nameEl.textContent = mainAgentBtnLabel();
+    agentBtn.title = mainAgentBtnTitle();
+    renderMainAgentPop();
+  }
+
+  // 2. 更新模型状态
   modelState.cur = (d.current || {}).model || '';
   modelState.groups = {};
   for (const m of d.models || []) { (modelState.groups[m.provider] = modelState.groups[m.provider] || []).push(m); }
   modelState.loaded = true;
-  btn.disabled = false;
-  btn.textContent = modelBtnLabel(modelState.cur);
-  btn.title = '主调度模型（主任务拆解用）· ' + Object.keys(modelState.groups).length + ' 个提供商 / ' + (d.models || []).length + ' 个模型';
-  renderModelPop();
+  if (modelBtn) {
+    modelBtn.disabled = false;
+    modelBtn.textContent = modelBtnLabel(modelState.cur);
+    modelBtn.title = modelBtnTitle() + ' · ' + Object.keys(modelState.groups).length + ' 个提供商 / ' + (d.models || []).length + ' 个模型';
+    renderModelPop();
+  }
 }
 function closeModelPop() { $('model-pop').classList.remove('on'); }
 $('chat-model-btn').addEventListener('click', (e) => {
   e.stopPropagation();
+  closeMainAgentPop();
   const pop = $('model-pop');
   if (pop.classList.contains('on')) { closeModelPop(); return; }
   renderModelPop();
   pop.classList.add('on');
 });
 document.addEventListener('click', (e) => {
-  const pop = $('model-pop');
-  if (pop.classList.contains('on') && !pop.contains(e.target) && e.target !== $('chat-model-btn')) closeModelPop();
+  const modelPop = $('model-pop');
+  if (modelPop && modelPop.classList.contains('on') && !modelPop.contains(e.target) && e.target !== $('chat-model-btn')) {
+    closeModelPop();
+  }
+  const agentPop = $('main-agent-pop');
+  if (agentPop && agentPop.classList.contains('on') && !agentPop.contains(e.target) && e.target !== $('main-agent-btn') && !($('main-agent-btn') && $('main-agent-btn').contains(e.target))) {
+    closeMainAgentPop();
+  }
 });
+/** 模型切换结果就地展示在 composer 工具条（替代底部 toast，不遮挡输入区），8s 后自动隐去 */
+function setModelStatus(text) {
+  const el = $('model-status');
+  if (!el) return;
+  if (el._h) clearTimeout(el._h);
+  if (!text) { el.className = 'model-status'; el.textContent = ''; return; }
+  el.textContent = text;
+  el.className = 'model-status on ok';
+  el._h = setTimeout(() => { el.className = 'model-status'; el.textContent = ''; el._h = null; }, 8000);
+}
 async function selectModel(v) {
   modelState.cur = v;
-  $('chat-model-btn').textContent = modelBtnLabel(v);
+  const btn = $('chat-model-btn');
+  btn.textContent = modelBtnLabel(v);
   closeModelPop();
+  const shortModel = v ? (v.indexOf('/') >= 0 ? v.slice(v.indexOf('/') + 1).trim() : v) : '默认';
+  // 1) 更新主调度（任务拆解）模型
   const r = await api('/planner/config', { method: 'POST', body: JSON.stringify({ model: v || '' }) });
-  if (r.ok) toast('✓ 主调度模型已更新为「' + (v || '默认') + '」');
-  else toast(r.error || '保存失败', true);
+  // 2) 同步更新当前任务执行会话的模型（PUT /sessions/:id 透传到远端 DSH）
+  if (v && state.currentTaskId) {
+    const task = state.taskCache.get(state.currentTaskId) || state.tasks.find(t => t.id === state.currentTaskId);
+    if (task && task.sessions) {
+      // 取第一个有远端会话绑定的成员
+      const agentId = Object.keys(task.sessions).find(id => task.sessions[id]?.remoteSessionId);
+      if (agentId) {
+        const slashIdx = v.indexOf('/');
+        const provider = slashIdx >= 0 ? v.slice(0, slashIdx).trim() : '';
+        const modelId = slashIdx >= 0 ? v.slice(slashIdx + 1).trim() : v;
+        const sr = await api('/tasks/' + state.currentTaskId + '/session-model', {
+          method: 'PUT',
+          body: JSON.stringify({ agentId, provider: provider || undefined, model: modelId }),
+        });
+        if (sr.ok) {
+          // 按钮原地点亮确认 + 工具条就地写明生效范围（不再弹 toast）
+          flashBtnOk(btn, '✓ 已切换「' + modelId + '」', modelBtnLabel(v));
+          setModelStatus('✓ 执行会话已切到「' + modelId + '」· 主调度「' + (v || '默认') + '」');
+          return;
+        }
+        if (sr.code !== 'NO_SESSION') toast(sr.error || '执行会话模型更新失败', true);
+      }
+    }
+  }
+  if (r.ok) {
+    flashBtnOk(btn, '✓ 已切换「' + shortModel + '」', modelBtnLabel(v));
+    setModelStatus('✓ 主调度模型已切到「' + (v || '默认') + '」');
+  } else {
+    toast(r.error || '保存失败', true);
+  }
 }
 loadPlannerOptions();
 
@@ -4442,6 +4828,7 @@ const filesState = {
   loading: false,
   error: '',
   initialized: false,
+  selected: new Set(), // 批量操作：选中的条目 path
 };
 
 function classifyFileIcon(name, type) {
@@ -4484,7 +4871,9 @@ function atFileToChat(filePath, fileName) {
     const val = inp.value || '';
     inp.value = val ? (val.endsWith(' ') ? val + insertText : val + ' ' + insertText) : insertText;
     inp.focus();
-    toast('✓ 已将 @' + agentName + ':' + finalPath + ' 引用填入对话输入框');
+    // 就地反馈：输入区脉冲 + 上方一行淡出小字（引用内容已在输入框可见，无需底部 toast 再打断）
+    pulseComposer();
+    hintComposer('已引用 @' + agentName + ':' + finalPath);
   }
 }
 
@@ -4577,18 +4966,19 @@ function renderFilesTable() {
   });
 
   if (filesState.loading) {
-    tbody.innerHTML = '<tr><td colspan="4"><div class="files-empty-box"><span class="cursor"></span><span>正在读取远程文件列表…</span></div></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5"><div class="files-empty-box"><span class="cursor"></span><span>正在读取远程文件列表…</span></div></td></tr>';
     return;
   }
 
   if (filesState.error) {
-    tbody.innerHTML = '<tr><td colspan="4"><div class="files-empty-box" style="color:var(--err)"><span>⚠️ 无法读取工作空间</span><span>' + esc(filesState.error) + '</span></div></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5"><div class="files-empty-box" style="color:var(--err)"><span>⚠️ 无法读取工作空间</span><span>' + esc(filesState.error) + '</span></div></td></tr>';
     return;
   }
 
   if (!filtered.length) {
-    tbody.innerHTML = '<tr><td colspan="4"><div class="files-empty-box"><span>📁</span><span>' + (kw ? '未找到匹配的文件或文件夹' : '当前目录为空') + '</span></div></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5"><div class="files-empty-box"><span>📁</span><span>' + (kw ? '未找到匹配的文件或文件夹' : '当前目录为空') + '</span></div></td></tr>';
     $('files-stats').textContent = '0 个项目';
+    renderBatchBar();
     return;
   }
 
@@ -4596,6 +4986,7 @@ function renderFilesTable() {
   // 如果不是根目录，增加返回上一级行
   if (filesState.parent && filesState.path !== filesState.parent) {
     rowsHtml += '<tr class="files-row" data-parent="1">' +
+      '<td class="files-cell-check"></td>' +
       '<td class="files-cell files-cell-name"><span class="files-icon">📁</span><span>..（返回上级）</span></td>' +
       '<td class="files-cell">—</td><td class="files-cell">—</td><td class="files-cell" style="text-align:right">—</td>' +
     '</tr>';
@@ -4608,7 +4999,9 @@ function renderFilesTable() {
     const mtimeText = item.mtime ? fmtDateTime(item.mtime) : '—';
     const downloadUrl = API + '/agents/fs/download?agent=' + encodeURIComponent(filesState.agentId) + '&path=' + encodeURIComponent(item.path);
 
-    rowsHtml += '<tr class="files-row" data-path="' + esc(item.path) + '" data-name="' + esc(item.name) + '" data-type="' + esc(item.type || 'file') + '">' +
+    const selected = filesState.selected.has(item.path);
+    rowsHtml += '<tr class="files-row' + (selected ? ' selected' : '') + '" data-path="' + esc(item.path) + '" data-name="' + esc(item.name) + '" data-type="' + esc(item.type || 'file') + '">' +
+      '<td class="files-cell-check"><input type="checkbox" class="files-check" data-path="' + esc(item.path) + '"' + (selected ? ' checked' : '') + ' title="选择" /></td>' +
       '<td class="files-cell files-cell-name">' +
         '<span class="files-icon">' + icon + '</span>' +
         '<span style="' + (item.hidden ? 'opacity:.6' : '') + '">' + esc(item.name) + '</span>' +
@@ -4666,6 +5059,18 @@ function renderFilesTable() {
       });
     }
 
+    // 选择复选框（批量操作）
+    const check = row.querySelector('.files-check');
+    if (check) {
+      check.addEventListener('click', e => e.stopPropagation());
+      check.addEventListener('change', () => {
+        if (check.checked) filesState.selected.add(itemPath);
+        else filesState.selected.delete(itemPath);
+        row.classList.toggle('selected', check.checked);
+        syncBatchSelection();
+      });
+    }
+
     // 删除按钮
     const delBtn = row.querySelector('[data-op="del"]');
     if (delBtn) {
@@ -4685,6 +5090,23 @@ function renderFilesTable() {
   const fileCount = filtered.filter(x => x.type !== 'dir').length;
   $('files-stats').textContent = (dirCount ? dirCount + ' 个文件夹 · ' : '') + fileCount + ' 个文件';
   $('files-current-path-text').textContent = filesState.path || filesState.home || '';
+  syncBatchSelection();
+}
+
+/** 批量操作：同步复选框/表头全选/批量条状态 */
+function syncBatchSelection() {
+  const box = $('files-check-all');
+  if (box) {
+    const rows = document.querySelectorAll('#files-list .files-check');
+    const checked = document.querySelectorAll('#files-list .files-check:checked');
+    box.checked = rows.length > 0 && checked.length === rows.length;
+    box.indeterminate = checked.length > 0 && checked.length < rows.length;
+  }
+  const n = filesState.selected.size;
+  const countEl = $('files-batch-count');
+  if (countEl) countEl.textContent = '已选 ' + n + ' 项';
+  const bar = $('files-batch-bar');
+  if (bar) bar.classList.toggle('on', n > 0);
 }
 
 /** 加载指定目录的文件 */
@@ -4788,6 +5210,33 @@ async function renderFilesView() {
       refreshBtn.addEventListener('click', () => loadFilesDir(filesState.path));
     }
 
+    // 批量操作条：全选 / 批量@ / 批量下载 / 批量删除 / 取消选择
+    const checkAll = $('files-check-all');
+    if (checkAll) {
+      checkAll.addEventListener('change', () => {
+        const check = checkAll.checked;
+        (filesState.entries || []).forEach(e => {
+          if (check) filesState.selected.add(e.path);
+          else filesState.selected.delete(e.path);
+        });
+        renderFilesTable();
+      });
+    }
+    const batchBar = $('files-batch-bar');
+    if (batchBar) {
+      const bAt = $('btn-batch-at');
+      if (bAt) bAt.addEventListener('click', () => batchAt());
+      const bDl = $('btn-batch-download');
+      if (bDl) bDl.addEventListener('click', () => batchDownload());
+      const bDel = $('btn-batch-del');
+      if (bDel) bDel.addEventListener('click', () => batchDelete());
+      const bClear = $('btn-batch-clear');
+      if (bClear) bClear.addEventListener('click', () => {
+        filesState.selected.clear();
+        renderFilesTable();
+      });
+    }
+
     // 新建文件夹按钮
     const mkdirBtn = $('btn-files-mkdir');
     if (mkdirBtn) {
@@ -4884,6 +5333,95 @@ async function uploadFilesToAgent(agentId, destPath, files) {
     toast('✓ 已成功上传 ' + successCount + '/' + files.length + ' 个文件');
     loadFilesDir(destPath);
   }
+}
+
+// ---------- 批量操作：批量 @ 引用 / 批量下载 / 批量删除 ----------
+
+/** 取当前选中且仍存在于列表中的条目 */
+function getSelectedEntries() {
+  return (filesState.entries || []).filter(e => filesState.selected.has(e.path));
+}
+
+/** 批量 @ 引用：把选中文件以 @智能体:相对路径 形式填入对话输入框 */
+async function batchAt() {
+  const items = getSelectedEntries();
+  if (!items.length) { toast('请先选择文件', true); return; }
+  const agent = state.agents.find(a => a.id === filesState.agentId);
+  const agentName = agent ? agent.name : (filesState.agentId || '智能体');
+  const refs = items.map(it => {
+    let refPath = it.path;
+    if (filesState.home && refPath.startsWith(filesState.home)) {
+      refPath = refPath.slice(filesState.home.length);
+      while (refPath.startsWith('/') || refPath.startsWith('\\\\')) refPath = refPath.slice(1);
+    }
+    return '@' + agentName + ':' + (refPath || it.name);
+  });
+  switchView('work');
+  const inp = $('input');
+  if (inp) {
+    const val = inp.value || '';
+    const insertText = refs.join(' ') + ' ';
+    inp.value = val ? (val.endsWith(' ') ? val + insertText : val + ' ' + insertText) : insertText;
+    inp.focus();
+    pulseComposer();
+    hintComposer('已引用 ' + refs.length + ' 个文件（@' + agentName + ':…）');
+  }
+  filesState.selected.clear();
+  syncBatchSelection();
+}
+
+/** 批量下载：逐个抓取选中文件并触发浏览器下载（多个同名自动加序号） */
+async function batchDownload() {
+  const items = getSelectedEntries().filter(it => it.type !== 'dir');
+  if (!items.length) { toast('请选择要下载的文件', true); return; }
+  toast('正在下载 ' + items.length + ' 个文件…');
+  const usedNames = {};
+  let ok = 0;
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    const url = API + '/agents/fs/download?agent=' + encodeURIComponent(filesState.agentId) + '&path=' + encodeURIComponent(it.path);
+    try {
+      const res = await fetch(url);
+      if (!res.ok) { toast('「' + it.name + '」下载失败 (HTTP ' + res.status + ')', true); continue; }
+      const buf = await res.arrayBuffer();
+      const blob = new Blob([buf], { type: 'application/octet-stream' });
+      const a = document.createElement('a');
+      let fname = it.name;
+      if (usedNames[fname]) { usedNames[fname]++; const dot = fname.lastIndexOf('.'); fname = dot > 0 ? (fname.slice(0, dot) + '_' + usedNames[fname] + fname.slice(dot)) : (fname + '_' + usedNames[fname]); }
+      else usedNames[fname] = 1;
+      a.href = URL.createObjectURL(blob);
+      a.download = fname;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      ok++;
+    } catch (e) {
+      toast('「' + it.name + '」下载出错', true);
+    }
+    // 多个文件之间稍作间隔，避免浏览器拦截连续下载
+    if (i < items.length - 1) await new Promise(r => setTimeout(r, 250));
+  }
+  toast(ok === items.length ? '✓ 已下载 ' + ok + ' 个文件' : '已下载 ' + ok + '/' + items.length + ' 个文件', ok === 0);
+}
+
+/** 批量删除：确认后逐个删除选中条目（文件夹含其内容） */
+async function batchDelete() {
+  const items = getSelectedEntries();
+  if (!items.length) { toast('请先选择文件', true); return; }
+  const dirs = items.filter(it => it.type === 'dir').length;
+  const names = items.map(it => it.name).join('、');
+  const warn = dirs ? '（含 ' + dirs + ' 个文件夹及其全部内容）' : '';
+  if (!confirm('确定在远程主机上删除选中的 ' + items.length + ' 个项目' + warn + '？\\n\\n' + names + '\\n\\n此操作不可恢复。')) return;
+  let ok = 0, fail = 0;
+  for (const it of items) {
+    const r = await api('/agents/fs/remove?agent=' + encodeURIComponent(filesState.agentId) + '&path=' + encodeURIComponent(it.path), { method: 'DELETE' });
+    if (r.ok) ok++;
+    else { fail++; toast('删除「' + it.name + '」失败: ' + (r.error || '未知错误'), true); }
+  }
+  filesState.selected.clear();
+  if (ok > 0) toast('✓ 已删除 ' + ok + (fail ? ' 个（' + fail + ' 个失败）' : ' 个'));
+  loadFilesDir(filesState.path);
 }
 
 // ---------- 设置视图 ----------

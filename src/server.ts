@@ -35,6 +35,7 @@ import { SshResourceStore } from './ssh-store.js'
 import { createWorkBuddyToolDefs, type WorkBuddyToolDef } from './tool-ops.js'
 import { AuthService, SESSION_COOKIE } from './auth.js'
 import { renderLoginUi } from './login-ui.js'
+import { formatDateVersion, readPackageVersion } from './date-version.js'
 
 // ---------------------------------------------------------------- 配置解析
 
@@ -161,16 +162,9 @@ export function normalizePrefix(input: string): string {
   return p.replace(/\/+$/, '')
 }
 
+/** 版本号：日期发布风格（YYYY.M.D），单一来源 package.json version */
 function pkgVersion(): string {
-  try {
-    const here = dirname(fileURLToPath(import.meta.url))
-    for (const candidate of [join(here, '..', 'package.json'), join(here, 'package.json')]) {
-      if (existsSync(candidate)) return JSON.parse(readFileSync(candidate, 'utf-8')).version || '0.0.0'
-    }
-  } catch {
-    /* ignore */
-  }
-  return '0.0.0'
+  return formatDateVersion(readPackageVersion())
 }
 
 // ---------------------------------------------------------------- 服务装配
@@ -322,7 +316,7 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
             res.statusCode = 200
             res.setHeader('Content-Type', 'text/html; charset=utf-8')
             res.setHeader('Cache-Control', 'no-store')
-            res.end(renderLoginUi(prefix))
+            res.end(renderLoginUi(prefix, undefined, pkgVersion()))
             return
           }
           sendJson(res, 401, { ok: false, error: '未登录或会话已过期', authRequired: true })
@@ -482,7 +476,7 @@ async function main(): Promise<void> {
 
   const app = await start(cfg)
   console.log('')
-  console.log('  ⚡ OneNat WorkBuddy — 独立部署 WEB 服务（不依赖 DSH）')
+  console.log(`  ⚡ OneNat WorkBuddy — 独立部署 WEB 服务（不依赖 DSH）  v${pkgVersion()}`)
   console.log(`  ├─ 控制台      ${app.consoleUrl}`)
   console.log(`  ├─ 健康检查    http://${cfg.host === '0.0.0.0' ? '127.0.0.1' : cfg.host}:${app.port}/healthz`)
   console.log(`  ├─ 工具通道    ${app.tools.length} 个工具：${app.tools.map((t) => t.name).join(' / ')}`)
