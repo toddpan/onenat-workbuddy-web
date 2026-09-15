@@ -4,7 +4,7 @@
  * 注意: 嵌入式 JS 不使用外层模板串冲突字符。
  */
 
-export function renderLoginUi(prefix: string, errmsg?: string): string {
+export function renderLoginUi(prefix: string, errmsg?: string, version?: string): string {
   const safePrefix = prefix || ''
   return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -66,7 +66,7 @@ body::before { content: ''; position: fixed; inset: 0; background: radial-gradie
     <div class="field"><label>密码</label><input id="password" type="password" autocomplete="current-password" placeholder="密码"></div>
     <button class="btn-login" id="btn" type="submit">登 录</button>
   </form>
-  <div class="hint">登录状态保留 7 天 · 会话 Cookie 仅存放于浏览器</div>
+  <div class="hint">登录状态保留 7 天 · 会话 Cookie 仅存放于浏览器${version ? `<br>版本 v${version}` : ''}</div>
 </div>
 <script>
 (function () {

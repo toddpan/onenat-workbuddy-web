@@ -21,9 +21,11 @@ import { normalizeRule, nextRun, ruleText } from './scheduler.js'
 import { SCHEDULE_TEMPLATES } from './schedule-templates.js'
 import type { DshRef, SubAgent, WorkTask, ScheduledTask } from './types.js'
 import { renderWebUi } from './web-ui.js'
+import { formatDateVersion, parseDateVersion, readPackageVersion } from './date-version.js'
 
 export class WorkBuddyRouter {
   private client = new DshClient()
+  private version = formatDateVersion(readPackageVersion())
 
   constructor(
     private store: WorkStore,
@@ -372,7 +374,7 @@ export class WorkBuddyRouter {
       res.statusCode = 200
       res.setHeader('Content-Type', 'text/html; charset=utf-8')
       res.setHeader('Cache-Control', 'no-store')
-      res.end(renderWebUi(prefix, opts))
+      res.end(renderWebUi(prefix, { ...opts, version: this.version }))
       return true
     }
 
@@ -500,6 +502,22 @@ export class WorkBuddyRouter {
       } catch (err: any) {
         this.sendJson(res, 500, { ok: false, error: err?.message || String(err) })
       }
+      return true
+    }
+
+    // ---------- 版本信息 ----------
+    if (p === '/api/version' && method === 'GET') {
+      const parts = parseDateVersion(this.version)
+      this.sendJson(res, 200, {
+        ok: true,
+        data: {
+          version: this.version,
+          name: '@dsh-external/onenat-workbuddy',
+          scheme: parts ? 'date' : 'unknown',
+          ...(parts ? { year: parts.year, month: parts.month, day: parts.day } : {}),
+          buildDate: new Date().toISOString(),
+        },
+      })
       return true
     }
 
@@ -1139,6 +1157,45 @@ export class WorkBuddyRouter {
       this.sendJson(res, 200, { ok: true, data: { answered: answers.length } })
       return true
     }
+    // 更新任务执行会话的模型（PUT /sessions/:id 透传到远端 DSH）
+    // body: { agentId, provider?, model?, reasoningEffort? }；model 为空 = 清除覆盖回退默认
+    const sessionModelMatch = /^\/api\/tasks\/([^/]+)\/session-model$/.exec(p)
+    if (sessionModelMatch && method === 'PUT') {
+      const taskId = decodeURIComponent(sessionModelMatch[1])
+      const body = await this.parseBody(req)
+      const task = this.store.getTask(taskId)
+      if (!task) {
+        this.sendJson(res, 404, { ok: false, error: 'Task not found' })
+        return true
+      }
+      const agentId = String(body?.agentId || '')
+      const binding = task.sessions?.[agentId]
+      if (!binding?.remoteSessionId) {
+        this.sendJson(res, 400, { ok: false, error: '该成员在任务中没有远端会话绑定', code: 'NO_SESSION' })
+        return true
+      }
+      const agent = this.store.getAgent(agentId)
+      if (!agent) {
+        this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
+        return true
+      }
+      const target = await this.resolver.resolve(agent)
+      if (!target.online || !target.baseUrl) {
+        this.sendJson(res, 502, { ok: false, error: target.error || '成员节点当前不可达' })
+        return true
+      }
+      const r = await this.client.updateSessionModel(target, binding.remoteSessionId, {
+        provider: typeof body?.provider === 'string' && body.provider ? body.provider : undefined,
+        model: typeof body?.model === 'string' && body.model ? body.model : undefined,
+        reasoningEffort: typeof body?.reasoningEffort === 'string' && body.reasoningEffort ? body.reasoningEffort : undefined,
+      })
+      if (!r.ok) {
+        this.sendJson(res, 502, { ok: false, error: r.error || '更新会话模型失败' })
+        return true
+      }
+      this.sendJson(res, 200, { ok: true, data: { selected: r.selected } })
+      return true
+    }
     // 重命名会话（对齐 DSH web 的 session.rename 动词）
     const renameMatch = /^\/api\/tasks\/([^/]+)\/rename$/.exec(p)
     if (renameMatch && method === 'POST') {
@@ -1338,6 +1395,22 @@ export class WorkBuddyRouter {
           ...(hasModel ? { model } : {}),
         },
       } as any)
+
+      // 若更新了主调度模型，且存在主智能体，同步主智能体默认配置以确保全部路径对齐
+      if (hasModel) {
+        const main = this.planner.pickMainAgent()
+        if (main) {
+          const pm = model || ''
+          const slash = pm.indexOf('/')
+          const provider = slash >= 0 ? pm.slice(0, slash).trim() || undefined : undefined
+          const modelId = slash >= 0 ? pm.slice(slash + 1).trim() || undefined : (pm || undefined)
+          this.store.mutateAgent(main.id, (a) => {
+            if (provider !== undefined) a.provider = provider
+            if (modelId !== undefined) a.model = modelId
+          })
+        }
+      }
+
       const s = this.store.getSettings()
       this.sendJson(res, 200, { ok: true, data: { agentId: s.planner.agentId, model: s.planner.model } })
       return true

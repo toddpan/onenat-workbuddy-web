@@ -1323,17 +1323,35 @@ export class TaskEngine {
         this.taskLog(taskId, 'warn', `远端会话丢失（${agent.name}），正在重建: ${existing.remoteSessionId}`)
       }
     }
+    const mainAgent = this.planner.pickMainAgent()
+    const isMain = mainAgent?.id === agent.id
+    const settings = this.store.getSettings()
+
+    // 若为主智能体且配置了主调度模型，优先采用该模型作为远端会话创建参数
+    let targetProvider = agent.provider
+    let targetModel = agent.model
+    if (isMain && settings.planner?.model) {
+      const pm = String(settings.planner.model).trim()
+      const slash = pm.indexOf('/')
+      if (slash >= 0) {
+        targetProvider = pm.slice(0, slash).trim() || undefined
+        targetModel = pm.slice(slash + 1).trim() || undefined
+      } else if (pm) {
+        targetModel = pm
+      }
+    }
+
     const res = await this.client.createSession(target, `[WorkBuddy] ${task.title}`, {
       agentPreset: agent.agentPreset,
-      provider: agent.provider,
-      model: agent.model,
+      provider: targetProvider,
+      model: targetModel,
       cwd: agent.workDir,
     })
     if (!res.ok || !res.sessionId) return { ok: false, error: res.error }
     this.store.mutateTask(taskId, (t) => {
       t.sessions[agent.id] = { remoteSessionId: res.sessionId!, baseUrl: target.baseUrl, cwd: agent.workDir || undefined, createdAt: Date.now() }
     })
-    this.taskLog(taskId, 'info', `远程会话已创建（${agent.name}${agent.workDir ? ' · 工作目录 ' + agent.workDir : ''}）: ${res.sessionId} @ ${target.baseUrl}`)
+    this.taskLog(taskId, 'info', `远程会话已创建（${agent.name}${targetModel ? ' · 模型 ' + targetModel : ''}${agent.workDir ? ' · 工作目录 ' + agent.workDir : ''}）: ${res.sessionId} @ ${target.baseUrl}`)
     // 校验远端 cwd 生效
     if (agent.workDir) {
       const info = await this.client.getSessionInfo(target, res.sessionId)
