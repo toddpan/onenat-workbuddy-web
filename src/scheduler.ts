@@ -106,6 +106,8 @@ export class ScheduleRunner {
               title: `⏰ ${s.name}`,
               memberAgentIds: validAgents.map((a) => a.id),
               message: s.message,
+              scheduleId: scheduleId,
+              scheduleName: s.name,
             })
             for (const a of validAgents) {
               items.push({ agentId: a.id, agentName: a.name, taskId: task.id, taskTitle: task.title, attempts: attempt })

@@ -454,8 +454,8 @@ function isAiTokenAllowedPath(pathname: string, prefix: string): boolean {
   if (p.startsWith('/api/planner/')) return true
   if (p.startsWith('/api/agents/fs/')) return true
   if (p === '/api/resources' || p.startsWith('/api/resources/')) return true
-  // 任务级文件面：下载成员工作区文件 / 附件上传 / 任务清单与统计（读）
-  if (/^\/api\/tasks\/[^/]+\/(files\/download|attachments|todos|stats)$/.test(p)) return true
+  // 任务级文件面：下载成员工作区文件 / 附件上传 / 任务清单与统计（读）；messages 为多轮追问
+  if (/^\/api\/tasks\/[^/]+\/(files\/download|attachments|todos|stats|messages)$/.test(p)) return true
   // 任务只读面（状态/详情/流）：AI 令牌跟踪自己派发的任务用
   if (/^\/api\/tasks\/[^/]+$/.test(p)) return true
   if (p === '/api/tasks' ) return true

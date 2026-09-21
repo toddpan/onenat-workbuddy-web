@@ -63,7 +63,12 @@ header {
   box-shadow: 0 0 12px rgba(56,189,248,.35);
 }
 .brand small { color: var(--tx3); font-weight: 400; font-size: 11px; margin-left: 4px; }
-nav { display: flex; gap: 2px; }
+nav { display: flex; gap: 2px; align-items: center; }
+.nav-sep { width: 1px; height: 18px; background: var(--line); margin: 0 7px; flex: none; }
+.settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; margin-bottom: 12px; }
+.settings-grid .card { margin: 0; }
+.settings-grid .ai-card { grid-column: 1 / -1; }
+@media (max-width: 900px) { .settings-grid { grid-template-columns: 1fr; } }
 nav button {
   background: transparent; color: var(--tx2); padding: 6px 12px; border-radius: var(--rad-sm);
   font-size: 13px; font-weight: 500; transition: all .15s ease;
@@ -71,7 +76,7 @@ nav button {
 }
 nav button .ic { font-size: 1.05em; line-height: 1; }
 nav button:hover { color: var(--tx); background: var(--bg3); }
-nav button.on { color: var(--pri); background: var(--pri-light); font-weight: 600; }
+nav button.on { color: var(--pri); background: var(--pri-light); font-weight: 600; box-shadow: inset 0 2px 0 var(--pri); }
 .hspacer { flex: 1; }
 .chip {
   display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--tx2);
@@ -258,6 +263,17 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
   height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
   color: var(--tx3); gap: 12px; user-select: none;
 }
+
+.qe-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 18px; width: min(620px, 92%); }
+.qe-card {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px; text-align: left;
+  background: var(--bg2); border: 1px solid var(--line); border-radius: var(--rad); padding: 10px 12px;
+  font-family: inherit; color: var(--tx); cursor: pointer; transition: border-color .15s, transform .15s;
+}
+.qe-card:hover { border-color: var(--pri); transform: translateY(-1px); }
+.qe-card .qe-ic { font-size: 16px; }
+.qe-card b { font-size: 12.5px; font-weight: 600; }
+.qe-card .qe-d { font-size: 11px; color: var(--tx3); line-height: 1.45; }
 .chat-loading {
   display: flex; align-items: center; justify-content: center; height: 100%; color: var(--tx3); font-size: 13px; gap: 8px;
 }
@@ -1171,7 +1187,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .mon-alerts.on { display: flex; }
 .mon-alert { font-size: 12px; border: 1px solid rgba(248,113,113,.4); background: var(--err-light); color: #fca5a5; border-radius: 8px; padding: 4px 10px; }
 .mon-alert.warn { border-color: rgba(251,191,36,.4); background: var(--warn-light); color: #fcd34d; }
-.mon-grid { display: grid; grid-template-columns: 5fr 5fr 4fr; gap: 12px; align-items: start; }
+.mon-grid { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 5fr) minmax(0, 4fr); gap: 12px; align-items: start; }
 .mon-col { min-width: 0; }
 .mon-sec-title { font-size: 12.5px; color: var(--tx2); font-weight: 600; margin: 4px 0 8px; display: flex; align-items: center; gap: 6px; }
 .mon-sec-title .cnt { color: var(--pri); font-weight: 500; font-size: 11.5px; }
@@ -1212,7 +1228,8 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .mon-ev { display: flex; gap: 7px; padding: 4px 2px; border-bottom: 1px dashed var(--line); font-size: 12px; line-height: 1.45; }
 .mon-ev:last-child { border-bottom: none; }
 .mon-ev .t { color: var(--tx3); font-size: 11px; font-variant-numeric: tabular-nums; flex: none; padding-top: 1px; }
-.mon-ev .m { color: var(--tx2); min-width: 0; }
+.mon-ev .m { color: var(--tx2); min-width: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.mon-ev:hover .m { -webkit-line-clamp: unset; }
 .mon-ev.error .m { color: #fca5a5; }
 .mon-ev.warn .m { color: #fcd34d; }
 .mon-trend { margin-top: 12px; }
@@ -1251,11 +1268,14 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
     <nav id="nav">
       <button data-v="work" class="on"><span class="ic">💬</span><span class="lb">工作台</span></button>
       <button data-v="monitor"><span class="ic">📊</span><span class="lb">监控大屏</span></button>
-      <button data-v="files"><span class="ic">📁</span><span class="lb">文件管理</span></button>
+      <span class="nav-sep" aria-hidden="true"></span>
       <button data-v="agents"><span class="ic">🤖</span><span class="lb">子智能体</span></button>
-      <button data-v="schedules"><span class="ic">⏰</span><span class="lb">定时任务</span></button>
-      <button data-v="voice"><span class="ic">🎙</span><span class="lb">语音助手</span></button>
       <button data-v="resources"><span class="ic">🗂</span><span class="lb">资源目录</span></button>
+      <button data-v="voice"><span class="ic">🎙</span><span class="lb">语音助手</span></button>
+      <span class="nav-sep" aria-hidden="true"></span>
+      <button data-v="schedules"><span class="ic">⏰</span><span class="lb">定时任务</span></button>
+      <button data-v="files"><span class="ic">📁</span><span class="lb">文件管理</span></button>
+      <span class="nav-sep" aria-hidden="true"></span>
       <button data-v="settings"><span class="ic">⚙️</span><span class="lb">设置</span></button>
     </nav>
     <div class="hspacer"></div>
@@ -1296,9 +1316,17 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
         </div>
         <div class="chat-scroll" id="chat-scroll">
           <div class="chat-empty" id="chat-empty">
-            <div style="font-size:36px">⚡</div>
+            <div style="font-size:34px">⚡</div>
             <div style="font-weight:600;font-size:15px;color:var(--tx)">OneNat WorkBuddy · 智能体协作工作台</div>
-            <div style="font-size:12.5px;max-width:340px;text-align:center;line-height:1.6">点击「＋ 新建任务」开启会话。<br>在输入框键入 @ 可即时指定智能体或注入资源。</div>
+            <div style="font-size:12.5px;max-width:360px;text-align:center;line-height:1.6">点击「＋ 新建任务」开启会话；输入框键入 @ 可即时指定智能体或注入资源。</div>
+            <div class="qe-grid">
+              <button class="qe-card" data-qe="monitor"><span class="qe-ic">📊</span><b>监控大屏</b><span class="qe-d">智能体运行态势 · 任务进度 · 实时动态</span></button>
+              <button class="qe-card" data-qe="agents"><span class="qe-ic">🤖</span><b>子智能体</b><span class="qe-d">添加/编辑执行节点 · 绑定资源与工作目录</span></button>
+              <button class="qe-card" data-qe="voice"><span class="qe-ic">🎙</span><b>语音助手</b><span class="qe-d">接入小智，语音发任务、查结果</span></button>
+              <button class="qe-card" data-qe="schedules"><span class="qe-ic">⏰</span><b>定时任务</b><span class="qe-d">按规则自动派发固定任务给智能体</span></button>
+              <button class="qe-card" data-qe="resources"><span class="qe-ic">🗂</span><b>资源目录</b><span class="qe-d">SSH / DSH / HTTP 资源实时入口</span></button>
+              <button class="qe-card" data-qe="files"><span class="qe-ic">📁</span><b>文件管理</b><span class="qe-d">浏览 / 上传智能体工作区文件</span></button>
+            </div>
           </div>
         </div>
         <div class="todo-dock" id="todo-dock" style="display:none">
@@ -1460,8 +1488,9 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
       <div class="panel-head"><h2>资源目录</h2><span class="sub" id="res-sub"></span><span class="hspacer"></span><button class="btn" id="btn-res-refresh">↻ 强制刷新</button></div>
       <div class="card" style="padding:0"><div class="tbl-wrap"><table class="res" id="res-table"><thead><tr><th>资源</th><th>类型</th><th>公网入口（实时解析）</th><th>内网目标</th><th>技能</th></tr></thead><tbody></tbody></table></div></div>
     </div></div>
-    <div class="view" id="view-settings"><div class="panel" style="max-width:760px">
-      <div class="panel-head"><h2>设置</h2></div>
+    <div class="view" id="view-settings"><div class="panel" style="max-width:1100px;margin:0 auto">
+      <div class="panel-head"><h2>设置</h2><span class="sub">平台连接 · 主任务调度 · AI 接入</span><span class="hspacer"></span><button class="btn pri" id="btn-save-settings">保存设置</button></div>
+      <div class="settings-grid">
       <div class="card">
         <h3 style="margin-bottom:12px">ONENAT 平台</h3>
         <div class="grid2">
@@ -1478,21 +1507,26 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
         </div>
         <div class="settings-note" id="set-planner-note">主任务拆解调用所选子智能体完成；默认自动使用本地子智能体（无则取列表第一个）。拆解用模型可在聊天窗下方工具栏选择，仅作用于主调度。</div>
       </div>
-      <div class="card">
+      <div class="card ai-card">
         <h3 style="margin-bottom:12px">AI 接入（一键安装提示词）</h3>
-        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+          <b style="font-size:12.5px;color:var(--tx2)">① 安装提示词</b>
+          <span style="font-size:11.5px;color:var(--tx3)">复制后发给任意有终端的 AI，它执行命令即完成安装与自检</span>
           <span class="hspacer"></span>
-          <button class="btn" id="btn-reset-ai-token" style="white-space:nowrap" title="生成新令牌，旧令牌立即失效（无需重启）">生成 / 重置</button>
+          <button class="btn" id="btn-reset-ai-token" style="white-space:nowrap" title="生成新令牌，旧令牌立即失效（无需重启）">生成 / 重置 APIKEY</button>
         </div>
-        <textarea id="set-ai-install" readonly rows="6" style="font-family:var(--mono);font-size:12px" placeholder="生成 APIKEY 后这里会出现安装提示词"></textarea>
-        <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
-          <button class="btn pri" id="btn-copy-ai-install" style="white-space:nowrap" title="复制安装提示词，发给任意有终端的 AI 即可一键装技能">复制安装提示词</button>
-          <span style="font-size:11.5px;color:var(--tx3)">APIKEY：<span class="mono" id="set-ai-token" style="font-family:var(--mono)"></span></span>
+        <textarea id="set-ai-install" readonly rows="8" style="font-family:var(--mono);font-size:12px;width:100%" placeholder="生成 APIKEY 后这里会出现安装提示词"></textarea>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+          <button class="btn pri" id="btn-copy-ai-install" style="white-space:nowrap" title="复制安装提示词">复制安装提示词</button>
+          <span style="font-size:11.5px;color:var(--tx3)">AI 执行后会自动装到本机所有 AI 技能目录（DSH / ZCode / Claude）并自检。</span>
         </div>
-        <div class="settings-note">把上面的安装提示词直接发给任意 AI（有终端即可）：提示词内含安装命令与 APIKEY，
-          AI 执行后会自动装到本机所有 AI 技能目录（DSH / ZCode / Claude）并自检。重置令牌后提示词自动更新，旧提示词立即失效。</div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:12px">
+          <b style="font-size:12.5px;color:var(--tx2)">② APIKEY</b>
+          <input id="set-ai-token" readonly style="font-family:var(--mono);flex:1" placeholder="未生成">
+          <span style="font-size:11.5px;color:var(--tx3)">已内嵌于上方提示词，无需单独传递 · 重置后旧令牌立即失效（无需重启）</span>
+        </div>
       </div>
-      <button class="btn pri" id="btn-save-settings">保存设置</button>
+      </div>
     </div></div>
   </main>
 </div>
@@ -1598,7 +1632,7 @@ async function api(path, opts) {
     // 网络层失败（服务重启间隙/连接被重置等）：不抛出，统一按业务失败处理，避免调用方中断卡死
     return { ok: false, error: '网络错误: ' + (e && e.message ? e.message : 'fetch failed') };
   }
-  ${AUTH_ENABLED ? "if (res.status === 401 && path.indexOf('/auth/') !== 0) { location.replace(PREFIX + '/'); return { ok: false, error: '未登录' }; }" : ''}
+  ${AUTH_ENABLED ? "if (res.status === 401 && path.indexOf('/auth/') !== 0) { location.replace(PREFIX + '/' + (location.hash || '')); return { ok: false, error: '未登录' }; }" : ''}
   let json = null; try { json = await res.json(); } catch (e) {}
   if (!json) json = { ok: false, error: 'HTTP ' + res.status };
   return json;
@@ -1613,7 +1647,7 @@ async function apiPostMulti(path, formData) {
 }
 ${AUTH_ENABLED ? `async function doLogout() {
   try { await fetch(API + '/auth/logout', { method: 'POST' }); } catch (e) {}
-  location.replace(PREFIX + '/');
+  location.replace(PREFIX + '/' + (location.hash || ''));
 }` : ''}
 function fmtTime(ts) {
   if (!ts) return '';
@@ -2346,7 +2380,10 @@ document.querySelectorAll('#nav button').forEach(btn => {
   btn.addEventListener('click', () => switchView(btn.dataset.v));
 });
 ${AUTH_ENABLED ? `var logoutBtn = document.getElementById('logout-btn');
-if (logoutBtn) logoutBtn.addEventListener('click', doLogout);` : ''}function switchView(v) {
+if (logoutBtn) logoutBtn.addEventListener('click', doLogout);` : ''}var currentView = 'work';
+function switchView(v) {
+  if (!document.getElementById('view-' + v)) return;
+  currentView = v;
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
   document.querySelectorAll('.view').forEach(x => x.classList.toggle('on', x.id === 'view-' + v));
   if (v === 'files') renderFilesView();
@@ -2356,7 +2393,14 @@ if (logoutBtn) logoutBtn.addEventListener('click', doLogout);` : ''}function swi
   if (v === 'settings') renderSettings();
   if (v === 'voice') voiceStart(); else voiceStop();
   if (v === 'monitor') monitorStart(); else monitorStop();
+  // 当前页签写入 hash：刷新/分享链接都停留在原页签（replaceState 不产生历史噪音）
+  var h = '#' + v;
+  if (location.hash !== h) { try { history.replaceState(null, '', h); } catch (e) { location.hash = h; } }
 }
+window.addEventListener('hashchange', () => {
+  var v = (location.hash || '').replace('#', '') || 'work';
+  if (v !== currentView && document.getElementById('view-' + v)) switchView(v);
+});
 
 // ---------- 移动端侧栏抽屉开关 ----------
 function isMobile() { return window.innerWidth <= 768; }
@@ -2423,9 +2467,15 @@ applyNavLabels();
 // ---------- 初始化引导 ----------
 async function boot() {
   initMentionPopup();
+  document.querySelectorAll('.qe-card[data-qe]').forEach((card) => {
+    card.addEventListener('click', () => switchView(card.dataset.qe));
+  });
   await Promise.all([loadResources(), loadAgents(), loadTasks(), loadSettings(), loadSchedules(), loadPlannerOptions()]);
   await refreshMentionCandidates();
   renderTaskList();
+  // 按 hash 恢复刷新前的页签（#monitor / #voice / #settings …），无 hash 停在工作台
+  var initial = (location.hash || '').replace('#', '');
+  if (initial && document.getElementById('view-' + initial)) switchView(initial);
   setInterval(loadTasksQuiet, 4000);
   // ONENAT 状态自愈：资源目录未加载成功时每 8s 重试（覆盖启动瞬间网络抖动/服务重启窗口），成功或超 2 分钟后停止
   const heal = setInterval(async () => {
@@ -6365,13 +6415,13 @@ function renderSettings() {
   $('set-base').value = s.onenat.baseUrl || '';
   $('set-key').value = s.onenat.apiKey || '';
   $('set-refresh').value = s.onenat.autoRefreshMs || 60000;
-  $('set-ai-token').textContent = s.aiToken || '';
+  $('set-ai-token').value = s.aiToken || '';
   renderAiInstall();
   fillPlannerAgentSetting();
 }
 /** AI 安装提示词：以浏览器当前访问地址为准（反代/远程场景自动匹配），内嵌 APIKEY，发给 AI 照做即可 */
 function renderAiInstall() {
-  const token = $('set-ai-token').textContent;
+  const token = $('set-ai-token').value;
   const base = location.origin + PREFIX;
   const tok = token || '<先生成APIKEY>';
   $('set-ai-install').value =
@@ -6382,14 +6432,14 @@ function renderAiInstall() {
     '3. 之后即可用 wb.mjs 或技能里的工具操作工作台，例如：wb.mjs monitor overview 看监控态势；wb.mjs task create --title x --agents <智能体ID> --message "任务内容" 发任务。';
 }
 $('btn-copy-ai-install').addEventListener('click', () => {
-  if (!$('set-ai-token').textContent) { toast('请先「生成 / 重置」APIKEY', true); return; }
+  if (!$('set-ai-token').value) { toast('请先「生成 / 重置」APIKEY', true); return; }
   navigator.clipboard.writeText($('set-ai-install').value).then(() => toast('✓ 安装提示词已复制，发给 AI 即可安装'), () => toast('复制失败，请手动选择复制', true));
 });
 $('btn-reset-ai-token').addEventListener('click', async () => {
   if (!confirm('生成新 APIKEY？旧令牌立即失效，已安装到各智能体的 SKILL 需要更新令牌。')) return;
   const r = await api('/settings/ai-token/reset', { method: 'POST' });
   if (r.ok && r.data && r.data.token) {
-    $('set-ai-token').textContent = r.data.token;
+    $('set-ai-token').value = r.data.token;
     state.settings = Object.assign({}, state.settings || {}, { aiToken: r.data.token });
     renderAiInstall();
     toast('✓ 新 APIKEY 已生成（无需重启）');

@@ -205,6 +205,24 @@ async function main() {
     console.log('  ⏭️  跳过「派生任务 ⏰ 标记」断言（本机无在线 DSH，派发未产生任务会话）')
   }
 
+  // ---------- 5b. 定时关联持久化 + 标题前缀兜底（回归：调度删除/滚窗后类型丢失） ----------
+  await req('DELETE', `${PREFIX}/api/schedules/${schedId}`)
+  const ovDel = await waitOverview((d) => !(d?.schedules || []).some((x) => x.id === schedId), '调度删除生效')
+  if (firedTask?.id) {
+    const persisted = await waitOverview((d) => {
+      const x = (d?.tasks || []).find((y) => y.id === firedTask.id)
+      return x && x.type === 'schedule'
+    }, '持久化 ⏰ 标识')
+    const pTask = (persisted?.tasks || []).find((x) => x.id === firedTask.id)
+    check('调度删除后派生任务仍为 ⏰ 定时任务（scheduleId 持久化）', pTask?.type === 'schedule' && pTask?.typeIcon === '⏰', `type=${pTask?.type}`)
+  }
+  await req('PATCH', `${PREFIX}/api/tasks/${taskId}`, { title: '⏰ 历史定时任务' })
+  const ovPre = await waitOverview((d) => (d?.tasks || []).some((x) => x.id === taskId && x.type === 'schedule'), '标题前缀兜底')
+  const pre = (ovPre?.tasks || []).find((x) => x.id === taskId)
+  check('标题 ⏰ 前缀兜底识别（无任何关联信息的历史任务）', pre?.type === 'schedule' && pre?.scheduleName === '历史定时任务', `type=${pre?.type} name=${pre?.scheduleName}`)
+  await req('PATCH', `${PREFIX}/api/tasks/${taskId}`, { title: '监控冒烟任务' })
+  await waitOverview((d) => (d?.tasks || []).some((x) => x.id === taskId && x.type === 'chat'), '恢复 chat 类型')
+
   // ---------- 6. 历史快照结构 ----------
   const hist = (await req('GET', `${PREFIX}/api/monitor/history?days=7`)).json?.data
   check('history 返回 7 天窗口', Array.isArray(hist?.days) && hist.days.length === 7, `len=${hist?.days?.length}`)

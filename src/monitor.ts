@@ -691,6 +691,33 @@ export class MonitorService {
 
   private taskView(t: WorkTask, schedule: ScheduledTask | undefined): TaskMonitor {
     const running = this.engine.isRunning(t.id)
+    // 类型识别三层兜底：创建时持久化的 scheduleId → runs 关联（50 条窗口内）→ 标题 ⏰ 前缀（历史任务/调度已删）
+    if (!schedule && t.scheduleId) {
+      schedule = {
+        id: t.scheduleId,
+        name: t.scheduleName || t.title.replace(/^⏰\s*/, ''),
+        agentIds: [],
+        message: '',
+        rule: { kind: 'daily', times: [] },
+        enabled: false,
+        createdAt: t.createdAt,
+        updatedAt: t.updatedAt,
+        runs: [],
+      } as ScheduledTask
+    }
+    if (!schedule && t.title.startsWith('⏰')) {
+      schedule = {
+        id: `legacy-${t.id}`,
+        name: t.title.replace(/^⏰\s*/, ''),
+        agentIds: [],
+        message: '',
+        rule: { kind: 'daily', times: [] },
+        enabled: false,
+        createdAt: t.createdAt,
+        updatedAt: t.updatedAt,
+        runs: [],
+      } as ScheduledTask
+    }
     const type: TaskType = schedule ? 'schedule' : t.mode === 'orchestrate' ? 'orchestrate' : 'chat'
     const typeIcon = type === 'schedule' ? '⏰' : type === 'orchestrate' ? '🎯' : '💬'
     const typeLabel = type === 'schedule' ? '定时任务' : type === 'orchestrate' ? '协同编排' : '直通对话'

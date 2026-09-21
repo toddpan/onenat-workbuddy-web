@@ -24,6 +24,9 @@ export interface CreateTaskInput {
   memberAgentIds: string[]
   mode?: 'chat' | 'orchestrate'
   message?: string
+  /** 由定时任务派生时记录来源（任务列表/监控屏的 ⏰ 类型标识随任务持久化） */
+  scheduleId?: string
+  scheduleName?: string
 }
 
 /** 取 prompt 尾部片段：降级轮询时供远端 history 定位本次回合的起点 user 消息（注入消息不含用户文本，天然排除） */
@@ -390,6 +393,8 @@ export class TaskEngine {
       sessions: {},
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      ...(input.scheduleId ? { scheduleId: input.scheduleId } : {}),
+      ...(input.scheduleName ? { scheduleName: input.scheduleName } : {}),
     }
     this.store.upsertTask(task)
     if (input.message?.trim()) {
