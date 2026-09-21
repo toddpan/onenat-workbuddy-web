@@ -1,5 +1,5 @@
 /**
- * @dsh-external/onenat-workbuddy - Interactive Web Console UI
+ * onenat-workbuddy-web - Interactive Web Console UI
  *
  * 单页控制台: 工作台(任务多轮聊天) / 子智能体 / 资源目录 / 设置
  *
@@ -667,6 +667,38 @@ body.task-running .msg.system.sys-planning .content::after {
   user-select: none; border-top: 1px solid var(--line);
 }
 
+/* ---- 任务清单坞（对齐 DSH web TodoPanel：任务 + N 进行中 · M 待处理 + 运行时长） ---- */
+.todo-dock {
+  flex: none; margin: 0 14px 6px; border: 1px solid var(--line); border-radius: var(--rad);
+  background: var(--bg2); overflow: hidden;
+}
+.todo-head {
+  width: 100%; display: flex; align-items: center; gap: 8px; padding: 7px 10px;
+  background: transparent; color: var(--tx2); font-size: 12.5px; text-align: left;
+}
+.todo-head:hover { background: var(--bg-hover); }
+.todo-lead { display: inline-flex; align-items: center; color: var(--pri); flex: none; }
+.todo-title { color: var(--tx); font-weight: 600; flex: none; }
+.todo-progress { color: var(--tx3); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.todo-elapsed { color: var(--tx3); font-size: 11.5px; flex: none; font-variant-numeric: tabular-nums; }
+.todo-elapsed.run { color: var(--pri); }
+.todo-chev { flex: none; color: var(--tx3); font-size: 10.5px; }
+.todo-list { list-style: none; max-height: 170px; overflow-y: auto; padding: 2px 0 6px; border-top: 1px solid var(--line); }
+.todo-item { display: flex; gap: 8px; align-items: flex-start; padding: 4px 12px; font-size: 12.5px; line-height: 1.5; color: var(--tx2); }
+.todo-item .g { flex: none; width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; margin-top: 1px; }
+.todo-item .c { flex: 1; min-width: 0; word-break: break-word; }
+.todo-item[data-status="in_progress"] .c { color: var(--tx); }
+.todo-item[data-status="completed"] .c { color: var(--tx3); }
+.todo-item[data-status="completed"] .g { color: var(--ok); }
+.todo-item[data-status="in_progress"] .g { color: var(--pri); }
+/* 会话已结束但条目仍停留在进行中：琥珀静态环，不转（区别于运行中的蓝色转圈） */
+.todo-item[data-status="unfinished"] .g { color: var(--warn); }
+.todo-item[data-status="unfinished"] .c { color: var(--tx2); }
+.todo-item[data-status="pending"] .g { color: var(--tx3); }
+.todo-spin { animation: todo-spin 1.1s linear infinite; transform-origin: 7px 7px; }
+@keyframes todo-spin { to { transform: rotate(360deg); } }
+.todo-empty { padding: 5px 12px 8px; font-size: 11.5px; color: var(--tx3); border-top: 1px solid var(--line); }
+
 /* 附件上传面板 */
 #upload-panel {
   position: fixed; right: 18px; bottom: 90px; z-index: 9000; width: 360px; max-width: calc(100vw - 36px);
@@ -941,6 +973,9 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
   .jump-bottom { right: 12px; padding: 8px 11px; font-size: 12px; }
   .jump-bottom .jb-t { display: none; }
   .task-stats { padding: 4px 10px 5px; font-size: 10.5px; }
+  .todo-dock { margin: 0 8px 6px; }
+  .todo-list { max-height: 132px; }
+  .todo-elapsed { font-size: 11px; }
 
   /* ---- 提及浮层 ---- */
   .mention-popup { width: calc(100vw - 24px); left: 12px; }
@@ -1122,6 +1157,91 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
   padding: 12px 14px; font-family: var(--mono); font-size: 12px; line-height: 1.55;
   color: var(--tx); overflow: auto; max-height: 520px; white-space: pre-wrap; word-break: break-all;
 }
+/* ---------- 监控大屏 ---------- */
+.mon-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.mon-status { color: var(--tx3); font-size: 12px; }
+.mon-kpis { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; margin-bottom: 12px; }
+.mon-kpi { background: var(--bg2); border: 1px solid var(--line); border-radius: var(--rad); padding: 9px 12px; min-width: 0; }
+.mon-kpi .lb { color: var(--tx3); font-size: 11.5px; white-space: nowrap; }
+.mon-kpi .v { font-size: 19px; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mon-kpi .d { color: var(--tx3); font-size: 10.5px; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mon-kpi .v.ok { color: var(--ok); } .mon-kpi .v.err { color: var(--err); }
+.mon-kpi .v.pri { color: var(--pri); } .mon-kpi .v.warn { color: var(--warn); }
+.mon-alerts { display: none; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.mon-alerts.on { display: flex; }
+.mon-alert { font-size: 12px; border: 1px solid rgba(248,113,113,.4); background: var(--err-light); color: #fca5a5; border-radius: 8px; padding: 4px 10px; }
+.mon-alert.warn { border-color: rgba(251,191,36,.4); background: var(--warn-light); color: #fcd34d; }
+.mon-grid { display: grid; grid-template-columns: 5fr 5fr 4fr; gap: 12px; align-items: start; }
+.mon-col { min-width: 0; }
+.mon-sec-title { font-size: 12.5px; color: var(--tx2); font-weight: 600; margin: 4px 0 8px; display: flex; align-items: center; gap: 6px; }
+.mon-sec-title .cnt { color: var(--pri); font-weight: 500; font-size: 11.5px; }
+.mon-sec-title .spacer { flex: 1; }
+.mon-list { display: flex; flex-direction: column; gap: 7px; max-height: 44vh; overflow: auto; padding-right: 2px; }
+.mon-agent, .mon-task { border: 1px solid var(--line); border-radius: var(--rad); background: var(--bg2); padding: 8px 11px; cursor: pointer; transition: border-color .15s; min-width: 0; }
+.mon-agent:hover, .mon-task:hover { border-color: var(--line2); }
+.mon-row1 { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.mon-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--tx3); flex: none; }
+.mon-dot.on { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+.mon-dot.off { background: var(--err); box-shadow: 0 0 6px var(--err); }
+.mon-nm { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mon-md { color: var(--tx3); font-size: 11px; white-space: nowrap; }
+.mon-spacer { flex: 1; }
+.mon-badge { font-size: 10.5px; border-radius: 999px; padding: 1px 8px; border: 1px solid var(--line); color: var(--tx3); white-space: nowrap; flex: none; }
+.mon-badge.busy { color: var(--pri); border-color: rgba(56,189,248,.45); }
+.mon-badge.run { color: var(--pri); border-color: rgba(56,189,248,.45); }
+.mon-badge.ok { color: var(--ok); border-color: rgba(52,211,153,.4); }
+.mon-badge.bad { color: var(--err); border-color: rgba(248,113,113,.4); }
+.mon-badge.warn { color: var(--warn); border-color: rgba(251,191,36,.4); }
+.mon-act { margin-top: 4px; font-size: 12px; color: var(--tx2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mon-act b { color: var(--tx); font-weight: 600; }
+.mon-err-line { margin-top: 4px; font-size: 12px; color: var(--err); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mon-res { margin-top: 5px; display: flex; flex-wrap: wrap; gap: 4px; }
+.mon-res-chip { font-size: 10.5px; border: 1px solid var(--line); border-radius: 6px; padding: 1px 7px; color: var(--tx3); }
+.mon-res-chip.on { color: var(--tx2); }
+.mon-res-chip.hot { color: var(--warn); border-color: rgba(251,191,36,.5); background: var(--warn-light); }
+.mon-res-chip.off { color: var(--err); border-color: rgba(248,113,113,.35); }
+.mon-hl { margin-top: 3px; font-size: 12px; color: var(--tx2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mon-hl.run { color: var(--pri); }
+.mon-hl.ok { color: var(--ok); }
+.mon-hl.bad { color: var(--err); }
+.mon-hl.stop { color: var(--warn); }
+.mon-desc { margin-top: 2px; font-size: 11px; color: var(--tx3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mon-bar { margin-top: 5px; height: 3px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.mon-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--pri), var(--ok)); transition: width .5s; }
+.mon-feed { display: flex; flex-direction: column; max-height: 60vh; overflow: auto; }
+.mon-ev { display: flex; gap: 7px; padding: 4px 2px; border-bottom: 1px dashed var(--line); font-size: 12px; line-height: 1.45; }
+.mon-ev:last-child { border-bottom: none; }
+.mon-ev .t { color: var(--tx3); font-size: 11px; font-variant-numeric: tabular-nums; flex: none; padding-top: 1px; }
+.mon-ev .m { color: var(--tx2); min-width: 0; }
+.mon-ev.error .m { color: #fca5a5; }
+.mon-ev.warn .m { color: #fcd34d; }
+.mon-trend { margin-top: 12px; }
+.mon-trend svg { width: 100%; height: 130px; display: block; background: var(--bg2); border: 1px solid var(--line); border-radius: var(--rad); }
+.mon-legend { display: flex; gap: 14px; font-size: 11px; color: var(--tx3); margin-top: 5px; }
+.mon-legend i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+.mon-empty { color: var(--tx3); font-size: 12px; padding: 10px 0; text-align: center; }
+/* ---------- 语音助手（小智 MCP 接入） ---------- */
+.xz-list { display: flex; flex-direction: column; gap: 8px; }
+.xz-row { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: var(--rad); background: var(--bg2); padding: 10px 14px; }
+.xz-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--tx3); flex: none; }
+.xz-dot.on { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+.xz-dot.off { background: var(--err); box-shadow: 0 0 6px var(--err); }
+.xz-name { font-weight: 600; white-space: nowrap; }
+.xz-ep { flex: 1; min-width: 0; font-family: var(--mono); font-size: 12px; color: var(--tx3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.xz-empty { color: var(--tx3); font-size: 12.5px; padding: 14px 0; text-align: center; }
+/* 任务详情弹层 */
+.mtd-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.mtd-sec { margin-top: 12px; }
+.mtd-sec > b { display: block; font-size: 12.5px; color: var(--tx2); margin-bottom: 6px; }
+.mtd-turn { border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; margin-bottom: 6px; background: var(--bg2); }
+.mtd-turn .mtd-role { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--tx3); margin-bottom: 3px; }
+.mtd-turn .mtd-role .who { color: var(--tx2); font-weight: 600; }
+.mtd-turn .mtd-text { font-size: 12.5px; line-height: 1.55; color: var(--tx); white-space: pre-wrap; word-break: break-word; max-height: 180px; overflow: auto; }
+.mtd-tool { font-size: 11.5px; color: var(--tx3); padding: 2px 0; font-family: var(--mono); }
+.mtd-tool .tn { color: var(--acc); }
+.mtd-tool.ok .tn { color: var(--ok); }
+.mtd-tool.err .tn { color: var(--err); }
+.mtd-tool.run .tn { color: var(--pri); }
 </style>
 </head>
 <body>
@@ -1130,9 +1250,11 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
     <div class="brand"><div class="logo">⚡</div><span id="brand-title">OneNat WorkBuddy</span><small>多智能体协作工作台</small></div>
     <nav id="nav">
       <button data-v="work" class="on"><span class="ic">💬</span><span class="lb">工作台</span></button>
+      <button data-v="monitor"><span class="ic">📊</span><span class="lb">监控大屏</span></button>
       <button data-v="files"><span class="ic">📁</span><span class="lb">文件管理</span></button>
       <button data-v="agents"><span class="ic">🤖</span><span class="lb">子智能体</span></button>
       <button data-v="schedules"><span class="ic">⏰</span><span class="lb">定时任务</span></button>
+      <button data-v="voice"><span class="ic">🎙</span><span class="lb">语音助手</span></button>
       <button data-v="resources"><span class="ic">🗂</span><span class="lb">资源目录</span></button>
       <button data-v="settings"><span class="ic">⚙️</span><span class="lb">设置</span></button>
     </nav>
@@ -1179,6 +1301,17 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
             <div style="font-size:12.5px;max-width:340px;text-align:center;line-height:1.6">点击「＋ 新建任务」开启会话。<br>在输入框键入 @ 可即时指定智能体或注入资源。</div>
           </div>
         </div>
+        <div class="todo-dock" id="todo-dock" style="display:none">
+          <button class="todo-head" id="todo-head" aria-expanded="true" title="远端 DSH 会话的任务清单（todo_write）与运行时长 · 点击折叠/展开">
+            <span class="todo-lead" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="1.4" y="1.4" width="11.2" height="11.2" rx="2.6" stroke="currentColor" stroke-width="1.2"/><path d="M4.3 7.1l1.8 1.8 3.5-3.7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span class="todo-title">任务</span>
+            <span class="todo-progress" id="todo-progress"></span>
+            <span class="hspacer"></span>
+            <span class="todo-elapsed" id="todo-elapsed" style="display:none"></span>
+            <span class="todo-chev" id="todo-chev" aria-hidden="true">▴</span>
+          </button>
+          <ul class="todo-list" id="todo-list"></ul>
+        </div>
         <div class="chat-input-container">
           <!-- @ 提及自动联想浮层 -->
           <div class="mention-popup" id="mention-popup">
@@ -1215,6 +1348,51 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <div class="task-stats" id="task-stats" style="display:none"></div>
         </div>
       </section>
+    </div>
+    <div class="view" id="view-voice">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>🎙 语音助手</h2>
+          <span class="sub">小智平台 MCP 接入（可多实例）· 工作台 11 个工具注册为语音可调用的 MCP 工具 · 变更即时生效（免重启）</span>
+          <span class="hspacer"></span>
+          <button class="btn pri" id="btn-xz-add">＋ 添加接入点</button>
+        </div>
+        <div class="xz-list" id="xz-list"><div class="mon-empty">加载中…</div></div>
+        <div class="settings-note" style="margin-top:12px">接入点地址在小智平台「MCP 插件」页查看（形如 wss://api.xiaozhi.me/mcp/?token=…）。
+          连接断开自动重连；停用/删除即时生效。注册的工具清单与「设置 → AI 接入」的工具通道实时同步，语音即可发任务、管理任务、看监控、管理定时任务。</div>
+      </div>
+    </div>
+    <div class="view" id="view-monitor">
+      <div class="panel">
+        <div class="mon-head">
+          <div class="panel-head" style="margin:0"><h2>📊 监控大屏</h2><span class="sub">智能体运行态势 · 每 5 秒自动刷新 · 点智能体看会话，点任务看详情</span></div>
+          <span class="hspacer"></span>
+          <span class="mon-status" id="mon-status"></span>
+          <button class="btn" id="mon-open-proj" title="独立暗色全屏投屏页（适合挂显示器）">🖥 投屏页</button>
+        </div>
+        <div class="mon-kpis" id="mon-kpis"><div class="mon-empty" style="grid-column:1/-1">加载中…</div></div>
+        <div class="mon-alerts" id="mon-alerts"></div>
+        <div class="mon-grid">
+          <div class="mon-col">
+            <div class="mon-sec-title">🤖 子智能体 <span class="cnt" id="mon-ag-cnt"></span><span class="spacer"></span><span style="color:var(--tx3);font-weight:400;font-size:11px">绿 在线 · 红 离线</span></div>
+            <div class="mon-list" id="mon-agents"><div class="mon-empty">加载中…</div></div>
+            <div class="mon-sec-title" style="margin-top:14px">🗂 资源调用 <span class="cnt" id="mon-res-cnt"></span></div>
+            <div class="mon-list" id="mon-resources" style="max-height:26vh"><div class="mon-empty">加载中…</div></div>
+          </div>
+          <div class="mon-col">
+            <div class="mon-sec-title">📋 任务会话 <span class="cnt" id="mon-task-cnt"></span><span class="spacer"></span><span style="color:var(--tx3);font-weight:400;font-size:11px">⏰ 定时 · 🎯 编排 · 💬 直通</span></div>
+            <div class="mon-list" id="mon-tasks"><div class="mon-empty">加载中…</div></div>
+          </div>
+          <div class="mon-col">
+            <div class="mon-sec-title">🔔 实时动态</div>
+            <div class="mon-feed" id="mon-feed"><div class="mon-empty">暂无事件</div></div>
+          </div>
+        </div>
+        <div class="mon-trend">
+          <div class="mon-sec-title">📈 近 24 小时趋势 <span class="spacer"></span><span class="mon-legend" style="margin:0"><span><i style="background:var(--pri)"></i>运行中</span><span><i style="background:var(--ok)"></i>今日完成累计</span><span><i style="background:var(--err)"></i>今日失败累计</span></span></div>
+          <svg id="mon-chart" viewBox="0 0 600 130" preserveAspectRatio="none"></svg>
+        </div>
+      </div>
     </div>
     <div class="view" id="view-files"><div class="panel files-panel">
       <div class="panel-head files-head">
@@ -1299,6 +1477,20 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <select id="set-planner-agent"></select>
         </div>
         <div class="settings-note" id="set-planner-note">主任务拆解调用所选子智能体完成；默认自动使用本地子智能体（无则取列表第一个）。拆解用模型可在聊天窗下方工具栏选择，仅作用于主调度。</div>
+      </div>
+      <div class="card">
+        <h3 style="margin-bottom:12px">AI 接入（一键安装提示词）</h3>
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+          <span class="hspacer"></span>
+          <button class="btn" id="btn-reset-ai-token" style="white-space:nowrap" title="生成新令牌，旧令牌立即失效（无需重启）">生成 / 重置</button>
+        </div>
+        <textarea id="set-ai-install" readonly rows="6" style="font-family:var(--mono);font-size:12px" placeholder="生成 APIKEY 后这里会出现安装提示词"></textarea>
+        <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+          <button class="btn pri" id="btn-copy-ai-install" style="white-space:nowrap" title="复制安装提示词，发给任意有终端的 AI 即可一键装技能">复制安装提示词</button>
+          <span style="font-size:11.5px;color:var(--tx3)">APIKEY：<span class="mono" id="set-ai-token" style="font-family:var(--mono)"></span></span>
+        </div>
+        <div class="settings-note">把上面的安装提示词直接发给任意 AI（有终端即可）：提示词内含安装命令与 APIKEY，
+          AI 执行后会自动装到本机所有 AI 技能目录（DSH / ZCode / Claude）并自检。重置令牌后提示词自动更新，旧提示词立即失效。</div>
       </div>
       <button class="btn pri" id="btn-save-settings">保存设置</button>
     </div></div>
@@ -1665,6 +1857,490 @@ function lastLine(s) {
   return (lines[lines.length - 1] || '').slice(0, 90);
 }
 
+// ---------- 监控大屏 ----------
+var monData = null;
+var monTimer = null;
+var monHist = [];
+var monHistLabels = [];
+var monHistAt = 0;
+
+function monitorStart() {
+  if ($('mon-open-proj') && !$('mon-open-proj')._wired) {
+    $('mon-open-proj')._wired = true;
+    $('mon-open-proj').addEventListener('click', () => window.open(PREFIX + '/monitor', '_blank'));
+  }
+  if (monTimer) return;
+  renderMonitor();
+  monTimer = setInterval(renderMonitor, 5000);
+}
+function monitorStop() {
+  if (monTimer) { clearInterval(monTimer); monTimer = null; }
+}
+
+async function renderMonitor() {
+  var r = await api('/monitor/overview');
+  var st = $('mon-status');
+  if (!r.ok) { st.textContent = '⚠ 加载失败：' + (r.error || '未知'); return; }
+  st.textContent = '更新于 ' + fmtTime(Date.now());
+  monData = r.data;
+  renderMonKpis(monData.kpi);
+  renderMonAlerts(monData.alerts || []);
+  renderMonAgents(monData.agents || []);
+  renderMonTasks(monData.tasks || []);
+  renderMonFeed(monData.events || []);
+  renderMonResources(monData.agents || [], monData.sshPool || []);
+  if (Date.now() - monHistAt > 60000) {
+    monHistAt = Date.now();
+    var hr = await api('/monitor/history?days=2');
+    if (hr.ok) { monHist = (hr.data.days || []); renderMonChart(); }
+  }
+}
+
+function monFmtTok(n) {
+  n = n || 0;
+  if (n >= 1e8) return (n / 1e8).toFixed(2) + ' 亿';
+  if (n >= 1e4) return (n / 1e4).toFixed(1) + 'k';
+  return String(n);
+}
+function monFmtElapse(ms) {
+  if (!ms || ms < 0) return '';
+  var s = Math.floor(ms / 1000);
+  if (s < 60) return s + 's';
+  var m = Math.floor(s / 60); if (m < 60) return m + 'm' + (s % 60) + 's';
+  var h = Math.floor(m / 60); if (h < 24) return h + 'h' + (m % 60) + 'm';
+  return Math.floor(h / 24) + 'd' + (h % 24) + 'h';
+}
+function monFmtCountdown(ts) {
+  if (!ts) return '';
+  var diff = ts - Date.now();
+  if (diff <= 0) return '即将触发';
+  var m = Math.floor(diff / 60000);
+  if (m < 60) return m + ' 分钟后';
+  var h = Math.floor(m / 60);
+  if (h < 24) return h + ' 小时 ' + (m % 60) + ' 分后';
+  return Math.floor(h / 24) + ' 天后';
+}
+var MON_EV_ICON = {
+  task_started: '▶️', task_completed: '✅', task_failed: '❌', task_cancelled: '⏹️',
+  subtask_completed: '✔️', subtask_failed: '✖️', plan_created: '🧩', schedule_fired: '⏰',
+  agent_online: '🟢', agent_offline: '🔴', resource_drift: '🔀', resource_offline: '📴', resource_online: '🔌'
+};
+
+function renderMonKpis(k) {
+  var tiles = [
+    { lb: '🤖 在线智能体', v: k.agentsOnline + ' / ' + k.agentsTotal, cls: k.agentsOnline ? 'ok' : 'err', d: k.agentsBusy + ' 执行中' + (k.agentsDisabled ? ' · ' + k.agentsDisabled + ' 停用' : '') },
+    { lb: '⚡ 运行中任务', v: String(k.tasksRunning), cls: 'pri', d: '并发执行' },
+    { lb: '✅ 今日完成', v: String(k.tasksCompletedToday), cls: 'ok', d: '自 0 点' },
+    { lb: '❌ 今日失败', v: String(k.tasksFailedToday), cls: k.tasksFailedToday ? 'err' : '', d: k.tasksFailedToday ? '需关注' : '正常' },
+    { lb: '🪙 今日 Token', v: monFmtTok(k.tokensInputToday + k.tokensOutputToday), cls: '', d: '缓存命中 ' + monFmtTok(k.cacheReadToday) },
+    { lb: '🛠 今日工具调用', v: String(k.toolCallsToday), cls: '', d: k.schedulesEnabled + '/' + k.schedulesTotal + ' 定时启用' },
+    { lb: '⏰ 下次定时', v: k.nextScheduleAt ? monFmtCountdown(k.nextScheduleAt) : '—', cls: 'warn', d: k.nextScheduleName || '无启用定时任务' }
+  ];
+  var html = '';
+  for (var i = 0; i < tiles.length; i++) {
+    var t = tiles[i];
+    html += '<div class="mon-kpi"><div class="lb">' + t.lb + '</div><div class="v ' + t.cls + '" title="' + esc(t.v) + '">' + esc(t.v) + '</div><div class="d" title="' + esc(t.d) + '">' + esc(t.d) + '</div></div>';
+  }
+  $('mon-kpis').innerHTML = html;
+}
+
+function renderMonAlerts(alerts) {
+  var el = $('mon-alerts');
+  if (!alerts.length) { el.className = 'mon-alerts'; el.innerHTML = ''; return; }
+  var html = '';
+  for (var i = 0; i < Math.min(alerts.length, 6); i++) {
+    html += '<span class="mon-alert ' + (alerts[i].level === 'warn' ? 'warn' : '') + '">⚠ ' + esc(alerts[i].msg) + '</span>';
+  }
+  el.className = 'mon-alerts on';
+  el.innerHTML = html;
+}
+
+function renderMonAgents(agents) {
+  var el = $('mon-agents');
+  var onlineCnt = agents.filter(function(a) { return a.online; }).length;
+  $('mon-ag-cnt').textContent = onlineCnt + '/' + agents.length + ' 在线';
+  if (!agents.length) { el.innerHTML = '<div class="mon-empty">还没有子智能体，去「子智能体」页创建</div>'; return; }
+  var busy = agents.filter(function(a) { return a.busy; });
+  var rest = agents.filter(function(a) { return !a.busy; });
+  var ordered = busy.concat(rest);
+  var html = '';
+  for (var i = 0; i < ordered.length; i++) {
+    var a = ordered[i];
+    var stCls = !a.enabled ? '' : (a.online ? 'on' : 'off');
+    var badge = a.busy ? '<span class="mon-badge busy">⚡ 执行中 ×' + a.runningCount + '</span>'
+      : (!a.enabled ? '<span class="mon-badge">已停用</span>'
+      : (a.online ? '<span class="mon-badge">空闲</span>' : '<span class="mon-badge bad">离线</span>'));
+    var resChips = '';
+    var resources = a.resources || [];
+    for (var j = 0; j < resources.length; j++) {
+      var rr = resources[j];
+      var inUse = rr.inUse && rr.inUse.length;
+      var cls = inUse ? 'hot' : (rr.online ? 'on' : 'off');
+      var mark = inUse ? ' 🔥' : (rr.online ? '' : ' ⚠');
+      resChips += '<span class="mon-res-chip ' + cls + '" title="' + esc(rr.kind) + ' · ' + esc(rr.endpoint || '入口未知') + '">' + esc(rr.name) + mark + '</span>';
+    }
+    var act = a.busy && a.currentActivity ? '<div class="mon-act">▸ <b>' + esc(a.currentActivity) + '</b></div>'
+      : (a.online ? '' : '<div class="mon-err-line">' + esc(a.error || '不可达') + '</div>');
+    html += '<div class="mon-agent" data-agent="' + esc(a.id) + '" title="点击查看该智能体的会话列表">' +
+      '<div class="mon-row1"><span class="mon-dot ' + stCls + '"></span><span class="mon-nm">' + esc(a.name) + '</span>' +
+      '<span class="mon-md">' + esc(a.model || '') + '</span><span class="mon-spacer"></span>' + badge + '</div>' + act +
+      (resChips ? '<div class="mon-res">' + resChips + '</div>' : '') +
+      '</div>';
+  }
+  el.innerHTML = html;
+  el.querySelectorAll('.mon-agent').forEach(function(card) {
+    card.addEventListener('click', function() { monOpenAgent(card.dataset.agent); });
+  });
+}
+
+function monHlCls(t) {
+  if (t.running) return 'run';
+  if (t.status === 'completed' || t.status === 'success') return 'ok';
+  if (t.status === 'failed') return 'bad';
+  if (t.status === 'cancelled') return 'stop';
+  return '';
+}
+
+/** 定时派生任务标题自带「⏰ 」前缀，图标位已单独渲染，避免重复 */
+function monTaskTitle(t) {
+  var s = String(t.title || '');
+  if (t.type === 'schedule') {
+    while (s.charAt(0) === '⏰' || s.charAt(0) === ' ') s = s.slice(1);
+  }
+  return s;
+}
+
+function renderMonTasks(tasks) {
+  var el = $('mon-tasks');
+  var running = tasks.filter(function(t) { return t.running; });
+  $('mon-task-cnt').textContent = running.length + ' 运行 / ' + tasks.length + ' 总数';
+  if (!tasks.length) { el.innerHTML = '<div class="mon-empty">暂无任务会话</div>'; return; }
+  var rest = tasks.filter(function(t) { return !t.running; }).slice(0, 14);
+  var ordered = running.concat(rest);
+  var html = '';
+  for (var i = 0; i < ordered.length; i++) {
+    var t = ordered[i];
+    var act = t.activity || {};
+    var sub = '';
+    if (act.subtasks && act.subtasks.total) {
+      sub = '子任务 ' + act.subtasks.completed + '/' + act.subtasks.total + ' 完成' + (act.subtasks.currentTitle ? ' · 「' + esc(act.subtasks.currentTitle) + '」' : '');
+    } else if (act.todoCurrent) {
+      sub = '当前步骤：' + esc(act.todoCurrent);
+    } else if (act.todosTotal) {
+      sub = '清单 ' + act.todosDone + '/' + act.todosTotal;
+    }
+    var pct = (act.subtasks && act.subtasks.total) ? Math.round(100 * act.subtasks.completed / act.subtasks.total) : null;
+    html += '<div class="mon-task' + (t.running ? '' : ' done') + '" data-task="' + esc(t.id) + '" title="点击查看任务详情">' +
+      '<div class="mon-row1"><span>' + t.typeIcon + '</span><span class="mon-nm">' + esc(monTaskTitle(t)) + '</span>' +
+      '<span class="mon-spacer"></span>' +
+      (t.running ? '<span class="mon-badge run">⏱ ' + monFmtElapse(t.elapsedMs) + '</span>' : '') +
+      '<span class="mon-badge ' + (t.running ? 'run' : monHlCls(t) === 'bad' ? 'bad' : monHlCls(t) === 'ok' ? 'ok' : monHlCls(t) === 'stop' ? 'warn' : '') + '">' + esc(t.status === 'running' ? '运行中' : t.status === 'completed' || t.status === 'success' ? '完成' : t.status === 'failed' ? '失败' : t.status === 'cancelled' ? '已中止' : t.status === 'draft' ? '草稿' : '部分成功') + '</span>' +
+      '</div>' +
+      '<div class="mon-hl ' + monHlCls(t) + '">' + esc(t.headline) + '</div>' +
+      (t.description ? '<div class="mon-desc" title="' + esc(t.description) + '">' + esc(t.description) + '</div>' : '') +
+      (sub ? '<div class="mon-desc">' + sub + '</div>' : '') +
+      (pct != null ? '<div class="mon-bar"><i style="width:' + pct + '%"></i></div>' : '') +
+      '</div>';
+  }
+  el.innerHTML = html;
+  el.querySelectorAll('.mon-task').forEach(function(card) {
+    card.addEventListener('click', function() { monOpenTask(card.dataset.task); });
+  });
+}
+
+function renderMonFeed(events) {
+  var el = $('mon-feed');
+  if (!events.length) { el.innerHTML = '<div class="mon-empty">暂无事件 · 等待任务与定时触发</div>'; return; }
+  var html = '';
+  for (var i = 0; i < Math.min(events.length, 80); i++) {
+    var e = events[i];
+    html += '<div class="mon-ev ' + e.level + '"><span class="t">' + fmtTime(e.at) + '</span><span>' + (MON_EV_ICON[e.kind] || '·') + '</span><span class="m">' + esc(e.msg) + '</span></div>';
+  }
+  el.innerHTML = html;
+}
+
+function renderMonResources(agents, sshPool) {
+  var el = $('mon-resources');
+  var rows = [];
+  var total = 0, hot = 0;
+  for (var i = 0; i < agents.length; i++) {
+    var a = agents[i];
+    var resources = a.resources || [];
+    for (var j = 0; j < resources.length; j++) {
+      var r = resources[j];
+      total += 1;
+      var inUse = r.inUse && r.inUse.length;
+      if (inUse) hot += 1;
+      var useBy = inUse ? ' 🔥 ' + esc(r.inUse[0].taskTitle) : '';
+      rows.push('<div class="mon-row1" style="padding:2px 0"><span class="mon-badge ' + (inUse ? 'warn' : r.online ? 'ok' : 'bad') + '">' + esc(a.name) + '</span>' +
+        '<span class="mon-nm" style="font-weight:400">' + esc(r.name) + '</span>' +
+        '<span class="mon-md">' + esc(r.kind) + (r.online ? '' : ' · 离线') + useBy + '</span><span class="mon-spacer"></span></div>');
+    }
+  }
+  for (var s = 0; s < sshPool.length; s++) {
+    var p = sshPool[s];
+    if (!(p.inUse && p.inUse.length)) continue;
+    hot += 1;
+    rows.push('<div class="mon-row1" style="padding:2px 0"><span class="mon-badge warn">SSH 池</span>' +
+      '<span class="mon-nm" style="font-weight:400">' + esc(p.name) + '</span>' +
+      '<span class="mon-md">🔥 ' + esc(p.inUse[0].taskTitle) + '</span><span class="mon-spacer"></span></div>');
+  }
+  $('mon-res-cnt').textContent = total + ' 绑定 · ' + hot + ' 使用中';
+  el.innerHTML = rows.length ? rows.join('') : '<div class="mon-empty">没有绑定资源 · 在「子智能体」页为智能体绑定 SSH/HTTP/DSH 资源</div>';
+}
+
+function monOpenAgent(agentId) {
+  if (!monData) return;
+  var a = null;
+  for (var i = 0; i < monData.agents.length; i++) if (monData.agents[i].id === agentId) a = monData.agents[i];
+  if (!a) return;
+  var list = monData.tasks.filter(function(t) { return t.agentIds.indexOf(agentId) >= 0; });
+  var html = '<div class="mon-row1" style="margin-bottom:8px"><span class="mon-dot ' + (a.online ? 'on' : 'off') + '"></span>' +
+    '<span class="mon-nm">' + esc(a.name) + '</span><span class="mon-spacer"></span>' +
+    '<span class="mon-badge ' + (a.busy ? 'busy' : '') + '">' + (a.busy ? '⚡ 执行中' : a.online ? '空闲' : '离线') + '</span></div>';
+  if (a.model) html += '<div class="mon-desc">模型：' + esc(a.model) + '</div>';
+  if (a.resources && a.resources.length) {
+    html += '<div class="mtd-sec"><b>🗂 绑定资源</b>';
+    for (var j = 0; j < a.resources.length; j++) {
+      var r = a.resources[j];
+      var inUse = r.inUse && r.inUse.length;
+      html += '<div class="mon-row1" style="padding:2px 0"><span class="mon-res-chip ' + (inUse ? 'hot' : r.online ? 'on' : 'off') + '">' + esc(r.name) + (inUse ? ' 🔥' : '') + '</span>' +
+        '<span class="mon-md">' + esc(r.kind) + (r.credentialMode ? ' · 凭证 ' + esc(r.credentialMode) : '') + '</span><span class="mon-spacer"></span></div>';
+      if (inUse) {
+        for (var u = 0; u < r.inUse.length; u++) {
+          html += '<div class="mon-desc">↳ 任务「' + esc(r.inUse[u].taskTitle) + '」的工具调用中出现该资源</div>';
+        }
+      }
+    }
+    html += '</div>';
+  }
+  html += '<div class="mtd-sec"><b>📋 会话列表（' + list.length + '）</b>';
+  if (!list.length) html += '<div class="mon-empty">该智能体还没有参与任何任务</div>';
+  for (var k = 0; k < list.length; k++) {
+    var t = list[k];
+    html += '<div class="mon-task" data-mtask="' + esc(t.id) + '"><div class="mon-row1"><span>' + t.typeIcon + '</span>' +
+      '<span class="mon-nm">' + esc(monTaskTitle(t)) + '</span><span class="mon-spacer"></span>' +
+      '<span class="mon-md">' + fmtDateTime(t.updatedAt) + '</span></div>' +
+      '<div class="mon-hl ' + monHlCls(t) + '">' + esc(t.headline) + '</div></div>';
+  }
+  html += '</div>';
+  $('drawer-title').textContent = '🤖 ' + a.name + ' · 运行详情';
+  $('drawer-body').innerHTML = html;
+  openDrawer('🤖 ' + a.name + ' · 运行详情');
+  $('drawer-body').querySelectorAll('[data-mtask]').forEach(function(card) {
+    card.addEventListener('click', function() { closeDrawer(); monOpenTask(card.dataset.mtask); });
+  });
+}
+
+async function monOpenTask(taskId) {
+  openModal('任务详情', '<div class="mon-empty">加载中…</div>');
+  var r = await api('/tasks/' + encodeURIComponent(taskId));
+  if (!r.ok) { openModal('任务详情', '<div class="mon-empty">加载失败：' + esc(r.error || '未知') + '</div>'); return; }
+  var t = r.data;
+  var mon = null;
+  if (monData) for (var i = 0; i < monData.tasks.length; i++) if (monData.tasks[i].id === taskId) mon = monData.tasks[i];
+  var typeIcon = mon ? mon.typeIcon : (t.mode === 'orchestrate' ? '🎯' : '💬');
+  var headTitle = mon ? monTaskTitle(mon) : String(t.title || '');
+  var html = '';
+  html += '<div class="mtd-head"><span style="font-size:18px">' + typeIcon + '</span><b>' + esc(headTitle) + '</b>' +
+    '<span class="mon-badge ' + (t.running ? 'run' : t.status === 'failed' ? 'bad' : t.status === 'completed' || t.status === 'success' ? 'ok' : '') + '">' + esc(t.status) + '</span>' +
+    '<span class="mon-md">' + esc((t.memberAgentIds || []).length) + ' 成员 · ' + fmtDateTime(t.createdAt) + '</span></div>';
+  if (mon) {
+    html += '<div class="mtd-sec"><b>当前状态</b><div class="mon-hl ' + monHlCls(mon) + '" style="white-space:normal">' + esc(mon.headline) + '</div>';
+    var act = mon.activity || {};
+    if (act.todoCurrent) html += '<div class="mon-desc">当前步骤：' + esc(act.todoCurrent) + '</div>';
+    if (act.runningTools && act.runningTools.length) {
+      for (var rt = 0; rt < act.runningTools.length; rt++) {
+        html += '<div class="mtd-tool run"><span class="tn">⏳ ' + esc(act.runningTools[rt].name) + '</span> 执行中</div>';
+      }
+    }
+    if (act.subtasks && act.subtasks.total) {
+      html += '<div class="mon-desc">子任务进度：' + act.subtasks.completed + '/' + act.subtasks.total + ' 完成' + (act.subtasks.failed ? ' · ' + act.subtasks.failed + ' 失败' : '') + '</div>';
+    }
+    html += '</div>';
+  }
+  if (t.plan && t.plan.subtasks && t.plan.subtasks.length) {
+    html += '<div class="mtd-sec"><b>🧩 编排计划（' + t.plan.subtasks.length + ' 个子任务）</b>';
+    for (var p = 0; p < t.plan.subtasks.length; p++) {
+      var sb = t.plan.subtasks[p];
+      html += '<div class="mon-row1" style="padding:2px 0"><span class="mon-badge ' + (sb.status === 'completed' ? 'ok' : sb.status === 'running' ? 'run' : sb.status === 'failed' ? 'bad' : '') + '">' + esc(sb.status) + '</span>' +
+        '<span class="mon-nm" style="font-weight:400">' + esc(sb.title) + '</span></div>';
+    }
+    html += '</div>';
+  }
+  if (t.summary && t.summary.finalConclusion) {
+    html += '<div class="mtd-sec"><b>✅ 汇总结论</b><div class="mtd-turn"><div class="mtd-text">' + esc(t.summary.finalConclusion.slice(0, 800)) + '</div></div></div>';
+  }
+  var turns = (t.turns || []).slice(-20);
+  html += '<div class="mtd-sec"><b>💬 对话回放（最近 ' + turns.length + ' 轮，完整对话请在工作台查看）</b>';
+  if (!turns.length) html += '<div class="mon-empty">还没有对话</div>';
+  for (var ti = 0; ti < turns.length; ti++) {
+    var turn = turns[ti];
+    var who = turn.role === 'user' ? '👤 你' : turn.role === 'system' ? '⚙ 系统' : '🤖 ' + (turn.agentName || '智能体');
+    var toolsHtml = '';
+    var tools = turn.tools || [];
+    for (var t2 = 0; t2 < tools.length; t2++) {
+      var tool = tools[t2];
+      var cls = tool.status === 'running' ? 'run' : tool.status === 'error' ? 'err' : 'ok';
+      var ico = tool.status === 'running' ? '⏳' : tool.status === 'error' ? '❌' : '🔧';
+      toolsHtml += '<div class="mtd-tool ' + cls + '"><span class="tn">' + ico + ' ' + esc(tool.name) + '</span>' +
+        (tool.ms ? ' ' + Math.round(tool.ms / 100) / 10 + 's' : '') +
+        (tool.args ? ' · ' + esc(String(tool.args).slice(0, 60)) : '') + '</div>';
+    }
+    var text = String(turn.text || '');
+    if (text.length > 600) text = text.slice(0, 600) + ' …';
+    html += '<div class="mtd-turn"><div class="mtd-role"><span class="who">' + esc(who) + '</span><span>' + fmtTime(turn.at) + '</span></div>' +
+      toolsHtml +
+      (text ? '<div class="mtd-text">' + esc(text) + '</div>' : '') +
+      '</div>';
+  }
+  html += '</div>';
+  var foot = '<button class="btn" onclick="closeModal()">关闭</button>';
+  openModal('任务详情', html);
+  $('modal-foot').innerHTML = foot + ' <button class="btn pri" id="mtd-open-work">💬 在工作台打开完整对话</button>';
+  $('mtd-open-work').addEventListener('click', function() {
+    closeModal();
+    switchView('work');
+    openTask(taskId);
+  });
+}
+
+function monRenderChartSvg() {
+  var snaps = [];
+  for (var i = 0; i < monHist.length; i++) {
+    var arr = monHist[i].snapshots || [];
+    for (var j = 0; j < arr.length; j++) snaps.push(arr[j]);
+  }
+  snaps.sort(function(a, b) { return a.at - b.at; });
+  var cutoff = Date.now() - 24 * 3600 * 1000;
+  var recent = snaps.filter(function(s) { return s.at >= cutoff; });
+  // 单快照时复制一点成平线，避免画不出任何可见轨迹
+  if (recent.length === 1) recent = [recent[0], Object.assign({}, recent[0], { at: recent[0].at + 3600000 })];
+  monHistLabels = recent.map(function(s) { return fmtTime(s.at); });
+  var svg = $('mon-chart');
+  if (!svg) return;
+  if (!recent.length) { svg.innerHTML = '<text x="300" y="65" fill="#64748b" font-size="11" text-anchor="middle">暂无快照数据（服务每小时自动采集一次）</text>'; return; }
+  var series = [
+    { color: '#38bdf8', pts: recent.map(function(s) { return s.tasksRunning; }), fill: false },
+    { color: '#34d399', pts: recent.map(function(s) { return s.tasksCompletedToday; }), fill: true },
+    { color: '#f87171', pts: recent.map(function(s) { return s.tasksFailedToday; }), fill: false }
+  ];
+  var W = 600, H = 130, padB = 14, padT = 6;
+  var max = 1;
+  for (var s2 = 0; s2 < series.length; s2++) for (var p2 = 0; p2 < series[s2].pts.length; p2++) if (series[s2].pts[p2] > max) max = series[s2].pts[p2];
+  var n = recent.length;
+  var stepX = W / Math.max(1, n - 1);
+  var parts = [];
+  for (var s3 = 0; s3 < series.length; s3++) {
+    var se = series[s3];
+    var d = '';
+    for (var p3 = 0; p3 < se.pts.length; p3++) {
+      var x = p3 * stepX;
+      var y = padT + (H - padT - padB) * (1 - Math.min(1, se.pts[p3] / max));
+      d += (p3 ? ' L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1);
+    }
+    if (se.fill) {
+      parts.push('<path d="' + d + ' L' + ((se.pts.length - 1) * stepX).toFixed(1) + ' ' + (H - padB) + ' L0 ' + (H - padB) + ' Z" fill="' + se.color + '" opacity="0.1"/>');
+    }
+    parts.push('<path d="' + d + '" fill="none" stroke="' + se.color + '" stroke-width="2" stroke-linejoin="round"/>');
+  }
+  for (var p4 = 0; p4 < n; p4 += Math.max(1, Math.floor(n / 6))) {
+    var lbl = monHistLabels[p4] || '';
+    if (lbl) {
+      var lx = Math.max(20, Math.min(W - 20, p4 * stepX));
+      parts.push('<text x="' + lx.toFixed(1) + '" y="' + (H - 2) + '" fill="#64748b" font-size="9" text-anchor="middle">' + esc(lbl) + '</text>');
+    }
+  }
+  svg.innerHTML = parts.join('');
+}
+function renderMonChart() { monRenderChartSvg(); }
+
+// ---------- 语音助手（小智 MCP 接入） ----------
+var xzTimer = null;
+function voiceStart() {
+  if (!$('btn-xz-add')._wired) {
+    $('btn-xz-add')._wired = true;
+    $('btn-xz-add').addEventListener('click', () => xzOpenForm(null));
+  }
+  loadXzList();
+  if (!xzTimer) xzTimer = setInterval(loadXzList, 5000);
+}
+function voiceStop() {
+  if (xzTimer) { clearInterval(xzTimer); xzTimer = null; }
+}
+async function loadXzList() {
+  const el = $('xz-list');
+  if (!el) return;
+  const r = await api('/xiaozhi/status');
+  const list = (r.ok && r.data.endpoints) || [];
+  if (!list.length) {
+    el.innerHTML = '<div class="xz-empty">还没有接入点 —— 点右上角「＋ 添加接入点」，把小智平台的 MCP 接入地址填进来</div>';
+    return;
+  }
+  const html = list.map((x) => {
+    const dotCls = !x.enabled ? '' : (x.connected ? 'on' : 'off');
+    const badge = !x.enabled ? '<span class="mon-badge">已停用</span>'
+      : (x.connected ? '<span class="mon-badge ok">● 已连接 · 语音可发任务</span>' : '<span class="mon-badge warn">● 未连接（自动重连中）</span>');
+    // 诊断：调用/丢弃/幂等命中/上次断线原因 —— 重复建单、会话被打断时的第一现场
+    const st = x.stats || {};
+    const last = st.lastTool;
+    const diag = (st.calls || st.dropped || st.replays || st.lastClose)
+      ? '<span class="xz-ep" title="' + esc([
+          '调用 ' + (st.calls || 0) + ' 次 · 失败 ' + (st.failures || 0) + ' 次',
+          '回包丢弃 ' + (st.dropped || 0) + ' 次（平台侧会看到无应答，可能重发整轮请求）',
+          '幂等命中 ' + (st.replays || 0) + ' 次（重复投递已拦下，未重复建单）',
+          '超大结果 ' + (st.oversize || 0) + ' 次',
+          st.lastClose ? '上次断开 code=' + st.lastClose.code + (st.lastClose.reason ? ' reason=' + st.lastClose.reason : '') + ' @ ' + new Date(st.lastClose.at).toLocaleTimeString() : '',
+          last ? '最近调用 ' + last.name + ' ' + (last.bytes / 1024).toFixed(1) + 'KB ' + last.ms + 'ms ' + (last.delivered ? '已回包' : '回包丢弃') + (last.replayed ? ' · 幂等回放' : '') : '',
+        ].filter(Boolean).join('\\n')) + '">调用 ' + (st.calls || 0) + ' · 丢弃 ' + (st.dropped || 0) + ' · 幂等 ' + (st.replays || 0) + '</span>'
+      : '';
+    return '<div class="xz-row"><span class="xz-dot ' + dotCls + '"></span>' +
+      '<span class="xz-name">' + esc(x.name || '未命名接入点') + '</span>' +
+      '<span class="xz-ep" title="' + esc(x.endpoint) + '">' + esc(x.endpoint) + '</span>' + badge + diag +
+      "<button class='btn' data-xz-op='toggle' data-xz-id='" + esc(x.id) + "' data-xz='" + esc(JSON.stringify(x)) + "' style='white-space:nowrap'>" + (x.enabled ? '停用' : '启用') + '</button>' +
+      "<button class='btn danger' data-xz-op='del' data-xz-id='" + esc(x.id) + "' style='white-space:nowrap'>删除</button>" +
+      '</div>';
+  }).join('');
+  el.innerHTML = html;
+  el.querySelectorAll('[data-xz-op]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const op = btn.dataset.xzOp;
+      if (op === 'toggle') {
+        const x = JSON.parse(btn.dataset.xz);
+        const rr = await api('/xiaozhi/endpoints', { method: 'POST', body: JSON.stringify({ id: x.id, name: x.name, endpoint: x.endpoint, enabled: !x.enabled }) });
+        if (rr.ok) toast(x.enabled ? '✓ 已停用' : '✓ 已启用'); else toast(rr.error || '操作失败', true);
+      } else if (op === 'del') {
+        if (!confirm('删除该接入点？')) return;
+        const rr = await api('/xiaozhi/endpoints/' + encodeURIComponent(btn.dataset.xzId), { method: 'DELETE' });
+        if (rr.ok) toast('✓ 已删除'); else toast(rr.error || '删除失败', true);
+      }
+      loadXzList();
+    });
+  });
+}
+function xzOpenForm(existing) {
+  const isEdit = Boolean(existing);
+  openModal(isEdit ? '编辑接入点' : '添加小智接入点',
+    '<div class="field" style="margin-bottom:10px"><label>名称（可选）</label><input id="xz-f-name" placeholder="例：客厅小智" value="' + esc(existing && existing.name || '') + '"></div>' +
+    '<div class="field"><label>MCP 接入点（ws:// 或 wss://，小智平台「MCP 插件」页可查）</label>' +
+    '<input id="xz-f-ep" style="font-family:var(--mono)" placeholder="wss://api.xiaozhi.me/mcp/?token=…" value="' + esc(existing && existing.endpoint || '') + '"></div>');
+  $('modal-foot').innerHTML = '<button class="btn" onclick="closeModal()">取消</button><button class="btn pri" id="xz-f-save">保存并连接</button>';
+  $('xz-f-save').addEventListener('click', async () => {
+    const body = {
+      id: existing && existing.id,
+      name: $('xz-f-name').value.trim(),
+      endpoint: $('xz-f-ep').value.trim(),
+      enabled: existing ? existing.enabled !== false : true,
+    };
+    if (!body.endpoint) { toast('请填写接入点地址', true); return; }
+    const r = await api('/xiaozhi/endpoints', { method: 'POST', body: JSON.stringify(body) });
+    if (!r.ok) { toast(r.error || '保存失败', true); return; }
+    closeModal();
+    toast('✓ 已保存，正在连接小智平台');
+    loadXzList();
+  });
+}
+
 // ---------- 导航 ----------
 document.querySelectorAll('#nav button').forEach(btn => {
   btn.addEventListener('click', () => switchView(btn.dataset.v));
@@ -1678,6 +2354,8 @@ if (logoutBtn) logoutBtn.addEventListener('click', doLogout);` : ''}function swi
   if (v === 'agents') renderAgents();
   if (v === 'schedules') renderSchedules();
   if (v === 'settings') renderSettings();
+  if (v === 'voice') voiceStart(); else voiceStop();
+  if (v === 'monitor') monitorStart(); else monitorStop();
 }
 
 // ---------- 移动端侧栏抽屉开关 ----------
@@ -1720,9 +2398,11 @@ if ($('input')) {
 // 手机端底部 Tab 使用短标签（桌面保持全称）
 const NAV_LABELS = {
   work: { full: '工作台', short: '工作台' },
+  monitor: { full: '监控大屏', short: '监控' },
   files: { full: '文件管理', short: '文件' },
   agents: { full: '子智能体', short: '智能体' },
   schedules: { full: '定时任务', short: '定时' },
+  voice: { full: '语音助手', short: '语音' },
   resources: { full: '资源目录', short: '资源' },
   settings: { full: '设置', short: '设置' },
 };
@@ -2017,6 +2697,7 @@ async function openTask(taskId) {
   applyTaskToView(freshTask, !cachedTask);
   connectStream(taskId);
   startTaskStatsPolling();
+  startTaskTodosPolling();
   ensureSkillList(); // "/" 技能候选预热（对齐 harness warm 钩子：打开会话即拉目录）
 }
 
@@ -2085,6 +2766,7 @@ function resetChatView() {
   if ($('chat-mode')) $('chat-mode').style.display = 'none';
   const mc = $('member-chips'); if (mc) mc.innerHTML = '';
   resetTaskStats();
+  resetTaskTodos();
 }
 
 function refreshChatHead(taskMaybe) {
@@ -2248,6 +2930,7 @@ function connectStream(taskId) {
       smartScrollBottom();
       loadTasksQuiet();
       loadTaskStats();
+      loadTaskTodos();
     } catch {}
   });
 
@@ -2658,7 +3341,13 @@ function buildTurnElement(taskId, turn) {
   const name = turn.role === 'user' ? '你' : esc(turn.agentName || (roleClass === 'system' ? '系统' : '子智能体'));
 
   const agent = state.agents.find(a => a.id === turn.agentId);
-  const modelBadge = agent && agent.model ? '<span class="tag-model">' + esc(String(agent.model).split('/').pop()) + '</span>' : '';
+  // 模型标签取「该轮实际生效的模型」：主智能体 = 模型列表当前选中（engine.ensureSession 建会话
+  // 即用 planner.model 覆盖其自身配置）；被 @ 的子智能体 = 其自身配置的模型。
+  const isMainTurn = turn.agentId && turn.agentId === (mainAgentState.cur || mainAgentState.resolvedAgentId);
+  const badgeModel = (isMainTurn && modelState.cur)
+    ? String(modelState.cur).split('/').pop()
+    : (agent ? String(agent.model || '').split('/').pop() : '');
+  const modelBadge = badgeModel ? '<span class="tag-model">' + esc(badgeModel) + '</span>' : '';
   const cacheBadge = usageBadgeHtml(turn.usage);
 
   wrap.innerHTML =
@@ -3541,6 +4230,91 @@ const mainAgentState = {
   error: '',
 };
 
+/**
+ * 本地即时应用主智能体选择：按钮文案、标题、弹层 ✓ 全部就地更新。
+ * /planner/options 需要远端解析（首屏可耗时数百 ms），切换反馈不能等它。
+ */
+function applyMainAgentSelection(sel) {
+  if (!sel) return;
+  const agentId = sel.agentId === undefined ? mainAgentState.cur : String(sel.agentId || '');
+  const auto = sel.auto === undefined ? !agentId : !!sel.auto;
+  const resolvedId = String(sel.resolvedAgentId || (auto ? mainAgentState.resolvedAgentId : agentId) || '');
+  const resolved = mainAgentState.agents.find(a => a.id === resolvedId);
+  mainAgentState.cur = agentId;
+  mainAgentState.auto = auto;
+  mainAgentState.resolvedAgentId = resolvedId;
+  if (sel.resolvedAgentName !== undefined) mainAgentState.resolvedAgentName = sel.resolvedAgentName;
+  else if (resolved) mainAgentState.resolvedAgentName = resolved.name;
+  mainAgentState.loaded = true;
+
+  const nameEl = $('main-agent-btn-name');
+  if (nameEl) nameEl.textContent = mainAgentBtnLabel();
+  const btn = $('main-agent-btn');
+  if (btn) btn.title = mainAgentBtnTitle();
+  renderMainAgentPop();
+  // 主智能体换了，气泡模型标签的归属也要跟着换
+  refreshMainAgentModelBadges();
+}
+
+/**
+ * 把服务端返回的任务摘要并回本地列表状态并立即重绘侧栏（无需刷新页面）。
+ * 服务端在切换主智能体时会同步「当前会话 + 空草稿」的成员账本，这里负责让界面同帧跟上。
+ */
+function applyTaskSummaries(summaries) {
+  const list = Array.isArray(summaries) ? summaries.filter(s => s && s.id) : [];
+  if (!list.length) return;
+  for (const s of list) {
+    const idx = state.tasks.findIndex(t => t.id === s.id);
+    if (idx >= 0) state.tasks[idx] = Object.assign({}, state.tasks[idx], s);
+    else state.tasks.unshift(s);
+    const cached = state.taskCache.get(s.id);
+    // 缓存里是含 turns 的完整任务，只并成员/模式字段，绝不用摘要覆盖全文
+    if (cached) state.taskCache.set(s.id, Object.assign({}, cached, { memberAgentIds: s.memberAgentIds, mode: s.mode }));
+  }
+  renderTaskList();
+  if (list.some(s => s.id === state.currentTaskId)) refreshChatHead();
+}
+
+/** 主智能体当前生效的模型（模型列表选中值；未选中时回退其自身配置） */
+function mainAgentEffectiveModel() {
+  if (modelState.cur) return String(modelState.cur).split('/').pop();
+  const mainId = mainAgentState.cur || mainAgentState.resolvedAgentId || '';
+  const a = state.agents.find(x => x.id === mainId);
+  return a && a.model ? String(a.model).split('/').pop() : '';
+}
+
+/**
+ * 就地刷新聊天窗已渲染气泡的模型标签（与 buildTurnElement 同一判定）：
+ * 主智能体 = 模型列表当前选中；其他智能体 = 各自配置。切换模型/主智能体后立即生效，无需刷新页面。
+ */
+function refreshMainAgentModelBadges() {
+  const scroll = $('chat-scroll');
+  if (!scroll) return;
+  const mainId = mainAgentState.cur || mainAgentState.resolvedAgentId || '';
+  const mainShort = mainAgentEffectiveModel();
+  scroll.querySelectorAll('.msg.agent').forEach(wrap => {
+    const aid = wrap.dataset.agentId || '';
+    if (!aid) return;
+    const a = state.agents.find(x => x.id === aid);
+    const short = (aid === mainId) ? mainShort : (a && a.model ? String(a.model).split('/').pop() : '');
+    const meta = wrap.querySelector('.meta');
+    if (!meta) return;
+    let tag = meta.querySelector('.tag-model');
+    if (short) {
+      if (!tag) {
+        tag = document.createElement('span');
+        tag.className = 'tag-model';
+        const b = meta.querySelector('b');
+        if (b && b.nextSibling) meta.insertBefore(tag, b.nextSibling);
+        else meta.appendChild(tag);
+      }
+      tag.textContent = short;
+    } else if (tag) {
+      tag.remove();
+    }
+  });
+}
+
 function mainAgentBtnLabel() {
   if (!mainAgentState.loaded) return '主智能体: 加载中…';
   if (mainAgentState.error) return '⚠️ 主智能体异常';
@@ -3580,7 +4354,10 @@ function renderMainAgentPop() {
       const isSelected = !isAuto && curId === a.id;
       const detail = state.agents.find(x => x.id === a.id) || {};
       const subParts = [];
-      if (detail.model) subParts.push('模型: ' + detail.model);
+      // 正在充当主智能体的行显示模型列表当前选中的模型（运行时实际生效），其余行显示各自配置
+      const isMainRow = isSelected || (isAuto && a.id === (mainAgentState.resolvedAgentId || ''));
+      const effModel = isMainRow ? mainAgentEffectiveModel() : (detail.model ? String(detail.model).split('/').pop() : '');
+      if (effModel) subParts.push('模型: ' + effModel);
       if (detail.workDir) subParts.push('目录: ' + detail.workDir);
       if (detail.dshRef && detail.dshRef.kind === 'direct') subParts.push('直连');
       else if (detail.dshRef && detail.dshRef.mappingId) subParts.push('ONENAT: ' + detail.dshRef.mappingId);
@@ -3633,24 +4410,46 @@ async function selectMainAgent(agentId) {
   const found = mainAgentState.agents.find(a => a.id === targetId);
   const displayName = targetId ? (found ? found.name : targetId) : '自动（本地优先）';
 
+  const modelBtnEl = $('chat-model-btn');
+  // 模型列表选中值在切换主智能体时保持不变（需求：主智能体模型 = 模型列表中选中的）。
+  // 若新主智能体节点没有该模型，ensureSession 会话级下发失败时由远端默认兜底，选中态仍归用户。
+
+  // 1) 就地切换：按钮/弹层 ✓ 先跟上，不等任何网络
+  applyMainAgentSelection({ agentId: targetId, auto: !targetId });
+
+  // 带上当前会话：服务端据此同步「当前会话 + 空草稿」的成员账本，侧栏列表立即更新
   const r = await api('/planner/config', {
     method: 'POST',
-    body: JSON.stringify({ agentId: targetId })
+    body: JSON.stringify({ agentId: targetId, taskId: state.currentTaskId || '' })
   });
 
   if (r.ok) {
+    // 2) 服务端权威结果覆盖本地（自动模式解析出的真实主智能体、成员账本同步后的任务摘要）；
+    //    模型选中保持用户所选（d.model = settings.planner.model，切主智能体不重置）
+    const d = r.data || {};
+    modelState.cur = d.model || '';
+    if (modelBtnEl) modelBtnEl.textContent = modelBtnLabel(modelState.cur);
+    applyMainAgentSelection({
+      agentId: d.agentId || '',
+      auto: !d.agentId,
+      resolvedAgentId: d.resolvedAgentId,
+      resolvedAgentName: d.resolvedAgentName,
+    });
+    applyTaskSummaries(d.tasks);
     if (btn) flashBtnOk(btn, '✓ 已切为「' + displayName + '」', mainAgentBtnLabel());
     hintComposer('✓ 主智能体已切到「' + displayName + '」');
-    await loadPlannerOptions();
+    loadPlannerOptions();
     if ($('set-planner-agent')) fillPlannerAgentSetting();
     if (state.currentTaskId) refreshChatHead();
   } else {
     toast(r.error || '切换主智能体失败', true);
+    // 失败回滚到服务端真实状态，避免界面显示未生效的选择
+    loadPlannerOptions();
   }
 }
 
 // ---------- 主调度模型选择（自定义弹层：原生 select 的移动端全屏弹窗字大折行且样式失控） ----------
-const modelState = { groups: {}, cur: '', loaded: false };
+const modelState = { groups: {}, cur: '', loaded: false, error: '' };
 function modelBtnLabel(v) { return '⚙ ' + (v || '主调度默认模型'); }
 function modelBtnTitle() { return '主调度模型 + 执行会话模型（点选即生效）'; }
 function renderModelPop() {
@@ -3669,7 +4468,10 @@ function renderModelPop() {
       html += '<div class="model-item' + (v === cur ? ' on' : '') + '" data-v="' + esc(v) + '"><span class="n">' + esc(m.id + (m.isDefault ? ' ★' : '')) + '</span><span class="ck">✓</span></div>';
     }
   }
-  if (!Object.keys(modelState.groups).length && !cur) html += '<div class="model-empty">暂无可选模型</div>';
+  if (!Object.keys(modelState.groups).length) {
+    if (modelState.error) html += '<div class="model-empty" style="color:var(--err);font-size:11.5px">⚠️ 模型目录获取失败: ' + esc(modelState.error) + '</div>';
+    else if (!cur) html += '<div class="model-empty">暂无可选模型</div>';
+  }
   pop.innerHTML = html;
   pop.querySelectorAll('.model-item').forEach(it => it.addEventListener('click', () => selectModel(it.dataset.v)));
 }
@@ -3694,6 +4496,7 @@ async function loadPlannerOptions() {
   mainAgentState.source = d.source || '';
   mainAgentState.error = d.error || '';
   const resolved = mainAgentState.agents.find(a => a.id === (d.current || {}).agentId);
+  mainAgentState.resolvedAgentId = (d.current || {}).agentId || '';
   mainAgentState.resolvedAgentName = resolved ? resolved.name : ((d.current || {}).agentId || '');
   mainAgentState.loaded = true;
 
@@ -3708,6 +4511,7 @@ async function loadPlannerOptions() {
   // 2. 更新模型状态
   modelState.cur = (d.current || {}).model || '';
   modelState.groups = {};
+  modelState.error = d.modelError || '';
   for (const m of d.models || []) { (modelState.groups[m.provider] = modelState.groups[m.provider] || []).push(m); }
   modelState.loaded = true;
   if (modelBtn) {
@@ -3716,6 +4520,8 @@ async function loadPlannerOptions() {
     modelBtn.title = modelBtnTitle() + ' · ' + Object.keys(modelState.groups).length + ' 个提供商 / ' + (d.models || []).length + ' 个模型';
     renderModelPop();
   }
+  // 服务端权威状态到位后，气泡模型标签与之一致（主智能体 = 列表选中模型）
+  refreshMainAgentModelBadges();
 }
 function closeModelPop() { $('model-pop').classList.remove('on'); }
 $('chat-model-btn').addEventListener('click', (e) => {
@@ -3752,31 +4558,27 @@ async function selectModel(v) {
   btn.textContent = modelBtnLabel(v);
   closeModelPop();
   const shortModel = v ? (v.indexOf('/') >= 0 ? v.slice(v.indexOf('/') + 1).trim() : v) : '默认';
-  // 1) 更新主调度（任务拆解）模型
+  // 1) 更新主调度模型（只写 planner 设置，不改写主智能体自身 provider/model 配置：
+  //    「选中的模型」与「智能体默认模型」是两个概念，@ 子智能体仍按各自配置执行）
   const r = await api('/planner/config', { method: 'POST', body: JSON.stringify({ model: v || '' }) });
-  // 2) 同步更新当前任务执行会话的模型（PUT /sessions/:id 透传到远端 DSH）
-  if (v && state.currentTaskId) {
-    const task = state.taskCache.get(state.currentTaskId) || state.tasks.find(t => t.id === state.currentTaskId);
-    if (task && task.sessions) {
-      // 取第一个有远端会话绑定的成员
-      const agentId = Object.keys(task.sessions).find(id => task.sessions[id]?.remoteSessionId);
-      if (agentId) {
-        const slashIdx = v.indexOf('/');
-        const provider = slashIdx >= 0 ? v.slice(0, slashIdx).trim() : '';
-        const modelId = slashIdx >= 0 ? v.slice(slashIdx + 1).trim() : v;
-        const sr = await api('/tasks/' + state.currentTaskId + '/session-model', {
-          method: 'PUT',
-          body: JSON.stringify({ agentId, provider: provider || undefined, model: modelId }),
-        });
-        if (sr.ok) {
-          // 按钮原地点亮确认 + 工具条就地写明生效范围（不再弹 toast）
-          flashBtnOk(btn, '✓ 已切换「' + modelId + '」', modelBtnLabel(v));
-          setModelStatus('✓ 执行会话已切到「' + modelId + '」· 主调度「' + (v || '默认') + '」');
-          return;
-        }
-        if (sr.code !== 'NO_SESSION') toast(sr.error || '执行会话模型更新失败', true);
-      }
+  // 气泡模型标签就地与新选中值对齐（主智能体 = 列表选中；其余 = 各自配置）
+  if (r.ok) { refreshMainAgentModelBadges(); }
+  // 2) 同步更新当前任务里主智能体执行会话的模型（不传 agentId，服务端默认作用于当前主智能体；PUT /sessions/:id 透传到远端 DSH）
+  if (state.currentTaskId) {
+    const slashIdx = v.indexOf('/');
+    const provider = slashIdx >= 0 ? v.slice(0, slashIdx).trim() : '';
+    const modelId = slashIdx >= 0 ? v.slice(slashIdx + 1).trim() : v;
+    const sr = await api('/tasks/' + state.currentTaskId + '/session-model', {
+      method: 'PUT',
+      body: JSON.stringify({ provider: provider || undefined, model: modelId }),
+    });
+    if (sr.ok) {
+      // 按钮原地点亮确认 + 工具条就地写明生效范围（不再弹 toast）
+      flashBtnOk(btn, '✓ 已切换「' + modelId + '」', modelBtnLabel(v));
+      setModelStatus('✓ 主智能体会话已切到「' + modelId + '」· 主调度「' + (v || '默认') + '」');
+      return;
     }
+    if (sr.code !== 'NO_SESSION') toast(sr.error || '执行会话模型更新失败', true);
   }
   if (r.ok) {
     flashBtnOk(btn, '✓ 已切换「' + shortModel + '」', modelBtnLabel(v));
@@ -3866,6 +4668,139 @@ function startTaskStatsPolling() {
   loadTaskStats();
   statsState.timer = setInterval(loadTaskStats, 5000);
 }
+
+// ---------- 任务清单坞（远端 DSH 会话的 todo_write 投影 + 运行时长，对齐 DSH web TodoPanel） ----------
+// 数据链路：浏览器 → WorkBuddy /api/tasks/:id/todos → 远端 dsh-web-service GET /sessions/:id/todos。
+// 运行时长在本地按「服务端 elapsedMs + 本地经过时间」递增，避免两端时钟漂移。
+const todoState = { timer: null, tick: null, inFlight: false, visible: false, running: false, baseElapsed: 0, anchorAt: 0, lastHtml: '', collapsed: false };
+try { todoState.collapsed = localStorage.getItem('wb.todoCollapsed') === '1'; } catch (e) {}
+function fmtTodoDuration(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600), m = Math.floor((total % 3600) / 60), s = total % 60;
+  if (h > 0) return h + '小时' + m + '分';
+  if (m > 0) return m + '分' + (s < 10 ? '0' + s : String(s)) + '秒';
+  return total + '秒';
+}
+function todoGlyph(status) {
+  if (status === 'completed') {
+    return '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="6.4" stroke="currentColor" stroke-width="1.2"/><path d="M4.3 7.2l1.8 1.8 3.6-3.9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  }
+  // in_progress = 会话运行中（蓝色渐隐环 + 旋转）；unfinished = 会话已结束但模型没标完成（琥珀色静态环，不转）
+  if (status === 'in_progress' || status === 'unfinished') {
+    const spin = status === 'in_progress' ? ' class="todo-spin"' : '';
+    return '<svg' + spin + ' width="14" height="14" viewBox="0 0 14 14" fill="none"><defs><linearGradient id="todo-grad" x1="2.5" y1="12" x2="10.5" y2="3.5" gradientUnits="userSpaceOnUse"><stop stop-color="currentColor"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs><circle cx="7" cy="7" r="6.4" stroke="url(#todo-grad)" stroke-width="1.4"/></svg>';
+  }
+  return '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="6.4" stroke="currentColor" stroke-width="1.2" stroke-dasharray="2.4 2.4"/></svg>';
+}
+function setTodoCollapsedUI() {
+  const list = $('todo-list'); const chev = $('todo-chev');
+  if (chev) chev.textContent = todoState.collapsed ? '▾' : '▴';
+  if (list) list.style.display = todoState.collapsed ? 'none' : '';
+}
+function renderTodoDock(data) {
+  const dock = $('todo-dock');
+  if (!dock) return;
+  const todos = Array.isArray(data && data.todos) ? data.todos : [];
+  const running = !!(data && data.running);
+  const elapsed = (data && data.elapsedMs) || 0;
+  if (!todos.length && !running && !(elapsed > 0)) {
+    dock.style.display = 'none';
+    todoState.visible = false;
+    return;
+  }
+  dock.style.display = '';
+  todoState.visible = true;
+  const c = (data && data.counts) || { completed: 0, inProgress: 0, pending: 0 };
+  const parts = [];
+  if (c.completed > 0) parts.push(c.completed + ' 已完成');
+  // 会话已结束（running=false）时，模型遗留的 in_progress 条目是「未完成」而不是「进行中」——
+  // 否则远端任务早已跑完，前端却一直显示运行中（蓝色转圈）。
+  if (c.inProgress > 0) parts.push(c.inProgress + (running ? ' 进行中' : ' 未完成'));
+  if (c.pending > 0) parts.push(c.pending + ' 待处理');
+  const prog = $('todo-progress');
+  if (prog) prog.textContent = parts.length ? parts.join(' · ') : (todos.length ? todos.length + ' 项' : '本轮暂无清单');
+  // 运行时长：服务端 elapsedMs 为锚点，前端每秒本地递增（运行中）
+  todoState.running = running;
+  todoState.baseElapsed = elapsed;
+  todoState.anchorAt = Date.now();
+  const el = $('todo-elapsed');
+  if (el) {
+    if (running || elapsed > 0) {
+      el.style.display = '';
+      el.className = 'todo-elapsed' + (running ? ' run' : '');
+      el.textContent = (running ? '⏱ 运行时长 ' : '⏱ 上轮时长 ') + fmtTodoDuration(elapsed);
+      el.title = running
+        ? '远端 DSH 会话本轮运行中（本地每秒递增）'
+        : '远端 DSH 会话最后一轮运行时长';
+    } else {
+      el.style.display = 'none';
+    }
+  }
+  const list = $('todo-list');
+  if (!list) return;
+  if (!todos.length) {
+    list.innerHTML = '<li class="todo-empty">主智能体本轮尚未写入任务清单（todo_write）</li>';
+    setTodoCollapsedUI();
+    todoState.lastHtml = '';
+    return;
+  }
+  const items = todos.map(function (it) {
+    const raw = it && it.status;
+    const st = raw === 'completed' ? 'completed' : (raw === 'in_progress' ? (running ? 'in_progress' : 'unfinished') : 'pending');
+    const title = st === 'unfinished' ? ' title="本轮已结束，该任务仍停留在进行中（未完成）"' : '';
+    return '<li class="todo-item" data-status="' + st + '"' + title + '><span class="g">' + todoGlyph(st) + '</span><span class="c">' + esc(it && it.content) + '</span></li>';
+  }).join('');
+  if (items !== todoState.lastHtml) {
+    todoState.lastHtml = items;
+    list.innerHTML = items;
+  }
+  setTodoCollapsedUI();
+}
+function tickTodoElapsed() {
+  if (!todoState.visible || !todoState.running) return;
+  const el = $('todo-elapsed');
+  if (!el) return;
+  el.textContent = '⏱ 运行时长 ' + fmtTodoDuration(todoState.baseElapsed + (Date.now() - todoState.anchorAt));
+}
+async function loadTaskTodos() {
+  const taskId = state.currentTaskId;
+  if (!taskId || todoState.inFlight) return;
+  todoState.inFlight = true;
+  try {
+    const r = await api('/tasks/' + taskId + '/todos');
+    if (state.currentTaskId !== taskId) return; // 已切走：丢弃旧响应
+    if (!r.ok || !r.data || r.data.supported === false) {
+      const dock = $('todo-dock');
+      if (dock) dock.style.display = 'none';
+      todoState.visible = false;
+      return;
+    }
+    renderTodoDock(r.data);
+  } catch (e) {
+  } finally {
+    todoState.inFlight = false;
+  }
+}
+function resetTaskTodos() {
+  if (todoState.timer) { clearInterval(todoState.timer); todoState.timer = null; }
+  if (todoState.tick) { clearInterval(todoState.tick); todoState.tick = null; }
+  todoState.inFlight = false; todoState.visible = false; todoState.running = false;
+  todoState.baseElapsed = 0; todoState.lastHtml = '';
+  const dock = $('todo-dock');
+  if (dock) dock.style.display = 'none';
+}
+// 打开会话时启动轮询（3s，清单随 todo_write 步进变化）+ 运行时长 1s 本地递增；SSE turn_end 处即时刷新
+function startTaskTodosPolling() {
+  resetTaskTodos();
+  loadTaskTodos();
+  todoState.timer = setInterval(loadTaskTodos, 3000);
+  todoState.tick = setInterval(tickTodoElapsed, 1000);
+}
+$('todo-head').addEventListener('click', () => {
+  todoState.collapsed = !todoState.collapsed;
+  try { localStorage.setItem('wb.todoCollapsed', todoState.collapsed ? '1' : '0'); } catch (e) {}
+  setTodoCollapsedUI();
+});
 
 // 会话重命名（删除/归档入口在会话抽屉的会话条目上）
 $('btn-rename-task').addEventListener('click', () => {
@@ -5430,8 +6365,36 @@ function renderSettings() {
   $('set-base').value = s.onenat.baseUrl || '';
   $('set-key').value = s.onenat.apiKey || '';
   $('set-refresh').value = s.onenat.autoRefreshMs || 60000;
+  $('set-ai-token').textContent = s.aiToken || '';
+  renderAiInstall();
   fillPlannerAgentSetting();
 }
+/** AI 安装提示词：以浏览器当前访问地址为准（反代/远程场景自动匹配），内嵌 APIKEY，发给 AI 照做即可 */
+function renderAiInstall() {
+  const token = $('set-ai-token').textContent;
+  const base = location.origin + PREFIX;
+  const tok = token || '<先生成APIKEY>';
+  $('set-ai-install').value =
+    '请安装 OneNat WorkBuddy 技能（多智能体工作台：发任务/管理任务/监控/定时任务/文件管理等 11 个工具）。\\n' +
+    '1. 在终端执行安装命令（会自动装到本机所有 AI 技能目录 DSH/ZCode/Claude 并自检）：\\n' +
+    '   curl -fsSL ' + base + '/install-skill.sh | bash -s -- --base-url ' + base + ' --token ' + tok + '\\n' +
+    '2. 安装后执行 wb.mjs tools 验证连通，并汇报安装结果。\\n' +
+    '3. 之后即可用 wb.mjs 或技能里的工具操作工作台，例如：wb.mjs monitor overview 看监控态势；wb.mjs task create --title x --agents <智能体ID> --message "任务内容" 发任务。';
+}
+$('btn-copy-ai-install').addEventListener('click', () => {
+  if (!$('set-ai-token').textContent) { toast('请先「生成 / 重置」APIKEY', true); return; }
+  navigator.clipboard.writeText($('set-ai-install').value).then(() => toast('✓ 安装提示词已复制，发给 AI 即可安装'), () => toast('复制失败，请手动选择复制', true));
+});
+$('btn-reset-ai-token').addEventListener('click', async () => {
+  if (!confirm('生成新 APIKEY？旧令牌立即失效，已安装到各智能体的 SKILL 需要更新令牌。')) return;
+  const r = await api('/settings/ai-token/reset', { method: 'POST' });
+  if (r.ok && r.data && r.data.token) {
+    $('set-ai-token').textContent = r.data.token;
+    state.settings = Object.assign({}, state.settings || {}, { aiToken: r.data.token });
+    renderAiInstall();
+    toast('✓ 新 APIKEY 已生成（无需重启）');
+  } else toast(r.error || '生成失败', true);
+});
 async function fillPlannerAgentSetting() {
   const sel = $('set-planner-agent'), note = $('set-planner-note');
   const r = await api('/planner/options');
@@ -5449,12 +6412,33 @@ async function fillPlannerAgentSetting() {
   else note.textContent = '主任务拆解由「' + (cur.auto ? autoName + '（自动）' : ((agents.find(a => a.id === cur.agentId) || {}).name || cur.agentId)) + '」完成；拆解用模型可在聊天窗下方工具栏选择，仅作用于主调度。';
 }
 $('btn-save-settings').addEventListener('click', async () => {
+  const plannerAgentId = $('set-planner-agent').value.trim();
   const payload = {
     onenat: { baseUrl: $('set-base').value.trim(), apiKey: $('set-key').value.trim(), autoRefreshMs: Number($('set-refresh').value) || 60000 },
-    planner: { agentId: $('set-planner-agent').value.trim() },
+    planner: { agentId: plannerAgentId },
   };
   const r = await api('/settings', { method: 'POST', body: JSON.stringify(payload) });
-  if (r.ok) { state.settings = r.data; toast('✓ 设置已保存'); loadResources(); }
+  if (r.ok) {
+    state.settings = r.data;
+    toast('✓ 设置已保存');
+    loadResources();
+    // 主智能体也可能在这里被改掉：走同一条切换通道，立即同步侧栏列表成员账本（免刷新）
+    const pr = await api('/planner/config', {
+      method: 'POST',
+      body: JSON.stringify({ agentId: plannerAgentId, taskId: state.currentTaskId || '' })
+    });
+    if (pr.ok) {
+      const d = pr.data || {};
+      applyMainAgentSelection({
+        agentId: d.agentId || '',
+        auto: !d.agentId,
+        resolvedAgentId: d.resolvedAgentId,
+        resolvedAgentName: d.resolvedAgentName,
+      });
+      applyTaskSummaries(d.tasks);
+      loadPlannerOptions();
+    }
+  }
   else toast(r.error || '保存失败', true);
 });
 

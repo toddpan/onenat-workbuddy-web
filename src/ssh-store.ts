@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-remote-orchestrator - SSH 连接资源存储
+ * dsh-remote-orchestrator - SSH 连接资源存储
  *
  * 独立于任务/节点存储，落盘 ~/.dsh/dsh-orchestrator-ssh.json。
  * 记录可连接的 SSH 账号与凭据（密码 / 私钥），按连接方式 + 主机 IP 组织，

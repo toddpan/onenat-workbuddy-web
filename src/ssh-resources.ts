@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-remote-orchestrator - SSH 连接资源服务逻辑
+ * dsh-remote-orchestrator - SSH 连接资源服务逻辑
  *
  * - normalizeSshResource: 表单/工具入参校验与归一化（新增与更新共用）
  * - maskSshResource:      列表场景脱敏（不回传明文密码/私钥）
@@ -95,10 +95,9 @@ function sshConnectConfig(r: SshResource, readyTimeoutMs: number): Record<string
 }
 
 /**
- * 加载 ssh2（CJS 包）。用 createRequire 做标准 CJS 解析（比 ESM 动态 import
- * 更稳：不受 harness 的 tsx/loader 钩子影响）。依次尝试：
- *   1. 本插件自身 node_modules（build.sh 会 junction 链接）；
- *   2. DSH profile 的 node_modules（dsh-ssh 等生态插件自带）；
+ * 加载 ssh2（CJS 包）。用 createRequire 做标准 CJS 解析。依次尝试：
+ *   1. 本服务自身 node_modules（npm install ssh2）；
+ *   2. DSH profile 的 node_modules（复用生态里已装的 ssh2，可选）；
  * 都不可用返回 undefined（test 降级 TCP 探测、exec 报缺依赖）。
  */
 function loadSsh2(): any | undefined {
@@ -111,7 +110,7 @@ function loadSsh2(): any | undefined {
       return undefined
     }
   }
-  // import.meta.url 的 ESM 真实路径（编译后 lib/ssh-resources.js）
+  // import.meta.url 的 ESM 真实路径（编译后 dist/ssh-resources.js）
   let selfBase: string | undefined
   try {
     selfBase = import.meta.url
@@ -122,7 +121,7 @@ function loadSsh2(): any | undefined {
     const found = tryRequire(selfBase)
     if (found) return found
   }
-  const profileBase = join(homedir(), '.dsh', 'profiles', 'web', 'node_modules', '@dsh-external', 'dsh-remote-orchestrator', 'lib', 'index.js')
+  const profileBase = join(homedir(), '.dsh', 'profiles', 'web', 'node_modules', 'ssh2', 'package.json')
   return tryRequire(profileBase)
 }
 

@@ -13,13 +13,15 @@
 
 FROM node:22-alpine AS build
 WORKDIR /src
-COPY package.json tsconfig.json tsconfig.server.json ./
+COPY package.json tsconfig.server.json ./
 COPY src ./src
 COPY scripts ./scripts
+COPY skills ./skills
 # 只用 typescript 构建（不装 DSH 相关 peer，独立部署与 DSH 无关）
 RUN npm install --no-save --no-package-lock typescript@5 @types/node@24 \
     && npx tsc -p tsconfig.server.json \
     && test -f dist/server.js
+
 
 FROM node:22-alpine
 ENV NODE_ENV=production \
@@ -29,6 +31,8 @@ ENV NODE_ENV=production \
 WORKDIR /app
 # ssh2 / undici 均为可选依赖：缺失时 SSH exec 降级 / SSE 长静默段使用默认超时，服务照常可用
 COPY --from=build /src/dist ./dist
+COPY --from=build /src/skills ./skills
+COPY --from=build /src/scripts/install-skill.sh ./scripts/install-skill.sh
 COPY package.json ./
 RUN mkdir -p /data
 VOLUME ["/data"]

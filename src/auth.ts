@@ -1,11 +1,10 @@
 /**
- * @dsh-external/onenat-workbuddy - 登录认证（独立部署模式）
+ * onenat-workbuddy-web - 登录认证（独立部署模式）
  *
  * - 用户落盘 dataDir/auth.json（scrypt 加盐哈希，不存明文）；首次运行无用户时
  *   用 adminUsername/adminPassword 播种管理员账号；
  * - 会话为内存态 HttpOnly Cookie（默认 7 天滑动过期），重启后需重新登录；
  * - 登录失败限速：单 IP 5 分钟内 10 次失败即 429。
- * 仅用于独立部署模式；DSH 插件模式沿用 DSH 自身的鉴权体系，不受影响。
  */
 
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
@@ -48,6 +47,9 @@ export class AuthService {
   private filePath: string
   private users: AuthUser[] = []
   private sessions = new Map<string, Session>()
+  /** AI 工具通道令牌（wbk-…）：落盘 ai-token.json，设置页可查看/重置，无需重启 */
+  private aiTokenPath: string
+  private aiToken: string | null = null
 
   constructor(
     dataDir: string,
@@ -55,11 +57,66 @@ export class AuthService {
     adminPassword: string,
   ) {
     this.filePath = join(dataDir, 'auth.json')
+    this.aiTokenPath = join(dataDir, 'ai-token.json')
     this.load()
     if (!this.users.length) {
       this.createUser(adminUsername || 'workbuddy', adminPassword || 'ThunderSoft@88')
       console.log(`[onenat-workbuddy] 已创建管理员账号「${adminUsername || 'workbuddy'}」（auth.json 可增删用户）`)
     }
+    this.loadAiToken()
+  }
+
+  // ---- AI 工具通道令牌 ----
+
+  private loadAiToken(): void {
+    try {
+      if (existsSync(this.aiTokenPath)) {
+        const parsed = JSON.parse(readFileSync(this.aiTokenPath, 'utf-8'))
+        this.aiToken = typeof parsed.token === 'string' && parsed.token ? parsed.token : null
+      }
+    } catch {
+      this.aiToken = null
+    }
+  }
+
+  private saveAiToken(): void {
+    try {
+      writeFileSync(this.aiTokenPath, JSON.stringify({ token: this.aiToken, updatedAt: Date.now() }, null, 2), { mode: 0o600 })
+    } catch (err) {
+      console.error('[onenat-workbuddy] ai-token.json 写入失败:', err)
+    }
+  }
+
+  /** 当前 AI 令牌（未配置返回空串：工具通道 fail-closed 拒绝一切调用） */
+  public getAiToken(): string {
+    return this.aiToken || ''
+  }
+
+  /** 是否已配置 AI 令牌 */
+  public hasAiToken(): boolean {
+    return Boolean(this.aiToken)
+  }
+
+  /** 种子令牌（--token / WORKBUDDY_TOKEN 启动参数）：仅在尚未配置时写入，之后以设置页管理为准 */
+  public seedAiToken(token: string): void {
+    const t = String(token || '').trim()
+    if (!t || this.aiToken) return
+    this.aiToken = t
+    this.saveAiToken()
+    console.log('[onenat-workbuddy] 已将启动参数令牌播种为 AI APIKEY（后续可在设置页重置）')
+  }
+
+  /** 重置 AI 令牌：生成 wbk- 前缀随机值并落盘（旧令牌立即失效），无需重启 */
+  public resetAiToken(): string {
+    this.aiToken = 'wbk-' + randomBytes(24).toString('hex')
+    this.saveAiToken()
+    return this.aiToken
+  }
+
+  /** 校验 AI 令牌；未配置令牌时一律拒绝（fail-closed） */
+  public validateAiToken(candidate: string | undefined | null): boolean {
+    if (!this.aiToken || !candidate) return false
+    return safeEqual(this.aiToken, String(candidate))
   }
 
   private load(): void {

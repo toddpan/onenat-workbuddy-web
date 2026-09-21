@@ -1,5 +1,5 @@
 /**
- * @dsh-external/onenat-workbuddy - 任务引擎（多轮聊天 + 编排调度 + SSE 事件枢纽）
+ * onenat-workbuddy-web - 任务引擎（多轮聊天 + 编排调度 + SSE 事件枢纽）
  *
  * chat 模式: 单成员直通 —— 复用该成员的长持远端会话（D3），SSE 流式回填聊天窗口
  * orchestrate 模式: LLM Planner 拆解（D4）→ DAG 调度并发/串行派发 → 汇总（§6.3）
@@ -327,7 +327,24 @@ export class TaskEngine {
     }
   }
 
+  private globalTaps = new Set<(taskId: string, e: TaskEvent) => void>()
+
+  /** 全局事件旁路（监控采集用）：无论该任务是否有 SSE 订阅者，所有事件都会流经这里 */
+  public onTap(fn: (taskId: string, e: TaskEvent) => void): () => void {
+    this.globalTaps.add(fn)
+    return () => {
+      this.globalTaps.delete(fn)
+    }
+  }
+
   private emit(taskId: string, event: TaskEvent): void {
+    for (const fn of this.globalTaps) {
+      try {
+        fn(taskId, event)
+      } catch {
+        /* 单个旁路订阅者异常不影响其他 */
+      }
+    }
     const set = this.hub.get(taskId)
     if (!set) return
     for (const fn of set) {
@@ -549,18 +566,6 @@ export class TaskEngine {
     const ctrl = new AbortController()
     this.activeJobs.set(taskId, ctrl)
 
-    // 若是第一轮用户消息且任务还是默认标题，异步自动提炼生成更精准的会话标题
-    if (task.turns.filter((t) => t.role === 'user').length === 1 && (task.title.startsWith('新任务') || task.title.startsWith('未命名任务') || task.title.length <= 6)) {
-      void this.planner.generateTitle(text.trim()).then((autoTitle) => {
-        if (autoTitle && autoTitle !== task.title) {
-          this.store.mutateTask(taskId, (t) => {
-            t.title = autoTitle
-          })
-          this.emit(taskId, { type: 'task_status', status: this.store.getTask(taskId)?.status || 'running' })
-        }
-      }).catch(() => {})
-    }
-
     // 异步执行，立即返回用户轮次（流式经 SSE 推送）
     void this.processUserMessage(taskId, text.trim(), mentions, ctrl.signal)
       .catch((err) => {
@@ -602,18 +607,24 @@ export class TaskEngine {
     // 1. 如果用户明确 @ 了子智能体，按提及的智能体定向派发（如果多个则编排，单人则直通）；
     // 2. 如果用户完全没有 @ 任何子智能体（纯提问/咨询/诊断，如“分析为什么连接不上”）：
     //    由【主智能体（Planner / 本地主调度）】直接进行分析与应答（直通 chat 模式），避免强行将诊断性问题拆解分发给故障节点；
-    // 3. 只有当任务本身是 orchestrate 模式且有多成员、并且用户没有被强制走主智能体时才走编排。
+    //    注意：主智能体身份每条消息实时解析（planner.pickTarget → settings.planner.agentId），
+    //    因此对话过程中切换主智能体后，下一条消息即路由到切换后的智能体（任何任务模式一致）。
+    // 3. 主智能体不可用时才回退到任务既有成员。
 
     const hasExplicitAgentMention = mentions.mentionedAgentIds.length > 0
     // 本轮是否明确 @ 了“恰好一个”智能体 —— 用户只想把这件事交给那一个智能体，
     // 不应被任务已有的多成员/编排模式放大成跨多智能体流水线
     const singleExplicitMention = mentions.mentionedAgentIds.length === 1
 
-    if (!hasExplicitAgentMention && task.mode === 'orchestrate') {
-      // 未指定智能体时，优先由主智能体进行分析应答
+    if (!hasExplicitAgentMention) {
+      // 未指定智能体时，由当前主智能体进行分析应答
       const plannerTarget = await this.planner.pickTarget()
       if (!('error' in plannerTarget) && plannerTarget.agent) {
         const pAgent = plannerTarget.agent
+        // 单成员任务保持成员与当前主智能体同步（附件上传目标等与路由判定同源）
+        if (task.memberAgentIds.length <= 1 && !task.memberAgentIds.includes(pAgent.id)) {
+          this.store.mutateTask(taskId, (t) => { t.memberAgentIds = [pAgent.id] })
+        }
         const targetsMap = new Map<string, DshTarget>([[pAgent.id, plannerTarget.target]])
         await this.runChatTurn(taskId, text, mentions, targetsMap, signal, pAgent.id)
         const fresh = this.store.getTask(taskId)!
@@ -777,6 +788,19 @@ export class TaskEngine {
       })
       this.emit(taskId, { type: 'task_status', status: 'failed' })
       return
+    }
+
+    // 首轮消息且标题仍是默认值 → 在任务自身的远端会话内提炼标题。
+    // 此前经 /chat/completions 不带 sessionId，dsh-web-service 会另起一个随机会话，
+    // 远端节点因此多出「只有一条标题问答」的孤立任务；现在标题问答与任务工单共用同一会话。
+    if (this.needsAutoTitle(task) && session.remoteSessionId) {
+      const title = await this.planner.generateTitleInSession(target, session.remoteSessionId, text).catch(() => '')
+      if (title) {
+        this.store.mutateTask(taskId, (t) => {
+          t.title = title
+        })
+        this.emit(taskId, { type: 'task_status', status: this.store.getTask(taskId)?.status || 'running' })
+      }
     }
 
     const turn: TaskTurn = {
@@ -1308,10 +1332,86 @@ export class TaskEngine {
 
   // ---------- 会话与派发基建 ----------
 
+  private needsAutoTitle(task: WorkTask): boolean {
+    const userTurns = (task.turns || []).filter((t) => t.role === 'user')
+    if (userTurns.length !== 1) return false
+    return task.title.startsWith('新任务') || task.title.startsWith('未命名任务') || task.title.length <= 6
+  }
+
+  /** 工作区列表缓存：baseUrl → { at, workspaces }，60s（避免每次建会话都打一发 /workspaces） */
+  private wsCache = new Map<string, { at: number; workspaces: Array<{ id: string; path?: string }> }>()
+
+  /**
+   * 按智能体工作目录解析远端工作区 id：精确匹配 path，无匹配时在远端注册同路径工作区
+   * （POST /workspaces 按 path 幂等）并使用之。注意 workspaceId 与 cwd 互斥（远端 harness 校验），
+   * 因此工作区路径必须与 workDir 完全一致（cwd 由工作区隐含）。
+   * 远端不支持 /workspaces（过旧）或未配置 workDir 时返回 undefined —— 退回仅传 cwd 的旧行为。
+   */
+  private async resolveWorkspaceId(target: DshTarget, wantedCwd: string): Promise<string | undefined> {
+    const cached = this.wsCache.get(target.baseUrl)
+    let workspaces: Array<{ id: string; path?: string }>
+    if (cached && Date.now() - cached.at < 60_000) {
+      workspaces = cached.workspaces
+    } else {
+      const r = await this.client.listWorkspaces(target).catch(() => ({ ok: false as const, workspaces: undefined }))
+      workspaces = r.ok && r.workspaces ? r.workspaces : []
+      this.wsCache.set(target.baseUrl, { at: Date.now(), workspaces })
+    }
+    const norm = (v: string) => v.replace(/\/+$/, '')
+    const want = norm(wantedCwd)
+    for (const ws of workspaces) {
+      if (ws.path && norm(ws.path) === want) return ws.id
+    }
+    // 无匹配工作区 → 在远端注册（幂等），并同步进缓存，后续会话直接命中
+    const created = await this.client.ensureWorkspace(target, wantedCwd, wantedCwd.split('/').filter(Boolean).pop() || undefined).catch(() => ({ ok: false as const, id: undefined }))
+    if (created.ok && created.id) {
+      if (this.wsCache.has(target.baseUrl)) this.wsCache.get(target.baseUrl)!.workspaces.push({ id: created.id, path: wantedCwd })
+      return created.id
+    }
+    return undefined
+  }
+
+  /**
+   * 主智能体切换后的会话预热对齐（WEB 端「切换主智能体」时调用，fire-and-forget）：
+   * 为当前主智能体就地建/对齐远端会话 —— 工作区、工作目录、主调度模型全部随新主智能体走，
+   * 用户下一条消息发出时已在正确的工作区里。
+   */
+  public async prepareMainSession(taskId: string): Promise<void> {
+    const task = this.store.getTask(taskId)
+    if (!task || task.mode !== 'chat' || this.activeJobs.has(taskId)) return
+    const main = this.planner.pickMainAgent()
+    if (!main || !task.memberAgentIds.includes(main.id)) return
+    const target = await this.resolver.resolve(main).catch(() => undefined)
+    if (!target?.online) return
+    await this.ensureSession(taskId, main, target).catch(() => {})
+  }
+
   private async ensureSession(taskId: string, agent: SubAgent, target: DshTarget): Promise<{ ok: boolean; remoteSessionId?: string; reused?: boolean; error?: string }> {
     const task = this.store.getTask(taskId)!
     const wantedCwd = agent.workDir || undefined
     const existing = task.sessions[agent.id]
+    const mainAgent = this.planner.pickMainAgent()
+    const isMain = mainAgent?.id === agent.id
+    const settings = this.store.getSettings()
+    const plannerModelSetting = String(settings.planner?.model || '').trim() || undefined
+
+    if (existing?.remoteSessionId && isMain && (existing.plannerModel || undefined) !== plannerModelSetting) {
+      // 主智能体的已绑定会话与「模型列表当前选中」不一致（切换过主智能体或模型）→ 就地对齐
+      const slash = plannerModelSetting ? plannerModelSetting.indexOf('/') : -1
+      const provider = plannerModelSetting && slash >= 0 ? plannerModelSetting.slice(0, slash).trim() || undefined : undefined
+      const modelId = plannerModelSetting && slash >= 0 ? plannerModelSetting.slice(slash + 1).trim() || undefined : plannerModelSetting
+      const aligned = await this.client.updateSessionModel(target, existing.remoteSessionId, { provider, model: modelId })
+      if (aligned.ok) {
+        this.store.mutateTask(taskId, (t) => {
+          const b = t.sessions[agent.id]
+          if (b) b.plannerModel = plannerModelSetting
+        })
+        this.taskLog(taskId, 'info', `主智能体会话模型已对齐（${agent.name}）: ${plannerModelSetting || '默认模型'}`)
+      } else {
+        this.taskLog(taskId, 'warn', `主智能体会话模型对齐失败（${agent.name}）: ${aligned.error}`)
+      }
+    }
+
     if (existing?.remoteSessionId) {
       if ((existing.cwd || undefined) !== wantedCwd) {
         // 工作目录已变更 → 旧会话作废，重建
@@ -1323,33 +1423,36 @@ export class TaskEngine {
         this.taskLog(taskId, 'warn', `远端会话丢失（${agent.name}），正在重建: ${existing.remoteSessionId}`)
       }
     }
-    const mainAgent = this.planner.pickMainAgent()
-    const isMain = mainAgent?.id === agent.id
-    const settings = this.store.getSettings()
 
     // 若为主智能体且配置了主调度模型，优先采用该模型作为远端会话创建参数
     let targetProvider = agent.provider
     let targetModel = agent.model
-    if (isMain && settings.planner?.model) {
-      const pm = String(settings.planner.model).trim()
+    if (isMain && plannerModelSetting) {
+      const pm = plannerModelSetting
       const slash = pm.indexOf('/')
       if (slash >= 0) {
         targetProvider = pm.slice(0, slash).trim() || undefined
         targetModel = pm.slice(slash + 1).trim() || undefined
-      } else if (pm) {
+      } else {
         targetModel = pm
       }
     }
 
+    // 工作区对齐：workspaceId 与 cwd 互斥（远端 harness 校验「accepts workspaceId or cwd, not both」）。
+    // 解析出工作区时只传 workspaceId（工作区路径即工作目录）；远端无工作区体系时退回传 cwd。
+    const workspaceId = agent.workDir ? await this.resolveWorkspaceId(target, agent.workDir).catch(() => undefined) : undefined
     const res = await this.client.createSession(target, `[WorkBuddy] ${task.title}`, {
       agentPreset: agent.agentPreset,
       provider: targetProvider,
       model: targetModel,
-      cwd: agent.workDir,
+      ...(workspaceId ? { workspaceId } : { cwd: agent.workDir }),
     })
+    if (workspaceId) {
+      this.taskLog(taskId, 'info', `会话已对齐工作区（${agent.name}）: workspace=${workspaceId} · 目录 ${agent.workDir}`)
+    }
     if (!res.ok || !res.sessionId) return { ok: false, error: res.error }
     this.store.mutateTask(taskId, (t) => {
-      t.sessions[agent.id] = { remoteSessionId: res.sessionId!, baseUrl: target.baseUrl, cwd: agent.workDir || undefined, createdAt: Date.now() }
+      t.sessions[agent.id] = { remoteSessionId: res.sessionId!, baseUrl: target.baseUrl, cwd: agent.workDir || undefined, plannerModel: isMain ? (plannerModelSetting || '') : undefined, createdAt: Date.now() }
     })
     this.taskLog(taskId, 'info', `远程会话已创建（${agent.name}${targetModel ? ' · 模型 ' + targetModel : ''}${agent.workDir ? ' · 工作目录 ' + agent.workDir : ''}）: ${res.sessionId} @ ${target.baseUrl}`)
     // 校验远端 cwd 生效
@@ -1397,8 +1500,11 @@ export class TaskEngine {
       return sync
     }
     // SSE 断损兜底（D5）：断流时已产出部分内容、或流被提前收掉未收到 turn_end、
-    // 或提交后流异常终结 —— 远端回合多半仍在继续，轮询对账拿回完整整轮结果
-    if (!signal.aborted && (sse.content || sse.complete === false || /SSE 流/.test(sse.error || ''))) {
+    // 或提交后流异常终结 —— 远端回合多半仍在继续，轮询对账拿回完整整轮结果。
+    // 网络层错误（fetch failed / 连接被重置 / 静默看门狗断开等）同样兜底：远端回合往往还在跑，
+    // 只对齐 /SSE 流/ 前缀会漏掉「零内容 + 网络错误」的形态，导致回复彻底不同步到 UI。
+    const networkLike = /fetch failed|terminated|TimeoutError|aborted|socket|ECONN|EPIPE|EHOST|upstream|静默超时|网络/i
+    if (!signal.aborted && (sse.content || sse.complete === false || /SSE 流|静默超时/.test(sse.error || '') || networkLike.test(sse.error || ''))) {
       handlers.onLog?.('SSE 流中断/提前结束，转轮询对账整轮结果...', 'warn')
       const polled = await this.client.waitForSessionResult(target, sessionId, {
         signal,

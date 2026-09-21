@@ -207,7 +207,7 @@ async function main() {
   // ---------- 6. 工具 HTTP 通道 ----------
   const toolList = await req('GET', `${PREFIX}/api/tools`)
   const toolNames = (toolList.json?.tools || []).map((t) => t.name)
-  check('工具清单暴露 7 个工具', toolList.status === 200 && toolNames.length === 7, toolNames.join(','))
+  check('工具清单暴露 11 个工具', toolList.status === 200 && toolNames.length === 11, toolNames.join(','))
   check('工具清单含参数 schema', (toolList.json?.tools || []).every((t) => t.parameters && typeof t.parameters === 'object'))
 
   const toolListCall = await req('POST', `${PREFIX}/api/tools/workbuddy_resource_manage`, { action: 'list' })
@@ -217,7 +217,9 @@ async function main() {
   check('工具调用 workbuddy_agent_manage', toolAgents.json?.ok === true && toolAgents.json?.result?.agents?.length === 1)
 
   const toolTasks = await req('POST', `${PREFIX}/api/tools/workbuddy_task_status`, { taskId })
-  check('工具调用 workbuddy_task_status', toolTasks.json?.ok === true && toolTasks.json?.result?.task?.id === taskId)
+  check('工具调用 workbuddy_task_status（默认摘要，小回包）', toolTasks.json?.ok === true && toolTasks.json?.result?.taskId === taskId && Boolean(toolTasks.json?.result?.status) && !toolTasks.json?.result?.task)
+  const toolTasksFull = await req('POST', `${PREFIX}/api/tools/workbuddy_task_status`, { taskId, detail: 'full' })
+  check('工具调用 workbuddy_task_status detail=full（完整任务）', toolTasksFull.json?.ok === true && toolTasksFull.json?.result?.task?.id === taskId)
 
   const toolMissing = await req('POST', `${PREFIX}/api/tools/not_a_tool`, {})
   check('未知工具返回 404', toolMissing.status === 404)

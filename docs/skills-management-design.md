@@ -1,7 +1,9 @@
 # OneNat WorkBuddy 技能管理 + 子智能体技能绑定 实现方案（v1）
 
-> 状态：待确认。确认后按此文档编码。
-> 关联仓库：`dsh-external/dsh-web-service`（远端 DSH HTTP 层）、`dsh-external/onenat-workbuddy`（本插件）。
+> 状态：历史设计记录（已实现）。本文撰写时项目还是 DSH 插件形态，文中 cordis/webServer 相关描述
+> 仅为历史背景；**本项目现为独立 Node.js WEB 服务**（`node dist/server.js`，零 DSH 依赖），
+> 技能中心已按「独立服务 + dsh-web-service HTTP API」形态落地。
+> 关联仓库：`dsh-web-service`（远端 DSH HTTP 层）。
 
 ---
 

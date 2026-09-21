@@ -116,15 +116,10 @@ jsdom 回归证据（修复前）：C2 场景只显示 117/526 字符，结尾�
 
 ## 6. 生效方式
 
-- **onenat-workbuddy-web**：`dist/` 与 `lib/` 已重新构建（`bash scripts/build-standalone.sh`、`bash scripts/build.sh`）。
-  - 独立部署实例（`node dist/server.js --port 3081 …`）**需按原命令重启**才会加载新 dist。
-  - DSH 插件形态：`dev_reload_package onenat-workbuddy` 或重启 DSH。
+- **onenat-workbuddy-web**：`dist/` 已重新构建（`bash scripts/build-standalone.sh`）。
+  独立部署实例（`node dist/server.js --port 3081 …`）**需按原命令重启**才会加载新 dist。
 - **dsh-web-service**：`lib/` 已重新构建，并已用 `dev_reload_package dsh-web-service` 在运行中的 DSH 上热重载生效
   （已自检 `/api/v1/system/status` 与 `prompt-stream` SSE 路由正常）。
-
-> 注：`~/.dsh/profiles/web/node_modules/@dsh-external/onenat-workbuddy` 目前是**悬空软链**
-> （指向已改名的 `DHS-test/onenat-workbuddy`，实际目录为 `onenat-workbuddy-web`），
-> 因此 DSH GUI 内并未挂载该工作台；用户侧入口是独立部署的 3081 控制台。若要 GUI 内嵌面板，请重建该软链。
 
 ## 7. 未覆盖 / 后续建议
 

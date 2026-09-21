@@ -1,5 +1,5 @@
 /**
- * @dsh-external/onenat-workbuddy - 版本维护工具
+ * onenat-workbuddy-web - 版本维护工具
  *
  * 版本号采用日期发布风格：YYYY.M.D（如 2026.9.15）。
  * 单一事实来源为 package.json 的 version 字段：

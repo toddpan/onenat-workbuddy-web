@@ -1,5 +1,5 @@
 /**
- * @dsh-external/onenat-workbuddy - 登录页（独立部署模式）
+ * onenat-workbuddy-web - 登录页（独立部署模式）
  * 风格与控制台一致；未登录访问控制台时由 server 返回本页。
  * 注意: 嵌入式 JS 不使用外层模板串冲突字符。
  */
