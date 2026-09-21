@@ -109,8 +109,8 @@ const HELP = `WorkBuddy CLI — AI 管理 OneNat WorkBuddy（配置: ${CFG.cfgPa
   task     [list|create|send|wait|status|delete|cancel|members|chat]
            create: --title t --agents a,b --message m [--mode chat|orchestrate]
            send:   --id x --message m     wait: --id x [--timeout ms]
-           status: [--id x]               chat: --id x --sub sid|agentId [--followup m]
-           members: --id x --agents a,b
+           status: [--id x]               chat: --id x --sub sid|agentId [--followup m]（--agent 为 --sub 的别名）
+           members: --id x --agents a,b  （--agents 必填，至少一个非空 ID）
   schedule [list|get|upsert|delete|toggle|run] [--json '{...}'] [--id x]
   planner  [get|set|options] [--agent id] [--model provider/model]
   file     [list|mkdir|upload|download|delete]
@@ -168,7 +168,10 @@ async function main() {
         return
       }
       if (action === 'chat') {
-        await tool('workbuddy_task_chat', { taskId: flags.id, subtaskId: flags.sub, followupMessage: flags.followup })
+        if (!flags.id) die('chat 需要 --id <taskId>')
+        const sub = flags.sub !== undefined ? flags.sub : flags.agent
+        if (sub === undefined || sub === true || sub === '') die('chat 需要 --sub <sid|agentId>（--agent 为其别名）')
+        await tool('workbuddy_task_chat', { taskId: flags.id, subtaskId: sub, followupMessage: flags.followup })
         return
       }
       const args = { action, taskId: flags.id }
@@ -180,7 +183,12 @@ async function main() {
       }
       if (action === 'send') args.message = flags.message
       if (action === 'wait') args.timeoutMs = num(flags.timeout, 120000)
-      if (action === 'members' && flags.agents) args.memberAgentIds = String(flags.agents).split(',').map((s) => s.trim()).filter(Boolean)
+      if (action === 'members') {
+        if (!flags.agents) die('members 需要 --agents <id,id>（成员子智能体 ID，至少一个）')
+        const memberIds = String(flags.agents).split(',').map((s) => s.trim()).filter(Boolean)
+        if (!memberIds.length) die('members 需要 --agents <id,id>（--agents 解析后为空，请提供至少一个非空 ID）')
+        args.memberAgentIds = memberIds
+      }
       await tool('workbuddy_task_manage', args)
       return
     }

@@ -436,7 +436,10 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
         return JSON.stringify({ ok: true })
       }
       if (action === 'members') {
-        const memberIds: string[] = asJson(args.memberAgentIds)
+        const memberIds = asJson(args.memberAgentIds)
+        if (!Array.isArray(memberIds) || !memberIds.some((id) => Boolean(id))) {
+          return JSON.stringify({ ok: false, error: 'members 需要 memberAgentIds（至少一个非空成员子智能体 ID）：HTTP 传数组或 JSON 字符串，CLI 用 --agents <id,id>' })
+        }
         const t = engine.updateMembers(taskId, memberIds)
         return JSON.stringify({ ok: Boolean(t), task: t }, null, 2)
       }
@@ -524,11 +527,12 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       const task = store.getTask(String(args.taskId || ''))
       if (!task) return JSON.stringify({ ok: false, error: '任务不存在' })
       const subId = String(args.subtaskId || '')
+      if (!subId) return JSON.stringify({ ok: false, error: '缺少 subtaskId（子任务 ID 或成员 agentId）：先 workbuddy_task_status 看子任务/成员列表' })
       const sub = task.plan?.subtasks.find((s) => s.id === subId)
       const agentId = sub?.agentId || subId
       const binding = task.sessions[agentId]
       const agent = store.getAgent(agentId)
-      if (!agent) return JSON.stringify({ ok: false, error: '未找到该 ID 对应的子任务/成员' })
+      if (!agent) return JSON.stringify({ ok: false, error: `未找到 ID「${subId}」对应的子任务或成员子智能体：请用 workbuddy_task_status {taskId:"${task.id}", detail:"full"} 查看该任务的子任务 ID / 成员 agentId，再用其作为 subtaskId` })
       if (!binding?.remoteSessionId) return JSON.stringify({ ok: false, error: '该成员尚未创建远程会话' })
       const target = await resolver.resolve(agent)
       if (!target.online) return JSON.stringify({ ok: false, error: target.error })

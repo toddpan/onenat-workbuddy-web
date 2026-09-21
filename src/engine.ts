@@ -405,7 +405,7 @@ export class TaskEngine {
 
   public updateMembers(taskId: string, memberAgentIds: string[]): WorkTask | undefined {
     const ids = Array.isArray(memberAgentIds) ? [...new Set(memberAgentIds.filter((id) => Boolean(id)))] : []
-    if (!ids.length) throw new Error('至少保留一个成员子智能体')
+    if (!ids.length) throw new Error('members 需要至少一个非空成员子智能体 ID（memberAgentIds / CLI --agents <id,id>）')
     return this.store.mutateTask(taskId, (task) => {
       if (this.activeJobs.has(taskId)) throw new Error('任务执行中，暂不能变更成员')
       task.memberAgentIds = ids
