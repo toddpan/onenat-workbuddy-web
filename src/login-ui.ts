@@ -88,7 +88,7 @@ body::before { content: ''; position: fixed; inset: 0; background: radial-gradie
       });
       var json = null; try { json = await res.json(); } catch (e) {}
       if (res.status === 429) { showErr('尝试次数过多，请 5 分钟后再试'); }
-      else if (json && json.ok) { location.replace(PREFIX + '/'); return; }
+      else if (json && json.ok) { location.replace(PREFIX + '/' + (location.hash || '')); return; }
       else { showErr((json && json.error) || '用户名或密码错误'); }
     } catch (e) { showErr('网络异常，请重试'); }
     btn.disabled = false; btn.textContent = '登 录';

@@ -55,7 +55,7 @@ header .sub { color: var(--tx3); font-size: 12.5px; }
 .kpi .v.pri { color: var(--pri); }
 .kpi .v.warn { color: var(--warn); }
 
-.grid { display: grid; grid-template-columns: 5fr 4fr 4fr; gap: 12px; align-items: start; }
+.grid { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 5fr) minmax(0, 3.6fr); gap: 12px; align-items: start; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; }
 .panel h2 { font-size: 13.5px; color: var(--tx2); font-weight: 600; display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .panel h2 .cnt { color: var(--pri); font-variant-numeric: tabular-nums; }
@@ -107,7 +107,8 @@ header .sub { color: var(--tx3); font-size: 12.5px; }
 .ev { display: flex; gap: 8px; padding: 5px 4px; border-bottom: 1px dashed rgba(30,42,74,.6); font-size: 12.5px; line-height: 1.45; }
 .ev:last-child { border-bottom: none; }
 .ev .t { color: var(--tx3); font-variant-numeric: tabular-nums; flex: none; font-size: 11.5px; padding-top: 1px; }
-.ev .m { color: var(--tx2); }
+.ev .m { color: var(--tx2); min-width: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ev:hover .m { -webkit-line-clamp: unset; }
 .ev .m b { color: var(--tx); }
 .ev.error .m { color: #fca5a5; }
 .ev.warn .m { color: #fcd34d; }
@@ -315,6 +316,11 @@ function renderTasks(tasks) {
   var rest = tasks.filter(function(t) { return !t.running; }).slice(0, 10);
   document.getElementById('task-cnt').textContent = running.length + ' 运行中 / ' + tasks.length + ' 总数';
   var ordered = running.concat(rest).slice(0, 16);
+  var titleOf = function(t) {
+    var x = String(t.title || '');
+    if (t.type === 'schedule') { while (x.charAt(0) === '⏰' || x.charAt(0) === ' ') x = x.slice(1); }
+    return x;
+  };
   if (!ordered.length) { el.innerHTML = '<div class="empty">暂无任务会话</div>'; return; }
   var html = '';
   for (var i = 0; i < ordered.length; i++) {
@@ -331,7 +337,7 @@ function renderTasks(tasks) {
     var pct = (act.subtasks && act.subtasks.total) ? Math.round(100 * act.subtasks.completed / act.subtasks.total) : null;
     var agentsLine = t.agentNames && t.agentNames.length ? ' · ' + esc(t.agentNames.join('、')) : '';
     html += '<div class="task' + (t.running ? '' : ' done') + '">' +
-      '<div class="row1"><span class="ic">' + t.typeIcon + '</span><span class="tt" title="' + esc(t.title) + '">' + esc(t.title) + '</span>' +
+      '<div class="row1"><span class="ic">' + t.typeIcon + '</span><span class="tt" title="' + esc(t.title) + '">' + esc(titleOf(t)) + '</span>' +
       '<span class="spacer"></span>' + (t.elapsedMs != null ? '<span class="el">⏱ ' + fmtElapse(t.elapsedMs) + '</span>' : '') + '</div>' +
       '<div class="hl ' + hlClass(t) + '">' + esc(t.headline) + '</div>' +
       (t.description ? '<div class="sub" title="' + esc(t.description) + '">' + esc(t.description) + agentsLine + '</div>' : '') +

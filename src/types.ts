@@ -300,6 +300,9 @@ export interface WorkTask {
   archivedAt?: number
   /** 会话附件（上传到各成员远端工作区后的登记） */
   attachments?: TaskAttachment[]
+  /** 由定时任务派生时记录来源（调度删除/滚动出窗口后类型标识仍可恢复） */
+  scheduleId?: string
+  scheduleName?: string
 }
 
 export interface TaskAttachment {
