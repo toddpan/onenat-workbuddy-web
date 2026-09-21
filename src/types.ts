@@ -285,8 +285,10 @@ export interface WorkTask {
   mode: TaskMode
   status: TaskStatus
   memberAgentIds: string[]
+  /** 创建者（'tool' = AI 工具通道 / 'console' = 控制台人工）。工具通道显式指定的成员受保护，不被主智能体改写 */
+  creator?: 'tool' | 'console'
   /** 最近一轮的路由模式：明确 @ 单人时为 direct（定向直通），否则为编排/默认 */
-  lastRoute?: { kind: 'direct' | 'orchestrate' | 'chat'; agentId?: string; agentName?: string }
+  lastRoute?: { kind: 'direct' | 'orchestrate' | 'chat'; agentId?: string; agentName?: string; source?: 'member' | 'main' }
   turns: TaskTurn[]
   /** 任务级引擎日志（规划器结果/成员问题/会话创建等，持久化） */
   taskLogs?: SubtaskLogEntry[]
