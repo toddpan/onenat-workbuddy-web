@@ -98,22 +98,22 @@ printf '{\n  "baseUrl": "%s",\n  "token": "%s",\n  "installedAt": %s\n}\n' \
 chmod 600 "$CFG"
 
 # ---------- 连通性自检（跑一次即可） ----------
+# 注意：自检输出直接捕获到变量，不落盘——/tmp 不可写的沙箱（Termux 等）也能通过。
 echo "▸ 连通性自检"
-SELFTEST=0
+SELFTEST="" SELFTEST_RC=0
 if command -v node >/dev/null 2>&1 && [ -n "$FIRST_WB" ]; then
-  if node "$FIRST_WB" tools >/tmp/wb-skill-selftest.$$ 2>&1; then
-    SELFTEST=1
-    cat /tmp/wb-skill-selftest.$$
+  # set -e 下用 `|| RC=$?` 形式：命令非 0 时脚本不会中断，且 $? 仍是 node 的退出码
+  SELFTEST="$(node "$FIRST_WB" tools 2>&1)" || SELFTEST_RC=$?
+  if [ "$SELFTEST_RC" = "0" ]; then
+    echo "$SELFTEST"
   else
-    cat /tmp/wb-skill-selftest.$$ >&2
+    echo "$SELFTEST" >&2
   fi
-  rm -f /tmp/wb-skill-selftest.$$
 else
   echo "  ⚠️ 未找到 node，跳过自检（wb.mjs 需要 Node ≥ 18）"
-  SELFTEST=1
 fi
 
-if [ "$SELFTEST" = "1" ]; then
+installed_note() {
   echo ""
   echo "✅ 安装完成（${#TARGETS[@]} 个技能目录）"
   for d in "${TARGETS[@]}"; do
@@ -123,7 +123,49 @@ if [ "$SELFTEST" = "1" ]; then
   echo "  配置: ${CFG}（600 权限；也可用环境变量 WORKBUDDY_BASE_URL / WORKBUDDY_TOKEN 覆盖）"
   echo ""
   echo "  快速验证: ${FIRST_WB} monitor overview"
-else
-  echo "❌ 自检失败：请检查 --base-url 与 --token 是否正确（APIKEY 在控制台「设置 → AI 接入」生成）" >&2
-  exit 1
+}
+
+if [ "$SELFTEST_RC" = "0" ]; then
+  installed_note
+  exit 0
 fi
+
+# 自检失败：先打印「文件已安装」，再按失败原因分别提示（区分本地环境 / 鉴权 / 网络）
+# 退出码约定：
+#   本地环境限制（如 /tmp 不可写）→ 退出 0：安装动作本身成功，仅自检受环境限制，不让 CI 误判安装失败
+#   鉴权 / 网络 / 其他 → 退出 1：文件已装好，但连通性存疑，CI 应感知并提示人工检查
+case "$SELFTEST" in
+  *Permission*denied*|*ENOENT*|*EACCES*|*cannot*write*|*No*such*file*)
+    echo ""
+    echo "⚠️ 自检未通过：本地环境限制（例如 ${TMPDIR:-/tmp} 不可写或 node 异常），与 --base-url/--token 无关"
+    echo "   文件已安装（安装动作成功），请在正常环境手动验证: ${FIRST_WB} tools"
+    installed_note
+    exit 0
+    ;;
+  *鉴权失败*|*"HTTP 401"*|*"HTTP 403"*)
+    echo ""
+    echo "✅ 文件已安装（${#TARGETS[@]} 个技能目录，清单见下）"
+    installed_note
+    echo "" >&2
+    echo "❌ 自检失败：鉴权被拒（APIKEY 无效/过期，或 --base-url 指向了错误的服务地址）" >&2
+    echo "   APIKEY 在控制台「设置 → AI 接入」生成；修正后手动验证: ${FIRST_WB} tools" >&2
+    exit 1
+    ;;
+  *网络错误*|*ECONNREFUSED*|*ENOTFOUND*|*EAI_AGAIN*|*超时*|*timeout*)
+    echo ""
+    echo "✅ 文件已安装（${#TARGETS[@]} 个技能目录，清单见下）"
+    installed_note
+    echo "" >&2
+    echo "❌ 自检失败：连不上服务（网络/地址问题）——请检查 --base-url 是否可达" >&2
+    echo "   修正后手动验证: ${FIRST_WB} tools" >&2
+    exit 1
+    ;;
+  *)
+    echo ""
+    echo "✅ 文件已安装（${#TARGETS[@]} 个技能目录，清单见下）"
+    installed_note
+    echo "" >&2
+    echo "❌ 自检失败（原因见上方输出）：请检查 --base-url 与 --token 是否正确，或手动运行 ${FIRST_WB} tools 排查" >&2
+    exit 1
+    ;;
+esac
