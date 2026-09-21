@@ -1,5 +1,5 @@
 /**
- * @dsh-external/onenat-workbuddy - 子智能体运行时解析器（D1 端口漂移免疫）
+ * onenat-workbuddy-web - 子智能体运行时解析器（D1 端口漂移免疫）
  *
  * SubAgent.dshRef（稳定 ID）→ ResolvedDshTarget（当下 baseUrl + apiKey）
  * 每次派发前调用，绝不缓存公网 URL。
@@ -27,7 +27,11 @@ export class AgentResolver {
     try {
       await this.directory.refresh(true)
     } catch (err: any) {
-      return { ...base, error: `ONENAT 资源刷新失败: ${err?.message || err}` }
+      // 直连实体（apiBaseUrl 固定）不依赖 ONENAT 目录：刷新失败不阻断解析，
+      // 否则 ONENAT 抖动会把本地直连的主智能体也判成不可达（模型目录/消息路由全部失效）。
+      if (agent.dshRef.kind !== 'direct') {
+        return { ...base, error: `ONENAT 资源刷新失败: ${err?.message || err}` }
+      }
     }
 
     let endpointBaseUrl: string | undefined

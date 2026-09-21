@@ -1,91 +1,51 @@
 {
-  "name": "@dsh-external/onenat-workbuddy",
+  "name": "onenat-workbuddy-web",
   "version": "2026.9.15",
-  "description": "OneNat WorkBuddy — 基于 ONENAT 资源面 + 多 DSH 算力面的多智能体协作工作台（任务多轮聊天 / 子智能体 / 资源提示词注入 / LLM 编排）",
+  "description": "OneNat WorkBuddy — 独立部署的多智能体协作 WEB 服务（基于 ONENAT 资源面 + 多 DSH 算力面：任务多轮聊天 / 子智能体 / 资源提示词注入 / LLM 编排）",
   "private": true,
   "repository": {
     "type": "git",
     "url": "https://github.com/toddpan/onenat-workbuddy.git"
   },
   "keywords": [
-    "deepseek-harness",
-    "dsh",
-    "cordis",
     "onenat",
     "workbuddy",
     "multi-agent",
-    "orchestrator"
+    "orchestrator",
+    "web-service"
   ],
   "author": "toddpan",
   "type": "module",
-  "main": "./lib/index.js",
-  "types": "./lib/types/index.d.ts",
+  "main": "./dist/server.js",
   "bin": {
-    "onenat-workbuddy": "./lib/server.js"
+    "onenat-workbuddy": "./dist/server.js"
   },
   "files": [
-    "lib",
-    "dist"
+    "dist",
+    "skills",
+    "scripts/install-skill.sh"
   ],
   "license": "BSD-3-Clause",
   "engines": {
     "node": ">=20"
   },
-  "peerDependencies": {
-    "@deepseek-ai/dsh-llm": ">=0.0.1-rc <2",
-    "@deepseek-ai/dsh-tools": ">=0.0.1-rc <2",
-    "@deepseek-ai/dsh-host-webserver": ">=0.0.1-rc <2",
-    "cordis": ">=4.0.0-rc <5",
-    "schemastery": "^3.18.0",
-    "@deepseek-ai/dsh-client-ui-slots": ">=0.0.1-rc <2"
-  },
-  "peerDependenciesMeta": {
-    "@deepseek-ai/dsh-llm": { "optional": true },
-    "@deepseek-ai/dsh-tools": { "optional": true },
-    "@deepseek-ai/dsh-host-webserver": { "optional": true },
-    "cordis": { "optional": true },
-    "schemastery": { "optional": true },
-    "@deepseek-ai/dsh-client-ui-slots": { "optional": true }
-  },
   "devDependencies": {
     "@types/node": "^24.13.3",
-    "typescript": "^5.9.0",
-    "tsdown": "^0.22.14"
+    "typescript": "^5.9.0"
   },
   "scripts": {
-    "build": "bash scripts/build.sh",
-    "build:standalone": "bash scripts/build-standalone.sh",
-    "build:client": "tsdown",
+    "build": "bash scripts/build-standalone.sh",
     "start": "node dist/server.js",
-    "start:standalone": "bash scripts/build-standalone.sh && node dist/server.js",
     "smoke": "node scripts/smoke-standalone.mjs",
     "smoke:e2e": "SMOKE_E2E=1 node scripts/smoke-standalone.mjs",
     "smoke:schedules": "node scripts/smoke-schedules.mjs",
-    "version:bump": "node lib/date-version.js",
+    "smoke:monitor": "node scripts/smoke-monitor.mjs",
+    "smoke:ai": "node scripts/smoke-ai-skill.mjs",
+    "version:bump": "node dist/date-version.js",
     "test:streaming": "node e2e-artifacts/run-streaming-tests.mjs",
     "test:streaming:e2e": "node e2e-artifacts/e2e-workbuddy-turn.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "typecheck:standalone": "tsc -p tsconfig.server.json --noEmit"
-  },
-  "exports": {
-    ".": {
-      "types": "./lib/types/index.d.ts",
-      "default": "./lib/index.js"
-    },
-    "./client": {
-      "types": "./lib/types/client/index.d.ts",
-      "default": "./lib/client.js"
-    },
-    "./package.json": "./package.json"
-  },
-  "dsh": {
-    "client": {
-      "inject": [
-        "@deepseek-ai/dsh-client-runtime",
-        "@deepseek-ai/dsh-client-ui-slots"
-      ],
-      "platform": "web"
-    }
+    "typecheck": "tsc -p tsconfig.server.json --noEmit",
+    "smoke:xiaozhi": "node scripts/smoke-xiaozhi-mcp.mjs"
   },
   "dependencies": {
     "ssh2": "^1.17.0",

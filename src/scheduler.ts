@@ -1,5 +1,5 @@
 /**
- * @dsh-external/onenat-workbuddy - ScheduleRunner: 定时任务调度器（Host 权威）
+ * onenat-workbuddy-web - ScheduleRunner: 定时任务调度器（Host 权威）
  *
  * 设计对齐 dsh-task-board 的调度语义：
  *  - Host 本地时区计算触发点；浏览器关闭不影响触发
@@ -22,6 +22,9 @@ const RETRY_DELAY_MS = 2_000
 export class ScheduleRunner {
   private timer: ReturnType<typeof setInterval> | null = null
   private firing = new Set<string>()
+
+  /** 触发完成回调（监控采集用）：scheduleId + 本次运行记录（含派发结果） */
+  public onRunFinished: ((scheduleId: string, run: ScheduleRun) => void) | null = null
 
   constructor(
     private store: WorkStore,
@@ -132,6 +135,11 @@ export class ScheduleRunner {
       })
       const okCount = run.items.filter((i) => i.taskId).length
       this.log(`定时任务「${s.name}」${manual ? '手动触发' : '触发'}：${okCount}/${run.items.length} 个子智能体派发成功`)
+      try {
+        this.onRunFinished?.(scheduleId, run)
+      } catch {
+        /* 监控回调异常不影响调度 */
+      }
       return run
     } finally {
       if (!manual) this.firing.delete(scheduleId)

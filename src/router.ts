@@ -1,5 +1,5 @@
 /**
- * @dsh-external/onenat-workbuddy - HTTP Router & API Dispatcher
+ * onenat-workbuddy-web - HTTP Router & API Dispatcher
  *
  * 路由表见设计文档 §9。SSE 网关: GET /api/tasks/:id/stream
  */
@@ -19,9 +19,29 @@ import type { SshResourceStore } from './ssh-store.js'
 import type { ScheduleRunner } from './scheduler.js'
 import { normalizeRule, nextRun, ruleText } from './scheduler.js'
 import { SCHEDULE_TEMPLATES } from './schedule-templates.js'
+import type { AuthService } from './auth.js'
+import type { XiaozhiMcpClient } from './xiaozhi-mcp.js'
 import type { DshRef, SubAgent, WorkTask, ScheduledTask } from './types.js'
+import type { MonitorService } from './monitor.js'
 import { renderWebUi } from './web-ui.js'
+import { renderMonitorUi } from './monitor-ui.js'
 import { formatDateVersion, parseDateVersion, readPackageVersion } from './date-version.js'
+
+/** 单个成员会话的「任务清单 + 运行时长」取数结果（/api/tasks/:id/todos 聚合用） */
+interface MemberTodos {
+  agentId: string
+  agentName: string
+  ok: boolean
+  supported?: boolean
+  error?: string
+  todos?: Array<{ content: string; status: string }>
+  running?: boolean
+  elapsedMs?: number
+  turnStartedAt?: number | null
+  turnEndedAt?: number | null
+  updatedAt?: number | null
+  turns?: number
+}
 
 export class WorkBuddyRouter {
   private client = new DshClient()
@@ -36,6 +56,9 @@ export class WorkBuddyRouter {
     private engine: TaskEngine,
     private sshStore: SshResourceStore,
     private scheduler?: ScheduleRunner,
+    private monitor?: MonitorService,
+    private auth?: AuthService,
+    private xiaozhi?: XiaozhiMcpClient,
   ) {}
 
   private sendJson(res: ServerResponse, statusCode: number, data: any): void {
@@ -72,6 +95,22 @@ export class WorkBuddyRouter {
     res.setHeader('Connection', 'keep-alive')
     res.setHeader('X-Accel-Buffering', 'no')
     res.flushHeaders?.()
+  }
+
+  // ---------- 小智接入点辅助 ----------
+
+  private xiaozhiEndpoints(): import('./types.js').XiaozhiEndpoint[] {
+    return [...(this.store.getSettings().xiaozhi?.endpoints || [])]
+  }
+
+  private xiaozhiListWithStatus(list: import('./types.js').XiaozhiEndpoint[]) {
+    const statusMap = new Map((this.xiaozhi?.listStatus() || []).map((s) => [s.id, s]))
+    return list.map((e) => ({ ...e, connected: Boolean(statusMap.get(e.id)?.connected), stats: statusMap.get(e.id)?.stats }))
+  }
+
+  private saveXiaozhiEndpoints(list: import('./types.js').XiaozhiEndpoint[]): void {
+    this.store.updateSettings({ xiaozhi: { endpoints: list } } as any)
+    this.xiaozhi?.configureAll(list)
   }
 
   /** 任务列表摘要（不含 turns/taskLogs/子任务日志全文） */
@@ -259,6 +298,116 @@ export class WorkBuddyRouter {
     }
   }
 
+  /** 任务清单缓存：taskId → { at, result }；2s TTL（清单随 todo_write 步进变化，需要更灵敏） */
+  private todosCache = new Map<string, { at: number; result: { httpStatus: number; payload: any } }>()
+  private todosInflight = new Map<string, Promise<{ httpStatus: number; payload: any }>>()
+
+  /**
+   * 任务的「任务清单 + 运行时长」：读远端 DSH 会话的 todo_write 投影
+   * （dsh-web-service ≥ 0.1.8 `GET /sessions/:id/todos`）。
+   *
+   * 取数顺序：主智能体会话优先（清单语义上属于主调度的计划），主智能体没有清单时
+   * 回退到第一个有清单的成员；都没有清单时返回主智能体（或首个可达成员）的
+   * running/elapsedMs，让前端仍能展示运行时长。
+   */
+  private async getTaskTodos(taskId: string): Promise<{ httpStatus: number; payload: any }> {
+    const cached = this.todosCache.get(taskId)
+    if (cached && Date.now() - cached.at < 2000) return cached.result
+    const inflight = this.todosInflight.get(taskId)
+    if (inflight) return inflight
+    const job = (async () => {
+      const task = this.store.getTask(taskId)
+      if (!task) {
+        return { httpStatus: 404, payload: { ok: false, error: 'Task not found' } }
+      }
+      const memberIds = Object.keys(task.sessions || {})
+      const mainAgent = this.planner.pickMainAgent()
+      const mainId = mainAgent && memberIds.includes(mainAgent.id) ? mainAgent.id : ''
+      // 主智能体优先，其余成员按绑定顺序兜底
+      const ordered = [...(mainId ? [mainId] : []), ...memberIds.filter((id) => id !== mainId)]
+      if (ordered.length === 0) {
+        const result = {
+          httpStatus: 200,
+          payload: {
+            ok: true,
+            data: {
+              taskId, supported: false, agentId: '', agentName: '',
+              todos: [], counts: { completed: 0, inProgress: 0, pending: 0 },
+              running: false, elapsedMs: 0, turnStartedAt: null, turnEndedAt: null, updatedAt: null, turns: 0,
+              members: [],
+            },
+          },
+        }
+        this.todosCache.set(taskId, { at: Date.now(), result })
+        return result
+      }
+      const results = await Promise.all(ordered.map(async (agentId): Promise<MemberTodos> => {
+        const agent = this.store.getAgent(agentId)
+        const binding = task.sessions[agentId]
+        const agentName = agent?.name || agentId
+        try {
+          if (!agent || !binding?.remoteSessionId) return { agentId, agentName, ok: false, supported: true, error: '成员会话未建立' }
+          const target = await this.resolver.resolve(agent)
+          if (!target.online || !target.baseUrl) return { agentId, agentName, ok: false, supported: true, error: target.error || '节点离线' }
+          const r = await this.client.getSessionTodos(target, binding.remoteSessionId)
+          if (!r.ok) return { agentId, agentName, ok: false, supported: r.supported !== false, error: r.error }
+          return {
+            agentId, agentName, ok: true, supported: true,
+            todos: r.todos || [], running: !!r.running, elapsedMs: r.elapsedMs || 0,
+            turnStartedAt: r.turnStartedAt ?? null, turnEndedAt: r.turnEndedAt ?? null,
+            updatedAt: r.updatedAt ?? null, turns: r.turns || 0,
+          }
+        } catch (err: any) {
+          return { agentId, agentName, ok: false, supported: true, error: err?.message }
+        }
+      }))
+      const supported = results.some((r) => r.ok || r.supported)
+      // 选主：有清单的最靠前成员 → 否则主智能体（若有远端会话）→ 否则首个可达成员
+      const withTodos = results.find((r) => r.ok && r.todos && r.todos.length > 0)
+      const mainResult = mainId ? results.find((r) => r.agentId === mainId) : undefined
+      const pick = withTodos
+        || (mainResult && mainResult.ok ? mainResult : undefined)
+        || results.find((r) => r.ok)
+      const todos = (pick?.todos || []).map((x) => ({
+        content: x.content,
+        status: x.status === 'in_progress' || x.status === 'completed' ? x.status : 'pending',
+      }))
+      const data = {
+        taskId,
+        supported,
+        agentId: pick?.agentId || '',
+        agentName: pick?.agentName || '',
+        todos,
+        counts: {
+          completed: todos.filter((x) => x.status === 'completed').length,
+          inProgress: todos.filter((x) => x.status === 'in_progress').length,
+          pending: todos.filter((x) => x.status === 'pending').length,
+        },
+        running: !!(pick?.ok && pick.running),
+        elapsedMs: pick?.ok ? pick.elapsedMs || 0 : 0,
+        turnStartedAt: pick?.turnStartedAt ?? null,
+        turnEndedAt: pick?.turnEndedAt ?? null,
+        updatedAt: pick?.updatedAt ?? null,
+        turns: pick?.turns || 0,
+        serverTime: Date.now(),
+        members: results.map((r) => ({
+          agentId: r.agentId, agentName: r.agentName, ok: r.ok,
+          count: r.ok ? (r.todos?.length || 0) : 0,
+          error: r.ok ? undefined : r.error,
+        })),
+      }
+      const result = { httpStatus: 200, payload: { ok: true, data } }
+      this.todosCache.set(taskId, { at: Date.now(), result })
+      return result
+    })()
+    this.todosInflight.set(taskId, job)
+    try {
+      return await job
+    } finally {
+      this.todosInflight.delete(taskId)
+    }
+  }
+
   /** 技能目录缓存：taskId|q → { at, result }（10s TTL；技能变更低频，前端每次触发带 q 过滤） */
   private skillsCache = new Map<string, { at: number; result: { httpStatus: number; payload: any } }>()
   private skillsInflight = new Map<string, Promise<{ httpStatus: number; payload: any }>>()
@@ -375,6 +524,77 @@ export class WorkBuddyRouter {
       res.setHeader('Content-Type', 'text/html; charset=utf-8')
       res.setHeader('Cache-Control', 'no-store')
       res.end(renderWebUi(prefix, { ...opts, version: this.version }))
+      return true
+    }
+
+    // ---------- 监控投屏页（独立暗色全屏） ----------
+    if (method === 'GET' && (p === '/monitor' || p === '/monitor/')) {
+      res.statusCode = 200
+      res.setHeader('Content-Type', 'text/html; charset=utf-8')
+      res.setHeader('Cache-Control', 'no-store')
+      res.end(renderMonitorUi(prefix, this.version))
+      return true
+    }
+
+    // ---------- 小智 MCP 接入（语音助手页，多实例管理；控制台会话） ----------
+    if (p === '/api/xiaozhi/status' && method === 'GET') {
+      const statusMap = new Map((this.xiaozhi?.listStatus() || []).map((s) => [s.id, s]))
+      const endpoints = (this.store.getSettings().xiaozhi?.endpoints || []).map((e) => ({
+        ...e,
+        connected: Boolean(statusMap.get(e.id)?.connected),
+        stats: statusMap.get(e.id)?.stats,
+      }))
+      this.sendJson(res, 200, { ok: true, data: { configured: endpoints.some((e) => e.enabled), endpoints } })
+      return true
+    }
+    if (p === '/api/xiaozhi/endpoints' && method === 'POST') {
+      const body = await this.parseBody(req)
+      const endpoint = String(body?.endpoint || '').trim()
+      if (!/^wss?:\/\//.test(endpoint)) {
+        this.sendJson(res, 400, { ok: false, error: '接入点必须是 ws:// 或 wss:// 地址' })
+        return true
+      }
+      const list = [...(this.store.getSettings().xiaozhi?.endpoints || [])]
+      const id = String(body?.id || '') || `xz-${Math.random().toString(36).slice(2, 8)}`
+      const name = String(body?.name || '').trim() || undefined
+      const enabled = body?.enabled === undefined ? true : Boolean(body.enabled)
+      const idx = list.findIndex((e) => e.id === id)
+      const entry = { id, ...(name ? { name } : {}), endpoint, enabled } as import('./types.js').XiaozhiEndpoint
+      if (idx >= 0) list[idx] = { ...list[idx], ...entry }
+      else list.push(entry)
+      this.saveXiaozhiEndpoints(list)
+      this.sendJson(res, 200, { ok: true, data: { endpoint: entry, endpoints: this.xiaozhiListWithStatus(list) } })
+      return true
+    }
+    const xzDelMatch = /^\/api\/xiaozhi\/endpoints\/([^/]+)$/.exec(p)
+    if (xzDelMatch && method === 'DELETE') {
+      const id = decodeURIComponent(xzDelMatch[1])
+      const list = (this.store.getSettings().xiaozhi?.endpoints || []).filter((e) => e.id !== id)
+      this.saveXiaozhiEndpoints(list)
+      this.sendJson(res, 200, { ok: true, data: { deleted: true, endpoints: this.xiaozhiListWithStatus(list) } })
+      return true
+    }
+
+    // ---------- 监控大屏（只读聚合） ----------
+    if (this.monitor && p === '/api/monitor/overview' && method === 'GET') {
+      try {
+        const data = await this.monitor.getOverview()
+        this.sendJson(res, 200, { ok: true, data })
+      } catch (err: any) {
+        this.sendJson(res, 500, { ok: false, error: err?.message || String(err) })
+      }
+      return true
+    }
+    if (this.monitor && p === '/api/monitor/events' && method === 'GET') {
+      const url = new URL(req.url || '/', 'http://localhost')
+      const limit = Number(url.searchParams.get('limit') || 200)
+      this.sendJson(res, 200, { ok: true, data: this.monitor.getRecentEvents(limit) })
+      return true
+    }
+    if (this.monitor && p === '/api/monitor/history' && method === 'GET') {
+      const url = new URL(req.url || '/', 'http://localhost')
+      const days = Number(url.searchParams.get('days') || 7)
+      this.sendJson(res, 200, { ok: true, data: { days: this.monitor.readHistory(days) } })
       return true
     }
 
@@ -512,7 +732,7 @@ export class WorkBuddyRouter {
         ok: true,
         data: {
           version: this.version,
-          name: '@dsh-external/onenat-workbuddy',
+          name: 'onenat-workbuddy-web',
           scheme: parts ? 'date' : 'unknown',
           ...(parts ? { year: parts.year, month: parts.month, day: parts.day } : {}),
           buildDate: new Date().toISOString(),
@@ -524,7 +744,17 @@ export class WorkBuddyRouter {
     // ---------- 设置 ----------
     if (p === '/api/settings' && method === 'GET') {
       const s = this.store.getSettings()
-      this.sendJson(res, 200, { ok: true, data: { ...s, onenat: { ...s.onenat, apiKey: s.onenat.apiKey ? s.onenat.apiKey.slice(0, 8) + '…' : '' } } })
+      this.sendJson(res, 200, { ok: true, data: { ...s, onenat: { ...s.onenat, apiKey: s.onenat.apiKey ? s.onenat.apiKey.slice(0, 8) + '…' : '' }, aiToken: this.auth?.getAiToken() || '' } })
+      return true
+    }
+    // AI APIKEY 重置（仅登录会话；旧令牌立即失效，无需重启）
+    if (p === '/api/settings/ai-token/reset' && method === 'POST') {
+      if (!this.auth) {
+        this.sendJson(res, 500, { ok: false, error: '认证服务未装配' })
+        return true
+      }
+      const token = this.auth.resetAiToken()
+      this.sendJson(res, 200, { ok: true, data: { token } })
       return true
     }
     if (p === '/api/settings' && (method === 'POST' || method === 'PUT')) {
@@ -535,9 +765,19 @@ export class WorkBuddyRouter {
         if (typeof body.onenat.apiKey === 'string' && body.onenat.apiKey.endsWith('…')) delete patch.onenat.apiKey // 打码值不覆盖
       }
       if (body.planner) patch.planner = body.planner
+      if (body.xiaozhi) patch.xiaozhi = body.xiaozhi
       const updated = this.store.updateSettings(patch)
       this.directory.configure(updated.onenat.baseUrl, updated.onenat.apiKey)
       this.directory.startAutoRefresh(updated.onenat.autoRefreshMs)
+      // 小智 MCP 接入点变更即时生效（免重启；兼容旧 {endpoint} 与新 {endpoints[]} 两种形状）
+      if (patch.xiaozhi) {
+        const list = Array.isArray(updated.xiaozhi?.endpoints) && updated.xiaozhi?.endpoints.length
+          ? updated.xiaozhi.endpoints
+          : (typeof updated.xiaozhi?.endpoint === 'string' && updated.xiaozhi.endpoint
+              ? [{ id: 'xz-default', endpoint: updated.xiaozhi.endpoint, enabled: true }]
+              : [])
+        this.xiaozhi?.configureAll(list as any)
+      }
       this.sendJson(res, 200, { ok: true, data: { ...updated, onenat: { ...updated.onenat, apiKey: updated.onenat.apiKey ? updated.onenat.apiKey.slice(0, 8) + '…' : '' } } })
       return true
     }
@@ -1113,6 +1353,14 @@ export class WorkBuddyRouter {
       this.sendJson(res, out.httpStatus, out.payload)
       return true
     }
+    // 任务清单 + 运行时长：远端 DSH 会话的 todo_write 投影（主智能体优先，2s 缓存 + 并发去重）
+    const todosMatch = /^\/api\/tasks\/([^/]+)\/todos$/.exec(p)
+    if (todosMatch && method === 'GET') {
+      const taskId = decodeURIComponent(todosMatch[1])
+      const out = await this.getTaskTodos(taskId)
+      this.sendJson(res, out.httpStatus, out.payload)
+      return true
+    }
     // 输入框 "/" 技能候选：聚合各成员会话作用域技能目录（按名去重，标注可用成员）
     const taskSkillsMatch = /^\/api\/tasks\/([^/]+)\/skills$/.exec(p)
     if (taskSkillsMatch && method === 'GET') {
@@ -1168,9 +1416,10 @@ export class WorkBuddyRouter {
         this.sendJson(res, 404, { ok: false, error: 'Task not found' })
         return true
       }
-      const agentId = String(body?.agentId || '')
+      // 未指定 agentId 时默认作用于「当前主智能体」（与聊天窗模型切换语义一致）
+      const agentId = String(body?.agentId || '') || this.planner.pickMainAgent()?.id || ''
       const binding = task.sessions?.[agentId]
-      if (!binding?.remoteSessionId) {
+      if (!agentId || !binding?.remoteSessionId) {
         this.sendJson(res, 400, { ok: false, error: '该成员在任务中没有远端会话绑定', code: 'NO_SESSION' })
         return true
       }
@@ -1364,10 +1613,13 @@ export class WorkBuddyRouter {
       const picked = await this.planner.plannerTarget()
       let models: Array<{ provider: string; id: string; name?: string; isDefault?: boolean }> = []
       const providers: string[] = []
+      let modelError: string | undefined
       if (picked.baseUrl) {
-        const target = { baseUrl: picked.baseUrl, online: true, resolvedAt: new Date().toISOString(), mappingId: '' }
+        // 必须带上解析出的 apiKey：远程 DSH 节点的 /models 需要鉴权，无 key 会 401 → 列表静默变空
+        const target = { baseUrl: picked.baseUrl, online: true, resolvedAt: new Date().toISOString(), mappingId: '', apiKey: picked.apiKey }
         const mr = await this.client.getModels(target as any)
         models = mr.models || []
+        if (!mr.ok) modelError = mr.error || '模型目录获取失败'
         for (const m of models) if (m.provider && !providers.includes(m.provider)) providers.push(m.provider)
       }
       this.sendJson(res, 200, {
@@ -1379,6 +1631,7 @@ export class WorkBuddyRouter {
           current: { agentId: picked.agentId, auto: picked.auto !== false, model: settings.planner.model },
           source: picked.source,
           error: picked.error,
+          modelError,
         },
       })
       return true
@@ -1396,23 +1649,52 @@ export class WorkBuddyRouter {
         },
       } as any)
 
-      // 若更新了主调度模型，且存在主智能体，同步主智能体默认配置以确保全部路径对齐
-      if (hasModel) {
-        const main = this.planner.pickMainAgent()
-        if (main) {
-          const pm = model || ''
-          const slash = pm.indexOf('/')
-          const provider = slash >= 0 ? pm.slice(0, slash).trim() || undefined : undefined
-          const modelId = slash >= 0 ? pm.slice(slash + 1).trim() || undefined : (pm || undefined)
-          this.store.mutateAgent(main.id, (a) => {
-            if (provider !== undefined) a.provider = provider
-            if (modelId !== undefined) a.model = modelId
-          })
+      // 语义约定（与需求一致）：
+      //  1) 「模型列表选中的模型」是主智能体的运行时模型，切换主智能体时不重置 —— 发消息与
+      //     新建会话都按该选中值建/对齐远端会话（engine.ensureSession）；
+      //  2) 模型切换只写 settings.planner.model，不改写主智能体自身 provider/model 配置 ——
+      //     「智能体默认模型」与「用户选中的模型」是两个概念，后者不得污染前者
+      //     （@ 子智能体仍按各自配置的模型执行）。
+
+      // 主智能体切换 → 同步任务成员账本，让侧栏列表立即显示切换后的智能体（不必刷新页面）：
+      //  1. 正在打开的会话（body.taskId）：单成员 chat 任务直接跟随主智能体（与 engine
+      //     processUserMessage 的「无 @ → 当前主智能体」路由判定同源，提前落账只为 UI 一致）；
+      //  2. 还没有任何消息的单成员 chat 草稿：成员绑定尚无意义，一并归到新的主智能体。
+      // 多成员编排任务与已有历史的其他会话不动，避免篡改历史归属。
+      const currentMain = this.planner.pickMainAgent()
+      const openedTaskId = typeof body?.taskId === 'string' ? String(body.taskId).trim() : ''
+      const syncedTasks: ReturnType<WorkBuddyRouter['taskSummary']>[] = []
+      const switchedTaskIds: string[] = []
+      if (hasAgent && currentMain) {
+        for (const t of this.store.getTasks()) {
+          if (t.mode !== 'chat' || t.memberAgentIds.length > 1) continue
+          const isOpened = t.id === openedTaskId
+          const isEmptyDraft = !(t.turns || []).some((x) => x.role === 'user')
+          if (!isOpened && !isEmptyDraft) continue
+          if (t.memberAgentIds[0] === currentMain.id) continue
+          this.store.mutateTask(t.id, (x) => { x.memberAgentIds = [currentMain.id] })
+          switchedTaskIds.push(t.id)
+          const fresh = this.store.getTask(t.id)
+          if (fresh) syncedTasks.push(this.taskSummary(fresh))
+        }
+        // 工作区/会话随主智能体切换：预热对齐新主智能体的远端会话（工作区、工作目录、主调度模型），
+        // 用户下一条消息发出时已在正确的工作区里（异步执行，不阻塞切换响应）
+        for (const tid of switchedTaskIds) {
+          void this.engine.prepareMainSession(tid).catch(() => {})
         }
       }
 
       const s = this.store.getSettings()
-      this.sendJson(res, 200, { ok: true, data: { agentId: s.planner.agentId, model: s.planner.model } })
+      this.sendJson(res, 200, {
+        ok: true,
+        data: {
+          agentId: s.planner.agentId,
+          model: s.planner.model,
+          resolvedAgentId: currentMain?.id,
+          resolvedAgentName: currentMain?.name,
+          tasks: syncedTasks,
+        },
+      })
       return true
     }
     const retryMatch = /^\/api\/tasks\/([^/]+)\/subtasks\/([^/]+)\/retry$/.exec(p)

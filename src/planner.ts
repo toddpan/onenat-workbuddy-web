@@ -1,5 +1,5 @@
 /**
- * @dsh-external/onenat-workbuddy - LLM Planner（D4）
+ * onenat-workbuddy-web - LLM Planner（D4）
  *
  * 目标: 用规划器模型按子智能体花名册把主任务拆解为子任务图（并行/串行/DAG），
  *       并在全部子任务结束后综合产出生成汇总结论。
@@ -18,8 +18,8 @@ export interface PlannerMember {
 }
 
 /**
- * 运行宿主信息（DSH 插件模式 / 独立部署模式共用）。
- * 仅用于拼自身控制台地址，不依赖任何宿主 API。
+ * 运行宿主信息。
+ * 仅用于拼自身控制台地址，不依赖任何外部 API。
  */
 export interface PlannerHost {
   /** 本服务监听端口（用于回显控制台 URL） */
@@ -80,19 +80,25 @@ export class Planner {
     return { target, source: agent.name + (auto ? '（自动）' : ''), agent, auto }
   }
 
-  /** LLM 拆解主任务 */
   /** 主调度目标信息（聊天窗「模式/模型」选项拉取用） */
   /** 规划器目标信息（设置页/聊天窗选项拉取用）：实际生效的子智能体与入口 */
-  public async plannerTarget(): Promise<{ source: string; baseUrl?: string; agentId?: string; auto?: boolean; error?: string }> {
+  public async plannerTarget(): Promise<{ source: string; baseUrl?: string; apiKey?: string; agentId?: string; auto?: boolean; error?: string }> {
+    // 先解析出「配置身份」：/planner/options 的 current 驱动前端主智能体 ✓ 选中态，
+    // 即使节点暂时不可达（ONENAT 抖动/隧道离线）也不能回退成自动挑选的别的智能体，
+    // 否则界面会「切了又跳回去」，与 settings.planner.agentId 的真实配置不一致。
+    const settings = this.store.getSettings()
+    const configured = settings.planner.agentId ? this.store.getAgent(settings.planner.agentId) : undefined
     const picked = await this.pickTarget()
     if ('error' in picked) {
-      // 失败时也给出自动挑选结果，供设置页显示默认值
+      // 失败时给出兜底展示目标（未配置任何智能体才用自动挑选结果），并附带错误说明
       const d = this.pickDefaultAgent()
-      return { source: '', agentId: d?.id, auto: true, error: picked.error }
+      return { source: '', agentId: configured?.id || d?.id, auto: !configured, error: picked.error }
     }
-    return { source: picked.source, baseUrl: picked.target.baseUrl, agentId: picked.agent.id, auto: picked.auto }
+    // apiKey 必须透传：模型目录（/models）在需要鉴权的远程 DSH 节点上无 key 会 401 → 列表恒为空
+    return { source: picked.source, baseUrl: picked.target.baseUrl, apiKey: picked.target.apiKey, agentId: picked.agent.id, auto: picked.auto }
   }
 
+  /** LLM 拆解主任务 */
   public async planTask(
     objective: string,
     members: PlannerMember[],
@@ -332,45 +338,69 @@ export class Planner {
    * 优先使用 LLM 生成 4~12 字标题；失败则优雅降级截取前缀
    */
   public async generateTitle(firstUserMessage: string): Promise<string> {
-    const raw = firstUserMessage.replace(/@[^\s@,，。!！?？:：;；]+/g, '').replace(/\s+/g, ' ').trim()
+    const raw = this.normalizeTitleSource(firstUserMessage)
     const fallback = raw.length > 20 ? raw.slice(0, 20) + '…' : (raw || '未命名任务')
 
     try {
       const picked = await this.pickTarget()
       if (!('target' in picked)) return fallback
 
-      const res = await this.client.chat(
-        picked.target,
-        [
-          {
-            role: 'user',
-            content: [
-              '你是一个会话标题提炼专家。请根据以下用户发送的第一条消息，提炼一个简明扼要的中文任务标题。',
-              '要求：',
-              '1. 长度控制在 4 到 12 个汉字之间；',
-              '2. 必须直接返回标题文本，严禁包含任何标点符号、引号、前缀、Markdown 或多余解释；',
-              '3. 突出核心动作与业务对象。',
-              '',
-              `用户消息: ${raw}`,
-            ].join('\n'),
-          },
-        ],
-        { timeoutMs: 15_000 },
-      )
-
+      const res = await this.client.chat(picked.target, [{ role: 'user', content: this.titlePrompt(raw) }], { timeoutMs: 15_000 })
       if (res.ok && res.content) {
-        let title = res.content.trim().replace(/^["'《「『【]+|["'》」』】]+$/g, '').trim()
-        // 去除可能的多行
-        title = title.split(/[\r\n]/)[0].trim()
-        if (title.length >= 2 && title.length <= 30) {
-          return title
-        }
+        const title = this.coerceTitle(res.content)
+        if (title) return title
       }
     } catch {
       // 忽略 LLM 异常，安全回退
     }
 
     return fallback
+  }
+
+  /**
+   * 在任务自身的远端会话内提炼标题（不再经 /chat/completions 另起随机会话）。
+   *
+   * 背景：不带 sessionId 的 /chat/completions 会让 dsh-web-service 新建一个随机会话，
+   * 远端节点因此多出「只有一条标题问答」的孤立任务。改为在任务会话建立后、
+   * 正式任务指令提交前，于同一会话内完成标题问答 —— 远端一个任务只对应一个会话。
+   * 会话历史顶部会留有一条轻量的标题问答（提示词已声明仅供系统内部使用）。
+   */
+  public async generateTitleInSession(target: DshTarget, sessionId: string, firstUserMessage: string): Promise<string> {
+    const raw = this.normalizeTitleSource(firstUserMessage)
+    const fallback = raw.length > 20 ? raw.slice(0, 20) + '…' : (raw || '未命名任务')
+    try {
+      const res = await this.client.chat(target, [{ role: 'user', content: this.titlePrompt(raw) }], { timeoutMs: 8_000, sessionId })
+      if (res.ok && res.content) {
+        const title = this.coerceTitle(res.content)
+        if (title) return title
+      }
+    } catch {
+      // 忽略异常，安全回退
+    }
+    return fallback
+  }
+
+  private normalizeTitleSource(firstUserMessage: string): string {
+    return firstUserMessage.replace(/@[^\s@,，。!！?？:：;；]+/g, '').replace(/\s+/g, ' ').trim()
+  }
+
+  private titlePrompt(raw: string): string {
+    return [
+      '[系统内部指令，仅用于生成本会话标题，与后续任务无关，请勿在后续对话中提及] ',
+      '你是一个会话标题提炼专家。请根据以下用户发送的第一条消息，提炼一个简明扼要的中文任务标题。',
+      '要求：',
+      '1. 长度控制在 4 到 12 个汉字之间；',
+      '2. 必须直接返回标题文本，严禁包含任何标点符号、引号、前缀、Markdown 或多余解释；',
+      '3. 突出核心动作与业务对象。',
+      '',
+      `用户消息: ${raw}`,
+    ].join('\n')
+  }
+
+  private coerceTitle(raw: string): string | undefined {
+    let title = String(raw ?? '').trim().replace(/^["'《「『【]+|["'》」』】]+$/g, '').trim()
+    title = title.split(/[\r\n]/)[0].trim()
+    return title.length >= 2 && title.length <= 30 ? title : undefined
   }
 }
 

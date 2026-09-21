@@ -1,5 +1,5 @@
 /**
- * @dsh-external/onenat-workbuddy - WorkStore: 子智能体池 + 任务会话 + 设置 持久化
+ * onenat-workbuddy-web - WorkStore: 子智能体池 + 任务会话 + 设置 持久化
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
@@ -42,7 +42,7 @@ export class WorkStore {
   constructor(customPath?: string) {
     const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh')
     this.filePath = customPath || join(dshHome, 'onenat-workbuddy', 'store.json')
-    this.data = { agents: [], tasks: [], schedules: [], settings: defaultSettings() }
+    this.data = { agents: [], tasks: [], schedules: [], settings: { ...defaultSettings(), xiaozhi: {} } }
     this.load()
     // 进程退出前把尾随写入落盘（SIGKILL 除外），避免最后 250ms 的流式增量丢失。
     // 只挂 'exit'：SIGINT/SIGTERM 走默认终止路径同样会触发 exit，且不会劫持 Ctrl-C 语义。
@@ -58,6 +58,11 @@ export class WorkStore {
     try {
       if (existsSync(this.filePath)) {
         const parsed = JSON.parse(readFileSync(this.filePath, 'utf-8'))
+        const xz = parsed.settings?.xiaozhi || {}
+        // 旧版单接入点字符串 → endpoints 列表迁移
+        const endpoints = Array.isArray(xz.endpoints) && xz.endpoints.length
+          ? xz.endpoints
+          : (typeof xz.endpoint === 'string' && xz.endpoint ? [{ id: 'xz-default', endpoint: xz.endpoint, enabled: true }] : [])
         this.data = {
           agents: Array.isArray(parsed.agents) ? parsed.agents : [],
           tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
@@ -65,6 +70,7 @@ export class WorkStore {
           settings: {
             onenat: { ...defaultSettings().onenat, ...(parsed.settings?.onenat || {}) },
             planner: { ...defaultSettings().planner, ...(parsed.settings?.planner || {}) },
+            xiaozhi: { endpoints },
           },
         }
       }
@@ -140,6 +146,7 @@ export class WorkStore {
   public updateSettings(patch: Partial<WorkBuddySettings>): WorkBuddySettings {
     if (patch.onenat) this.data.settings.onenat = { ...this.data.settings.onenat, ...patch.onenat }
     if (patch.planner) this.data.settings.planner = { ...this.data.settings.planner, ...patch.planner }
+    if (patch.xiaozhi) this.data.settings.xiaozhi = { ...(this.data.settings.xiaozhi || {}), ...patch.xiaozhi }
     this.save()
     return this.getSettings()
   }

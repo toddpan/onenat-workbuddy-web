@@ -27,6 +27,33 @@ else
   "$TSC" -p tsconfig.server.json
 fi
 
+# 内联脚本语法关卡：三个页面（控制台/投屏/登录）的 <script> 必须能通过 node --check。
+# web-ui 等页面源码位于 TS 模板字符串内，\n 等转义一旦漏写双写就会让整页 JS 断裂（历史故障两次）。
+node --input-type=module -e "
+import { renderWebUi } from './dist/web-ui.js';
+import { renderMonitorUi } from './dist/monitor-ui.js';
+import { renderLoginUi } from './dist/login-ui.js';
+import { writeFileSync } from 'node:fs';
+const checks = {
+  console: renderWebUi('/onenat-workbuddy', { version: '0.0.0-check' }),
+  monitor: renderMonitorUi('/onenat-workbuddy', '0.0.0-check'),
+  login: renderLoginUi('/onenat-workbuddy', undefined, '0.0.0-check'),
+};
+let i = 0;
+for (const [name, html] of Object.entries(checks)) {
+  const m = html.match(/<script>([\\s\\S]*)<\\/script>/);
+  if (!m) continue;
+  writeFileSync('dist/.page-check-' + name + '.js', m[1]);
+  i++;
+}
+console.log('page scripts extracted: ' + i);
+"
+for f in dist/.page-check-*.js; do
+  [ -e "$f" ] || continue
+  node --check "$f" || { echo "build:standalone 失败：页面内联脚本语法错误（$f）—— 检查模板字符串内的 \\n / 引号转义是否双写" >&2; exit 1; }
+  rm -f "$f"
+done
+
 if [ ! -f dist/server.js ]; then
   echo "build:standalone 失败：dist/server.js 未生成" >&2
   exit 1

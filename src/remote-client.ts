@@ -1,5 +1,5 @@
 /**
- * @dsh-external/onenat-workbuddy - DSH 远程客户端（面向解析后的 ResolvedDshTarget）
+ * onenat-workbuddy-web - DSH 远程客户端（面向解析后的 ResolvedDshTarget）
  *
  * 相比 dsh-remote-orchestrator 的 RemoteDshClient 升级:
  *  1. 一切调用吃 { baseUrl, apiKey }（由 ResourceDirectory 实时解析而来），不再吃裸 agent（D1）
@@ -72,6 +72,19 @@ function clean(url: string): string {
  * 用 `indexOf('\n\n')` 一个帧都切不出来（表现为「一个字的增量都没收到」）。
  */
 const SSE_FRAME_SEP = /\r?\n\r?\n/
+
+/**
+ * SSE 静默看门狗（默认 10 分钟，WB_SSE_IDLE_TIMEOUT_MS 可覆盖，测试用）。
+ *
+ * bodyTimeout=0 让长工具执行/压缩期间的静默段不断流，但也意味着远端若「流开着却永远不发帧」
+ * （对端进程挂起 / error 后不关流 / 连接半开），read() 会永远 pending —— 任务卡 running，
+ * 回复永远不同步到 UI。看门狗在「超过 idleMs 无任何帧」时主动断开读取，
+ * 返回 complete:false 交给调用方的轮询对账兜底。
+ */
+const SSE_IDLE_TIMEOUT_MS = (() => {
+  const n = Number(process.env.WB_SSE_IDLE_TIMEOUT_MS || 0)
+  return Number.isFinite(n) && n > 0 ? n : 600_000
+})()
 
 /**
  * 解析单个 SSE 帧。按规范逐行取值：
@@ -689,12 +702,15 @@ export class DshClient {
   public async createSession(
     target: DshTarget,
     title: string,
-    options?: { agentPreset?: string; provider?: string; model?: string; cwd?: string },
+    options?: { agentPreset?: string; provider?: string; model?: string; cwd?: string; workspaceId?: string },
   ): Promise<{ ok: boolean; sessionId?: string; error?: string }> {
     const payload: Record<string, any> = { title, agentPreset: options?.agentPreset || 'cordis' }
     if (options?.provider) payload.provider = options.provider
     if (options?.model) payload.model = options.model
     if (options?.cwd) payload.cwd = options.cwd
+    // 工作区对齐：DSH 节点以 workspace 组织会话，按主智能体工作目录解析出的 workspaceId 建会话，
+    // 保证会话落在正确的工作区而不是节点默认工作区
+    if (options?.workspaceId) payload.workspaceId = options.workspaceId
     try {
       const res = await fetch(`${clean(target.baseUrl)}/sessions`, {
         method: 'POST',
@@ -762,8 +778,49 @@ export class DshClient {
     }
   }
 
-  public async getSession(target: DshTarget, sessionId: string): Promise<{ ok: boolean; status?: string; error?: string }> {
+  /** 列出远端 DSH 节点的工作区（workspaceRegistry）；远端过旧/无该接口时返回 ok:false（调用方降级为仅传 cwd） */
+  public async listWorkspaces(target: DshTarget): Promise<{ ok: boolean; workspaces?: Array<{ id: string; path?: string; title?: string }>; error?: string }> {
     try {
+      const res = await fetch(`${clean(target.baseUrl)}/workspaces`, {
+        headers: this.headers(target.apiKey),
+        signal: AbortSignal.timeout(10_000),
+      })
+      const json: any = await res.json().catch(() => ({}))
+      if (res.status === 404 || res.status === 501 || res.status === 503) return { ok: false, error: '远端不支持工作区接口' }
+      if (!res.ok || !json?.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
+      const items = Array.isArray(json.data) ? json.data : []
+      return {
+        ok: true,
+        workspaces: items.map((w: any) => ({ id: String(w.id), path: typeof w.path === 'string' ? w.path : undefined, title: typeof w.title === 'string' ? w.title : undefined })),
+      }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || '查询工作区失败' }
+    }
+  }
+
+  /**
+   * 确保远端存在指定路径的工作区并返回其 id：POST /workspaces 按 path 幂等（已存在直接返回既有）。
+   * 用于「智能体 workDir 不对应任何已注册工作区」时自动注册，保证会话落在正确的工作区。
+   */
+  public async ensureWorkspace(target: DshTarget, path: string, title?: string): Promise<{ ok: boolean; id?: string; error?: string }> {
+    try {
+      const res = await fetch(`${clean(target.baseUrl)}/workspaces`, {
+        method: 'POST',
+        headers: this.headers(target.apiKey),
+        body: JSON.stringify({ path, ...(title ? { title } : {}) }),
+        signal: AbortSignal.timeout(10_000),
+      })
+      const json: any = await res.json().catch(() => ({}))
+      if (res.status === 404 || res.status === 501 || res.status === 503) return { ok: false, error: '远端不支持工作区接口' }
+      if (!res.ok || !json?.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
+      const ws = json.data || {}
+      return ws.id ? { ok: true, id: String(ws.id) } : { ok: false, error: '远端未返回工作区 id' }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || '创建工作区失败' }
+    }
+  }
+
+  public async getSession(target: DshTarget, sessionId: string): Promise<{ ok: boolean; status?: string; error?: string }> {    try {
       const res = await fetch(`${clean(target.baseUrl)}/sessions/${encodeURIComponent(sessionId)}`, {
         headers: this.headers(target.apiKey),
         signal: AbortSignal.timeout(10_000),
@@ -849,6 +906,52 @@ export class DshClient {
   }
 
   /**
+   * 会话任务清单 + 运行时长（对端 DSH 会话的 todo_write 投影 + 当前/最后一轮 turn 墙钟）。
+   * 需要 dsh-web-service ≥ 0.1.8（GET /sessions/:id/todos）；旧版返回 supported=false 供调用方降级隐藏。
+   */
+  public async getSessionTodos(target: DshTarget, sessionId: string): Promise<{
+    ok: boolean
+    supported?: boolean
+    todos?: Array<{ content: string; status: string }>
+    updatedAt?: number | null
+    turnStartedAt?: number | null
+    turnEndedAt?: number | null
+    running?: boolean
+    elapsedMs?: number
+    turns?: number
+    error?: string
+  }> {
+    try {
+      const res = await fetch(`${clean(target.baseUrl)}/sessions/${encodeURIComponent(sessionId)}/todos`, {
+        headers: this.headers(target.apiKey),
+        signal: AbortSignal.timeout(12_000),
+      })
+      const json: any = await res.json().catch(() => ({}))
+      if (res.status === 404 || res.status === 501) return { ok: false, supported: false, error: '远端 dsh-web-service 版本过低，不含任务清单接口' }
+      if (!res.ok || !json?.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
+      const d = json.data || {}
+      const todos = Array.isArray(d.todos)
+        ? d.todos
+          .filter((x: any) => x && typeof x.content === 'string' && x.content !== '')
+          .map((x: any) => ({ content: String(x.content), status: String(x.status || 'pending') }))
+        : []
+      return {
+        ok: true,
+        supported: true,
+        todos,
+        updatedAt: typeof d.updatedAt === 'number' ? d.updatedAt : null,
+        turnStartedAt: typeof d.turnStartedAt === 'number' ? d.turnStartedAt : null,
+        turnEndedAt: typeof d.turnEndedAt === 'number' ? d.turnEndedAt : null,
+        running: Boolean(d.running),
+        elapsedMs: typeof d.elapsedMs === 'number' && d.elapsedMs >= 0 ? d.elapsedMs : 0,
+        turns: typeof d.turns === 'number' ? d.turns : 0,
+      }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || '查询会话任务清单失败' }
+    }
+  }
+
+  /**
    * 提交 ask_user_question 挂起问题的答复（远端宿主 waterfall 桥）。
    * 需要 dsh-web-service ≥ 0.1.6（POST /sessions/:id/answers）；旧版返回 supported=false。
    */
@@ -911,11 +1014,24 @@ export class DshClient {
       let sawTurnEnd = false
       let loggedFirstReasoning = false
       let usage: Record<string, number> | undefined
+      let idleTimer: ReturnType<typeof setTimeout> | null = null
+      let idleFired = false
+      const armIdleWatchdog = () => {
+        if (idleTimer) clearTimeout(idleTimer)
+        idleTimer = setTimeout(() => {
+          idleFired = true
+          try { reader.cancel().catch(() => {}) } catch { /* ignore */ }
+        }, SSE_IDLE_TIMEOUT_MS)
+        idleTimer.unref?.()
+      }
+      armIdleWatchdog()
       handlers.onLog?.('远端 SSE 流已连接，指令已提交', 'info')
-      while (!done) {
-        const chunk = await reader.read()
-        if (chunk.done) break
-        buffer += decoder.decode(chunk.value, { stream: true })
+      try {
+        while (!done) {
+          const chunk = await reader.read()
+          if (chunk.done) break
+          armIdleWatchdog()
+          buffer += decoder.decode(chunk.value, { stream: true })
         let sep: RegExpExecArray | null
         while ((sep = SSE_FRAME_SEP.exec(buffer)) !== null) {
           const frame = buffer.slice(0, sep.index)
@@ -974,6 +1090,15 @@ export class DshClient {
           }
           if (sawTurnEnd && evName === 'done') break
         }
+        }
+      } finally {
+        if (idleTimer) clearTimeout(idleTimer)
+      }
+      if (idleFired) {
+        // 静默看门狗触发：流开着却长时间无帧（远端挂起/半开连接），主动断开转轮询对账，
+        // 不能让任务永远停在 running（「回复永远不同步到 UI」的直接根因之一）
+        handlers.onLog?.(`SSE 静默超过 ${Math.round(SSE_IDLE_TIMEOUT_MS / 1000)}s 无任何帧，断开转轮询对账...`, 'warn')
+        return { ok: true, content, reasoning: reasoning || undefined, via: 'sse', usage, complete: false, error: `SSE 静默超时(${Math.round(SSE_IDLE_TIMEOUT_MS / 1000)}s 无帧)` }
       }
       if (!sawTurnEnd && !content) {
         return { ok: false, error: 'SSE 流在产出任何内容前结束', sseUnsupported: false }
@@ -1090,8 +1215,9 @@ export class DshClient {
     promptFragment?: string,
     options?: { attempts?: number; intervalMs?: number; signal?: AbortSignal },
   ): Promise<PromptResult> {
-    const attempts = options?.attempts ?? 4
-    const intervalMs = options?.intervalMs ?? 1200
+    // 8 次 × 1.5s：assistant/message 落库有滞后（尤其超长回复），重试太浅会误判「空回复」
+    const attempts = options?.attempts ?? 8
+    const intervalMs = options?.intervalMs ?? 1500
     let lastError = '回合已结束但未从历史中提取到助手回复'
     for (let i = 0; i < attempts; i++) {
       if (options?.signal?.aborted) return { ok: false, error: '已中止' }
@@ -1112,7 +1238,7 @@ export class DshClient {
   public async chat(
     target: DshTarget,
     messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
-    options?: { model?: string; timeoutMs?: number; signal?: AbortSignal },
+    options?: { model?: string; timeoutMs?: number; signal?: AbortSignal; sessionId?: string },
   ): Promise<{ ok: boolean; content?: string; reasoning?: string; sessionId?: string; error?: string }> {
     try {
       const res = await fetch(`${clean(target.baseUrl)}/chat/completions`, {
@@ -1121,6 +1247,9 @@ export class DshClient {
         body: JSON.stringify({
           messages,
           stream: false,
+          // 显式带 sessionId：在既有会话内完成本轮对话（如任务标题提炼），
+          // 否则 dsh-web-service 会新建一个随机会话 —— 远端因此多出孤立任务
+          ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
           ...(options?.model && options.model.includes('/') ? { model: options.model } : {}),
         }),
         signal: options?.signal ?? AbortSignal.timeout(options?.timeoutMs ?? 300_000),

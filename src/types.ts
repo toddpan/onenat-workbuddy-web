@@ -1,5 +1,5 @@
 /**
- * @dsh-external/onenat-workbuddy - Data Types & Protocol Models
+ * onenat-workbuddy-web - Data Types & Protocol Models
  *
  * 设计文档: ngrok 仓库 docs/onenat-workbuddy-design.md
  * 核心决策 D1: 子智能体/资源绑定一律引用 ONENAT 稳定 ID (mappingId/appId)，
@@ -213,6 +213,8 @@ export interface TaskSessionBinding {
   baseUrl: string
   /** 建会话时使用的工作目录（用于检测 agent.workDir 变更后重建会话） */
   cwd?: string
+  /** 主智能体最后一次对齐到会话的主调度模型（planner.model，空串=默认）；用于检测切换后重新对齐 */
+  plannerModel?: string
   createdAt: number
 }
 
@@ -429,6 +431,22 @@ export interface WorkBuddySettings {
     /** 主调度模型（provider/model-id，透传 /chat/completions 的 model 选择；聊天窗可选） */
     model?: string
   }
+  /** 小智语音助手 MCP 接入（桥接客户端把工具通道注册为小智 MCP 工具，支持多平台实例） */
+  xiaozhi?: {
+    /** 旧版单接入点（已迁移到 endpoints） */
+    endpoint?: string
+    /** 接入点列表 */
+    endpoints?: XiaozhiEndpoint[]
+  }
+}
+
+/** 一个小智平台 MCP 接入点 */
+export interface XiaozhiEndpoint {
+  id: string
+  name?: string
+  /** MCP 接入点 WebSocket 地址（ws:// / wss://，平台「MCP 插件」页可查） */
+  endpoint: string
+  enabled: boolean
 }
 
 export interface StorageData {
@@ -436,13 +454,4 @@ export interface StorageData {
   tasks: WorkTask[]
   schedules: ScheduledTask[]
   settings: WorkBuddySettings
-}
-
-export interface PluginConfig {
-  pathPrefix?: string
-  storagePath?: string
-  onenatBaseUrl?: string
-  onenatApiKey?: string
-  autoRefreshMs?: number
-  autoSummary?: boolean
 }

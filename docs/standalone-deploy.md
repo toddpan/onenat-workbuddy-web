@@ -1,17 +1,17 @@
 # OneNat WorkBuddy 独立部署指南（不依赖 DSH）
 
-同一份核心代码（`src/onenat.ts` / `store.ts` / `resolver.ts` / `prompt-composer.ts` / `planner.ts` /
-`engine.ts` / `router.ts` / `web-ui.ts`）有两种运行方式，二者互不影响：
+OneNat WorkBuddy 是**独立 Node.js WEB 服务**（不是 DSH 插件）：入口 `dist/server.js`，
+Node 原生 `http`，零 DSH 依赖；它把多个 DSH 节点（经 dsh-web-service API）当作算力面调用。
 
-| | DSH 插件模式 | **独立部署模式（本文）** |
-|---|---|---|
-| 入口 | `lib/index.js`（cordis 插件） | `dist/server.js` |
-| 宿主 | DSH 进程（`ctx.webServer` + `ctx.tools`） | Node 原生 `http` 服务，**零 DSH 依赖** |
-| 控制台 | `http://<DSH>/onenat-workbuddy` | `http://<host>:<port>/onenat-workbuddy` |
-| 模型工具 | 注册进 DSH 模型工具表 | HTTP 工具通道 `GET/POST /api/tools[/:name]` |
-| 数据目录 | `$DSH_HOME/onenat-workbuddy/` | `--data` / `$WORKBUDDY_HOME`（默认 `~/.onenat-workbuddy`） |
+| | 说明 |
+|---|---|
+| 入口 | `dist/server.js` |
+| 宿主 | Node 原生 `http` 服务，**零 DSH 依赖**（不 import `cordis` / `@deepseek-ai/*`） |
+| 控制台 | `http://<host>:<port>/onenat-workbuddy` |
+| 模型工具 | HTTP 工具通道 `GET/POST /api/tools[/:name]]` |
+| 数据目录 | `--data` / `$WORKBUDDY_HOME`（默认 `~/.onenat-workbuddy`） |
 
-> 独立部署只依赖 Node ≥ 20 的内建能力；`ssh2`（SSH 资源 test/exec）与 `undici`（SSE 长静默段
+> 只依赖 Node ≥ 20 的内建能力；`ssh2`（SSH 资源 test/exec）与 `undici`（SSE 长静默段
 > 关闭 chunk 间超时）是**可选**依赖，缺失时自动优雅降级，服务照常可用。
 
 ---
@@ -20,7 +20,7 @@
 
 ```bash
 # 只编译独立服务（DSH 无关的服务端图）→ dist/
-bash scripts/build-standalone.sh          # 或 npm run build:standalone
+bash scripts/build-standalone.sh          # 或 npm run build
 
 # 编译产物
 node dist/server.js --help
@@ -31,8 +31,6 @@ node dist/server.js --help
 1. 定位 `tsc`（本地 `node_modules/.bin/tsc` → `$DSH_CHECKOUT` → `npx typescript@5`）；
 2. 按 `tsconfig.server.json` 编译（只收 `src/server.ts` 及其 DSH 无关的依赖图）；
 3. 校验 `dist/server.js` 存在，且产物里**没有** `cordis` / `@deepseek-ai/*` 引用，否则构建失败。
-
-`dist/` 里不会有 `index.js` / `tools.js` / `client.js` —— 那三个是 DSH 插件模式专用文件。
 
 ---
 
@@ -90,13 +88,12 @@ node dist/server.js --port 3081 \
 - 修改密码：`POST {prefix}/api/auth/password` `{"oldPassword":"…","newPassword":"…"}`
   （成功后吊销该用户全部会话）；`GET {prefix}/api/auth/me` 查当前登录用户；
 - 增加用户：编辑 `auth.json` 按既有 `salt/hash` 格式追加；
-- DSH 插件模式不受影响（沿用 DSH 自身鉴权，控制台不渲染登录/退出元素）。
 
 ---
 
 ## 3. 接口面
 
-控制台与业务 REST 全部挂在 `--prefix` 下（下表省略前缀），与插件模式**完全一致**（见 README 路由表）：
+控制台与业务 REST 全部挂在 `--prefix` 下（下表省略前缀，路由清单见 README）：
 
 ```
 GET  {prefix}/                     控制台单页（响应式，含移动端底部 Tab）
@@ -235,7 +232,7 @@ server {
 ## 6. 安全边界
 
 - **默认只监听 `127.0.0.1`**。绑 `0.0.0.0` 时启动横幅会给出显式告警。
-- 控制台与业务 API **没有内建鉴权**（与插件模式共用同一套路由），面向他人时必须置于反代/内网之后；
+- 控制台与业务 API 默认需登录（见上文「登录鉴权」），面向他人时仍建议置于反代/内网之后；
 - **登录鉴权默认开启**（见上文「登录鉴权」）：控制台与业务 API 需登录，管理员见 `--admin-*` 参数；
 - **工具通道是特权面**（含 SSH `exec`、读取明文凭据），跨机调用请务必启用 `--token`
   （或 `WORKBUDDY_TOKEN`），令牌只保护 `/api/tools*`，不影响控制台 UI；
