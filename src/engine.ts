@@ -27,6 +27,8 @@ export interface CreateTaskInput {
   /** 由定时任务派生时记录来源（任务列表/监控屏的 ⏰ 类型标识随任务持久化） */
   scheduleId?: string
   scheduleName?: string
+  /** 创建者：'tool' = AI 工具通道（显式指定的成员受保护）/ 'console' = 控制台人工 */
+  creator?: 'tool' | 'console'
 }
 
 /** 取 prompt 尾部片段：降级轮询时供远端 history 定位本次回合的起点 user 消息（注入消息不含用户文本，天然排除） */
@@ -389,6 +391,7 @@ export class TaskEngine {
       mode,
       status: 'draft',
       memberAgentIds,
+      creator: explicit.length ? (input.creator || 'tool') : 'console',
       turns: [],
       sessions: {},
       createdAt: Date.now(),
@@ -622,20 +625,57 @@ export class TaskEngine {
     const singleExplicitMention = mentions.mentionedAgentIds.length === 1
 
     if (!hasExplicitAgentMention) {
-      // 未指定智能体时，由当前主智能体进行分析应答
-      const plannerTarget = await this.planner.pickTarget()
-      if (!('error' in plannerTarget) && plannerTarget.agent) {
-        const pAgent = plannerTarget.agent
-        // 单成员任务保持成员与当前主智能体同步（附件上传目标等与路由判定同源）
-        if (task.memberAgentIds.length <= 1 && !task.memberAgentIds.includes(pAgent.id)) {
-          this.store.mutateTask(taskId, (t) => { t.memberAgentIds = [pAgent.id] })
+      // 未在本轮消息中 @ 指定智能体时的路由：
+      //   · 控制台人工任务 → 由主智能体（Planner）分析应答；
+      //   · 工具通道显式指定成员的任务（mode=chat 直通）→ 尊重指定的成员，绝不被主智能体改写（坑 4 修复）。
+      const useMainAgent = task.creator !== 'tool' || task.mode !== 'chat' || task.memberAgentIds.length !== 1
+      if (useMainAgent) {
+        // 未指定智能体时，由当前主智能体进行分析应答
+        const plannerTarget = await this.planner.pickTarget()
+        if (!('error' in plannerTarget) && plannerTarget.agent) {
+          const pAgent = plannerTarget.agent
+          // 单成员任务保持成员与当前主智能体同步（附件上传目标等与路由判定同源）
+          if (task.memberAgentIds.length <= 1 && !task.memberAgentIds.includes(pAgent.id)) {
+            this.store.mutateTask(taskId, (t) => { t.memberAgentIds = [pAgent.id] })
+          }
+          const targetsMap = new Map<string, DshTarget>([[pAgent.id, plannerTarget.target]])
+          this.store.mutateTask(taskId, (t) => {
+            t.lastRoute = { kind: 'chat', agentId: pAgent.id, agentName: pAgent.name, source: 'main' }
+          })
+          await this.runChatTurn(taskId, text, mentions, targetsMap, signal, pAgent.id)
+          const fresh = this.store.getTask(taskId)!
+          this.emit(taskId, { type: 'task_end', task: fresh })
+          return
         }
-        const targetsMap = new Map<string, DshTarget>([[pAgent.id, plannerTarget.target]])
-        await this.runChatTurn(taskId, text, mentions, targetsMap, signal, pAgent.id)
-        const fresh = this.store.getTask(taskId)!
-        this.emit(taskId, { type: 'task_end', task: fresh })
-        return
       }
+      // 工具通道显式指定单成员：主智能体不可用或本就应直通该成员 → 解析并直通指定成员
+      if (task.mode === 'chat' && task.memberAgentIds.length === 1) {
+        const memberId = task.memberAgentIds[0]
+        const member = this.store.getAgent(memberId)
+        const memberTarget = member ? await this.resolver.resolve(member) : null
+        if (member && memberTarget && memberTarget.online && memberTarget.baseUrl) {
+          this.store.mutateTask(taskId, (t) => {
+            t.lastRoute = { kind: 'chat', agentId: memberId, agentName: member.name, source: 'member' }
+          })
+          await this.runChatTurn(taskId, text, mentions, new Map([[memberId, memberTarget]]), signal, memberId)
+          const fresh = this.store.getTask(taskId)!
+          this.emit(taskId, { type: 'task_end', task: fresh })
+          return
+        }
+        // 指定成员不可用：如实记录并回退到主智能体（不静默改写成员）
+        this.taskLog(taskId, 'warn', `指定成员「${member?.name || memberId}」不可用（${memberTarget?.error || '未找到'}），本轮回退主智能体处理`)
+        const fallback = await this.planner.pickTarget()
+        if (!('error' in fallback) && fallback.agent) {
+          this.store.mutateTask(taskId, (t) => {
+            t.lastRoute = { kind: 'chat', agentId: fallback.agent.id, agentName: fallback.agent.name, source: 'main' }
+          })
+          await this.runChatTurn(taskId, text, mentions, new Map([[fallback.agent.id, fallback.target]]), signal, fallback.agent.id)
+          const fresh = this.store.getTask(taskId)!
+          this.emit(taskId, { type: 'task_end', task: fresh })
+          return
+        }
+      }
+      // 兜底：主智能体不可用 → 解析任务既有成员（原逻辑）
     }
 
     const { targets, issues } = await this.resolver.resolveMembers(task.memberAgentIds)

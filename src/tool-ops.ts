@@ -355,6 +355,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
           memberAgentIds: explicit,
           mode: args.mode,
           message: args.message,
+          creator: 'tool',
         })
         createDedupe.set(fp, { at: Date.now(), taskId: task.id })
         // ② 立即回执：执行是异步的（流式进度走 SSE / 轮询），这里绝不等待首轮跑完
@@ -487,6 +488,10 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
         turns: task.turns.length,
         createdAt: task.createdAt,
         updatedAt: task.updatedAt,
+        // 最近一轮实际由谁处理：member = 任务指定成员；main = 主智能体（改派）。让调用方看清「先回执 A、实际 B」的情况
+        route: task.lastRoute
+          ? { kind: task.lastRoute.kind, agentId: task.lastRoute.agentId, agentName: task.lastRoute.agentName, source: task.lastRoute.source }
+          : undefined,
         lastUserMessage: preview(userTurns[userTurns.length - 1]?.text, 200),
         lastReply: preview(agentTurns[agentTurns.length - 1]?.text, 600),
         summary: preview(task.summary, 800),
