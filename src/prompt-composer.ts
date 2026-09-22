@@ -25,6 +25,8 @@ export interface ComposeContext {
   mask?: boolean
   /** 用户本轮通过 @ 动态提及注入的临时资源列表 */
   extraResources?: AgentResourceBinding[]
+  /** 项目/任务级技能（/名 手势加载，与专家绑定技能同等对待） */
+  extraSkills?: string[]
 }
 
 export interface ComposeResult {
@@ -185,12 +187,12 @@ export class PromptComposer {
       parts.push('6. 提示词里的凭证是**派发时刻的快照**：认证失败（SSH `Permission denied` / 接口 401/403）时，先用上面给的凭证接口**现取最新凭证**再试一次，不要拿旧密码反复重试；若取回的 `resolved_from` 仍是 `app`（= 该映射未设实例凭证）或用户名与提示词不一致，如实报告"该映射未配实例凭证/凭证已轮换"，而不是继续猜密码。')
     }
 
-    // 子智能体绑定的技能：均已安装在目标节点 → 写入 /name 手势，由远端宿主原生加载正文
-    const boundSkills = (agent.skills || []).slice(0, MAX_BOUND_SKILLS)
-    if (boundSkills.length > 0) {
+    // 子智能体绑定的技能 + 项目/任务级技能：均已安装在目标节点 → 写入 /name 手势，由远端宿主原生加载正文
+    const skillNames = [...new Set([...(agent.skills || []), ...(ctx.extraSkills || [])])].slice(0, MAX_BOUND_SKILLS)
+    if (skillNames.length > 0) {
       parts.push('')
-      parts.push('[已装载技能]（当前子智能体绑定、且已安装在目标节点上的技能。下列 /技能名 手势会由 DSH 自动加载技能正文，请直接遵循执行，也可用 skill 工具加载）:')
-      parts.push(boundSkills.map((n) => '/' + n).join(' '))
+      parts.push('[已装载技能]（当前专家绑定与项目配置、且已安装在目标节点上的技能。下列 /技能名 手势会由 DSH 自动加载技能正文，请直接遵循执行，也可用 skill 工具加载）:')
+      parts.push(skillNames.map((n) => '/' + n).join(' '))
     }
 
     // 资源侧分发的技能：远端未预装 → 给出"检查已装 → 版本比对升级 → 下载安装 → 手势加载"自助指引

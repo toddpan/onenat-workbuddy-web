@@ -16,11 +16,14 @@ export class AgentResolver {
     private directory: OnenatDirectory,
   ) {}
 
-  /** 解析单个子智能体；失败时返回 online=false + error（不抛错，调用方决定跳过或报错） */
-  public async resolve(agent: SubAgent): Promise<ResolvedDshTarget> {
+  /**
+   * 按节点引用（dshRef 形状）解析执行目标 —— 专家与节点解耦的基础：
+   * 项目/任务指定执行节点，专家只携带角色配置；agentId 仅作标识回传。
+   */
+  public async resolveRef(dshRef: import('./types.js').DshRef, apiKey?: string, agentId = 'node'): Promise<ResolvedDshTarget> {
     const base: ResolvedDshTarget = {
       baseUrl: '',
-      agentId: agent.id,
+      agentId,
       resolvedAt: Date.now(),
       online: false,
     }
@@ -29,7 +32,7 @@ export class AgentResolver {
     } catch (err: any) {
       // 直连实体（apiBaseUrl 固定）不依赖 ONENAT 目录：刷新失败不阻断解析，
       // 否则 ONENAT 抖动会把本地直连的主智能体也判成不可达（模型目录/消息路由全部失效）。
-      if (agent.dshRef.kind !== 'direct') {
+      if (dshRef.kind !== 'direct') {
         return { ...base, error: `ONENAT 资源刷新失败: ${err?.message || err}` }
       }
     }
@@ -38,11 +41,11 @@ export class AgentResolver {
     let mappingId: string | undefined
     let credMappingId: string | undefined
 
-    if (agent.dshRef.kind === 'direct') {
-      endpointBaseUrl = agent.dshRef.apiBaseUrl
-    } else if (agent.dshRef.kind === 'mapping') {
-      const ep = this.directory.resolveMapping(agent.dshRef.mappingId)
-      if (!ep) return { ...base, error: `映射 ${agent.dshRef.mappingId} 已不存在（请在子智能体里重新绑定 DSH 实体）` }
+    if (dshRef.kind === 'direct') {
+      endpointBaseUrl = dshRef.apiBaseUrl
+    } else if (dshRef.kind === 'mapping') {
+      const ep = this.directory.resolveMapping(dshRef.mappingId)
+      if (!ep) return { ...base, error: `映射 ${dshRef.mappingId} 已不存在（请重新绑定 DSH 节点）` }
       if (!ep.online || !ep.baseUrl) {
         return { ...base, mappingId: ep.mappingId, error: `映射「${ep.tunnelName}/${ep.note || ep.mappingId}」当前离线或不可达` }
       }
@@ -50,10 +53,10 @@ export class AgentResolver {
       mappingId = ep.mappingId
       credMappingId = ep.mappingId
     } else {
-      const ep = this.directory.resolveApp(agent.dshRef.appId)
-      if (!ep) return { ...base, error: `应用 ${agent.dshRef.appId} 未绑定任何映射或已删除` }
+      const ep = this.directory.resolveApp(dshRef.appId)
+      if (!ep) return { ...base, error: `应用 ${dshRef.appId} 未绑定任何映射或已删除` }
       if (!ep.online || !ep.baseUrl) {
-        return { ...base, mappingId: ep.mappingId, error: `应用「${ep.appName || agent.dshRef.appId}」当前离线` }
+        return { ...base, mappingId: ep.mappingId, error: `应用「${ep.appName || dshRef.appId}」当前离线` }
       }
       endpointBaseUrl = ep.baseUrl
       mappingId = ep.mappingId
@@ -61,21 +64,26 @@ export class AgentResolver {
     }
 
     // API Key: 显式配置优先；否则经映射凭证接口解析（Bearer 型）
-    let apiKey = agent.apiKey?.trim() || undefined
-    if (!apiKey && credMappingId) {
+    let key = apiKey?.trim() || undefined
+    if (!key && credMappingId) {
       const cred = await this.directory.fetchMappingCredentials(credMappingId)
-      if (cred.ok) apiKey = cred.apiKey || cred.token || undefined
+      if (cred.ok) key = cred.apiKey || cred.token || undefined
       // 凭证不可用不阻断：公网 DSH 可能无需鉴权，由 ping 阶段暴露问题
     }
 
     return {
       baseUrl: endpointBaseUrl.replace(/\/+$/, ''),
-      apiKey,
-      agentId: agent.id,
+      apiKey: key,
+      agentId,
       mappingId,
       resolvedAt: Date.now(),
       online: true,
     }
+  }
+
+  /** 解析单个专家：节点取专家的遗留默认绑定（兼容旧数据；新模型由项目/任务指定节点） */
+  public async resolve(agent: SubAgent): Promise<ResolvedDshTarget> {
+    return this.resolveRef(agent.dshRef, agent.apiKey, agent.id)
   }
 
   /** 解析 + 探活（/system/status），返回带健康信息的目标 */

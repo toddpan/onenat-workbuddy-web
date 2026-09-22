@@ -458,7 +458,9 @@ function isAiTokenAllowedPath(pathname: string, prefix: string): boolean {
   if (/^\/api\/tasks\/[^/]+\/(files\/download|attachments|todos|stats|messages)$/.test(p)) return true
   // 任务只读面（状态/详情/流）：AI 令牌跟踪自己派发的任务用
   if (/^\/api\/tasks\/[^/]+$/.test(p)) return true
-  if (p === '/api/tasks' ) return true
+  if (p === '/api/tasks') return true
+  // 项目 CRUD（AI 可自建/配置项目）
+  if (p === '/api/projects' || p.startsWith('/api/projects/')) return true
   return false
 }
 

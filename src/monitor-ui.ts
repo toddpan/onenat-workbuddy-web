@@ -159,7 +159,7 @@ header .sub { color: var(--tx3); font-size: 12.5px; }
 
   <div class="grid">
     <div class="panel">
-      <h2>🤖 子智能体 <span class="cnt" id="ag-cnt"></span><span class="spacer"></span><span class="mini">绿=在线 · 红=离线 · 灰=停用</span></h2>
+      <h2>🤖 专家 <span class="cnt" id="ag-cnt"></span><span class="spacer"></span><span class="mini">绿=在线 · 红=离线 · 灰=停用</span></h2>
       <div class="agent-list" id="agents"><div class="empty">加载中…</div></div>
     </div>
     <div class="panel">
@@ -269,7 +269,7 @@ function renderAgents(agents) {
   var el = document.getElementById('agents');
   var onlineCnt = agents.filter(function(a) { return a.online; }).length;
   document.getElementById('ag-cnt').textContent = onlineCnt + '/' + agents.length + ' 在线';
-  if (!agents.length) { el.innerHTML = '<div class="empty">还没有子智能体</div>'; return; }
+  if (!agents.length) { el.innerHTML = '<div class="empty">还没有专家</div>'; return; }
   var busy = agents.filter(function(a) { return a.busy; });
   var rest = agents.filter(function(a) { return !a.busy; });
   var ordered = busy.concat(rest);

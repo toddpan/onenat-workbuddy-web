@@ -21,7 +21,7 @@ import { normalizeRule, nextRun, ruleText } from './scheduler.js'
 import { SCHEDULE_TEMPLATES } from './schedule-templates.js'
 import type { AuthService } from './auth.js'
 import type { XiaozhiMcpClient } from './xiaozhi-mcp.js'
-import type { DshRef, SubAgent, WorkTask, ScheduledTask } from './types.js'
+import type { DshRef, Project, SubAgent, WorkTask, ScheduledTask } from './types.js'
 import type { MonitorService } from './monitor.js'
 import { renderWebUi } from './web-ui.js'
 import { renderMonitorUi } from './monitor-ui.js'
@@ -111,6 +111,54 @@ export class WorkBuddyRouter {
   private saveXiaozhiEndpoints(list: import('./types.js').XiaozhiEndpoint[]): void {
     this.store.updateSettings({ xiaozhi: { endpoints: list } } as any)
     this.xiaozhi?.configureAll(list)
+  }
+
+  // ---------- 项目辅助 ----------
+
+  private projectSummary(proj: Project) {
+    const nodeTitle = proj.dshRef.kind === 'direct'
+      ? proj.dshRef.apiBaseUrl
+      : (proj.dshRef.kind === 'mapping'
+        ? (this.directory.resolveMapping(proj.dshRef.mappingId)?.tunnelName || proj.dshRef.mappingId)
+        : (this.directory.resolveApp(proj.dshRef.appId)?.appName || proj.dshRef.appId))
+    return {
+      id: proj.id,
+      name: proj.name,
+      nodeTitle: nodeTitle || '(未配置节点)',
+      workspace: proj.workspace || '',
+      instructionPreview: (proj.instruction || '').slice(0, 120),
+      expertIds: proj.expertIds,
+      experts: proj.expertIds.map((id) => ({ id, name: this.store.getAgent(id)?.name || id })),
+      connectorIds: proj.connectorIds,
+      skillNames: proj.skillNames,
+      createdAt: proj.createdAt,
+      updatedAt: proj.updatedAt,
+    }
+  }
+
+  /** 创建/更新项目（校验名称与节点；专家必须存在） */
+  private upsertProjectFromInput(body: any): Project {
+    const name = String(body?.name || '').trim()
+    if (!name) throw new Error('缺少项目名称')
+    const dshRef = body?.dshRef ? (body.dshRef as DshRef) : undefined
+    const existing = body?.id ? this.store.getProject(String(body.id)) : undefined
+    const finalRef = dshRef || existing?.dshRef
+    if (!finalRef) throw new Error('缺少项目 DSH 节点（dshRef）')
+    const expertIds = Array.isArray(body?.expertIds) ? body.expertIds.map(String) : (existing?.expertIds || [])
+    for (const eid of expertIds) {
+      if (!this.store.getAgent(eid)) throw new Error(`专家不存在: ${eid}`)
+    }
+    return this.store.upsertProject({
+      id: body?.id ? String(body.id) : undefined,
+      name,
+      dshRef: finalRef,
+      apiKey: body?.apiKey !== undefined ? String(body.apiKey) : undefined,
+      workspace: body?.workspace !== undefined ? String(body.workspace) : undefined,
+      instruction: body?.instruction !== undefined ? String(body.instruction) : undefined,
+      expertIds,
+      connectorIds: Array.isArray(body?.connectorIds) ? body.connectorIds.map(String) : (existing?.connectorIds || []),
+      skillNames: Array.isArray(body?.skillNames) ? body.skillNames.map(String) : (existing?.skillNames || []),
+    })
   }
 
   /** 任务列表摘要（不含 turns/taskLogs/子任务日志全文） */
@@ -573,6 +621,46 @@ export class WorkBuddyRouter {
       this.saveXiaozhiEndpoints(list)
       this.sendJson(res, 200, { ok: true, data: { deleted: true, endpoints: this.xiaozhiListWithStatus(list) } })
       return true
+    }
+
+    // ---------- 项目（列表/创建/详情/修改/删除） ----------
+    if (p === '/api/projects' && method === 'GET') {
+      this.sendJson(res, 200, { ok: true, data: this.store.getProjects().map((proj) => this.projectSummary(proj)) })
+      return true
+    }
+    if (p === '/api/projects' && method === 'POST') {
+      const body = await this.parseBody(req)
+      try {
+        const saved = this.upsertProjectFromInput(body)
+        this.sendJson(res, 200, { ok: true, data: this.projectSummary(saved) })
+      } catch (err: any) {
+        this.sendJson(res, 400, { ok: false, error: err?.message || String(err) })
+      }
+      return true
+    }
+    const projMatch = /^\/api\/projects\/([^/]+)$/.exec(p)
+    if (projMatch) {
+      const id = decodeURIComponent(projMatch[1])
+      const proj = this.store.getProject(id)
+      if (method === 'GET') {
+        if (!proj) { this.sendJson(res, 404, { ok: false, error: '项目不存在' }); return true }
+        this.sendJson(res, 200, { ok: true, data: this.projectSummary(proj) })
+        return true
+      }
+      if (method === 'DELETE') {
+        this.sendJson(res, 200, { ok: true, data: { deleted: this.store.deleteProject(id) } })
+        return true
+      }
+      if (method === 'PATCH' || method === 'PUT') {
+        const body = await this.parseBody(req)
+        try {
+          const saved = this.upsertProjectFromInput({ ...body, id })
+          this.sendJson(res, 200, { ok: true, data: this.projectSummary(saved) })
+        } catch (err: any) {
+          this.sendJson(res, 400, { ok: false, error: err?.message || String(err) })
+        }
+        return true
+      }
     }
 
     // ---------- 监控大屏（只读聚合） ----------
@@ -1282,7 +1370,11 @@ export class WorkBuddyRouter {
 
     // ---------- 任务会话 ----------
     if (p === '/api/tasks' && method === 'GET') {
-      const tasks = this.store.getTasks()
+      // 可选 ?projectId= 过滤（项目工作台只看本项目任务）
+      const urlTasks = new URL(req.url || '/', 'http://localhost')
+      const projectFilter = urlTasks.searchParams.get('projectId') || ''
+      const allTasks = this.store.getTasks()
+      const tasks = projectFilter ? allTasks.filter((t) => t.projectId === projectFilter) : allTasks
       // 列表只返回摘要（完整 turns/taskLogs 随任务增长可达数 MB，且 SSE 每个事件都会刷新列表，
       // 全量返回会占满浏览器并发连接，导致切换会话时单任务请求长时间排队）
       this.sendJson(res, 200, { ok: true, data: tasks.map((t) => this.taskSummary(t)) })

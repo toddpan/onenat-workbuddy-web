@@ -16,8 +16,8 @@ import type { PromptComposer } from './prompt-composer.js'
 import { Planner, type PlanDraft } from './planner.js'
 import type { OnenatDirectory } from './onenat.js'
 import type { WorkStore } from './store.js'
-import type { SubtaskLogEntry } from './types.js'
-import type { AgentResourceBinding, ExtractedFileMention, ExtractedMentions, PlanSubtask, SubAgent, TaskEvent, TaskTurn, TurnToolCall, WorkTask } from './types.js'
+import type { SubtaskLogEntry, AgentResourceBinding, DshRef, ExtractedFileMention, ExtractedMentions, PlanSubtask, Project, SubAgent, TaskEvent, TaskTurn, TurnToolCall, WorkTask } from './types.js'
+import type { SshResourceStore } from './ssh-store.js'
 
 export interface CreateTaskInput {
   title?: string
@@ -29,6 +29,14 @@ export interface CreateTaskInput {
   scheduleName?: string
   /** 创建者：'tool' = AI 工具通道（显式指定的成员受保护）/ 'console' = 控制台人工 */
   creator?: 'tool' | 'console'
+  /** 所属项目：继承项目节点/工作区/指令/专家/连接器/技能 */
+  projectId?: string
+  /** 单独任务直接指定执行节点 */
+  nodeRef?: DshRef
+  /** 任务级连接器（'ssh:<id>' | 'map:<mappingId>' | 'app:<appId>'） */
+  connectorIds?: string[]
+  /** 任务级技能（/名 手势） */
+  skillNames?: string[]
 }
 
 /** 取 prompt 尾部片段：降级轮询时供远端 history 定位本次回合的起点 user 消息（注入消息不含用户文本，天然排除） */
@@ -38,6 +46,7 @@ function turnFragment(prompt: string): string {
 
 export class TaskEngine {
   private client = new DshClient()
+  private sshStore: SshResourceStore | undefined
   private activeJobs = new Map<string, AbortController>()
   private hub = new Map<string, Set<(e: TaskEvent) => void>>()
   /**
@@ -64,7 +73,9 @@ export class TaskEngine {
     private resolver: AgentResolver,
     private composer: PromptComposer,
     private planner: Planner,
-  ) {}
+    sshStore?: SshResourceStore,
+  ) {
+    this.sshStore = sshStore}
 
   /** 从用户消息中提取 @子智能体 与 @资源（支持包含空格名称的最长前缀匹配与同名多实体解析） */
   /** 从用户消息中提取 @子智能体、@资源 以及 @文件（支持 @智能体:文件路径、@[智能体:文件路径] 及独立 @文件路径） */
@@ -398,6 +409,10 @@ export class TaskEngine {
       updatedAt: Date.now(),
       ...(input.scheduleId ? { scheduleId: input.scheduleId } : {}),
       ...(input.scheduleName ? { scheduleName: input.scheduleName } : {}),
+      ...(input.projectId ? { projectId: input.projectId } : {}),
+      ...(input.nodeRef ? { nodeRef: input.nodeRef } : {}),
+      ...(input.connectorIds?.length ? { connectorIds: input.connectorIds } : {}),
+      ...(input.skillNames?.length ? { skillNames: input.skillNames } : {}),
     }
     this.store.upsertTask(task)
     if (input.message?.trim()) {
@@ -625,6 +640,34 @@ export class TaskEngine {
     const singleExplicitMention = mentions.mentionedAgentIds.length === 1
 
     if (!hasExplicitAgentMention) {
+      // 项目任务：执行节点/工作区/指令/连接器/技能全部来自项目上下文（专家与节点解耦）。
+      // 主专家 = 规划器配置的专家（若在项目专家列表内），否则项目首位专家。
+      const projExec = this.taskExec(task)
+      if (projExec.dshRef) {
+        const main = this.planner.pickMainAgent()
+        const mainId = main && projExec.skills !== undefined && projExec.project?.expertIds.includes(main.id)
+          ? main.id
+          : (projExec.project?.expertIds[0] || (task.memberAgentIds.length === 1 ? task.memberAgentIds[0] : main?.id))
+        if (mainId) {
+          const target = await this.resolver.resolveRef(projExec.dshRef, projExec.apiKey, mainId)
+          if (!target.online || !target.baseUrl) {
+            this.appendSystemTurn(taskId, `⚠️ 项目「${projExec.project?.name || taskId}」节点不可达: ${target.error || '未知'}`)
+            this.store.mutateTask(taskId, (t) => { t.status = 'failed' })
+            this.emit(taskId, { type: 'task_status', status: 'failed' })
+            return
+          }
+          if (task.memberAgentIds.length <= 1 && !task.memberAgentIds.includes(mainId)) {
+            this.store.mutateTask(taskId, (t) => { t.memberAgentIds = [mainId] })
+          }
+          this.store.mutateTask(taskId, (t) => {
+            t.lastRoute = { kind: 'chat', agentId: mainId, source: 'project' }
+          })
+          await this.runChatTurn(taskId, text, mentions, new Map([[mainId, target]]), signal, mainId)
+          const fresh = this.store.getTask(taskId)!
+          this.emit(taskId, { type: 'task_end', task: fresh })
+          return
+        }
+      }
       // 未在本轮消息中 @ 指定智能体时的路由：
       //   · 控制台人工任务 → 由主智能体（Planner）分析应答；
       //   · 工具通道显式指定成员的任务（mode=chat 直通）→ 尊重指定的成员，绝不被主智能体改写（坑 4 修复）。
@@ -681,6 +724,15 @@ export class TaskEngine {
     const { targets, issues } = await this.resolver.resolveMembers(task.memberAgentIds)
     for (const issue of issues) {
       this.taskLog(taskId, 'warn', `成员「${issue.name}」不可用: ${issue.error}`)
+    }
+
+    // 项目任务：编排成员统一改到项目节点执行（专家与节点解耦）
+    const execO = this.taskExec(task)
+    if (execO.dshRef) {
+      for (const [aid, t] of targets) {
+        const nt = await this.resolver.resolveRef(execO.dshRef, execO.apiKey, aid).catch(() => undefined)
+        if (nt?.online && nt.baseUrl) targets.set(aid, nt)
+      }
     }
 
     // @ 了恰好一个智能体：定向直通该智能体（即使任务本身是多成员编排任务）
@@ -823,7 +875,13 @@ export class TaskEngine {
     const preferredId = overrideAgentId || mentions.mentionedAgentIds.find((id) => targets.has(id))
     const agentId = preferredId || task.memberAgentIds.find((id) => targets.has(id)) || [...targets.keys()][0]
     const agent = this.store.getAgent(agentId)!
-    const target = targets.get(agentId)!
+    const exec = this.taskExec(task)
+    let target = targets.get(agentId)!
+    if (exec.dshRef) {
+      // 项目/任务指定节点：专家在指定节点上执行（专家与节点解耦）
+      const nt = await this.resolver.resolveRef(exec.dshRef, exec.apiKey, agentId).catch(() => undefined)
+      if (nt?.online && nt.baseUrl) target = nt
+    }
 
     const session = await this.ensureSession(taskId, agent, target)
     if (!session.ok) {
@@ -862,6 +920,11 @@ export class TaskEngine {
     this.emit(taskId, { type: 'turn_start', turn })
 
     const transformed = await this.transformFileMentionsForAgent(text, mentions, agent)
+    // 项目指令 + 专家系统提示词 + 项目 SSH 连接器：注入本轮提示词最前（项目上下文）
+    const sysPrefix = [exec.instruction, agent.systemPrompt].filter(Boolean).join('\n\n')
+    const sshSection = exec.sshConnectors.length
+      ? '[项目 SSH 连接器]（已可用 onenat_ssh 工具直接操作，连接信息如下）:\n' + exec.sshConnectors.map((c) => '- ' + c.name + ' → ' + c.host + ':' + c.port).join('\n')
+      : ''
     let fullPrompt = transformed.text
     const hasDynamicResources = mentions.mentionedResourceBindings.length > 0 || (mentions.mentionedFiles && mentions.mentionedFiles.length > 0)
     const cachedBlock = hasDynamicResources ? null : this.blockCacheFresh(taskId, agent)
@@ -869,14 +932,16 @@ export class TaskEngine {
     if (!cachedBlock) {
       const composed = await this.composer.compose(agent, {
         resolvedAt: Date.now(),
-        extraResources: mentions.mentionedResourceBindings,
+        extraResources: [...exec.extraBindings, ...mentions.mentionedResourceBindings],
+        extraSkills: exec.skills,
       })
       const block = composed.block
       const extraFileSection = transformed.extraSections.join('\n\n')
       const allPrefixes = [block, extraFileSection].filter(Boolean).join('\n\n')
-      if (allPrefixes) {
+      const withCtx = [sysPrefix, sshSection, allPrefixes].filter(Boolean).join('\n\n')
+      if (withCtx) {
         if (!hasDynamicResources) this.blockCache.set(this.blockCacheKey(taskId, agent), { block, at: Date.now() })
-        fullPrompt = `${allPrefixes}\n\n[当前用户消息]:\n${transformed.text}`
+        fullPrompt = `${withCtx}\n\n[当前用户消息]:\n${transformed.text}`
       } else if (!hasDynamicResources) {
         this.blockCache.set(this.blockCacheKey(taskId, agent), { block: '', at: Date.now() })
       }
@@ -884,8 +949,9 @@ export class TaskEngine {
     } else {
       const extraFileSection = transformed.extraSections.join('\n\n')
       const allPrefixes = [cachedBlock.block, extraFileSection].filter(Boolean).join('\n\n')
-      if (allPrefixes) {
-        fullPrompt = `${allPrefixes}\n\n[当前用户消息]:\n${transformed.text}`
+      const withCtx = [sysPrefix, sshSection, allPrefixes].filter(Boolean).join('\n\n')
+      if (withCtx) {
+        fullPrompt = `${withCtx}\n\n[当前用户消息]:\n${transformed.text}`
       }
     }
 
@@ -1265,6 +1331,7 @@ export class TaskEngine {
     mentions?: ExtractedMentions,
   ): Promise<void> {
     const taskId = task.id
+    const exec = this.taskExec(task)
     this.store.mutateSubtask(taskId, sub.id, (s) => {
       s.status = 'running'
       s.startedAt = Date.now()
@@ -1272,7 +1339,7 @@ export class TaskEngine {
     this.emit(taskId, { type: 'subtask_status', subtask: this.store.getTask(taskId)!.plan!.subtasks.find((x) => x.id === sub.id)! })
     this.emit(taskId, { type: 'log', subtaskId: sub.id, level: 'info', msg: `开始在「${agent.name}」上执行: ${sub.title}` })
 
-    const session = await this.ensureSession(taskId, agent, target)
+    const session = await this.ensureSession(taskId, agent, target, { cwd: exec.workspace, workspace: exec.workspace })
     if (!session.ok) {
       this.store.mutateSubtask(taskId, sub.id, (s) => {
         s.status = 'failed'
@@ -1299,7 +1366,8 @@ export class TaskEngine {
     if (!cachedBlock) {
       const composed = await this.composer.compose(agent, {
         resolvedAt: Date.now(),
-        extraResources,
+        extraResources: [...exec.extraBindings, ...extraResources],
+        extraSkills: exec.skills,
       })
       const block = composed.block
       if (!hasDynamicResources) this.blockCache.set(this.blockCacheKey(taskId, agent), { block, at: Date.now() })
@@ -1431,9 +1499,51 @@ export class TaskEngine {
     await this.ensureSession(taskId, main, target).catch(() => {})
   }
 
-  private async ensureSession(taskId: string, agent: SubAgent, target: DshTarget): Promise<{ ok: boolean; remoteSessionId?: string; reused?: boolean; error?: string }> {
+  /**
+   * 任务执行上下文：项目任务继承项目节点/工作区/指令/连接器/技能；
+   * 单独任务可用 nodeRef/connectorIds/skillNames 覆盖；都没有则专家按遗留默认节点执行。
+   */
+  private taskExec(task: WorkTask): {
+    project?: Project
+    dshRef?: DshRef
+    apiKey?: string
+    workspace?: string
+    instruction?: string
+    extraBindings: AgentResourceBinding[]
+    sshConnectors: Array<{ id: string; name: string; host: string; port: number }>
+    skills: string[]
+  } {
+    const project = task.projectId ? this.store.getProject(task.projectId) : undefined
+    const dshRef = project?.dshRef || task.nodeRef || undefined
+    const connectorIds = task.connectorIds?.length ? task.connectorIds : (project?.connectorIds || [])
+    const extraBindings: AgentResourceBinding[] = []
+    const sshConnectors: Array<{ id: string; name: string; host: string; port: number }> = []
+    for (const cid of connectorIds) {
+      if (cid.startsWith('ssh:')) {
+        const r = this.sshStore?.get(cid.slice(4))
+        if (r) sshConnectors.push({ id: r.id, name: r.name, host: r.host, port: r.port })
+      } else if (cid.startsWith('map:')) {
+        extraBindings.push({ ref: { kind: 'mapping', mappingId: cid.slice(4) }, credentialMode: 'self-fetch', skillMode: 'none' })
+      } else if (cid.startsWith('app:')) {
+        extraBindings.push({ ref: { kind: 'app', appId: cid.slice(4) }, credentialMode: 'self-fetch', skillMode: 'none' })
+      }
+    }
+    return {
+      project,
+      dshRef,
+      apiKey: project?.apiKey,
+      workspace: project?.workspace,
+      instruction: project?.instruction,
+      extraBindings,
+      sshConnectors,
+      skills: task.skillNames?.length ? task.skillNames : (project?.skillNames || []),
+    }
+  }
+
+    private async ensureSession(taskId: string, agent: SubAgent, target: DshTarget, opts?: { cwd?: string; workspace?: string }): Promise<{ ok: boolean; remoteSessionId?: string; reused?: boolean; error?: string }> {
     const task = this.store.getTask(taskId)!
-    const wantedCwd = agent.workDir || undefined
+    const exec = this.taskExec(task)
+    const wantedCwd = opts?.workspace ?? opts?.cwd ?? exec.workspace ?? agent.workDir ?? undefined
     const existing = task.sessions[agent.id]
     const mainAgent = this.planner.pickMainAgent()
     const isMain = mainAgent?.id === agent.id
@@ -1485,28 +1595,28 @@ export class TaskEngine {
 
     // 工作区对齐：workspaceId 与 cwd 互斥（远端 harness 校验「accepts workspaceId or cwd, not both」）。
     // 解析出工作区时只传 workspaceId（工作区路径即工作目录）；远端无工作区体系时退回传 cwd。
-    const workspaceId = agent.workDir ? await this.resolveWorkspaceId(target, agent.workDir).catch(() => undefined) : undefined
+    const workspaceId = wantedCwd ? await this.resolveWorkspaceId(target, wantedCwd).catch(() => undefined) : undefined
     const res = await this.client.createSession(target, `[WorkBuddy] ${task.title}`, {
       agentPreset: agent.agentPreset,
       provider: targetProvider,
       model: targetModel,
-      ...(workspaceId ? { workspaceId } : { cwd: agent.workDir }),
+      ...(workspaceId ? { workspaceId } : wantedCwd ? { cwd: wantedCwd } : {}),
     })
     if (workspaceId) {
-      this.taskLog(taskId, 'info', `会话已对齐工作区（${agent.name}）: workspace=${workspaceId} · 目录 ${agent.workDir}`)
+      this.taskLog(taskId, 'info', `会话已对齐工作区（${agent.name}）: workspace=${workspaceId} · 目录 ${wantedCwd}`)
     }
     if (!res.ok || !res.sessionId) return { ok: false, error: res.error }
     this.store.mutateTask(taskId, (t) => {
-      t.sessions[agent.id] = { remoteSessionId: res.sessionId!, baseUrl: target.baseUrl, cwd: agent.workDir || undefined, plannerModel: isMain ? (plannerModelSetting || '') : undefined, createdAt: Date.now() }
+      t.sessions[agent.id] = { remoteSessionId: res.sessionId!, baseUrl: target.baseUrl, cwd: wantedCwd || undefined, plannerModel: isMain ? (plannerModelSetting || '') : undefined, createdAt: Date.now() }
     })
-    this.taskLog(taskId, 'info', `远程会话已创建（${agent.name}${targetModel ? ' · 模型 ' + targetModel : ''}${agent.workDir ? ' · 工作目录 ' + agent.workDir : ''}）: ${res.sessionId} @ ${target.baseUrl}`)
+    this.taskLog(taskId, 'info', `远程会话已创建（${agent.name}${targetModel ? ' · 模型 ' + targetModel : ''}${wantedCwd ? ' · 工作目录 ' + wantedCwd : ''}）: ${res.sessionId} @ ${target.baseUrl}`)
     // 校验远端 cwd 生效
-    if (agent.workDir) {
+    if (wantedCwd) {
       const info = await this.client.getSessionInfo(target, res.sessionId)
       if (!info.ok || !info.cwd) {
-        this.taskLog(taskId, 'warn', `远端会话工作目录校验失败（${agent.name}）: 期望 ${agent.workDir}，实际 ${info.cwd || '(未返回)'} — 远端 dsh-web-service 可能过旧`)
-      } else if (info.cwd.replace(/\/+$/, '') !== agent.workDir.replace(/\/+$/, '')) {
-        this.taskLog(taskId, 'warn', `远端会话 cwd 与配置不一致（${agent.name}）: 期望 ${agent.workDir}，实际 ${info.cwd}`)
+        this.taskLog(taskId, 'warn', `远端会话工作目录校验失败（${agent.name}）: 期望 ${wantedCwd}，实际 ${info.cwd || '(未返回)'} — 远端 dsh-web-service 可能过旧`)
+      } else if (info.cwd.replace(/\/+$/, '') !== wantedCwd.replace(/\/+$/, '')) {
+        this.taskLog(taskId, 'warn', `远端会话 cwd 与配置不一致（${agent.name}）: 期望 ${wantedCwd}，实际 ${info.cwd}`)
       }
     }
     return { ok: true, remoteSessionId: res.sessionId, reused: false }
