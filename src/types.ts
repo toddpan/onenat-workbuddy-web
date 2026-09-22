@@ -203,6 +203,33 @@ export interface ExtractedMentions {
   cleanText: string
 }
 
+// ---------- 项目 ----------
+
+/**
+ * 项目：捆绑 DSH 节点 / 工作区 / 指令 / 专家 / 连接器 / 技能 的一等实体。
+ * 项目内发起的任务自动继承全部上下文；专家与节点解耦（专家可在任意项目节点执行）。
+ */
+export interface Project {
+  id: string
+  name: string
+  /** 项目 DSH 节点 */
+  dshRef: DshRef
+  /** 节点鉴权（direct 直连时可填） */
+  apiKey?: string
+  /** 项目工作目录（会话 cwd 与工作区） */
+  workspace?: string
+  /** 项目指令（注入任务系统提示词最前） */
+  instruction?: string
+  /** 项目专家 */
+  expertIds: string[]
+  /** 连接器：'ssh:<资源id>' | 'map:<mappingId>' | 'app:<appId>' */
+  connectorIds: string[]
+  /** 项目技能（以 /名 手势自动加载） */
+  skillNames: string[]
+  createdAt: number
+  updatedAt: number
+}
+
 // ---------- 任务会话（多轮） ----------
 
 export type TaskMode = 'chat' | 'orchestrate'
@@ -288,7 +315,7 @@ export interface WorkTask {
   /** 创建者（'tool' = AI 工具通道 / 'console' = 控制台人工）。工具通道显式指定的成员受保护，不被主智能体改写 */
   creator?: 'tool' | 'console'
   /** 最近一轮的路由模式：明确 @ 单人时为 direct（定向直通），否则为编排/默认 */
-  lastRoute?: { kind: 'direct' | 'orchestrate' | 'chat'; agentId?: string; agentName?: string; source?: 'member' | 'main' }
+  lastRoute?: { kind: 'direct' | 'orchestrate' | 'chat'; agentId?: string; agentName?: string; source?: 'member' | 'main' | 'project' }
   turns: TaskTurn[]
   /** 任务级引擎日志（规划器结果/成员问题/会话创建等，持久化） */
   taskLogs?: SubtaskLogEntry[]
@@ -305,6 +332,14 @@ export interface WorkTask {
   /** 由定时任务派生时记录来源（调度删除/滚动出窗口后类型标识仍可恢复） */
   scheduleId?: string
   scheduleName?: string
+  /** 所属项目：任务继承项目的节点/工作区/指令/专家/连接器/技能 */
+  projectId?: string
+  /** 单独任务直接指定的执行节点（项目任务走项目节点） */
+  nodeRef?: DshRef
+  /** 任务级连接器覆盖（单独任务临时加挂） */
+  connectorIds?: string[]
+  /** 任务级技能覆盖（单独任务临时加挂） */
+  skillNames?: string[]
 }
 
 export interface TaskAttachment {
@@ -458,5 +493,6 @@ export interface StorageData {
   agents: SubAgent[]
   tasks: WorkTask[]
   schedules: ScheduledTask[]
+  projects: Project[]
   settings: WorkBuddySettings
 }

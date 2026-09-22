@@ -5,7 +5,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
-import type { AgentResourceBinding, DshRef, StorageData, SubAgent, WorkBuddySettings, WorkTask, PlanSubtask, TaskTurn, ScheduledTask } from './types.js'
+import type { AgentResourceBinding, DshRef, Project, StorageData, SubAgent, WorkBuddySettings, WorkTask, PlanSubtask, TaskTurn, ScheduledTask } from './types.js'
 
 function defaultSettings(): WorkBuddySettings {
   return {
@@ -42,7 +42,7 @@ export class WorkStore {
   constructor(customPath?: string) {
     const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh')
     this.filePath = customPath || join(dshHome, 'onenat-workbuddy', 'store.json')
-    this.data = { agents: [], tasks: [], schedules: [], settings: { ...defaultSettings(), xiaozhi: {} } }
+    this.data = { agents: [], tasks: [], schedules: [], projects: [], settings: { ...defaultSettings(), xiaozhi: {} } }
     this.load()
     // 进程退出前把尾随写入落盘（SIGKILL 除外），避免最后 250ms 的流式增量丢失。
     // 只挂 'exit'：SIGINT/SIGTERM 走默认终止路径同样会触发 exit，且不会劫持 Ctrl-C 语义。
@@ -67,6 +67,7 @@ export class WorkStore {
           agents: Array.isArray(parsed.agents) ? parsed.agents : [],
           tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
           schedules: Array.isArray(parsed.schedules) ? parsed.schedules : [],
+          projects: Array.isArray(parsed.projects) ? parsed.projects : [],
           settings: {
             onenat: { ...defaultSettings().onenat, ...(parsed.settings?.onenat || {}) },
             planner: { ...defaultSettings().planner, ...(parsed.settings?.planner || {}) },
@@ -303,6 +304,47 @@ export class WorkStore {
     const before = this.data.tasks.length
     this.data.tasks = this.data.tasks.filter((t) => t.id !== id)
     const changed = this.data.tasks.length !== before
+    if (changed) this.save()
+    return changed
+  }
+
+  // ---- Projects ----
+
+  public getProjects(): Project[] {
+    return [...this.data.projects].sort((a, b) => b.createdAt - a.createdAt)
+  }
+
+  public getProject(id: string): Project | undefined {
+    return this.data.projects.find((p) => p.id === id)
+  }
+
+  public upsertProject(input: Partial<Project>): Project {
+    const now = Date.now()
+    const existing = input.id ? this.data.projects.find((p) => p.id === input.id) : undefined
+    const project: Project = {
+      id: existing?.id || `proj-${Math.random().toString(36).slice(2, 10)}`,
+      name: String(input.name ?? existing?.name ?? '未命名项目'),
+      dshRef: (input.dshRef as Project['dshRef']) || existing?.dshRef || { kind: 'direct', apiBaseUrl: '' },
+      apiKey: input.apiKey !== undefined ? input.apiKey : existing?.apiKey,
+      workspace: input.workspace !== undefined ? (String(input.workspace).trim() || undefined) : existing?.workspace,
+      instruction: input.instruction !== undefined ? (String(input.instruction).trim() || undefined) : existing?.instruction,
+      expertIds: input.expertIds ? [...new Set(input.expertIds.map(String))] : existing?.expertIds || [],
+      connectorIds: input.connectorIds ? [...new Set(input.connectorIds.map(String))] : existing?.connectorIds || [],
+      skillNames: input.skillNames ? [...new Set(input.skillNames.map(String))] : existing?.skillNames || [],
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    }
+    const idx = this.data.projects.findIndex((p) => p.id === project.id)
+    if (idx >= 0) this.data.projects[idx] = project
+    else this.data.projects.push(project)
+    this.save()
+    return project
+  }
+
+  public deleteProject(id: string): boolean {
+    const before = this.data.projects.length
+    this.data.projects = this.data.projects.filter((p) => p.id !== id)
+    const changed = this.data.projects.length !== before
     if (changed) this.save()
     return changed
   }

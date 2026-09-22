@@ -48,11 +48,18 @@ for (const [name, html] of Object.entries(checks)) {
 }
 console.log('page scripts extracted: ' + i);
 "
+page_ok=1
 for f in dist/.page-check-*.js; do
   [ -e "$f" ] || continue
-  node --check "$f" || { echo "build:standalone 失败：页面内联脚本语法错误（$f）—— 检查模板字符串内的 \\n / 引号转义是否双写" >&2; exit 1; }
-  rm -f "$f"
+  if ! node --check "$f" 2>/tmp/wb-page-check-err; then
+    echo "build:standalone 失败：页面内联脚本语法错误 —— 检查模板字符串内换行/引号转义是否双写" >&2
+    cat /tmp/wb-page-check-err >&2
+    rm -f /tmp/wb-page-check-err
+    exit 1
+  fi
+  rm -f /tmp/wb-page-check-err
 done
+if [ "$page_ok" != "1" ]; then exit 1; fi
 
 if [ ! -f dist/server.js ]; then
   echo "build:standalone 失败：dist/server.js 未生成" >&2
