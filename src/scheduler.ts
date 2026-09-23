@@ -22,6 +22,8 @@ const RETRY_DELAY_MS = 2_000
 export class ScheduleRunner {
   private timer: ReturnType<typeof setInterval> | null = null
   private firing = new Set<string>()
+  /** 手动触发去重：scheduleId → 上次手动触发时间（防双击 3 秒窗口） */
+  private lastManualFire = new Map<string, number>()
 
   /** 触发完成回调（监控采集用）：scheduleId + 本次运行记录（含派发结果） */
   public onRunFinished: ((scheduleId: string, run: ScheduleRun) => void) | null = null
@@ -80,6 +82,15 @@ export class ScheduleRunner {
     if (!manual) {
       if (this.firing.has(scheduleId)) return undefined
       this.firing.add(scheduleId)
+    } else {
+      // 手动触发 3 秒去重：双击/界面无反馈连点会发出两次 POST，第二次直接返回最近一次 run
+      const last = this.lastManualFire.get(scheduleId)
+      if (last && Date.now() - last < 3_000) {
+        const lastRun = s.runs?.[0]
+        this.log(`定时任务「${s.name}」${Math.round((Date.now() - last) / 1000)}s 内重复手动触发，已忽略（防双击）`)
+        return lastRun
+      }
+      this.lastManualFire.set(scheduleId, Date.now())
     }
     try {
       const run: ScheduleRun = {

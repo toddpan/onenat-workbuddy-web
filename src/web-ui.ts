@@ -5984,14 +5984,22 @@ function renderSchedules() {
     card.querySelector('[data-op=detail]').addEventListener('click', () => openScheduleDetail(s.id));
     card.querySelector('[data-op=edit]').addEventListener('click', () => openScheduleDrawer(s));
     card.querySelector('[data-op=run]').addEventListener('click', async () => {
-      toast('派发中…');
-      const r = await api('/schedules/' + s.id + '/run', { method: 'POST' });
-      if (!r.ok) { toast(r.error || '触发失败', true); return; }
-      const run = r.data || {};
-      const okCount = (run.items || []).filter(i => i.taskId).length;
-      toast('✓ 已派发 ' + okCount + '/' + (run.items || []).length + ' 个子智能体');
-      await loadSchedules(); renderSchedules();
-      openScheduleDetail(s.id);
+      const runBtn = card.querySelector('[data-op=run]')
+      if (runBtn.disabled) return
+      runBtn.disabled = true
+      runBtn.textContent = '派发中…'
+      try {
+        toast('派发中…');
+        const r = await api('/schedules/' + s.id + '/run', { method: 'POST' });
+        if (!r.ok) { toast(r.error || '触发失败', true); return; }
+        const run = r.data || {};
+        const okCount = (run.items || []).filter(i => i.taskId).length;
+        toast('✓ 已派发 ' + okCount + '/' + (run.items || []).length + ' 个子智能体');
+        await loadSchedules(); renderSchedules();
+        openScheduleDetail(s.id);
+      } finally {
+        if (runBtn.isConnected) { runBtn.disabled = false; runBtn.textContent = '▶ 立即执行' }
+      }
     });
     card.querySelector('[data-op=toggle]').addEventListener('click', async () => {
       const r = await api('/schedules/' + s.id + '/toggle', { method: 'POST' });
