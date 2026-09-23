@@ -2506,12 +2506,21 @@ function updateProjectBanner() {
   if (picker) picker.style.display = 'none';
 }
 
-async function openProjectDrawer(projectId) {
+async function openProjectDrawer(projectId, preset) {
   const p = state.projects.find(function (x) { return x.id === projectId; });
   const isEdit = Boolean(p);
   if (!state.agents.length) await loadAgents();
-  // 浏览/技能采样用的智能体：优先项目首位子智能体（其所在节点即项目节点）
-  const browseAgentId = (p && p.expertIds && p.expertIds[0]) || (state.agents[0] && state.agents[0].id) || '';
+  const v = {
+    name: (preset && preset.name) || (p && p.name) || '',
+    workspace: (preset && preset.workspace) || (p && p.workspace) || '',
+    instruction: (preset && preset.instruction) || (p && p.instruction) || '',
+    expertIds: (preset && preset.expertIds) || (p && p.expertIds) || [],
+    connectorIds: (preset && preset.connectorIds) || (p && p.connectorIds) || [],
+    skillNames: (preset && preset.skillNames) || (p && p.skillNames) || [],
+    nodeRef: (preset && preset.nodeRef) || (p && p.dshRef) || null,
+  };
+  // 浏览/技能采样用的智能体：项目首位专家（其所在节点即项目节点），否则第一个智能体
+  const browseAgentId = v.expertIds[0] || (state.agents[0] && state.agents[0].id) || '';
   const nodeOptions = [];
   for (const r of state.resources) {
     if (r.kind === 'dsh' && r.mappingId) nodeOptions.push({ label: (r.title || r.appName || r.note || r.mappingId), ref: { kind: 'mapping', mappingId: r.mappingId } });
@@ -2536,65 +2545,78 @@ async function openProjectDrawer(projectId) {
   for (const r of state.resources) {
     if (r.kind !== 'dsh' && r.mappingId) conns.push({ id: 'map:' + r.mappingId, label: '🌐 ' + (r.appName || r.note || r.mappingId) });
   }
-  const sel = new Set(p ? p.skillNames || [] : []);
-  const connSel = new Set(p ? p.connectorIds || [] : []);
-  const nodeJson = p ? JSON.stringify(p.dshRef || {}) : '';
-  openModal(isEdit ? '项目配置 · ' + p.name : '新建项目',
-    '<div class="field" style="margin-bottom:10px"><label>项目名称</label><input id="pj-f-name" value="' + esc(p ? p.name : '') + '" placeholder="例：KB 平台交付"></div>' +
+  const nodeJson = JSON.stringify(v.nodeRef || {});
+  const bodyHtml =
+    '<div class="field" style="margin-bottom:10px"><label>项目名称</label><input id="pj-f-name" value="' + esc(v.name) + '" placeholder="例：KB 平台交付"></div>' +
     '<div class="field" style="margin-bottom:10px"><label>DSH 节点</label><select id="pj-f-node" class="cfg-sel">' +
     nodeOptions.map(function (n) {
       const sel = nodeJson === JSON.stringify(n.ref) ? ' selected' : '';
       return '<option value="' + esc(JSON.stringify(n.ref)) + '"' + sel + '>' + esc(n.label) + '</option>';
     }).join('') +
     '</select></div>' +
-    '<div class="field" style="margin-bottom:10px"><label>项目工作目录（从节点浏览选择，会话 cwd 与工作区）</label>' +
-    '<div style="display:flex;gap:8px;align-items:center"><input id="pj-f-ws" style="font-family:var(--mono);flex:1" value="' + esc(p ? p.workspace || '' : '') + '" placeholder="/workspace/project">' +
+    '<div class="field" style="margin-bottom:10px"><label>项目工作目录（从远程 DSH 节点浏览选择，会话 cwd 与工作区）</label>' +
+    '<div style="display:flex;gap:8px;align-items:center"><input id="pj-f-ws" style="font-family:var(--mono);flex:1" value="' + esc(v.workspace) + '" placeholder="/workspace/project">' +
     '<button class="mini-btn" id="pj-f-browse" style="padding:10px 14px;white-space:nowrap">📁 浏览节点目录</button></div></div>' +
-    '<div class="field" style="margin-bottom:10px"><label>项目指令（注入每次任务，角色/阶段/规范）</label><textarea id="pj-f-ins" rows="6" style="font-family:var(--mono);font-size:12px" placeholder="# 角色\\n你是一个…助手…">' + esc(p ? p.instruction || '' : '') + '</textarea></div>' +
-    '<div class="field" style="margin-bottom:10px"><label>项目子智能体（勾选 = 项目内任务默认成员）</label><div class="pj-checks">' +
+    '<div class="field" style="margin-bottom:10px"><label>项目指令（注入每次任务，角色/阶段/规范）</label><textarea id="pj-f-ins" rows="6" style="font-family:var(--mono);font-size:12px" placeholder="# 角色\\n你是一个…助手…">' + esc(v.instruction) + '</textarea></div>' +
+    '<div class="field" style="margin-bottom:10px"><label>项目子智能体（勾选 = 项目内任务的执行单元）</label><div class="pj-checks">' +
     state.agents.map(function (a) {
-      const on = p && (p.expertIds || []).indexOf(a.id) >= 0;
+      const on = v.expertIds.indexOf(a.id) >= 0;
       return '<label><input type="checkbox" class="pj-exp" value="' + esc(a.id) + '"' + (on ? ' checked' : '') + '> ' + esc(a.name) + '</label>';
     }).join('') +
     '</div></div>' +
     '<div class="field" style="margin-bottom:10px"><label>项目连接器（勾选后项目任务可用）</label><div class="pj-checks">' +
     (conns.length ? conns.map(function (c) {
-      const on = connSel.has(c.id);
+      const on = v.connectorIds.indexOf(c.id) >= 0;
       return '<label><input type="checkbox" class="pj-conn" value="' + esc(c.id) + '"' + (on ? ' checked' : '') + '> ' + esc(c.label) + '</label>';
     }).join('') : '<div class="mon-empty">暂无候选连接器（SSH 池 / ONENAT 资源目录为空）</div>') +
     '</div></div>' +
     '<div class="field"><label>项目技能（勾选后派发时以 /名 手势加载）</label><div class="pj-checks">' +
     (nodeSkills.length ? nodeSkills.map(function (n) {
-      const on = sel.has(n);
+      const on = v.skillNames.indexOf(n) >= 0;
       return '<label><input type="checkbox" class="pj-skill" value="' + esc(n) + '"' + (on ? ' checked' : '') + '> ' + esc(n) + '</label>';
     }).join('') : '<div class="mon-empty">该节点暂无已装技能（或采样智能体不可达）</div>') +
-    '</div></div>',
-    [
-      { label: '取消', cls: '', act: function () { closeModal(); } },
-      { label: isEdit ? '保存配置' : '创建项目', cls: 'pri', act: async function () {
-        const name = document.getElementById('pj-f-name').value.trim();
-        if (!name) { toast('请填写项目名称', true); return; }
-        let dshRef;
-        try { dshRef = JSON.parse(document.getElementById('pj-f-node').value); } catch (e) { toast('节点无效', true); return; }
-        const body = {
-          id: isEdit ? p.id : undefined,
-          name,
-          dshRef,
-          workspace: document.getElementById('pj-f-ws').value.trim(),
-          instruction: document.getElementById('pj-f-ins').value,
-          expertIds: Array.from(document.querySelectorAll('.pj-exp:checked')).map(function (x) { return x.value; }),
-          connectorIds: Array.from(document.querySelectorAll('.pj-conn:checked')).map(function (x) { return x.value; }),
-          skillNames: Array.from(document.querySelectorAll('.pj-skill:checked')).map(function (x) { return x.value; }),
-        };
-        const r = await api('/projects' + (isEdit ? '/' + p.id : ''), { method: isEdit ? 'PATCH' : 'POST', body: JSON.stringify(body) });
-        if (!r.ok) { toast(r.error || '保存失败', true); return; }
-        await loadProjects();
-        closeModal();
-        toast('✓ 项目已保存');
-        renderProjects();
-        if (isEdit && state.projectId === p.id) updateProjectBanner();
-      } },
-    ]);
+    '</div></div>';
+  const actions = [
+    { label: '取消', cls: '', act: function () { closeModal(); } },
+    { label: isEdit ? '保存配置' : '创建项目', cls: 'pri', act: async function () {
+      const body = {
+        id: isEdit ? projectId : undefined,
+        name: document.getElementById('pj-f-name').value.trim(),
+        dshRef: JSON.parse(document.getElementById('pj-f-node').value),
+        workspace: document.getElementById('pj-f-ws').value.trim(),
+        instruction: document.getElementById('pj-f-ins').value,
+        expertIds: Array.prototype.map.call(document.querySelectorAll('.pj-exp:checked'), function (x) { return x.value; }),
+        connectorIds: Array.prototype.map.call(document.querySelectorAll('.pj-conn:checked'), function (x) { return x.value; }),
+        skillNames: Array.prototype.map.call(document.querySelectorAll('.pj-skill:checked'), function (x) { return x.value; }),
+      };
+      if (!body.name) { toast('请填写项目名称', true); return; }
+      const r = await api('/projects' + (isEdit ? '/' + projectId : ''), { method: isEdit ? 'PATCH' : 'POST', body: JSON.stringify(body) });
+      if (!r.ok) { toast(r.error || '保存失败', true); return; }
+      await loadProjects();
+      closeModal();
+      toast('✓ 项目已保存');
+      renderProjects();
+      if (isEdit && state.projectId === projectId) updateProjectBanner();
+    } },
+  ];
+  openModal(isEdit ? '项目配置 · ' + v.name : '新建项目', bodyHtml, actions);
+  // 📁 浏览节点目录：打开远程目录浏览器（复用子智能体的实现），选完带回并保留表单其余内容
+  document.getElementById('pj-f-browse').addEventListener('click', function () {
+    if (!browseAgentId) { toast('请先勾选项目子智能体', true); return; }
+    const keep = {
+      name: document.getElementById('pj-f-name').value,
+      workspace: document.getElementById('pj-f-ws').value,
+      instruction: document.getElementById('pj-f-ins').value,
+      expertIds: Array.prototype.map.call(document.querySelectorAll('.pj-exp:checked'), function (x) { return x.value; }),
+      connectorIds: Array.prototype.map.call(document.querySelectorAll('.pj-conn:checked'), function (x) { return x.value; }),
+      skillNames: Array.prototype.map.call(document.querySelectorAll('.pj-skill:checked'), function (x) { return x.value; }),
+      nodeRef: JSON.parse(document.getElementById('pj-f-node').value || 'null') || v.nodeRef || null,
+    };
+    openDirBrowser(browseAgentId, function (picked) {
+      keep.workspace = picked;
+      openProjectDrawer(projectId, keep);
+    });
+  });
 }
 
 // ---------- 单独任务环境（节点/连接器/技能） ----------
