@@ -170,6 +170,7 @@ export class WorkBuddyRouter {
       title: t.title,
       mode: t.mode,
       status: t.status,
+      projectId: t.projectId || undefined,
       running: this.engine.isRunning(t.id),
       memberAgentIds: t.memberAgentIds,
       lastRoute: t.lastRoute,
