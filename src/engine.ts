@@ -1573,9 +1573,9 @@ export class TaskEngine {
       : agent.dshRef.kind === 'direct'
     const wantedCwd = (execWorkspaceFits ? rawCwd : undefined) ?? (sameNode ? agent.workDir : undefined) ?? undefined
     const existing = task.sessions[agent.id]
-    const mainAgent = this.planner.pickMainAgent()
-    // 节点主会话（__node__）视同主执行者：模型列表选中值对其生效
-    const isMain = mainAgent?.id === agent.id || agent.id === NODE_AGENT_ID
+    // 调度模型（模型按钮）只对节点主会话生效；@ 的 sub agent 用自身配置的 model/provider，
+    // 不被 planner.model 覆盖（否则 planner 恰好指向它时会用坏上游覆盖好配置——07:17 空回合根因）
+    const isMain = agent.id === NODE_AGENT_ID
     const settings = this.store.getSettings()
     const plannerModelSetting = String(settings.planner?.model || '').trim() || undefined
 
