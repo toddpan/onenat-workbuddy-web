@@ -1333,7 +1333,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <span class="badge mode" id="chat-mode" style="display:none"></span>
           <span class="hspacer"></span>
           <div class="main-agent-picker" id="node-picker">
-            <button class="main-agent-btn" id="node-btn" title="任务节点（主 DSH）：新建任务在该节点上执行；@子智能体 作为 sub agent 在同一节点被调用">
+            <button class="main-agent-btn" id="node-btn" title="任务节点（主 DSH）：无 @ 的主会话在该节点上执行；@子智能体 作为 sub agent 回到其绑定节点远程执行">
               <span class="ag-ico">🖥</span>
               <span class="ag-name" id="node-btn-name">节点: 加载中…</span>
               <span class="ag-arr">▾</span>
@@ -2684,9 +2684,9 @@ async function openRunConfig(focus) {
   };
   const expertSection = isProject
     ? '<div class="pj-chips">' + chipsOf(proj.expertIds) + '</div>' +
-      '<div class="hint" style="margin-top:8px">主会话在项目节点上执行（不绑定智能体）；消息里输入 @ 调用 sub agent，在同一节点执行专项任务（发飞书、发邮件…）。集合在「⚙ 项目配置」维护。</div>'
+      '<div class="hint" style="margin-top:8px">主会话在项目节点上执行（不绑定智能体）；消息里输入 @ 调用 sub agent，在其绑定的节点上远程执行专项任务（发飞书、发邮件…）。集合在「⚙ 项目配置」维护。</div>'
     : '<div class="pj-chips">' + state.agents.map(function (a) { return '<span class="tag">🤖 ' + esc(a.name) + '</span>'; }).join(' ') + '</div>' +
-      '<div class="hint" style="margin-top:8px">主会话在当前节点执行（右上角切换节点）；消息里输入 @ 调用 sub agent，在同一节点执行专项任务（发飞书、发邮件…）。</div>';
+      '<div class="hint" style="margin-top:8px">主会话在当前节点执行（右上角切换节点）；消息里输入 @ 调用 sub agent，在其绑定的节点上远程执行专项任务（发飞书、发邮件…）。</div>';
 
   const nodeSection = isProject
     ? '<div class="rc-row"><span class="rc-k">节点</span><span class="tag">🔒 ' + esc(proj.nodeTitle || '(默认)') + '</span></div>' +
@@ -4852,7 +4852,7 @@ function selectNode(mappingId) {
   state.taskEnv.nodeRef = nodeState.cur ? { kind: 'mapping', mappingId: nodeState.cur } : null;
   closeNodePop();
   setNodeBtnUi('节点: ' + nodeBtnLabel());
-  hintComposer('✓ 新建任务将在「' + nodeBtnLabel() + '」上执行；@子智能体 作为 sub agent 在同一节点调用');
+  hintComposer('✓ 新建任务将在「' + nodeBtnLabel() + '」上执行；@子智能体 回到其绑定节点远程执行');
 }
 function setNodeBtnUi(label) {
   const btn = $('node-btn');
@@ -6014,7 +6014,7 @@ function openScheduleDrawer(s, tpl) {
   openDrawer(isEdit ? '编辑定时任务' : (prefill.id ? '新建定时任务（模板: ' + prefill.name + '）' : '新建定时任务'));
   $('drawer-body').innerHTML =
     '<div class="field"><label>任务标题</label><input id="sc-name" value="' + esc(s ? s.name : (prefill.name || '')) + '" placeholder="如: 每日站会摘要"></div>' +
-    '<div class="field"><label>执行节点（主 DSH：任务在该节点上直发，@ sub agent 同节点调用）</label>' +
+    '<div class="field"><label>执行节点（主 DSH：主会话在该节点上直发，@ sub agent 回其绑定节点远程执行）</label>' +
     '<select id="sc-node">' +
     dshNodeOptions().map(function (n) {
       const label = n.title || n.appName || n.note || n.mappingId;
