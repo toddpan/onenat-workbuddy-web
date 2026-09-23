@@ -1657,6 +1657,18 @@ export class TaskEngine {
       const fallbackPayload = { agentPreset: agent.agentPreset, provider: targetProvider, model: targetModel }
       res = await this.client.createSession(effTarget, `[WorkBuddy] ${task.title}`, fallbackPayload)
     }
+    // 自愈 3：瞬时失败退避重试（ONENAT 隧道抖动/串端口——无 /root 的机器瞬移、远端重启窗口、5xx）
+    if (!res.ok && res.error && /ENOENT|ECONN|EPIPE|EHOST|fetch failed|terminated|HTTP 5\d\d|timed? ?out/i.test(res.error)) {
+      this.taskLog(taskId, 'info', `创建会话瞬时失败（${res.error.slice(0, 80)}），1.5s 后自动重试一次`)
+      await new Promise((r) => setTimeout(r, 1500))
+      res = await this.client.createSession(effTarget, `[WorkBuddy] ${task.title}`, createPayload)
+      // 若瞬时失败源于目录（重试带目录又 ENOENT），再走一次目录回退
+      if (!res.ok && res.error && /ensure project directory|ENOENT/i.test(res.error) && (workspaceId || wantedCwd) && !cwdFellBack) {
+        cwdFellBack = true
+        const fallbackPayload = { agentPreset: agent.agentPreset, provider: targetProvider, model: targetModel }
+        res = await this.client.createSession(effTarget, `[WorkBuddy] ${task.title}`, fallbackPayload)
+      }
+    }
     if (workspaceId) {
       this.taskLog(taskId, 'info', `会话已对齐工作区（${agent.name}）: workspace=${workspaceId} · 目录 ${wantedCwd}`)
     }
