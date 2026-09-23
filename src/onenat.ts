@@ -58,11 +58,15 @@ export class OnenatDirectory {
   /**
    * 凭证缓存 TTL。**必须短**：映射实例凭证在 OneNat 后台改完后，本进程缓存最多
    * 只会阻碍这么久（旧实现 10 分钟 ⇒ "设了独立凭证，注入的还是应用默认/旧密码"）。
-   * 同时它也是 OneNat 侧 5 次/分限速的保护：30s 内同映射最多取 2 次。
+   * 同时它也是 OneNat 侧 5 次/分限速的保护：TTL 内同映射最多取 1 次。
+   * 10 分钟 TTL：凭证轮换的即时性由 401 自愈的 force 强拉保证（绕过 TTL），
+   * 平时限速 5 次/分是主要矛盾——TTL 越短越容易打出 429。
    */
-  private static CRED_TTL = 30 * 1000
+  private static CRED_TTL = 10 * 60 * 1000
   /** 失败（403/429）负缓存 TTL：只用来挡连环触发，绝不当成功凭证用 */
   private static CRED_NEG_TTL = 15 * 1000
+  /** 最近一次成功凭证（mappingId → data）：限速/网络失败时回落，绝不因 429 把 key 弄丢 */
+  private credLastGood = new Map<string, OnenatCredentials>()
 
   constructor(
     private baseUrl: string,
@@ -259,33 +263,43 @@ export class OnenatDirectory {
     const cached = this.credCache.get(mappingId)
     const ttl = cached?.data.ok ? OnenatDirectory.CRED_TTL : OnenatDirectory.CRED_NEG_TTL
     if (!force && cached && Date.now() - cached.at < ttl) return cached.data
-    try {
-      const res = await fetch(`${this.baseUrl}/api/v1/mappings/${encodeURIComponent(mappingId)}/credentials`, {
-        headers: this.headers(),
-        signal: AbortSignal.timeout(10_000),
-      })
-      const json: any = await res.json().catch(() => ({}))
-      if (!res.ok) {
-        const data: OnenatCredentials = { ok: false, error: json?.error || `HTTP ${res.status}`, fetchedAt: Date.now() }
-        // 403/429 属策略性失败：只做短负缓存，避免连环触发限速
-        if (res.status === 403 || res.status === 429) this.credCache.set(mappingId, { at: Date.now(), data })
+    // ONENAT 凭证接口限速极严（5 次/分），429 时退避重试一次再放弃
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        if (attempt > 0) await new Promise((r) => setTimeout(r, 2000))
+        const res = await fetch(`${this.baseUrl}/api/v1/mappings/${encodeURIComponent(mappingId)}/credentials`, {
+          headers: this.headers(),
+          signal: AbortSignal.timeout(10_000),
+        })
+        const json: any = await res.json().catch(() => ({}))
+        if (!res.ok) {
+          const data: OnenatCredentials = { ok: false, error: json?.error || `HTTP ${res.status}`, fetchedAt: Date.now() }
+          // 403/429 属策略性失败：只做短负缓存，避免连环触发限速
+          if (res.status === 403 || res.status === 429) this.credCache.set(mappingId, { at: Date.now(), data })
+          if (res.status === 429 && attempt === 0) continue
+          // 限速/策略失败时回落最近一次成功凭证：key 本来就好，绝不能因为拿不到凭证而 401
+          return this.credLastGood.get(mappingId) || data
+        }
+        const data: OnenatCredentials = {
+          ok: true,
+          authType: json?.auth_type || json?.authType,
+          username: json?.username,
+          password: json?.password,
+          apiKey: json?.api_key || json?.apiKey,
+          token: json?.token,
+          resolvedFrom: json?.resolved_from || json?.resolvedFrom,
+          fetchedAt: Date.now(),
+        }
+        this.credCache.set(mappingId, { at: Date.now(), data })
+        this.credLastGood.set(mappingId, data)
         return data
+      } catch (err: any) {
+        if (attempt > 0) {
+          return this.credLastGood.get(mappingId) || { ok: false, error: err?.message || '凭证读取失败', fetchedAt: Date.now() }
+        }
       }
-      const data: OnenatCredentials = {
-        ok: true,
-        authType: json?.auth_type || json?.authType,
-        username: json?.username,
-        password: json?.password,
-        apiKey: json?.api_key || json?.apiKey,
-        token: json?.token,
-        resolvedFrom: json?.resolved_from || json?.resolvedFrom,
-        fetchedAt: Date.now(),
-      }
-      this.credCache.set(mappingId, { at: Date.now(), data })
-      return data
-    } catch (err: any) {
-      return { ok: false, error: err?.message || '凭证读取失败', fetchedAt: Date.now() }
     }
+    return this.credLastGood.get(mappingId) || { ok: false, error: '凭证读取失败', fetchedAt: Date.now() }
   }
 
   /** 对 DSH 端点探活：GET /system/status */
