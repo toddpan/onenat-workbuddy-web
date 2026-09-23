@@ -1566,7 +1566,12 @@ export class TaskEngine {
     private async ensureSession(taskId: string, agent: SubAgent, target: DshTarget, opts?: { cwd?: string; workspace?: string }): Promise<{ ok: boolean; remoteSessionId?: string; reused?: boolean; error?: string; target?: DshTarget }> {
     const task = this.store.getTask(taskId)!
     const exec = this.taskExec(task)
-    const wantedCwd = opts?.workspace ?? opts?.cwd ?? exec.workspace ?? agent.workDir ?? undefined
+    // workDir 只在「执行节点 = 智能体自身绑定节点」时适用；新模型跨节点调用 @ sub agent 时，
+    // 其 workDir 属于原节点（如 /data/panzj/...），带到别的节点只会 mkdir ENOENT
+    const sameNode = (target as any).mappingId
+      ? (agent.dshRef.kind === 'mapping' && (target as any).mappingId === agent.dshRef.mappingId)
+      : agent.dshRef.kind === 'direct'
+    const wantedCwd = opts?.workspace ?? opts?.cwd ?? exec.workspace ?? (sameNode ? agent.workDir : undefined) ?? undefined
     const existing = task.sessions[agent.id]
     const mainAgent = this.planner.pickMainAgent()
     // 节点主会话（__node__）视同主执行者：模型列表选中值对其生效
@@ -1592,7 +1597,11 @@ export class TaskEngine {
     }
 
     if (existing?.remoteSessionId) {
-      if ((existing.cwd || undefined) !== wantedCwd) {
+      // 执行节点变更（用户切换任务节点）→ 旧节点上的会话作废，重建
+      const nodeChanged = !!existing.baseUrl && existing.baseUrl.replace(/\/+$/, '') !== target.baseUrl.replace(/\/+$/, '')
+      if (nodeChanged) {
+        this.taskLog(taskId, 'info', `执行节点变更（${agent.name}）: ${existing.baseUrl} → ${target.baseUrl}，重建远端会话`)
+      } else if ((existing.cwd || undefined) !== wantedCwd) {
         // 工作目录已变更 → 旧会话作废，重建
         this.taskLog(taskId, 'info', `工作目录变更（${agent.name}）: ${existing.cwd || '(默认)'} → ${wantedCwd || '(默认)'}，重建远端会话`)
       } else {
@@ -1639,6 +1648,15 @@ export class TaskEngine {
         res = await this.client.createSession(effTarget, `[WorkBuddy] ${task.title}`, createPayload)
       }
     }
+    // 自愈 2：工作目录在目标节点不存在（ENOENT mkdir，如项目 workspace/agent workDir 属于另一台机器）
+    // → 去掉目录约束回退远端默认目录重建会话，并在任务日志注明
+    let cwdFellBack = false
+    if (!res.ok && res.error && /ensure project directory|ENOENT/i.test(res.error) && (workspaceId || wantedCwd)) {
+      this.taskLog(taskId, 'warn', `工作目录 ${wantedCwd || '(workspace)'} 在目标节点不可用（目录不存在且无法创建），已回退远端默认目录重建会话`)
+      cwdFellBack = true
+      const fallbackPayload = { agentPreset: agent.agentPreset, provider: targetProvider, model: targetModel }
+      res = await this.client.createSession(effTarget, `[WorkBuddy] ${task.title}`, fallbackPayload)
+    }
     if (workspaceId) {
       this.taskLog(taskId, 'info', `会话已对齐工作区（${agent.name}）: workspace=${workspaceId} · 目录 ${wantedCwd}`)
     }
@@ -1648,7 +1666,7 @@ export class TaskEngine {
     }
     target = effTarget
     this.store.mutateTask(taskId, (t) => {
-      t.sessions[agent.id] = { remoteSessionId: res.sessionId!, baseUrl: target.baseUrl, cwd: wantedCwd || undefined, plannerModel: isMain ? (plannerModelSetting || '') : undefined, createdAt: Date.now() }
+      t.sessions[agent.id] = { remoteSessionId: res.sessionId!, baseUrl: target.baseUrl, cwd: cwdFellBack ? undefined : (wantedCwd || undefined), plannerModel: isMain ? (plannerModelSetting || '') : undefined, createdAt: Date.now() }
     })
     this.taskLog(taskId, 'info', `远程会话已创建（${agent.name}${targetModel ? ' · 模型 ' + targetModel : ''}${wantedCwd ? ' · 工作目录 ' + wantedCwd : ''}）: ${res.sessionId} @ ${target.baseUrl}`)
     // 校验远端 cwd 生效
