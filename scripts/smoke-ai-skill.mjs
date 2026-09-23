@@ -133,8 +133,18 @@ async function main() {
   check('种子令牌放行 monitor_read', okTok.status === 200 && okTok.json?.ok === true && okTok.json?.result?.kpi, `status=${okTok.status}`)
   const toolsList = await fetch(`${BASE2}${PREFIX}/api/tools`, { headers: { Authorization: 'Bearer seed-token-123' } }).then((r) => r.json())
   const toolNames = (toolsList.tools || []).map((t) => t.name)
-  check('工具清单 11 个（含 4 个新工具）', toolNames.length === 11, toolNames.join(','))
+  check('工具清单 12 个（含 project_manage）', toolNames.length === 12 && toolNames.includes('workbuddy_project_manage'), toolNames.join(','))
   check('新工具齐全', ['workbuddy_monitor_read', 'workbuddy_schedule_manage', 'workbuddy_planner_manage', 'workbuddy_file_manage'].every((n) => toolNames.includes(n)))
+  // project_manage 全链路：upsert → list → create 带projectId → delete
+  const projUpsert = await tool(BASE2, 'seed-token-123', 'workbuddy_project_manage', { action: 'upsert', project: { name: '冒烟测试项目', dshRef: { kind: 'mapping', mappingId: 'mock-dsh-live' } } })
+  const projId = projUpsert.json?.result?.project?.id
+  check('project upsert 创建成功', projUpsert.json?.ok === true && Boolean(projId), JSON.stringify(projUpsert.json).slice(0, 120))
+  const projList = await tool(BASE2, 'seed-token-123', 'workbuddy_project_manage', { action: 'list' })
+  check('project list 含新项目', projList.json?.result?.projects?.some((p) => p.id === projId), '')
+  const projTask = await tool(BASE2, 'seed-token-123', 'workbuddy_task_manage', { action: 'create', projectId: projId, title: '项目任务冒烟', message: '冒烟：项目任务创建（不 @ 任何人）' })
+  check('task create 带 projectId 受理', projTask.json?.result?.accepted === true && projTask.json?.result?.taskId, JSON.stringify(projTask.json).slice(0, 140))
+  const projDel = await tool(BASE2, 'seed-token-123', 'workbuddy_project_manage', { action: 'delete', projectId: projId })
+  check('project delete 清理成功', projDel.json?.result?.ok === true, '')
   const settingsViaToken = await fetch(`${BASE2}${PREFIX}/api/settings`, { headers: { Authorization: 'Bearer seed-token-123' } }).then((r) => r.status)
   check('令牌面之外（/api/settings）拒绝（403）', settingsViaToken === 403, `status=${settingsViaToken}`)
 

@@ -85,8 +85,8 @@ function pruneSendDedupe(): void {
   }
 }
 
-function createFingerprint(title: unknown, message: unknown, memberIds: string[], mode: unknown): string {
-  const material = [String(title ?? '').trim(), String(message ?? '').trim(), [...memberIds].sort().join(','), String(mode ?? '')].join('\u0001')
+function createFingerprint(title: unknown, message: unknown, memberIds: string[], mode: unknown, projectId?: unknown): string {
+  const material = [String(title ?? '').trim(), String(message ?? '').trim(), [...memberIds].sort().join(','), String(mode ?? ''), String(projectId ?? '')].join('\u0001')
   return createHash('sha1').update(material).digest('hex')
 }
 
@@ -273,6 +273,8 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       memberAgentIds: { type: 'json', description: '成员子智能体 ID 数组（create 可省略：省略即只归属主智能体；members 必填且非空）' },
       mode: { type: 'string', description: '模式: chat（单成员直通）或 orchestrate（多成员编排），缺省按成员数推断' },
       message: { type: 'string', description: '消息内容（create 可选首条消息；send 必填）' },
+      nodeRef: { type: 'json', description: 'create 可选，任务节点（主 DSH）: {kind:"mapping", mappingId:"<DSH 映射 ID>"}。无 @ 的主会话在该节点上执行；不传则用上次所选/默认节点' },
+      projectId: { type: 'string', description: 'create 可选，归属项目 ID（workbuddy_project_manage list 取得）。项目任务自动继承项目节点/工作区/指令/可@ sub agent，nodeRef 与 memberAgentIds 可省略' },
       timeoutMs: { type: 'string', description: 'wait 最长同步等待毫秒（HTTP 通道默认 120000 上限 600000；MCP 通道默认 0=立即回执，最多 20000）' },
     },
     async execute(args, rawCtx) {
@@ -294,9 +296,14 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       if (action === 'create') {
         const memberIds: string[] = asJson(args.memberAgentIds)
         const explicit = Array.isArray(memberIds) ? memberIds.filter(Boolean) : []
+        const projectId = args.projectId ? String(args.projectId) : undefined
+        // 归属项目校验（提前失败，避免建出无节点上下文的任务）
+        if (projectId && !store.getProject(projectId)) {
+          return JSON.stringify({ ok: false, error: `项目不存在: ${projectId}（用 workbuddy_project_manage {action:"list"} 查看可用项目）` }, null, 2)
+        }
 
         // ① 业务级幂等：同内容重复到达（平台重投/整轮重跑、AI 误重发）→ 复用既有任务，不再建第二个
-        const fp = createFingerprint(args.title, args.message, explicit, args.mode)
+        const fp = createFingerprint(args.title, args.message, explicit, args.mode, projectId)
         const hit = createDedupe.get(fp)
         if (hit) {
           const existing = store.getTask(hit.taskId)
@@ -350,12 +357,15 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
           }
         }
 
+        const nodeRef = asJson(args.nodeRef)
         const task = await engine.createTask({
           title: args.title,
           memberAgentIds: explicit,
           mode: args.mode,
           message: args.message,
           creator: 'tool',
+          ...(projectId ? { projectId } : {}),
+          ...(nodeRef && typeof nodeRef === 'object' && nodeRef.mappingId ? { nodeRef: { kind: 'mapping', mappingId: String(nodeRef.mappingId) } } : {}),
         })
         createDedupe.set(fp, { at: Date.now(), taskId: task.id })
         // ② 立即回执：执行是异步的（流式进度走 SSE / 轮询），这里绝不等待首轮跑完
@@ -976,5 +986,92 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
     },
   }
 
-  return [resourceManage, agentManage, taskManage, taskStatus, taskChat, taskEvaluate, sshResourceManage, monitorRead, scheduleManage, plannerManage, fileManage]
+  // 12. 项目管理（项目 = 节点 + 工作区 + 指令 + 可@ sub agent + 连接器 + 技能 的可复用上下文）
+  const projectManage: WorkBuddyToolDef = {
+    name: 'workbuddy_project_manage',
+    description:
+      '管理 WorkBuddy 项目：list / get / upsert / delete。项目把「执行节点(DSH) + 工作目录 + 项目指令 + 可@ sub agent + 连接器 + 技能」捆绑成一个可复用上下文；' +
+      'task_manage create 带 projectId 即创建项目工作台任务（自动继承全部上下文，主会话在项目节点执行）。',
+    parameters: {
+      action: { type: 'string', description: '操作: list / get / upsert / delete' },
+      projectId: { type: 'string', description: '项目 ID（get/delete 用）' },
+      project: {
+        type: 'json',
+        description:
+          'upsert 用: {name:"<项目名>", dshRef:{kind:"mapping", mappingId:"<DSH 映射 ID>"}, workspace:"<工作目录>", instruction:"<项目指令>", ' +
+          'expertIds:["<sub agent ID>",...], connectorIds:["ssh:<id>"|"map:<mappingId>",...], skillNames:["<技能名>",...]}' +
+          '（编辑时带 id；expertIds = 项目内可 @ 的 sub agent 集合）',
+      },
+    },
+    async execute(args) {
+      const action = args.action || 'list'
+      if (action === 'list') {
+        const projects = store.getProjects().map((p) => {
+          const nodeTitle = p.dshRef.kind === 'direct'
+            ? p.dshRef.apiBaseUrl
+            : (p.dshRef.kind === 'mapping'
+              ? (directory.resolveMapping(p.dshRef.mappingId)?.tunnelName || p.dshRef.mappingId)
+              : (directory.resolveApp(p.dshRef.appId)?.appName || p.dshRef.appId))
+          return {
+            id: p.id,
+            name: p.name,
+            dshRef: p.dshRef,
+            nodeTitle: nodeTitle || '(未配置节点)',
+            workspace: p.workspace || '',
+            experts: (p.expertIds || []).map((id) => ({ id, name: store.getAgent(id)?.name || id })),
+            skillNames: p.skillNames,
+            connectorIds: p.connectorIds,
+            taskCount: store.getTasks().filter((t) => t.projectId === p.id).length,
+          }
+        })
+        return JSON.stringify({
+          ok: true,
+          projects,
+          usage: '发项目任务: workbuddy_task_manage {action:"create", projectId:"<项目ID>", message:"<指令>（可 @ sub agent）"} —— 节点/工作区/指令自动继承，无需再传',
+        }, null, 2)
+      }
+      if (action === 'get') {
+        const p = store.getProject(String(args.projectId || ''))
+        if (!p) return JSON.stringify({ ok: false, error: `项目不存在: ${args.projectId}` }, null, 2)
+        return JSON.stringify({ ok: true, project: p }, null, 2)
+      }
+      if (action === 'upsert') {
+        const body = asJson(args.project)
+        if (!body || typeof body !== 'object') return JSON.stringify({ ok: false, error: 'upsert 需要 project 参数（JSON）' }, null, 2)
+        const name = String(body.name || '').trim()
+        if (!name) return JSON.stringify({ ok: false, error: '缺少项目名称 name' }, null, 2)
+        const existing = body.id ? store.getProject(String(body.id)) : undefined
+        const refInput = body.dshRef ?? existing?.dshRef
+        const dshRef = normalizeDshRef(refInput)
+        if ('error' in dshRef) return JSON.stringify({ ok: false, error: dshRef.error + '（形如 {kind:"mapping", mappingId:"<DSH 映射 ID>"}，映射 ID 用 workbuddy_resource_manage {action:"dsh"} 查询）' }, null, 2)
+        const expertIds = Array.isArray(body.expertIds) ? body.expertIds.map(String) : (existing?.expertIds || [])
+        for (const eid of expertIds) {
+          if (!store.getAgent(eid)) return JSON.stringify({ ok: false, error: `sub agent 不存在: ${eid}（用 workbuddy_agent_manage {action:"list"} 查询）` }, null, 2)
+        }
+        const saved = store.upsertProject({
+          id: body.id ? String(body.id) : undefined,
+          name,
+          dshRef,
+          workspace: body.workspace !== undefined ? String(body.workspace) : undefined,
+          instruction: body.instruction !== undefined ? String(body.instruction) : undefined,
+          expertIds,
+          connectorIds: Array.isArray(body.connectorIds) ? body.connectorIds.map(String) : (existing?.connectorIds || []),
+          skillNames: Array.isArray(body.skillNames) ? body.skillNames.map(String) : (existing?.skillNames || []),
+        })
+        return JSON.stringify({
+          ok: true,
+          project: saved,
+          usage: `发项目任务: workbuddy_task_manage {action:"create", projectId:"${saved.id}", message:"…"}`,
+        }, null, 2)
+      }
+      if (action === 'delete') {
+        const ok = store.deleteProject(String(args.projectId || ''))
+        if (!ok) return JSON.stringify({ ok: false, error: `项目不存在: ${args.projectId}` }, null, 2)
+        return JSON.stringify({ ok: true, deleted: String(args.projectId) }, null, 2)
+      }
+      return JSON.stringify({ ok: false, error: `不支持的 action: ${action}` })
+    },
+  }
+
+  return [resourceManage, agentManage, taskManage, taskStatus, taskChat, taskEvaluate, sshResourceManage, monitorRead, scheduleManage, plannerManage, fileManage, projectManage]
 }
