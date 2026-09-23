@@ -19,6 +19,12 @@ import type { WorkStore } from './store.js'
 import type { SubtaskLogEntry, AgentResourceBinding, DshRef, ExtractedFileMention, ExtractedMentions, PlanSubtask, Project, SubAgent, TaskEvent, TaskTurn, TurnToolCall, WorkTask } from './types.js'
 import type { SshResourceStore } from './ssh-store.js'
 
+/**
+ * 节点主会话的伪 agentId：新模型下无 @ 的主会话不绑定任何 sub agent 身份，
+ * 直接在任务节点（项目节点/所选节点）上以远端默认形态执行。该 id 仅存在于 task.sessions。
+ */
+const NODE_AGENT_ID = '__node__'
+
 export interface CreateTaskInput {
   title?: string
   memberAgentIds: string[]
@@ -392,9 +398,9 @@ export class TaskEngine {
 
   public async createTask(input: CreateTaskInput): Promise<WorkTask> {
     const explicit = Array.isArray(input.memberAgentIds) ? input.memberAgentIds.filter((id) => Boolean(id)) : []
-    // 未显式指定成员 → 归主智能体（唯一权威判定在 defaultMemberAgentIds，避免各调用方各写一套兜底）
-    const memberAgentIds = explicit.length ? [...new Set(explicit)] : this.defaultMemberAgentIds()
-    if (!memberAgentIds.length) throw new Error('没有可用的子智能体作为主智能体（请先在「子智能体」页添加子智能体）')
+    // 新模型：成员账本 = 参与过的 sub agent（@ 时自动追加），不再预填「主智能体」；
+    // 无 @ 的主会话直接在任务节点上执行（processUserMessage → runChatTurn 节点直发）
+    const memberAgentIds = explicit.length ? [...new Set(explicit)] : []
     const mode: WorkTask['mode'] = input.mode || (memberAgentIds.length > 1 ? 'orchestrate' : 'chat')
     const task: WorkTask = {
       id: `task-${randomUUID().slice(0, 8)}`,
@@ -460,7 +466,7 @@ export class TaskEngine {
           const binding = task.sessions[sub.agentId]
           const agent = this.store.getAgent(sub.agentId)
           if (binding && agent) {
-            const target = await this.resolver.resolve(agent).catch(() => undefined)
+            const target = await this.resolveExecTarget(task, sub.agentId).catch(() => undefined)
             if (target?.online) await this.client.cancelSession(target, binding.remoteSessionId).catch(() => {})
           }
           this.emit(taskId, { type: 'subtask_status', subtask: this.store.getTask(taskId)?.plan?.subtasks.find((s) => s.id === sub.id)! })
@@ -470,10 +476,15 @@ export class TaskEngine {
       const taskAll = this.store.getTask(taskId)
       for (const aid of Object.keys(taskAll?.sessions || {})) {
         const binding = taskAll!.sessions[aid]
+        if (!binding) continue
+        // 会话可能建在项目节点上，按项目/任务指定节点优先解析；
+        // 节点主会话（__node__）无智能体记录，用会话绑定 baseUrl + 任务凭证直发中断
         const ag = this.store.getAgent(aid)
-        if (!binding || !ag) continue
-        const tg = await this.resolver.resolve(ag).catch(() => undefined)
-        if (tg?.online) await this.client.cancelSession(tg, binding.remoteSessionId).catch(() => {})
+        let tg = ag ? await this.resolveExecTarget(taskAll!, aid).catch(() => undefined) : undefined
+        if (!tg && binding.baseUrl) {
+          tg = { baseUrl: binding.baseUrl, apiKey: this.taskExec(taskAll!).apiKey, agentId: aid, online: true } as DshTarget & { online: boolean }
+        }
+        if (tg) await this.client.cancelSession(tg, binding.remoteSessionId).catch(() => {})
       }
 
       // 若任务当前状态是 running，置为 cancelled 并通知前端
@@ -526,8 +537,7 @@ export class TaskEngine {
         })
         return { ok: false, error: '子智能体不存在' }
       }
-      const { targets } = await this.resolver.resolveMembers([sub.agentId])
-      const target = targets.get(sub.agentId)
+      const target = await this.resolveExecTarget(task, sub.agentId)
       if (!target) {
         this.store.mutateSubtask(taskId, subtaskId, (s) => {
           s.status = 'failed'
@@ -640,89 +650,43 @@ export class TaskEngine {
     const singleExplicitMention = mentions.mentionedAgentIds.length === 1
 
     if (!hasExplicitAgentMention) {
-      // 项目任务：执行节点/工作区/指令/连接器/技能全部来自项目上下文（专家与节点解耦）。
-      // 主专家 = 规划器配置的专家（若在项目专家列表内），否则项目首位专家。
-      const projExec = this.taskExec(task)
-      if (projExec.dshRef) {
-        const main = this.planner.pickMainAgent()
-        let mainId
-        if (task.memberAgentIds.length === 1 && this.store.getAgent(task.memberAgentIds[0])) {
-          // 单成员任务：成员账本即用户意图（含 🎛 运行配置里的临时专家切换）
-          mainId = task.memberAgentIds[0]
-        } else {
-          mainId = (main && projExec.project?.expertIds?.includes(main.id)) ? main.id : (projExec.project?.expertIds?.[0] || main?.id)
-        }
-        if (mainId) {
-          const target = await this.resolver.resolveRef(projExec.dshRef, projExec.apiKey, mainId)
-          if (!target.online || !target.baseUrl) {
-            this.appendSystemTurn(taskId, `⚠️ 项目「${projExec.project?.name || taskId}」节点不可达: ${target.error || '未知'}`)
-            this.store.mutateTask(taskId, (t) => { t.status = 'failed' })
-            this.emit(taskId, { type: 'task_status', status: 'failed' })
-            return
-          }
-          if (task.memberAgentIds.length <= 1 && !task.memberAgentIds.includes(mainId)) {
-            this.store.mutateTask(taskId, (t) => { t.memberAgentIds = [mainId] })
-          }
-          this.store.mutateTask(taskId, (t) => {
-            t.lastRoute = { kind: 'chat', agentId: mainId, source: 'project' }
-          })
-          await this.runChatTurn(taskId, text, mentions, new Map([[mainId, target]]), signal, mainId)
-          const fresh = this.store.getTask(taskId)!
-          this.emit(taskId, { type: 'task_end', task: fresh })
+      // 新模型：无 @ = 主会话直发任务节点。项目任务=项目配置节点；非项目任务=创建时所选节点。
+      // 主会话不绑定任何 sub agent 身份（远端默认形态 + 项目指令），sub agent 通过 @ 在该节点上调用。
+      const exec0 = this.taskExec(task)
+      if (exec0.dshRef) {
+        const nodeTarget = await this.resolver.resolveRef(exec0.dshRef, exec0.apiKey, NODE_AGENT_ID)
+        if (!nodeTarget.online || !nodeTarget.baseUrl) {
+          this.appendSystemTurn(taskId, `⚠️ 任务节点不可达: ${nodeTarget.error || '解析失败'}`)
+          this.store.mutateTask(taskId, (t) => { t.status = 'failed' })
+          this.emit(taskId, { type: 'task_status', status: 'failed' })
           return
         }
+        const nodeAgent = this.makeNodeAgent(exec0)
+        this.store.mutateTask(taskId, (t) => {
+          t.lastRoute = { kind: 'chat', agentId: NODE_AGENT_ID, agentName: nodeAgent.name, source: 'node' }
+        })
+        await this.runChatTurn(taskId, text, mentions, new Map<string, DshTarget>([[NODE_AGENT_ID, nodeTarget]]), signal, NODE_AGENT_ID, nodeAgent)
+        const fresh = this.store.getTask(taskId)!
+        this.emit(taskId, { type: 'task_end', task: fresh })
+        return
       }
-      // 未在本轮消息中 @ 指定智能体时的路由：
-      //   · 控制台人工任务 → 由主智能体（Planner）分析应答；
-      //   · 工具通道显式指定成员的任务（mode=chat 直通）→ 尊重指定的成员，绝不被主智能体改写（坑 4 修复）。
-      const useMainAgent = task.creator !== 'tool' || task.mode !== 'chat' || task.memberAgentIds.length !== 1
-      if (useMainAgent) {
-        // 未指定智能体时，由当前主智能体进行分析应答
-        const plannerTarget = await this.planner.pickTarget()
-        if (!('error' in plannerTarget) && plannerTarget.agent) {
-          const pAgent = plannerTarget.agent
-          // 单成员任务保持成员与当前主智能体同步（附件上传目标等与路由判定同源）
-          if (task.memberAgentIds.length <= 1 && !task.memberAgentIds.includes(pAgent.id)) {
-            this.store.mutateTask(taskId, (t) => { t.memberAgentIds = [pAgent.id] })
-          }
-          const targetsMap = new Map<string, DshTarget>([[pAgent.id, plannerTarget.target]])
-          this.store.mutateTask(taskId, (t) => {
-            t.lastRoute = { kind: 'chat', agentId: pAgent.id, agentName: pAgent.name, source: 'main' }
-          })
-          await this.runChatTurn(taskId, text, mentions, targetsMap, signal, pAgent.id)
-          const fresh = this.store.getTask(taskId)!
-          this.emit(taskId, { type: 'task_end', task: fresh })
-          return
+      // 兜底：任务未绑定节点（存量任务/未选择节点）→ 默认智能体身份在其自身节点执行（UI 已无主智能体入口）
+      const plannerTarget = await this.planner.pickTarget()
+      if (!('error' in plannerTarget) && plannerTarget.agent) {
+        const pAgent = plannerTarget.agent
+        if (task.memberAgentIds.length <= 1 && !task.memberAgentIds.includes(pAgent.id)) {
+          this.store.mutateTask(taskId, (t) => { t.memberAgentIds = [pAgent.id] })
         }
+        const targetsMap = new Map<string, DshTarget>([[pAgent.id, plannerTarget.target]])
+        this.store.mutateTask(taskId, (t) => {
+          t.lastRoute = { kind: 'chat', agentId: pAgent.id, agentName: pAgent.name, source: 'main' }
+        })
+        await this.runChatTurn(taskId, text, mentions, targetsMap, signal, pAgent.id)
+        const fresh = this.store.getTask(taskId)!
+        this.emit(taskId, { type: 'task_end', task: fresh })
+        return
       }
-      // 工具通道显式指定单成员：主智能体不可用或本就应直通该成员 → 解析并直通指定成员
-      if (task.mode === 'chat' && task.memberAgentIds.length === 1) {
-        const memberId = task.memberAgentIds[0]
-        const member = this.store.getAgent(memberId)
-        const memberTarget = member ? await this.resolver.resolve(member) : null
-        if (member && memberTarget && memberTarget.online && memberTarget.baseUrl) {
-          this.store.mutateTask(taskId, (t) => {
-            t.lastRoute = { kind: 'chat', agentId: memberId, agentName: member.name, source: 'member' }
-          })
-          await this.runChatTurn(taskId, text, mentions, new Map([[memberId, memberTarget]]), signal, memberId)
-          const fresh = this.store.getTask(taskId)!
-          this.emit(taskId, { type: 'task_end', task: fresh })
-          return
-        }
-        // 指定成员不可用：如实记录并回退到主智能体（不静默改写成员）
-        this.taskLog(taskId, 'warn', `指定成员「${member?.name || memberId}」不可用（${memberTarget?.error || '未找到'}），本轮回退主智能体处理`)
-        const fallback = await this.planner.pickTarget()
-        if (!('error' in fallback) && fallback.agent) {
-          this.store.mutateTask(taskId, (t) => {
-            t.lastRoute = { kind: 'chat', agentId: fallback.agent.id, agentName: fallback.agent.name, source: 'main' }
-          })
-          await this.runChatTurn(taskId, text, mentions, new Map([[fallback.agent.id, fallback.target]]), signal, fallback.agent.id)
-          const fresh = this.store.getTask(taskId)!
-          this.emit(taskId, { type: 'task_end', task: fresh })
-          return
-        }
-      }
-      // 兜底：主智能体不可用 → 解析任务既有成员（原逻辑）
+      // 默认智能体不可用 → 落到下方任务既有成员解析（仅存量任务会出现）
     }
 
     const { targets, issues } = await this.resolver.resolveMembers(task.memberAgentIds)
@@ -747,14 +711,12 @@ export class TaskEngine {
       this.store.mutateTask(taskId, (t) => {
         t.lastRoute = { kind: 'direct', agentId: onlyId, agentName: onlyAgent?.name || onlyId }
       })
-      // 只解析被 @ 的那一个智能体
-      const single = await this.resolver.resolveMembers([onlyId])
-      const singleTarget = single.targets.get(onlyId)
+      // 只解析被 @ 的那一个智能体（项目任务强制在项目节点执行）
+      const singleTarget = await this.resolveExecTarget(task, onlyId)
       if (singleTarget) {
         await this.runChatTurn(taskId, text, mentions, new Map([[onlyId, singleTarget]]), signal)
       } else {
-        const err = single.issues.find((x) => x.agentId === onlyId)?.error || '该智能体不可用'
-        this.appendSystemTurn(taskId, `⚠️ 被 @ 的智能体「${this.store.getAgent(onlyId)?.name || onlyId}」暂不可用: ${err}`)
+        this.appendSystemTurn(taskId, `⚠️ 被 @ 的智能体「${this.store.getAgent(onlyId)?.name || onlyId}」暂不可用（项目节点与自身节点均不可达）`)
         this.store.mutateTask(taskId, (t) => { t.status = 'failed' })
         this.emit(taskId, { type: 'task_status', status: 'failed' })
       }
@@ -799,6 +761,7 @@ export class TaskEngine {
     text: string,
     mentions: ExtractedMentions | undefined,
     targetAgent: SubAgent,
+    task?: WorkTask,
   ): Promise<{ text: string; extraSections: string[] }> {
     const files = mentions?.mentionedFiles || []
     if (!files.length) return { text, extraSections: [] }
@@ -819,7 +782,8 @@ export class TaskEngine {
         let authHeader: string | undefined = undefined
 
         if (ownerAgent) {
-          const ownerTarget = await this.resolver.resolve(ownerAgent).catch(() => undefined)
+          // 文件在会话所在节点（项目任务 = 项目节点），下载 URL 必须同源
+          const ownerTarget = await this.resolveExecTarget(task, ownerAgent.id).catch(() => undefined)
           if (ownerTarget?.online && ownerTarget.baseUrl) {
             const base = ownerTarget.baseUrl.replace(/\/+$/, '')
             downloadUrl = `${base}/fs/download?path=${encodeURIComponent(file.path)}`
@@ -873,12 +837,14 @@ export class TaskEngine {
     targets: Map<string, DshTarget>,
     signal: AbortSignal,
     overrideAgentId?: string,
+    agentOverride?: SubAgent,
   ): Promise<void> {
     const task = this.store.getTask(taskId)!
-    // 若显式 @ 了某个可用智能体，优先使用被 @ 的智能体；或使用指定的 overrideAgentId
-    const preferredId = overrideAgentId || mentions.mentionedAgentIds.find((id) => targets.has(id))
+    // 若显式 @ 了某个可用智能体，优先使用被 @ 的智能体；或使用指定的 overrideAgentId；
+    // agentOverride = 节点主会话的「无身份」执行者（不来自 store）
+    const preferredId = agentOverride?.id || overrideAgentId || mentions.mentionedAgentIds.find((id) => targets.has(id))
     const agentId = preferredId || task.memberAgentIds.find((id) => targets.has(id)) || [...targets.keys()][0]
-    const agent = this.store.getAgent(agentId)!
+    const agent = agentOverride || this.store.getAgent(agentId)!
     const exec = this.taskExec(task)
     let target = targets.get(agentId)!
     if (exec.dshRef) {
@@ -888,6 +854,8 @@ export class TaskEngine {
     }
 
     const session = await this.ensureSession(taskId, agent, target)
+    // 凭证刷新/节点重映射后的 target 要传导给后续 prompt/SSE 请求
+    if (session.target) target = session.target
     if (!session.ok) {
       this.appendSystemTurn(taskId, `⚠️ 创建远程会话失败（${agent.name}）: ${session.error}`)
       this.store.mutateTask(taskId, (t) => {
@@ -923,7 +891,7 @@ export class TaskEngine {
     this.store.appendTurn(taskId, turn)
     this.emit(taskId, { type: 'turn_start', turn })
 
-    const transformed = await this.transformFileMentionsForAgent(text, mentions, agent)
+    const transformed = await this.transformFileMentionsForAgent(text, mentions, agent, task)
     // 项目指令 + 专家系统提示词 + 项目 SSH 连接器：注入本轮提示词最前（项目上下文）
     const sysPrefix = [exec.instruction, agent.systemPrompt].filter(Boolean).join('\n\n')
     const sshSection = exec.sshConnectors.length
@@ -1344,6 +1312,7 @@ export class TaskEngine {
     this.emit(taskId, { type: 'log', subtaskId: sub.id, level: 'info', msg: `开始在「${agent.name}」上执行: ${sub.title}` })
 
     const session = await this.ensureSession(taskId, agent, target, { cwd: exec.workspace, workspace: exec.workspace })
+    if (session.target) target = session.target
     if (!session.ok) {
       this.store.mutateSubtask(taskId, sub.id, (s) => {
         s.status = 'failed'
@@ -1361,7 +1330,7 @@ export class TaskEngine {
     }
     subLog(`远程会话${session.reused ? '复用' : '新建'} ${session.remoteSessionId} @ ${target.baseUrl}`)
 
-    const transformed = await this.transformFileMentionsForAgent(sub.prompt, mentions, agent)
+    const transformed = await this.transformFileMentionsForAgent(sub.prompt, mentions, agent, task)
 
     const parts: string[] = []
     const hasDynamicResources = (extraResources && extraResources.length > 0) || (mentions?.mentionedFiles && mentions.mentionedFiles.length > 0)
@@ -1507,6 +1476,43 @@ export class TaskEngine {
    * 任务执行上下文：项目任务继承项目节点/工作区/指令/连接器/技能；
    * 单独任务可用 nodeRef/connectorIds/skillNames 覆盖；都没有则专家按遗留默认节点执行。
    */
+  /**
+   * 解析智能体的执行目标节点：项目/任务指定了 dshRef 时必须用指定节点（专家与节点解耦），
+   * 指定节点不可达时回退智能体自身绑定节点；未指定则用自身绑定节点。
+   * 所有「建立会话 / 附件上传 / 中止会话 / 文件下载」路径都必须经由本方法，避免绕过项目节点。
+   * agentId = NODE_AGENT_ID 时表示节点主会话（无智能体记录），只按任务节点解析。
+   */
+  public async resolveExecTarget(task: WorkTask | undefined, agentId: string): Promise<DshTarget & { online: boolean; error?: string } | undefined> {
+    const exec = task ? this.taskExec(task) : undefined
+    if (exec?.dshRef) {
+      const nt = await this.resolver.resolveRef(exec.dshRef, exec.apiKey, agentId).catch(() => undefined)
+      if (nt?.online && nt.baseUrl) return nt
+    }
+    const agent = this.store.getAgent(agentId)
+    if (!agent) return undefined
+    return (await this.resolver.resolve(agent).catch(() => undefined)) || undefined
+  }
+
+  /** 主会话的「无身份」执行者：远端节点默认形态 + 项目指令，不注入任何 sub agent 提示词 */
+  private makeNodeAgent(exec: { dshRef?: DshRef }): SubAgent {
+    const ref = exec.dshRef
+    let nodeTitle = ''
+    if (ref?.kind === 'mapping') nodeTitle = this.directory.resolveMapping(ref.mappingId)?.tunnelName || ref.mappingId
+    else if (ref?.kind === 'app') nodeTitle = this.directory.resolveApp(ref.appId)?.appName || ref.appId
+    else if (ref?.kind === 'direct') nodeTitle = ref.apiBaseUrl
+    const now = Date.now()
+    return {
+      id: NODE_AGENT_ID,
+      name: nodeTitle ? `${nodeTitle} · 主会话` : '主会话',
+      dshRef: ref || { kind: 'direct', apiBaseUrl: '' },
+      resources: [],
+      skills: [],
+      enabled: true,
+      createdAt: now,
+      updatedAt: now,
+    }
+  }
+
   private taskExec(task: WorkTask): {
     project?: Project
     dshRef?: DshRef
@@ -1544,13 +1550,14 @@ export class TaskEngine {
     }
   }
 
-    private async ensureSession(taskId: string, agent: SubAgent, target: DshTarget, opts?: { cwd?: string; workspace?: string }): Promise<{ ok: boolean; remoteSessionId?: string; reused?: boolean; error?: string }> {
+    private async ensureSession(taskId: string, agent: SubAgent, target: DshTarget, opts?: { cwd?: string; workspace?: string }): Promise<{ ok: boolean; remoteSessionId?: string; reused?: boolean; error?: string; target?: DshTarget }> {
     const task = this.store.getTask(taskId)!
     const exec = this.taskExec(task)
     const wantedCwd = opts?.workspace ?? opts?.cwd ?? exec.workspace ?? agent.workDir ?? undefined
     const existing = task.sessions[agent.id]
     const mainAgent = this.planner.pickMainAgent()
-    const isMain = mainAgent?.id === agent.id
+    // 节点主会话（__node__）视同主执行者：模型列表选中值对其生效
+    const isMain = mainAgent?.id === agent.id || agent.id === NODE_AGENT_ID
     const settings = this.store.getSettings()
     const plannerModelSetting = String(settings.planner?.model || '').trim() || undefined
 
@@ -1577,7 +1584,7 @@ export class TaskEngine {
         this.taskLog(taskId, 'info', `工作目录变更（${agent.name}）: ${existing.cwd || '(默认)'} → ${wantedCwd || '(默认)'}，重建远端会话`)
       } else {
         const st = await this.client.getSession(target, existing.remoteSessionId)
-        if (st.ok) return { ok: true, remoteSessionId: existing.remoteSessionId, reused: true }
+        if (st.ok) return { ok: true, remoteSessionId: existing.remoteSessionId, reused: true, target }
         // 远端会话已丢失（重启/清理），重建
         this.taskLog(taskId, 'warn', `远端会话丢失（${agent.name}），正在重建: ${existing.remoteSessionId}`)
       }
@@ -1600,16 +1607,33 @@ export class TaskEngine {
     // 工作区对齐：workspaceId 与 cwd 互斥（远端 harness 校验「accepts workspaceId or cwd, not both」）。
     // 解析出工作区时只传 workspaceId（工作区路径即工作目录）；远端无工作区体系时退回传 cwd。
     const workspaceId = wantedCwd ? await this.resolveWorkspaceId(target, wantedCwd).catch(() => undefined) : undefined
-    const res = await this.client.createSession(target, `[WorkBuddy] ${task.title}`, {
+    const createPayload = {
       agentPreset: agent.agentPreset,
       provider: targetProvider,
       model: targetModel,
       ...(workspaceId ? { workspaceId } : wantedCwd ? { cwd: wantedCwd } : {}),
-    })
+    }
+    let effTarget = target
+    let res = await this.client.createSession(effTarget, `[WorkBuddy] ${task.title}`, createPayload)
+    // 401/403 自愈：映射节点的凭证可能解析失败（ONENAT 抖动被静默吞掉）或已轮换 →
+    // 强制刷新该映射的实例凭证后重试一次，避免一次凭证抖动导致整轮「创建会话失败」
+    if (!res.ok && res.error && /401|403|unauthorized/i.test(res.error) && (effTarget as any).mappingId) {
+      const cred = await this.directory.fetchMappingCredentials((effTarget as any).mappingId, true).catch(() => undefined)
+      const refreshedKey = cred?.ok ? (cred.apiKey || cred.token || undefined) : undefined
+      if (refreshedKey) {
+        this.taskLog(taskId, 'info', `节点凭证鉴权失败（${(effTarget as any).mappingId}），已强制刷新凭证重试`)
+        effTarget = { ...effTarget, apiKey: refreshedKey }
+        res = await this.client.createSession(effTarget, `[WorkBuddy] ${task.title}`, createPayload)
+      }
+    }
     if (workspaceId) {
       this.taskLog(taskId, 'info', `会话已对齐工作区（${agent.name}）: workspace=${workspaceId} · 目录 ${wantedCwd}`)
     }
-    if (!res.ok || !res.sessionId) return { ok: false, error: res.error }
+    if (!res.ok || !res.sessionId) {
+      const hint = /401|403|unauthorized/i.test(res.error || '') ? '（节点鉴权失败：请检查 ONENAT 上映射的实例凭证配置）' : ''
+      return { ok: false, error: (res.error || '未知') + hint }
+    }
+    target = effTarget
     this.store.mutateTask(taskId, (t) => {
       t.sessions[agent.id] = { remoteSessionId: res.sessionId!, baseUrl: target.baseUrl, cwd: wantedCwd || undefined, plannerModel: isMain ? (plannerModelSetting || '') : undefined, createdAt: Date.now() }
     })
@@ -1623,7 +1647,7 @@ export class TaskEngine {
         this.taskLog(taskId, 'warn', `远端会话 cwd 与配置不一致（${agent.name}）: 期望 ${wantedCwd}，实际 ${info.cwd}`)
       }
     }
-    return { ok: true, remoteSessionId: res.sessionId, reused: false }
+    return { ok: true, remoteSessionId: res.sessionId, reused: false, target: effTarget }
   }
 
   /** SSE 流式优先；不支持降级同步；同步超时转轮询（D5） */
@@ -1694,7 +1718,11 @@ export class TaskEngine {
    */
   public attachmentTargetAgentIds(task: WorkTask): string[] {
     const members = (task.memberAgentIds || []).filter((id) => Boolean(id))
-    if (!members.length) return this.defaultMemberAgentIds()
+    if (!members.length) {
+      // 新模型：任务只有节点主会话（无成员）→ 附件投到主会话所在节点
+      if (task.sessions?.[NODE_AGENT_ID]?.remoteSessionId) return [NODE_AGENT_ID]
+      return this.defaultMemberAgentIds()
+    }
     if (members.length === 1) return members
     const route = task.lastRoute
     if (route && (route.kind === 'direct' || route.kind === 'chat') && route.agentId && members.includes(route.agentId)) {
@@ -1733,12 +1761,14 @@ export class TaskEngine {
     const results: Array<{ agentId: string; agentName: string; ok: boolean; error?: string; files?: Array<{ name: string; path: string; size: number }> }> = await Promise.all(
       targetIds.map(async (agentId) => {
         const agent = this.store.getAgent(agentId)
-        const target = targets.get(agentId)
+        // 项目任务：附件必须传到会话所在的项目节点（与 ensureSession 同源）
+        let target: DshTarget | undefined = (await this.resolveExecTarget(task, agentId)) || targets.get(agentId)
         if (!agent || !target) return { agentId, agentName: agent?.name || agentId, ok: false, error: '节点不可用' }
         const session = await this.ensureSession(taskId, agent, target)
         if (!session.ok || !session.remoteSessionId) {
           return { agentId, agentName: agent.name, ok: false, error: session.error || '会话创建失败' }
         }
+        if (session.target) target = session.target
         const up = await this.client.uploadFiles(target, session.remoteSessionId, files)
         if (!up.ok) {
           this.taskLog(taskId, 'error', `附件上传失败（${agent.name}）: ${up.error}`)
@@ -1883,12 +1913,13 @@ export class TaskEngine {
       const results = await Promise.all(
         targetIds.map(async (agentId) => {
           const agent = this.store.getAgent(agentId)
-          const target = targets.get(agentId)
+          let target: DshTarget | undefined = targets.get(agentId)
           if (!agent || !target) return { agentId, agentName: agent?.name || agentId, ok: false, error: '节点不可用' }
           const session = await this.ensureSession(taskId, agent, target)
           if (!session.ok || !session.remoteSessionId) {
             return { agentId, agentName: agent.name, ok: false, error: session.error || '会话创建失败' }
           }
+          if (session.target) target = session.target
           const up = await this.client.uploadFileResumable(
             target,
             session.remoteSessionId,
@@ -1958,8 +1989,7 @@ export class TaskEngine {
     if (!agent) return { ok: false, error: `成员不存在: ${aid}` }
     const binding = task.sessions?.[aid]
     if (!binding?.remoteSessionId) return { ok: false, error: `成员「${agent.name}」尚无远端会话（先发送一条消息以建立会话）` }
-    const { targets } = await this.resolver.resolveMembers([aid])
-    const target = targets.get(aid)
+    const target = await this.resolveExecTarget(task, aid)
     if (!target) return { ok: false, error: '节点不可用' }
 
     // 绝对路径 → 工作区相对路径（远端 safeJoin 以 cwd 为根解析）

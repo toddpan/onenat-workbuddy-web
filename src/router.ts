@@ -124,6 +124,7 @@ export class WorkBuddyRouter {
     return {
       id: proj.id,
       name: proj.name,
+      dshRef: proj.dshRef,
       nodeTitle: nodeTitle || '(未配置节点)',
       workspace: proj.workspace || '',
       instructionPreview: (proj.instruction || '').slice(0, 120),
@@ -196,10 +197,13 @@ export class WorkBuddyRouter {
     const name = String(body?.name || '').trim()
     if (!name) throw new Error('缺少名称')
     const agentIds = Array.isArray(body?.agentIds) ? Array.from(new Set((body.agentIds as any[]).map(String))) : []
-    if (!agentIds.length) throw new Error('至少指定一个子智能体')
     for (const aid of agentIds) {
       if (!this.store.getAgent(aid)) throw new Error(`子智能体不存在: ${aid}`)
     }
+    const nodeMappingId = String(body?.nodeMappingId || '').trim()
+    if (nodeMappingId && !this.directory.resolveMapping(nodeMappingId)) throw new Error(`DSH 节点不存在: ${nodeMappingId}`)
+    // 新模型：节点必填（任务在节点上直发，@ sub agent 写在指令里）；兼容仅含 agentIds 的旧客户端
+    if (!nodeMappingId && !agentIds.length) throw new Error('至少指定一个 DSH 节点（或在指令中 @ 子智能体）')
     const message = String(body?.message || '').trim()
     if (!message) throw new Error('任务文本不能为空')
     const existing = body?.id ? this.store.getSchedule(String(body.id)) : undefined
@@ -212,6 +216,7 @@ export class WorkBuddyRouter {
       name,
       description: body?.description ? String(body.description) : undefined,
       agentIds,
+      ...(nodeMappingId ? { nodeMappingId } : {}),
       message,
       rule,
       enabled,
@@ -223,12 +228,15 @@ export class WorkBuddyRouter {
   /** 列表摘要：剔除 runs（历史走详情） */
   private scheduleSummary(s: ScheduledTask) {
     const agents = s.agentIds.map((aid) => this.store.getAgent(aid)).filter(Boolean) as SubAgent[]
+    const nodeTitle = s.nodeMappingId ? (this.directory.resolveMapping(s.nodeMappingId)?.tunnelName || s.nodeMappingId) : ''
     return {
       id: s.id,
       name: s.name,
       description: s.description,
       agentIds: s.agentIds,
       agents: agents.map((a) => ({ id: a.id, name: a.name, enabled: a.enabled !== false })),
+      nodeMappingId: s.nodeMappingId,
+      nodeTitle,
       messagePreview: s.message.slice(0, 120),
       rule: s.rule,
       ruleText: ruleText(s.rule),
@@ -292,10 +300,12 @@ export class WorkBuddyRouter {
       }
       const results = await Promise.all(bindings.map(async ([agentId, binding]) => {
         try {
+          // 节点主会话（__node__）无智能体记录：按任务节点解析
           const agent = this.store.getAgent(agentId)
-          if (!agent) return null
-          const target = await this.resolver.resolve(agent)
-          if (!target.online || !target.baseUrl) return null
+          const target = agent
+            ? await this.resolver.resolve(agent)
+            : await this.engine.resolveExecTarget(task, agentId)
+          if (!target || !target.online || !target.baseUrl) return null
           const r = await this.client.getSessionStats(target, binding.remoteSessionId)
           if (!r.ok || !r.stats) return { agentId, ok: false, supported: r.supported !== false, error: r.error }
           return { agentId, ok: true, supported: true, stats: r.stats }
@@ -393,11 +403,14 @@ export class WorkBuddyRouter {
       const results = await Promise.all(ordered.map(async (agentId): Promise<MemberTodos> => {
         const agent = this.store.getAgent(agentId)
         const binding = task.sessions[agentId]
-        const agentName = agent?.name || agentId
+        const agentName = agent?.name || (agentId === '__node__' ? '主会话' : agentId)
         try {
-          if (!agent || !binding?.remoteSessionId) return { agentId, agentName, ok: false, supported: true, error: '成员会话未建立' }
-          const target = await this.resolver.resolve(agent)
-          if (!target.online || !target.baseUrl) return { agentId, agentName, ok: false, supported: true, error: target.error || '节点离线' }
+          if (!binding?.remoteSessionId) return { agentId, agentName, ok: false, supported: true, error: '成员会话未建立' }
+          // 节点主会话（__node__）无智能体记录：按任务节点解析
+          const target = agent
+            ? await this.resolver.resolve(agent)
+            : await this.engine.resolveExecTarget(task, agentId)
+          if (!target || !target.online || !target.baseUrl) return { agentId, agentName, ok: false, supported: true, error: (target as any)?.error || '节点离线' }
           const r = await this.client.getSessionTodos(target, binding.remoteSessionId)
           if (!r.ok) return { agentId, agentName, ok: false, supported: r.supported !== false, error: r.error }
           return {
@@ -484,10 +497,13 @@ export class WorkBuddyRouter {
       const perMember = await Promise.all(memberIds.map(async (agentId) => {
         try {
           const agent = this.store.getAgent(agentId)
-          const agentName = agent?.name || agentId
-          if (!agent) return null
-          const target = await this.resolver.resolve(agent)
-          if (!target.online || !target.baseUrl) return { agentId, agentName, ok: false, supported: true, skills: [] }
+          const agentName = agent?.name || (agentId === '__node__' ? '主会话' : agentId)
+          if (!agent && agentId !== '__node__') return null
+          // 节点主会话（__node__）无智能体记录：按任务节点解析（仅会话作用域，无默认技能根回退）
+          const target = agent
+            ? await this.resolver.resolve(agent)
+            : await this.engine.resolveExecTarget(task, agentId)
+          if (!target || !target.online || !target.baseUrl) return { agentId, agentName, ok: false, supported: true, skills: [] }
           const binding = task.sessions?.[agentId]
           if (binding?.remoteSessionId) {
             const r = await this.client.getSessionSkills(target, binding.remoteSessionId, q)
@@ -495,7 +511,7 @@ export class WorkBuddyRouter {
             return { agentId, agentName, ok: true, supported: true, skills: r.skills || [] }
           }
           // 无会话绑定：回退默认技能根（cwd 用成员工作目录，等价新会话目录）
-          const r = await this.client.listSkills(target, { cwd: agent.workDir || undefined, search: q || undefined })
+          const r = await this.client.listSkills(target, { cwd: agent?.workDir || undefined, search: q || undefined })
           if (!r.ok) return { agentId, agentName, ok: false, supported: r.unsupported !== true, skills: [] }
           return { agentId, agentName, ok: true, supported: true, skills: r.skills || [] }
         } catch {
