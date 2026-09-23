@@ -314,8 +314,8 @@ export interface WorkTask {
   memberAgentIds: string[]
   /** 创建者（'tool' = AI 工具通道 / 'console' = 控制台人工）。工具通道显式指定的成员受保护，不被主智能体改写 */
   creator?: 'tool' | 'console'
-  /** 最近一轮的路由模式：明确 @ 单人时为 direct（定向直通），否则为编排/默认 */
-  lastRoute?: { kind: 'direct' | 'orchestrate' | 'chat'; agentId?: string; agentName?: string; source?: 'member' | 'main' | 'project' }
+  /** 最近一轮的路由模式：明确 @ 单人时为 direct（定向直通），无 @ 主会话为 chat+source=node（节点直发） */
+  lastRoute?: { kind: 'direct' | 'orchestrate' | 'chat'; agentId?: string; agentName?: string; source?: 'member' | 'main' | 'project' | 'node' }
   turns: TaskTurn[]
   /** 任务级引擎日志（规划器结果/成员问题/会话创建等，持久化） */
   taskLogs?: SubtaskLogEntry[]
@@ -411,8 +411,10 @@ export interface ScheduledTask {
   id: string
   name: string
   description?: string
-  /** 目标子智能体（一个或多个；触发时各自独立建会话派发同一份任务文本） */
+  /** 目标子智能体（一个或多个；触发时各自独立建会话派发同一份任务文本）。新模型下可空：任务在节点上直发，@ sub agent 写在指令里 */
   agentIds: string[]
+  /** 主 DSH 节点（mappingId）：新模型下任务在该节点上直发；为空时回退首个 agentIds 的绑定节点（存量兼容） */
+  nodeMappingId?: string
   /** 固定任务文本（触发时原样派发） */
   message: string
   rule: ScheduleRule

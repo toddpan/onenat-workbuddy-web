@@ -93,11 +93,15 @@ export class ScheduleRunner {
       const validAgents = s.agentIds
         .map((aid) => this.store.getAgent(aid))
         .filter((a): a is NonNullable<typeof a> => Boolean(a))
+      // 主 DSH 节点：新模型优先 schedule.nodeMappingId；存量无节点时回退首个子智能体的绑定映射节点
+      const legacyNodeMappingId = validAgents.find((a) => a.dshRef?.kind === 'mapping' && a.dshRef.mappingId)?.dshRef as { kind: 'mapping'; mappingId: string } | undefined
+      const nodeMappingId = s.nodeMappingId || legacyNodeMappingId?.mappingId || ''
+      const nodeRef = nodeMappingId ? { kind: 'mapping' as const, mappingId: nodeMappingId } : undefined
       // 单任务派发：指令原样交给 TaskEngine（与「新建任务」输入框同语义）——
       // 引擎 extractMentions 解析 @子智能体（@多个=协同编排）与 @资源（入口/凭证按绑定策略注入提示词）
       const items: ScheduleRunItem[] = []
-      if (!validAgents.length) {
-        items.push({ agentId: s.agentIds[0] || '', agentName: s.agentIds[0] || '（无目标）', error: '子智能体不存在（可能已删除）' })
+      if (!validAgents.length && !nodeRef) {
+        items.push({ agentId: s.agentIds[0] || '', agentName: s.agentIds[0] || '（无目标）', error: '子智能体不存在（可能已删除）且未配置任务节点' })
       } else {
         let lastErr = ''
         for (let attempt = 1; attempt <= 1 + DISPATCH_RETRIES; attempt++) {
@@ -106,11 +110,16 @@ export class ScheduleRunner {
               title: `⏰ ${s.name}`,
               memberAgentIds: validAgents.map((a) => a.id),
               message: s.message,
+              nodeRef,
               scheduleId: scheduleId,
               scheduleName: s.name,
             })
-            for (const a of validAgents) {
-              items.push({ agentId: a.id, agentName: a.name, taskId: task.id, taskTitle: task.title, attempts: attempt })
+            if (validAgents.length) {
+              for (const a of validAgents) {
+                items.push({ agentId: a.id, agentName: a.name, taskId: task.id, taskTitle: task.title, attempts: attempt })
+              }
+            } else {
+              items.push({ agentId: '__node__', agentName: '节点主会话', taskId: task.id, taskTitle: task.title, attempts: attempt })
             }
             break
           } catch (err: any) {
@@ -121,7 +130,7 @@ export class ScheduleRunner {
           }
         }
         if (!items.length) {
-          items.push({ agentId: validAgents[0].id, agentName: validAgents[0].name, error: lastErr, attempts: 1 + DISPATCH_RETRIES })
+          items.push({ agentId: validAgents[0]?.id || '__node__', agentName: validAgents[0]?.name || '节点主会话', error: lastErr, attempts: 1 + DISPATCH_RETRIES })
         }
       }
       run.items = items
