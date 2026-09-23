@@ -645,9 +645,13 @@ export class TaskEngine {
       const projExec = this.taskExec(task)
       if (projExec.dshRef) {
         const main = this.planner.pickMainAgent()
-        const mainId = main && projExec.skills !== undefined && projExec.project?.expertIds.includes(main.id)
-          ? main.id
-          : (projExec.project?.expertIds[0] || (task.memberAgentIds.length === 1 ? task.memberAgentIds[0] : main?.id))
+        let mainId
+        if (task.memberAgentIds.length === 1 && this.store.getAgent(task.memberAgentIds[0])) {
+          // 单成员任务：成员账本即用户意图（含 🎛 运行配置里的临时专家切换）
+          mainId = task.memberAgentIds[0]
+        } else {
+          mainId = (main && projExec.project?.expertIds?.includes(main.id)) ? main.id : (projExec.project?.expertIds?.[0] || main?.id)
+        }
         if (mainId) {
           const target = await this.resolver.resolveRef(projExec.dshRef, projExec.apiKey, mainId)
           if (!target.online || !target.baseUrl) {

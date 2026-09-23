@@ -1,14 +1,14 @@
 /**
  * onenat-workbuddy-web - Interactive Web Console UI
  *
- * 单页控制台: 工作台(任务多轮聊天) / 专家 / 资源目录 / 设置
+ * 单页控制台: 工作台(任务多轮聊天) / 子智能体 / 资源目录 / 设置
  *
  * 深度集成 DSH Web 架构设计与性能优化：
- *  1. 会话列表管理：按时间分组（今天/前7天/更早/已归档）、即时搜索过滤、状态脉冲指示、专家成员徽章；
+ *  1. 会话列表管理：按时间分组（今天/前7天/更早/已归档）、即时搜索过滤、状态脉冲指示、子智能体成员徽章；
  *  2. 0ms 瞬时会话切换：客户端内存 Store 缓存已访问会话，切换时瞬间呈现，后台静默增量同步；
  *  3. 高性能历史渲染：分页分块渲染（最新轮次优先 + 向上加载更早历史）、Markdown 编译缓存、DocumentFragment 批处理挂载；
  *  4. RAF 节流流式更新：requestAnimationFrame 聚合 SSE 高频 delta/reasoning，智能跟随滚动（不打断用户向上查阅）；
- *  5. 专家交互模式深度融合：自适应 Header、各智能体独立气泡、可折叠思考流、工具调用执行树、DAG 编排计划追踪与子会话穿透。
+ *  5. 子智能体交互模式深度融合：自适应 Header、各智能体独立气泡、可折叠思考流、工具调用执行树、DAG 编排计划追踪与子会话穿透。
  *
  * 注意: 嵌入式 JS 全程不使用外层反引号模板串冲突字符，避免转义问题。
  */
@@ -1244,6 +1244,9 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .pj-checks { display: flex; flex-direction: column; gap: 6px; max-height: 200px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
 .pj-checks label { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--tx2); cursor: pointer; }
 .pj-banner { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: var(--pri-light); border: 1px solid rgba(56,189,248,.3); border-radius: var(--rad); margin-bottom: 8px; font-size: 12.5px; }
+.rc-section { margin-bottom: 14px; }
+.rc-section > b { display: block; font-size: 12.5px; color: var(--tx); margin-bottom: 8px; }
+.rc-section .hint { font-size: 11.5px; color: var(--tx3); line-height: 1.6; }
 .pj-banner b { color: var(--pri); }
 .mon-ev.error .m { color: #fca5a5; }
 .mon-ev.warn .m { color: #fcd34d; }
@@ -1285,7 +1288,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
       <button data-v="projects"><span class="ic">📦</span><span class="lb">项目</span></button>
       <button data-v="monitor"><span class="ic">📊</span><span class="lb">监控大屏</span></button>
       <span class="nav-sep" aria-hidden="true"></span>
-      <button data-v="agents"><span class="ic">🤖</span><span class="lb">专家</span></button>
+      <button data-v="agents"><span class="ic">🤖</span><span class="lb">子智能体</span></button>
       <button data-v="resources"><span class="ic">🗂</span><span class="lb">资源目录</span></button>
       <button data-v="voice"><span class="ic">🎙</span><span class="lb">语音助手</span></button>
       <span class="nav-sep" aria-hidden="true"></span>
@@ -1322,7 +1325,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <span class="badge mode" id="chat-mode" style="display:none"></span>
           <span class="hspacer"></span>
           <div class="main-agent-picker" id="main-agent-picker">
-            <button class="main-agent-btn" id="main-agent-btn" title="当前主智能体（点击切换）">
+            <button class="main-agent-btn" id="main-agent-btn" title="全局默认智能体：影响所有未 @ 指定智能体的任务；单任务临时切换请用输入区上方「🎛 运行配置」">
               <span class="ag-ico">🤖</span>
               <span class="ag-name" id="main-agent-btn-name">主智能体: 加载中…</span>
               <span class="ag-arr">▾</span>
@@ -1337,7 +1340,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
             <div style="font-size:12.5px;max-width:360px;text-align:center;line-height:1.6">点击「＋ 新建任务」开启会话；输入框键入 @ 可即时指定智能体或注入资源。</div>
             <div class="qe-grid">
               <button class="qe-card" data-qe="monitor"><span class="qe-ic">📊</span><b>监控大屏</b><span class="qe-d">智能体运行态势 · 任务进度 · 实时动态</span></button>
-              <button class="qe-card" data-qe="agents"><span class="qe-ic">🤖</span><b>专家</b><span class="qe-d">添加/编辑执行节点 · 绑定资源与工作目录</span></button>
+              <button class="qe-card" data-qe="agents"><span class="qe-ic">🤖</span><b>子智能体</b><span class="qe-d">添加/编辑执行节点 · 绑定资源与工作目录</span></button>
               <button class="qe-card" data-qe="voice"><span class="qe-ic">🎙</span><b>语音助手</b><span class="qe-d">接入小智，语音发任务、查结果</span></button>
               <button class="qe-card" data-qe="schedules"><span class="qe-ic">⏰</span><b>定时任务</b><span class="qe-d">按规则自动派发固定任务给智能体</span></button>
               <button class="qe-card" data-qe="resources"><span class="qe-ic">🗂</span><b>资源目录</b><span class="qe-d">SSH / DSH / HTTP 资源实时入口</span></button>
@@ -1384,7 +1387,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <div class="composer-bar">
             <span class="hspacer"></span>
             <span class="model-status" id="model-status"></span>
-            <button class="mini-btn" id="btn-task-env" title="单独任务环境：选节点 / 连接器 / 技能（仅对新建任务生效）">🌐 环境</button>
+            <button class="mini-btn" id="btn-run-config" title="运行配置：执行专家 / 节点与工作区 / 连接器 / 技能 / 模型">🎛 运行配置</button>
             <div class="model-picker" id="model-picker">
               <button class="cfg-sel model-btn" id="chat-model-btn" title="主调度模型 + 执行会话模型（点选即生效）">⚙ 主调度默认模型</button>
               <div class="model-pop" id="model-pop"></div>
@@ -1411,7 +1414,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
       <div class="panel">
         <div class="panel-head">
           <h2>📦 项目</h2>
-          <span class="sub">项目 = 节点 + 工作区 + 指令 + 专家/连接器/技能 的组合。项目内发起的任务自动继承全部上下文。</span>
+          <span class="sub">项目 = 节点 + 工作区 + 指令 + 子智能体/连接器/技能 的组合。项目内发起的任务自动继承全部上下文。</span>
           <span class="hspacer"></span>
           <button class="btn pri" id="btn-proj-new">＋ 新建项目</button>
         </div>
@@ -1430,7 +1433,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
         <div class="mon-alerts" id="mon-alerts"></div>
         <div class="mon-grid">
           <div class="mon-col">
-            <div class="mon-sec-title">🤖 专家 <span class="cnt" id="mon-ag-cnt"></span><span class="spacer"></span><span style="color:var(--tx3);font-weight:400;font-size:11px">绿 在线 · 红 离线</span></div>
+            <div class="mon-sec-title">🤖 子智能体 <span class="cnt" id="mon-ag-cnt"></span><span class="spacer"></span><span style="color:var(--tx3);font-weight:400;font-size:11px">绿 在线 · 红 离线</span></div>
             <div class="mon-list" id="mon-agents"><div class="mon-empty">加载中…</div></div>
             <div class="mon-sec-title" style="margin-top:14px">🗂 资源调用 <span class="cnt" id="mon-res-cnt"></span></div>
             <div class="mon-list" id="mon-resources" style="max-height:26vh"><div class="mon-empty">加载中…</div></div>
@@ -1453,7 +1456,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
     <div class="view" id="view-files"><div class="panel files-panel">
       <div class="panel-head files-head">
         <h2>📁 远程工作空间文件管理</h2>
-        <span class="sub">浏览、上传与管理远程主智能体 / 专家工作区文件 · 支持一键「@文件」引用到对话</span>
+        <span class="sub">浏览、上传与管理远程主智能体 / 子智能体工作区文件 · 支持一键「@文件」引用到对话</span>
         <span class="hspacer"></span>
         <div style="display:flex;align-items:center;gap:6px">
           <label style="font-size:12px;color:var(--tx3);white-space:nowrap">智能体:</label>
@@ -1505,11 +1508,11 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
       </div>
     </div></div>
     <div class="view" id="view-agents"><div class="panel">
-      <div class="panel-head"><h2>专家管理</h2><span class="sub">绑定 ONENAT 上的 DSH 实体（稳定 ID，端口变化不影响）· 配置模式/模型/提示词/可用资源</span><span class="hspacer"></span><button class="btn pri" id="btn-new-agent">＋ 新建专家</button></div>
+      <div class="panel-head"><h2>子智能体管理</h2><span class="sub">绑定 ONENAT 上的 DSH 实体（稳定 ID，端口变化不影响）· 配置模式/模型/提示词/可用资源</span><span class="hspacer"></span><button class="btn pri" id="btn-new-agent">＋ 新建子智能体</button></div>
       <div id="agent-list"></div>
     </div></div>
     <div class="view" id="view-schedules"><div class="panel">
-      <div class="panel-head"><h2>定时任务</h2><span class="sub">按规则定时把固定任务文本派发给一个或多个专家 · Host 侧调度（关闭页面不影响触发，错过的触发点不补跑）</span><span class="hspacer"></span><button class="btn pri" id="btn-new-schedule">＋ 新建定时任务</button></div>
+      <div class="panel-head"><h2>定时任务</h2><span class="sub">按规则定时把固定任务文本派发给一个或多个子智能体 · Host 侧调度（关闭页面不影响触发，错过的触发点不补跑）</span><span class="hspacer"></span><button class="btn pri" id="btn-new-schedule">＋ 新建定时任务</button></div>
       <div id="schedule-list"></div>
     </div></div>
     <div class="view" id="view-resources"><div class="panel">
@@ -1530,10 +1533,10 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
       <div class="card">
         <h3 style="margin-bottom:12px">LLM 规划器（主任务拆解）</h3>
         <div class="field" style="max-width:420px">
-          <label>指定专家（主任务拆解由谁完成）</label>
+          <label>指定子智能体（主任务拆解由谁完成）</label>
           <select id="set-planner-agent"></select>
         </div>
-        <div class="settings-note" id="set-planner-note">主任务拆解调用所选专家完成；默认自动使用本地专家（无则取列表第一个）。拆解用模型可在聊天窗下方工具栏选择，仅作用于主调度。</div>
+        <div class="settings-note" id="set-planner-note">主任务拆解调用所选子智能体完成；默认自动使用本地子智能体（无则取列表第一个）。拆解用模型可在聊天窗下方工具栏选择，仅作用于主调度。</div>
       </div>
       <div class="card ai-card">
         <h3 style="margin-bottom:12px">AI 接入（一键安装提示词）</h3>
@@ -2024,7 +2027,7 @@ function renderMonAgents(agents) {
   var el = $('mon-agents');
   var onlineCnt = agents.filter(function(a) { return a.online; }).length;
   $('mon-ag-cnt').textContent = onlineCnt + '/' + agents.length + ' 在线';
-  if (!agents.length) { el.innerHTML = '<div class="mon-empty">还没有专家，去「专家」页创建</div>'; return; }
+  if (!agents.length) { el.innerHTML = '<div class="mon-empty">还没有子智能体，去「子智能体」页创建</div>'; return; }
   var busy = agents.filter(function(a) { return a.busy; });
   var rest = agents.filter(function(a) { return !a.busy; });
   var ordered = busy.concat(rest);
@@ -2151,7 +2154,7 @@ function renderMonResources(agents, sshPool) {
       '<span class="mon-md">🔥 ' + esc(p.inUse[0].taskTitle) + '</span><span class="mon-spacer"></span></div>');
   }
   $('mon-res-cnt').textContent = total + ' 绑定 · ' + hot + ' 使用中';
-  el.innerHTML = rows.length ? rows.join('') : '<div class="mon-empty">没有绑定资源 · 在「专家」页为智能体绑定 SSH/HTTP/DSH 资源</div>';
+  el.innerHTML = rows.length ? rows.join('') : '<div class="mon-empty">没有绑定资源 · 在「子智能体」页为智能体绑定 SSH/HTTP/DSH 资源</div>';
 }
 
 function monOpenAgent(agentId) {
@@ -2419,38 +2422,52 @@ function renderProjects() {
     document.getElementById('btn-proj-new').addEventListener('click', function () { openProjectDrawer(null); });
   }
   if (!state.projects.length) {
-    grid.innerHTML = '<div class="mon-empty">还没有项目 —— 点右上角「＋ 新建项目」创建。项目把节点、工作区、指令、专家、连接器、技能捆绑成一个可复用的工作上下文。</div>';
+    grid.innerHTML = '<div class="mon-empty">还没有项目 —— 点右上角「＋ 新建项目」创建。项目把节点、工作区、指令、连接器、技能捆绑成一个可复用的工作上下文。</div>';
     return;
   }
-  grid.innerHTML = state.projects.map((p) => {
-    const chips = [
-      p.experts.length ? p.experts.map(e => esc(e.name)).join(' · ') : '',
+  grid.innerHTML = state.projects.map(function (p) {
+    var taskCount = state.tasks.filter(function (t) { return t.projectId === p.id; }).length;
+    var chips = [
+      p.expertIds.length ? p.expertIds.map(function (id) { var a = state.agents.find(function (x) { return x.id === id; }); return a ? a.name : id; }).join(' · ') : '',
       p.skillNames.length ? p.skillNames.length + ' 技能' : '',
       p.connectorIds.length ? p.connectorIds.length + ' 连接器' : ''
     ].filter(Boolean).join(' ｜ ');
-    return '<div class="proj-card" data-proj="' + esc(p.id) + '" title="点击进入项目工作台">' +
+    return '<div class="proj-card" data-proj="' + esc(p.id) + '">' +
       '<div class="pj-name">' + esc(p.name) + '</div>' +
-      '<div class="pj-meta">🖥 ' + esc(p.nodeTitle) + (p.workspace ? ' · 📁 ' + esc(p.workspace) : '') + '</div>' +
+      '<div class="pj-meta">🖥 ' + esc(p.nodeTitle) + (p.workspace ? ' · 📁 ' + esc(p.workspace) : '') + ' · 📋 ' + taskCount + ' 个任务</div>' +
       (p.instructionPreview ? '<div class="pj-ins">' + esc(p.instructionPreview) + '</div>' : '') +
       '<div class="pj-chips"><span class="tag">' + chips + '</span></div>' +
+      '<div class="ops" style="display:flex;gap:8px;margin-top:10px">' +
+      '<button class="mini-btn pj-enter">🚀 进入工作台</button>' +
+      '<button class="mini-btn pj-edit">⚙ 编辑</button>' +
+      '<button class="mini-btn pj-del">🗑 删除</button></div>' +
       '</div>';
   }).join('');
-  grid.querySelectorAll('.proj-card').forEach((card) => {
-    card.addEventListener('click', (e) => {
-      if (e.target.closest('.pj-del') || e.target.closest('.pj-edit')) return;
-      enterProject(card.dataset.proj);
+  grid.querySelectorAll('.proj-card').forEach(function (card) {
+    var pid = card.dataset.proj;
+    card.querySelector('.pj-enter').addEventListener('click', function () { enterProject(pid); });
+    card.querySelector('.pj-edit').addEventListener('click', function () { openProjectDrawer(pid); });
+    card.querySelector('.pj-del').addEventListener('click', async function () {
+      if (!confirm('删除项目「' + (state.projects.find(function (x) { return x.id === pid; }) || {}).name + '」？项目下的任务不会被删除。')) return;
+      const r = await api('/projects/' + encodeURIComponent(pid), { method: 'DELETE' });
+      if (r.ok) { toast('✓ 项目已删除'); if (state.projectId === pid) exitProject(); loadProjects(); renderProjects(); }
+      else toast(r.error || '删除失败', true);
     });
   });
 }
 
+// 通用模态按钮助手（openModal 只支持静态 footer，这里手动绑定）
+// bindModalActions 已移除：openModal 原生支持自定义 footer 按钮
+
 async function enterProject(projectId) {
   const p = state.projects.find((x) => x.id === projectId);
-  if (!p) return;
+  if (!p) { toast('项目不存在', true); return; }
   state.projectId = projectId;
   state.currentTaskId = null;
   state.taskCache.clear();
   await loadTasks();
   switchView('work');
+  updateProjectBanner();
   toast('已进入项目「' + p.name + '」');
 }
 
@@ -2460,10 +2477,12 @@ function exitProject() {
   loadTasks();
   renderTaskList();
   updateProjectBanner();
+  const picker = document.getElementById('main-agent-picker');
+  if (picker) picker.style.display = '';
 }
 
 function updateProjectBanner() {
-  let el = document.getElementById('pj-banner');
+  var el = document.getElementById('pj-banner');
   const p = state.projectId ? state.projects.find((x) => x.id === state.projectId) : null;
   if (!p) { if (el) el.remove(); return; }
   if (!el) {
@@ -2474,19 +2493,23 @@ function updateProjectBanner() {
     head.insertAdjacentElement('afterend', el);
   }
   el.innerHTML = '📦 项目工作台：<b>' + esc(p.name || p.id) + '</b>' +
-    '<span style="color:var(--tx3)">（任务自动继承项目节点/工作区/指令/专家/连接器/技能）</span>' +
+    '<span style="color:var(--tx3)">（任务自动继承项目节点 / 工作区 / 指令 / 连接器 / 技能）</span>' +
     '<span style="flex:1"></span>' +
     '<button class="mini-btn" id="pj-cfg">⚙ 项目配置</button>' +
     '<button class="mini-btn" id="pj-exit">退出项目</button>';
-  document.getElementById('pj-exit').addEventListener('click', () => { exitProject(); });
-  document.getElementById('pj-cfg').addEventListener('click', () => openProjectDrawer(p.id));
+  document.getElementById('pj-exit').addEventListener('click', function () { exitProject(); });
+  document.getElementById('pj-cfg').addEventListener('click', function () { openProjectDrawer(p.id); });
+  // 项目工作台隐藏全局默认智能体切换器（项目任务默认成员来自项目，临时切换用 🎛 运行配置）
+  const picker = document.getElementById('main-agent-picker');
+  if (picker) picker.style.display = 'none';
 }
 
 async function openProjectDrawer(projectId) {
-  const p = state.projects.find((x) => x.id === projectId);
+  const p = state.projects.find(function (x) { return x.id === projectId; });
   const isEdit = Boolean(p);
   if (!state.agents.length) await loadAgents();
-  const experts = state.agents;
+  // 浏览/技能采样用的智能体：优先项目首位子智能体（其所在节点即项目节点）
+  const browseAgentId = (p && p.expertIds && p.expertIds[0]) || (state.agents[0] && state.agents[0].id) || '';
   const nodeOptions = [];
   for (const r of state.resources) {
     if (r.kind === 'dsh' && r.mappingId) nodeOptions.push({ label: (r.title || r.appName || r.note || r.mappingId), ref: { kind: 'mapping', mappingId: r.mappingId } });
@@ -2496,24 +2519,56 @@ async function openProjectDrawer(projectId) {
       nodeOptions.push({ label: (a.name + '（直连）'), ref: { kind: 'direct', apiBaseUrl: a.dshRef.apiBaseUrl } });
     }
   }
-  const curNode = p ? JSON.stringify(p.dshRef || {}) : '';
+  // 节点已装技能（供项目技能勾选）
+  let nodeSkills = [];
+  if (browseAgentId) {
+    const sr = await api('/agents/' + browseAgentId + '/skills');
+    if (sr.ok) nodeSkills = ((sr.data || {}).skills || []).map(function (x) { return x.name; });
+  }
+  // 连接器候选：SSH 连接器池 + ONENAT HTTP/映射连接器
+  const conns = [];
+  try {
+    const sr = await api('/ssh-resources');
+    for (const x of (sr.data || [])) conns.push({ id: 'ssh:' + x.id, label: '🖥 ' + x.name + '（' + x.host + '）' });
+  } catch (e) { /* ignore */ }
+  for (const r of state.resources) {
+    if (r.kind !== 'dsh' && r.mappingId) conns.push({ id: 'map:' + r.mappingId, label: '🌐 ' + (r.appName || r.note || r.mappingId) });
+  }
+  const sel = new Set(p ? p.skillNames || [] : []);
+  const connSel = new Set(p ? p.connectorIds || [] : []);
+  const nodeJson = p ? JSON.stringify(p.dshRef || {}) : '';
   openModal(isEdit ? '项目配置 · ' + p.name : '新建项目',
     '<div class="field" style="margin-bottom:10px"><label>项目名称</label><input id="pj-f-name" value="' + esc(p ? p.name : '') + '" placeholder="例：KB 平台交付"></div>' +
     '<div class="field" style="margin-bottom:10px"><label>DSH 节点</label><select id="pj-f-node" class="cfg-sel">' +
-    nodeOptions.map((n) => {
-      const sel = p && JSON.stringify(p.dshRef || {}) === JSON.stringify(n.ref) ? ' selected' : '';
+    nodeOptions.map(function (n) {
+      const sel = nodeJson === JSON.stringify(n.ref) ? ' selected' : '';
       return '<option value="' + esc(JSON.stringify(n.ref)) + '"' + sel + '>' + esc(n.label) + '</option>';
     }).join('') +
     '</select></div>' +
-    '<div class="field" style="margin-bottom:10px"><label>项目工作目录（会话 cwd 与工作区，可留空）</label><input id="pj-f-ws" style="font-family:var(--mono)" value="' + esc(p ? p.workspace || '' : '') + '" placeholder="/workspace/project"></div>' +
+    '<div class="field" style="margin-bottom:10px"><label>项目工作目录（从节点浏览选择，会话 cwd 与工作区）</label>' +
+    '<div style="display:flex;gap:8px;align-items:center"><input id="pj-f-ws" style="font-family:var(--mono);flex:1" value="' + esc(p ? p.workspace || '' : '') + '" placeholder="/workspace/project">' +
+    '<button class="mini-btn" id="pj-f-browse" style="padding:10px 14px;white-space:nowrap">📁 浏览节点目录</button></div></div>' +
     '<div class="field" style="margin-bottom:10px"><label>项目指令（注入每次任务，角色/阶段/规范）</label><textarea id="pj-f-ins" rows="6" style="font-family:var(--mono);font-size:12px" placeholder="# 角色\\n你是一个…助手…">' + esc(p ? p.instruction || '' : '') + '</textarea></div>' +
-    '<div class="field" style="margin-bottom:10px"><label>项目专家（勾选 = 项目内任务默认成员）</label><div class="pj-checks">' +
-    experts.map((a) => '<label><input type="checkbox" class="pj-exp" value="' + esc(a.id) + '"' + ((p && p.expertIds || []).includes(a.id) ? ' checked' : '') + '> ' + esc(a.name) + '</label>').join('') +
+    '<div class="field" style="margin-bottom:10px"><label>项目子智能体（勾选 = 项目内任务默认成员）</label><div class="pj-checks">' +
+    state.agents.map(function (a) {
+      const on = p && (p.expertIds || []).indexOf(a.id) >= 0;
+      return '<label><input type="checkbox" class="pj-exp" value="' + esc(a.id) + '"' + (on ? ' checked' : '') + '> ' + esc(a.name) + '</label>';
+    }).join('') +
     '</div></div>' +
-    '<div class="field" style="margin-bottom:10px"><label>项目连接器（逗号分隔，格式 ssh:<资源ID> / map:<映射ID> / app:<应用ID>，可留空）</label><input id="pj-f-conns" style="font-family:var(--mono)" value="' + esc(p ? (p.connectorIds || []).join(',') : '') + '" placeholder="ssh:xxx, map:yyy"></div>' +
-    '<div class="field"><label>项目技能（逗号分隔技能名，派发时以 /名 手势加载）</label><input id="pj-f-skills" style="font-family:var(--mono)" value="' + esc(p ? (p.skillNames || []).join(',') : '') + '" placeholder="lark-cli, kb-log"></div>',
+    '<div class="field" style="margin-bottom:10px"><label>项目连接器（勾选后项目任务可用）</label><div class="pj-checks">' +
+    (conns.length ? conns.map(function (c) {
+      const on = connSel.has(c.id);
+      return '<label><input type="checkbox" class="pj-conn" value="' + esc(c.id) + '"' + (on ? ' checked' : '') + '> ' + esc(c.label) + '</label>';
+    }).join('') : '<div class="mon-empty">暂无候选连接器（SSH 池 / ONENAT 资源目录为空）</div>') +
+    '</div></div>' +
+    '<div class="field"><label>项目技能（勾选后派发时以 /名 手势加载）</label><div class="pj-checks">' +
+    (nodeSkills.length ? nodeSkills.map(function (n) {
+      const on = sel.has(n);
+      return '<label><input type="checkbox" class="pj-skill" value="' + esc(n) + '"' + (on ? ' checked' : '') + '> ' + esc(n) + '</label>';
+    }).join('') : '<div class="mon-empty">该节点暂无已装技能（或采样智能体不可达）</div>') +
+    '</div></div>',
     [
-      { label: '取消', cls: '', act: closeModal },
+      { label: '取消', cls: '', act: function () { closeModal(); } },
       { label: isEdit ? '保存配置' : '创建项目', cls: 'pri', act: async function () {
         const name = document.getElementById('pj-f-name').value.trim();
         if (!name) { toast('请填写项目名称', true); return; }
@@ -2525,7 +2580,9 @@ async function openProjectDrawer(projectId) {
           dshRef,
           workspace: document.getElementById('pj-f-ws').value.trim(),
           instruction: document.getElementById('pj-f-ins').value,
-          expertIds: Array.from(document.querySelectorAll('.pj-exp:checked')).map((x) => x.value),
+          expertIds: Array.from(document.querySelectorAll('.pj-exp:checked')).map(function (x) { return x.value; }),
+          connectorIds: Array.from(document.querySelectorAll('.pj-conn:checked')).map(function (x) { return x.value; }),
+          skillNames: Array.from(document.querySelectorAll('.pj-skill:checked')).map(function (x) { return x.value; }),
         };
         const r = await api('/projects' + (isEdit ? '/' + p.id : ''), { method: isEdit ? 'PATCH' : 'POST', body: JSON.stringify(body) });
         if (!r.ok) { toast(r.error || '保存失败', true); return; }
@@ -2538,53 +2595,104 @@ async function openProjectDrawer(projectId) {
     ]);
 }
 
-// 通用模态按钮助手（openModal 只支持静态 footer，这里手动绑定）
-function bindModalActions(actions) {
-  actions.forEach(function (a) {
-    var btns = document.querySelectorAll('#modal-foot .btn');
-    btns.forEach(function (b) {
-      if (b.textContent === a.label) b.addEventListener('click', a.act);
-    });
-  });
+// ---------- 单独任务环境（节点/连接器/技能） ----------
+// ---------- 运行配置（统一弹层：专家/节点/连接器/技能/模型，按作用域感知） ----------
+if (document.getElementById('btn-run-config')) {
+  document.getElementById('btn-run-config').addEventListener('click', function () { openRunConfig('top'); });
 }
 
-// ---------- 单独任务环境（节点/连接器/技能） ----------
-if (document.getElementById('btn-task-env')) {
-  document.getElementById('btn-task-env').addEventListener('click', async function () {
-    if (!state.resources.length) await loadResources();
-    var dshNodes = state.resources.filter(function (r) { return r.kind === 'dsh' && r.mappingId; });
-    var conns = [];
-    for (var i = 0; i < state.resources.length; i++) {
-      var r = state.resources[i];
-      if (r.kind !== 'dsh' && r.mappingId) conns.push({ id: 'map:' + r.mappingId, label: '🌐 ' + (r.appName || r.note || r.mappingId) });
-    }
-    try {
-      var sr = await api('/ssh-resources');
-      for (var j = 0; j < (sr.data || []).length; j++) {
-        var x = sr.data[j];
-        conns.push({ id: 'ssh:' + x.id, label: '🖥 ' + x.name + '（' + x.host + '）' });
-      }
-    } catch (e) { /* SSH 池拉取失败不阻塞 */ }
-    openModal('单独任务环境', '<div class="field" style="margin-bottom:10px"><label>执行节点（DSH）</label><select id="env-node" class="cfg-sel"><option value="">（默认：主智能体节点）</option>' +
-      dshNodes.map(function (n) { return '<option value="' + esc(n.mappingId) + '"' + (state.taskEnv.nodeRef && state.taskEnv.nodeRef.mappingId === n.mappingId ? ' selected' : '') + '>' + esc(n.note || n.appName || n.mappingId) + '</option>'; }).join('') +
-      '</select></div>' +
-      '<div class="field" style="margin-bottom:10px"><label>连接器（勾选后任务内可用）</label><div class="pj-checks">' +
-      (conns.length ? conns.map(function (c) { return '<label><input type="checkbox" class="env-conn" value="' + esc(c.id) + '"' + (state.taskEnv.connectorIds.indexOf(c.id) >= 0 ? ' checked' : '') + '> ' + esc(c.label) + '</label>'; }).join('') : '<div class="mon-empty">暂无可用连接器</div>') +
-      '</div></div>' +
-      '<div class="field"><label>技能（逗号分隔技能名，派发时以 /名 手势加载）</label><input id="env-skills" style="font-family:var(--mono)" value="' + esc((state.taskEnv.skillNames || []).join(',')) + '" placeholder="lark-cli, kb-log"></div>',
-      [
-        { label: '取消', cls: '', act: function () { closeModal(); } },
-        { label: '保存环境', cls: 'pri', act: function () {
-          state.taskEnv = {
-            nodeRef: document.getElementById('env-node').value ? { kind: 'mapping', mappingId: document.getElementById('env-node').value } : null,
-            connectorIds: Array.prototype.map.call(document.querySelectorAll('.env-conn:checked'), function (x) { return x.value; }),
-            skillNames: document.getElementById('env-skills').value.split(',').map(function (x) { return x.trim(); }).filter(Boolean),
-          };
-          closeModal();
-          toast('✓ 任务环境已保存，新任务将使用该环境');
-        } },
-      ]);
-  });
+/** 打开运行配置弹层。focus: 'expert' 时滚动定位到执行专家分区 */
+async function openRunConfig(focus) {
+  const proj = state.projectId ? state.projects.find(function (x) { return x.id === state.projectId; }) : null;
+  const isProject = Boolean(proj);
+  const inProject = isProject && state.projectId === proj.id; // 恒真，占位便于阅读
+  // 采样智能体：项目首位专家 / 全局默认 / 第一个智能体（用于拉取节点技能清单）
+  const sampleAgentId = (proj && proj.expertIds[0]) || (state.agents[0] && state.agents[0].id) || '';
+  // 连接器候选
+  const conns = [];
+  try {
+    const sr = await api('/ssh-resources');
+    for (const x of (sr.data || [])) conns.push({ id: 'ssh:' + x.id, label: '🖥 ' + x.name + '（' + x.host + '）' });
+  } catch (e) { /* ignore */ }
+  for (const r of state.resources) {
+    if (r.kind !== 'dsh' && r.mappingId) conns.push({ id: 'map:' + r.mappingId, label: '🌐 ' + (r.appName || r.note || r.mappingId) });
+  }
+  // 节点已装技能
+  let nodeSkills = [];
+  if (sampleAgentId) {
+    const sr = await api('/agents/' + sampleAgentId + '/skills');
+    if (sr.ok) nodeSkills = ((sr.data || {}).skills || []).map(function (x) { return x.name; });
+  }
+  const curTask = state.currentTaskId ? state.tasks.find(function (t) { return t.id === state.currentTaskId; }) : null;
+  const curMember = curTask && curTask.memberAgentIds.length === 1 ? curTask.memberAgentIds[0] : null;
+  const mainName = (mainAgentState && mainAgentState.resolvedAgentName) || mainAgentState.cur || '自动';
+
+  const expertSection = isProject
+    ? (curTask
+        ? '<div class="field"><div class="pj-checks" id="rc-experts">' +
+          state.agents.map(function (a) {
+            const on = curMember ? a.id === curMember : (proj.expertIds || []).indexOf(a.id) >= 0;
+            return '<label><input type="radio" name="rc-expert" value="' + esc(a.id) + '"' + (on ? ' checked' : '') + '> ' + esc(a.name) + '</label>';
+          }).join('') + '</div>' +
+          '<div class="hint">仅影响当前任务后续消息；改全局默认用上方「默认智能体」按钮</div></div>'
+        : '<div class="hint">项目配套专家：' + esc((proj.expertIds || []).map(function (id) { var a = state.agents.find(function (x) { return x.id === id; }); return a ? a.name : id; }).join('、') || '未配置') + '（发起任务后可临时切换）</div>')
+    : '<div class="hint">全局默认智能体：' + esc(mainName) + '（在右上角按钮或设置页修改）</div>';
+
+  const nodeSection = isProject
+    ? '<div class="hint">🔒 项目节点：' + esc(proj.nodeTitle || '') + ' · 工作区：' + esc(proj.workspace || '(默认)') + ' —— 修改请点项目横幅「⚙ 项目配置」</div>'
+    : '<div class="field"><label>执行节点（DSH，仅对新任务生效）</label><select id="rc-node" class="cfg-sel"><option value="">（默认：主智能体节点）</option>' +
+      state.resources.filter(function (r) { return r.kind === 'dsh' && r.mappingId; }).map(function (r) {
+        const sel = state.taskEnv.nodeRef && state.taskEnv.nodeRef.mappingId === r.mappingId ? ' selected' : '';
+        return '<option value="' + esc(r.mappingId) + '"' + sel + '>' + esc(r.note || r.appName || r.mappingId) + '</option>';
+      }).join('') + '</select></div>';
+
+  const connSection = isProject
+    ? '<div class="pj-chips">' + ((proj.connectorIds || []).map(function (cid) { return '<span class="tag">' + esc(cid) + '</span>'; }).join(' ') || '<span class="sub">未绑定</span>') + '</div><div class="hint">修改请点项目横幅「⚙ 项目配置」</div>'
+    : '<div class="pj-checks">' + (conns.length ? conns.map(function (c) {
+        const on = state.taskEnv.connectorIds.indexOf(c.id) >= 0;
+        return '<label><input type="checkbox" class="rc-conn" value="' + esc(c.id) + '"' + (on ? ' checked' : '') + '> ' + esc(c.label) + '</label>';
+      }).join('') : '<div class="mon-empty">暂无候选连接器</div>') + '</div>';
+
+  const skillSection = isProject
+    ? '<div class="pj-chips">' + ((proj.skillNames || []).map(function (n) { return '<span class="tag">/' + esc(n) + '</span>'; }).join(' ') || '<span class="sub">未配置</span>') + '</div><div class="hint">修改请点项目横幅「⚙ 项目配置」</div>'
+    : '<div class="field"><label>技能（逗号分隔，/名 手势加载，仅对新任务生效）</label><input id="rc-skills" style="font-family:var(--mono)" value="' + esc((state.taskEnv.skillNames || []).join(',')) + '" placeholder="lark-cli, kb-log"></div>';
+
+  const modelSection = '<div class="hint">当前主调度模型：<b>' + esc((state.settings && state.settings.planner && state.settings.planner.model) || '默认模型') + '</b> —— 切换用输入区下方模型按钮（全局生效，含项目任务）</div>';
+
+  const bodyHtml =
+    '<div class="rc-section" id="rc-sec-expert"><b>① 执行专家</b>' + expertSection + '</div>' +
+    '<div class="rc-section"><b>② 执行节点 与 工作区</b>' + nodeSection + '</div>' +
+    '<div class="rc-section"><b>③ 连接器 / 技能</b>' + connSection + skillSection + '</div>' +
+    '<div class="rc-section"><b>④ 模型</b>' + modelSection + '</div>';
+
+  const actions = [];
+  // 单独任务：保存节点/连接器/技能到新任务环境
+  if (!isProject) {
+    actions.push({ label: '保存为新任务环境', cls: 'pri', act: function () {
+      const node = document.getElementById('rc-node');
+      state.taskEnv.nodeRef = node && node.value ? { kind: 'mapping', mappingId: node.value } : null;
+      state.taskEnv.connectorIds = Array.prototype.map.call(document.querySelectorAll('.rc-conn:checked'), function (x) { return x.value; });
+      state.taskEnv.skillNames = (document.getElementById('rc-skills') || { value: '' }).value.split(',').map(function (x) { return x.trim(); }).filter(Boolean);
+      closeModal();
+      toast('✓ 运行配置已保存（作用于新任务）');
+    } });
+  }
+  // 项目任务：保存临时专家切换
+  if (isProject && curTask && curMember !== null) {
+    actions.push({ label: '保存专家切换（仅当前任务）', cls: 'pri', act: async function () {
+      const sel = document.querySelector('input[name="rc-expert"]:checked');
+      if (!sel) { toast('请选择专家', true); return; }
+      const r = await api('/tasks/' + curTask.id, { method: 'PATCH', body: JSON.stringify({ memberAgentIds: [sel.value] }) });
+      if (!r.ok) { toast(r.error || '切换失败', true); return; }
+      await loadTasks();
+      closeModal();
+      toast('✓ 当前任务专家已切换');
+    } });
+  }
+  actions.push({ label: '关闭', cls: '', act: function () { closeModal(); } });
+
+  openModal('🎛 运行配置' + (isProject ? ' · ' + proj.name : ''), bodyHtml, actions);
+  if (focus === 'expert') { const el = document.getElementById('rc-sec-expert'); if (el) el.scrollIntoView(); }
 }
 
 // ---------- 导航 ----------
@@ -2658,7 +2766,7 @@ const NAV_LABELS = {
   projects: { full: '项目', short: '项目' },
   monitor: { full: '监控大屏', short: '监控' },
   files: { full: '文件管理', short: '文件' },
-  agents: { full: '专家', short: '专家' },
+  agents: { full: '子智能体', short: '子智能体' },
   schedules: { full: '定时任务', short: '定时' },
   voice: { full: '语音助手', short: '语音' },
   resources: { full: '资源目录', short: '资源' },
@@ -3049,7 +3157,7 @@ function refreshChatHead(taskMaybe) {
   const route = task.lastRoute;
   if (route && route.kind === 'direct') {
     modeEl.className = 'badge mode chat direct';
-    modeEl.textContent = '🎯 定向直通 → ' + (route.agentName || route.agentId || '专家');
+    modeEl.textContent = '🎯 定向直通 → ' + (route.agentName || route.agentId || '子智能体');
     return;
   }
   if (route && route.kind === 'chat') {
@@ -3440,7 +3548,7 @@ function renderAskUserCard(el, t, turnMeta) {
   const footHtml = isDone
     ? (t.result ? '<div class="ask-result-hint" style="font-size:11.5px;color:var(--tx3);margin-top:4px">答复内容: ' + esc(t.result) + '</div>' : '')
     : '<div class="ask-actions">' +
-        '<span style="font-size:11.5px;color:var(--tx3);margin-right:auto">选择后提交答复；答复会直接回传给专家</span>' +
+        '<span style="font-size:11.5px;color:var(--tx3);margin-right:auto">选择后提交答复；答复会直接回传给子智能体</span>' +
         '<button class="ask-btn-skip" type="button">跳过</button>' +
         '<button class="ask-btn-submit" type="button">📤 提交答复</button>' +
       '</div>';
@@ -3448,7 +3556,7 @@ function renderAskUserCard(el, t, turnMeta) {
   el.innerHTML = '<div class="ask-card' + (isDone ? ' submitted' : '') + '">' +
     '<div class="ask-head">' +
       '<span class="ask-icon">❓</span>' +
-      '<span class="ask-title">专家需要您的确认 / 选择</span>' +
+      '<span class="ask-title">子智能体需要您的确认 / 选择</span>' +
       '<span class="ask-status">' + statusText + '</span>' +
     '</div>' +
     '<div class="ask-body">' + qHtml + '</div>' +
@@ -3514,7 +3622,7 @@ function renderAskUserCard(el, t, turnMeta) {
         });
         if (r.ok) {
           markSubmitted();
-          toast('✓ 答复已回传，专家继续执行中…');
+          toast('✓ 答复已回传，子智能体继续执行中…');
           setSending(true);
         } else {
           submitBtn.disabled = false;
@@ -3606,11 +3714,11 @@ function buildTurnElement(taskId, turn) {
   // 系统轮次带 agentName（如「🎯 主调度规划」）时以该身份展示，区别于告警类系统消息
   const isNamedSys = roleClass === 'system' && Boolean(turn.agentName);
   const avatar = turn.role === 'user' ? '你' : (roleClass === 'system' ? (isNamedSys ? '🎯' : '⚠') : (isOrch ? '🎯' : '🤖'));
-  const name = turn.role === 'user' ? '你' : esc(turn.agentName || (roleClass === 'system' ? '系统' : '专家'));
+  const name = turn.role === 'user' ? '你' : esc(turn.agentName || (roleClass === 'system' ? '系统' : '子智能体'));
 
   const agent = state.agents.find(a => a.id === turn.agentId);
   // 模型标签取「该轮实际生效的模型」：主智能体 = 模型列表当前选中（engine.ensureSession 建会话
-  // 即用 planner.model 覆盖其自身配置）；被 @ 的专家 = 其自身配置的模型。
+  // 即用 planner.model 覆盖其自身配置）；被 @ 的子智能体 = 其自身配置的模型。
   const isMainTurn = turn.agentId && turn.agentId === (mainAgentState.cur || mainAgentState.resolvedAgentId);
   const badgeModel = (isMainTurn && modelState.cur)
     ? String(modelState.cur).split('/').pop()
@@ -4584,12 +4692,12 @@ function refreshMainAgentModelBadges() {
 }
 
 function mainAgentBtnLabel() {
-  if (!mainAgentState.loaded) return '主智能体: 加载中…';
+  if (!mainAgentState.loaded) return '默认智能体: 加载中…';
   if (mainAgentState.error) return '⚠️ 主智能体异常';
   if (mainAgentState.auto) {
-    return '主智能体: ' + (mainAgentState.resolvedAgentName || '自动') + '（自动）';
+    return '默认智能体: ' + (mainAgentState.resolvedAgentName || '自动') + '（自动）';
   }
-  return '主智能体: ' + (mainAgentState.resolvedAgentName || mainAgentState.cur || '未命名');
+  return '默认智能体: ' + (mainAgentState.resolvedAgentName || mainAgentState.cur || '未命名');
 }
 
 function mainAgentBtnTitle() {
@@ -4602,22 +4710,22 @@ function renderMainAgentPop() {
   if (!pop) return;
   const isAuto = mainAgentState.auto;
   const curId = mainAgentState.cur;
-  const resolvedName = mainAgentState.resolvedAgentName || '本地专家优先';
+  const resolvedName = mainAgentState.resolvedAgentName || '本地子智能体优先';
   let html = '<div class="main-agent-pop-head"><span>主智能体（Planner / 默认应答）</span><span>点选即切换</span></div>';
 
   // 1. 自动选择项
   html += '<div class="main-agent-item' + (isAuto ? ' on' : '') + '" data-id="">' +
     '<div class="ag-info">' +
       '<div class="ag-title">⚡（自动）' + esc(resolvedName) + '</div>' +
-      '<div class="ag-sub">本地或在线 DSH 专家优先 · 智能动态兜底</div>' +
+      '<div class="ag-sub">本地或在线 DSH 子智能体优先 · 智能动态兜底</div>' +
     '</div>' +
     '<span class="ag-ck">✓</span>' +
   '</div>';
 
-  // 2. 全部专家列表
+  // 2. 全部子智能体列表
   const allAgents = mainAgentState.agents || [];
   if (allAgents.length) {
-    html += '<div class="model-group" style="margin-top:4px">指定专家</div>';
+    html += '<div class="model-group" style="margin-top:4px">指定子智能体</div>';
     for (const a of allAgents) {
       const isSelected = !isAuto && curId === a.id;
       const detail = state.agents.find(x => x.id === a.id) || {};
@@ -4629,7 +4737,7 @@ function renderMainAgentPop() {
       if (detail.workDir) subParts.push('目录: ' + detail.workDir);
       if (detail.dshRef && detail.dshRef.kind === 'direct') subParts.push('直连');
       else if (detail.dshRef && detail.dshRef.mappingId) subParts.push('ONENAT: ' + detail.dshRef.mappingId);
-      const subInfo = subParts.join(' · ') || '专家';
+      const subInfo = subParts.join(' · ') || '子智能体';
 
       html += '<div class="main-agent-item' + (isSelected ? ' on' : '') + '" data-id="' + esc(a.id) + '">' +
         '<div class="ag-info">' +
@@ -4640,7 +4748,7 @@ function renderMainAgentPop() {
       '</div>';
     }
   } else if (!isAuto) {
-    html += '<div class="model-empty">暂无可用专家</div>';
+    html += '<div class="model-empty">暂无可用子智能体</div>';
   }
 
   if (mainAgentState.error) {
@@ -4827,7 +4935,7 @@ async function selectModel(v) {
   closeModelPop();
   const shortModel = v ? (v.indexOf('/') >= 0 ? v.slice(v.indexOf('/') + 1).trim() : v) : '默认';
   // 1) 更新主调度模型（只写 planner 设置，不改写主智能体自身 provider/model 配置：
-  //    「选中的模型」与「智能体默认模型」是两个概念，@ 专家仍按各自配置执行）
+  //    「选中的模型」与「智能体默认模型」是两个概念，@ 子智能体仍按各自配置执行）
   const r = await api('/planner/config', { method: 'POST', body: JSON.stringify({ model: v || '' }) });
   // 气泡模型标签就地与新选中值对齐（主智能体 = 列表选中；其余 = 各自配置）
   if (r.ok) { refreshMainAgentModelBadges(); }
@@ -5084,7 +5192,7 @@ $('chat-title').addEventListener('dblclick', () => {
 $('btn-new-task').addEventListener('click', createNewTaskDirectly);
 async function createNewTaskDirectly() {
   // 不指定成员：由服务端按「主智能体」默认归属（engine.defaultMemberAgentIds，与无 @ 消息的路由判定同源）。
-  // 历史实现传 state.agents.map(...) 全部专家，导致无 @ 的新任务被放大成全员编排，
+  // 历史实现传 state.agents.map(...) 全部子智能体，导致无 @ 的新任务被放大成全员编排，
   // 且上传附件时会向所有成员节点扇出（每个成员都被建远端会话）。
   const proj = state.projectId ? state.projects.find(function (x) { return x.id === state.projectId; }) : null;
   const env = state.taskEnv || {};
@@ -5140,12 +5248,12 @@ function renderResources() {
   }
 }
 
-// ---------- 专家视图 ----------
+// ---------- 子智能体视图 ----------
 $('btn-new-agent').addEventListener('click', () => openAgentDrawer(null));
 function renderAgents() {
   const el = $('agent-list'); el.innerHTML = '';
   if (!state.agents.length) {
-    el.innerHTML = '<div class="card"><span class="sub" style="color:var(--tx3)">还没有专家。点击「新建专家」—— 从资源目录中选择一个 DSH 节点（稳定 ID 绑定，端口变化不影响），配置提示词与可用连接器。</span></div>';
+    el.innerHTML = '<div class="card"><span class="sub" style="color:var(--tx3)">还没有子智能体。点击「新建子智能体」—— 从资源目录中选择一个 DSH 节点（稳定 ID 绑定，端口变化不影响），配置提示词与可用连接器。</span></div>';
     return;
   }
   for (const a of state.agents) {
@@ -5180,7 +5288,7 @@ function renderAgents() {
       openModal('资源提示词预览（脱敏）', '<div class="pre-block">' + esc(r.data.full || '(空)') + '</div>' + (r.data.warnings && r.data.warnings.length ? '<div style="color:var(--warn);font-size:12px;margin-top:8px">⚠ ' + r.data.warnings.map(esc).join('；') + '</div>' : ''));
     });
     card.querySelector('[data-op=del]').addEventListener('click', async () => {
-      if (!confirm('删除专家「' + a.name + '」？')) return;
+      if (!confirm('删除子智能体「' + a.name + '」？')) return;
       await api('/agents/' + a.id, { method: 'DELETE' }); await loadAgents(); renderAgents(); toast('已删除');
     });
     el.appendChild(card);
@@ -5197,8 +5305,8 @@ function describeDshRef(a) {
   return '应用 ' + a.dshRef.appId + (ep ? ' → ' + (ep.baseUrl || '离线') : '');
 }
 
-// ---------- 技能中心（管理 + 绑定专家节点的技能） ----------
-let skillCenterAgent = null; // 当前技能中心对应的专家
+// ---------- 技能中心（管理 + 绑定子智能体节点的技能） ----------
+let skillCenterAgent = null; // 当前技能中心对应的子智能体
 async function openSkillCenter(agent) {
   skillCenterAgent = agent;
   openDrawer('🎯 技能中心 · ' + (agent.name || agent.id));
@@ -5237,7 +5345,7 @@ async function loadSkillCenter() {
     '<div style="display:flex;gap:8px;align-items:center"><input type="file" id="sk-file" accept=".zip,.tgz,.tar.gz,.gz" style="flex:1">' +
     '<button class="mini-btn" id="sk-up" style="padding:10px 14px">⬆ 上传</button></div>' +
     '<div class="hint">解压后自动识别技能名；同名覆盖。上传到该节点的「用户技能」目录。</div></div></div>' +
-    '<div class="field"><label>已安装技能（' + skills.length + ' 个）· 勾选 = 绑定到该专家（派发时以 /名 手势提示 DSH 加载，技能须已安装在节点上，最多 20 个）</label>' +
+    '<div class="field"><label>已安装技能（' + skills.length + ' 个）· 勾选 = 绑定到该子智能体（派发时以 /名 手势提示 DSH 加载，技能须已安装在节点上，最多 20 个）</label>' +
     '<div id="sk-list" style="display:flex;flex-direction:column;gap:8px">' +
     (rows || '<div class="card"><span class="sub">该节点暂无技能，上传一个技能包开始。</span></div>') + '</div></div>' +
     '<div class="ops" style="display:flex;gap:10px;margin-top:14px"><button class="btn pri" id="sk-save">保存绑定</button><button class="btn" id="sk-close">关闭</button></div>';
@@ -5318,7 +5426,7 @@ function skillRowHtml(s, bound, i) {
 
 function openAgentDrawer(agent) {
   const isEdit = Boolean(agent);
-  openDrawer(isEdit ? '编辑专家' : '新建专家');
+  openDrawer(isEdit ? '编辑子智能体' : '新建子智能体');
   const dshOptions = state.resources.filter(x => x.kind === 'dsh' && x.online)
     .map(x => '<option value="mapping:' + esc(x.mappingId) + '">' + esc(x.tunnelName + ' · ' + (x.appName || x.note) + ' → ' + x.baseUrl) + '</option>').join('');
   const resOptions = state.resources.map(x => '<option value="' + esc(x.mappingId) + '">' + esc('[' + x.kind + '] ' + x.tunnelName + ' · ' + (x.appName || x.note || x.mappingId) + (x.online ? '' : '（离线）')) + '</option>').join('');
@@ -5418,7 +5526,7 @@ function openAgentDrawer(agent) {
     try {
       const r = await api('/agents', { method: 'POST', body: JSON.stringify(payload) });
       if (!r.ok) { toast(r.error || '保存失败', true); return; }
-      closeDrawer(); await loadAgents(); renderAgents(); toast('✓ 专家已保存');
+      closeDrawer(); await loadAgents(); renderAgents(); toast('✓ 子智能体已保存');
     } finally {
       btn.disabled = false; btn.textContent = '保存';
     }
@@ -5640,7 +5748,7 @@ function setupScheduleMention(input, popup, listEl) {
 
 /**
  * 从指令文本解析 @ 提及（与服务端 extractMentions 同策略：候选按名称长度降序做最长前缀匹配）。
- * 返回 { agentIds, unknown } —— unknown 是 @ 到但无法解析为专家的片段（提示用户）。
+ * 返回 { agentIds, unknown } —— unknown 是 @ 到但无法解析为子智能体的片段（提示用户）。
  */
 function parseScheduleMentions(text) {
   const dict = [];
@@ -5722,7 +5830,7 @@ function renderSchedules() {
     el.appendChild(tplBox);
   }
   if (!state.schedules.length) {
-    el.insertAdjacentHTML('beforeend', '<div class="card"><span class="sub" style="color:var(--tx3)">还没有定时任务。点击「＋ 新建定时任务」或从上方模板开始—— 选择一个或多个专家，配置触发规则与固定任务文本，到点由 Host 自动派发执行。</span></div>');
+    el.insertAdjacentHTML('beforeend', '<div class="card"><span class="sub" style="color:var(--tx3)">还没有定时任务。点击「＋ 新建定时任务」或从上方模板开始—— 选择一个或多个子智能体，配置触发规则与固定任务文本，到点由 Host 自动派发执行。</span></div>');
     return;
   }
   for (const s of state.schedules) {
@@ -5749,7 +5857,7 @@ function renderSchedules() {
       if (!r.ok) { toast(r.error || '触发失败', true); return; }
       const run = r.data || {};
       const okCount = (run.items || []).filter(i => i.taskId).length;
-      toast('✓ 已派发 ' + okCount + '/' + (run.items || []).length + ' 个专家');
+      toast('✓ 已派发 ' + okCount + '/' + (run.items || []).length + ' 个子智能体');
       await loadSchedules(); renderSchedules();
       openScheduleDetail(s.id);
     });
@@ -5785,14 +5893,14 @@ function openScheduleDrawer(s, tpl) {
     '</select>' +
     '<div id="sc-rule-box" style="margin-top:8px"></div>' +
     '<div class="hint" id="sc-preview" style="margin-top:6px;color:var(--pri)"></div></div>' +
-    '<div class="field"><label>指令（用 @ 提及专家与资源，与新建任务同语义）</label>' +
+    '<div class="field"><label>指令（用 @ 提及子智能体与资源，与新建任务同语义）</label>' +
     '<div style="position:relative">' +
-    '<textarea id="sc-message" style="min-height:110px" placeholder="如: 让 @苦力兔 把 @136 上的日志收集过来，分析系统运行情况&#10;输入 @ 唤起专家 / 资源联想">' + esc(s ? s.message : (prefill.message || '')) + '</textarea>' +
+    '<textarea id="sc-message" style="min-height:110px" placeholder="如: 让 @苦力兔 把 @136 上的日志收集过来，分析系统运行情况&#10;输入 @ 唤起子智能体 / 资源联想">' + esc(s ? s.message : (prefill.message || '')) + '</textarea>' +
     '<div class="mention-popup below" id="sc-mention-popup" style="left:0;right:0;width:auto">' +
-    '<div class="mention-popup-head">提及专家或资源</div>' +
+    '<div class="mention-popup-head">提及子智能体或资源</div>' +
     '<div class="mention-popup-list" id="sc-mention-list"></div>' +
     '</div></div>' +
-    '<div class="hint">触发时自动解析 @提及：被 @ 的专家进入执行（@ 多个 = 协同编排），@ 的资源把入口与凭证按绑定策略注入提示词。</div></div>' +
+    '<div class="hint">触发时自动解析 @提及：被 @ 的子智能体进入执行（@ 多个 = 协同编排），@ 的资源把入口与凭证按绑定策略注入提示词。</div></div>' +
     '<div class="field"><label>备注（可选）</label><input id="sc-desc" value="' + esc(s && s.description || (prefill.description || '')) + '"></div>' +
     '<div class="ops" style="display:flex;gap:10px;margin-top:14px"><button class="btn pri" id="sc-save">' + (isEdit ? '保存' : '创建定时任务') + '</button><button class="btn" id="sc-cancel">取消</button></div>';
 
@@ -5897,16 +6005,16 @@ function collectSchedule(existing) {
   if (!name) { toast('缺少名称', true); return null; }
   const message = $('sc-message').value.trim();
   if (!message) { toast('指令不能为空', true); return null; }
-  // 从指令的 @ 提及解析目标专家（与触发时服务端 extractMentions 同策略）
+  // 从指令的 @ 提及解析目标子智能体（与触发时服务端 extractMentions 同策略）
   const parsed = parseScheduleMentions(message);
   let agentIds = parsed.agentIds;
   if (!agentIds.length && existing && (existing.agentIds || []).length) {
     // 编辑旧任务且指令里没有 @ 智能体：回退到原有目标，避免静默丢目标
     agentIds = existing.agentIds;
   }
-  if (!agentIds.length) { toast('请在指令中用 @ 提及至少一个专家（如 @苦力兔）', true); return null; }
+  if (!agentIds.length) { toast('请在指令中用 @ 提及至少一个子智能体（如 @苦力兔）', true); return null; }
   if (parsed.unknown.length) {
-    toast('⚠️ 这些 @ 未匹配到专家（将按资源处理）: ' + parsed.unknown.join('、'), true);
+    toast('⚠️ 这些 @ 未匹配到子智能体（将按资源处理）: ' + parsed.unknown.join('、'), true);
   }
   const kind = $('sc-kind').value;
   let rule;
@@ -5966,14 +6074,14 @@ function renderScheduleDetail(s, tab, keepScroll) {
       '<div class="k">任务名称</div><div>' + esc(s.name) + '</div>' +
       '<div class="k">状态</div><div>' + (s.enabled ? '<span class="tag ok">启用</span>' : '<span class="tag err">停用</span>') + '</div>' +
       '<div class="k">触发规则</div><div>' + esc(s.ruleText || ruleText(s.rule)) + '</div>' +
-      '<div class="k">目标专家</div><div>' + esc(agentNamesOf(s)) + '</div>' +
+      '<div class="k">目标子智能体</div><div>' + esc(agentNamesOf(s)) + '</div>' +
       '<div class="k">累计触发</div><div>' + (s.totalRuns || 0) + ' 次' + (s.totalRuns ? ' · 派发成功率 ' + Math.round((s.successRuns || 0) * 100 / s.totalRuns) + '%' : '') + '</div>' +
       '<div class="k">上次触发</div><div>' + (s.lastRunAt ? fmtDateTime(s.lastRunAt) : '从未') + '</div>' +
       '<div class="k">下次触发</div><div>' + (s.enabled ? (s.nextRunAt ? fmtDateTime(s.nextRunAt) : '—') : '（已停用）') + '</div>' +
       '<div class="k">备注</div><div>' + esc(s.description || '—') + '</div>' +
       '<div class="k">创建时间</div><div>' + fmtDateTime(s.createdAt) + '</div>' +
       '</div>' +
-      '<div class="field" style="margin-top:14px"><label>任务文本（每次触发派发给每个专家）</label>' +
+      '<div class="field" style="margin-top:14px"><label>任务文本（每次触发派发给每个子智能体）</label>' +
       '<div class="pre-block" style="max-height:180px;overflow:auto">' + esc(s.message || '') + '</div></div>' +
       '<div class="ops" style="display:flex;gap:10px;margin-top:14px">' +
       '<button class="btn pri" id="sd-run">▶ 立即执行</button>' +
@@ -6352,12 +6460,12 @@ async function renderFilesView() {
   const sel = $('files-agent-select');
   if (!sel) return;
 
-  // 刷新专家列表
+  // 刷新子智能体列表
   if (!state.agents.length) await loadAgents();
 
   const agents = state.agents.filter(a => a.enabled !== false);
   if (!agents.length) {
-    $('files-list').innerHTML = '<tr><td colspan="4"><div class="files-empty-box"><span>🤖</span><span>尚未创建任何专家，请先在「专家」页创建。</span></div></td></tr>';
+    $('files-list').innerHTML = '<tr><td colspan="4"><div class="files-empty-box"><span>🤖</span><span>尚未创建任何子智能体，请先在「子智能体」页创建。</span></div></td></tr>';
     return;
   }
 
@@ -6678,12 +6786,12 @@ async function fillPlannerAgentSetting() {
   const cur = d.current || {};
   let opts = '';
   const autoName = (agents.find(a => a.id === cur.agentId) || {}).name || (cur.auto ? '未配置' : '');
-  opts += '<option value=""' + (cur.auto ? ' selected' : '') + '>（自动）' + esc(autoName || '本地专家优先') + '</option>';
+  opts += '<option value=""' + (cur.auto ? ' selected' : '') + '>（自动）' + esc(autoName || '本地子智能体优先') + '</option>';
   for (const a of agents) {
     opts += '<option value="' + esc(a.id) + '"' + (!cur.auto && cur.agentId === a.id ? ' selected' : '') + '>' + esc(a.name) + '</option>';
   }
   sel.innerHTML = opts;
-  if (d.error) note.textContent = '⚠️ 规划器当前不可用：' + d.error + '。可在上方指定其他专家。';
+  if (d.error) note.textContent = '⚠️ 规划器当前不可用：' + d.error + '。可在上方指定其他子智能体。';
   else note.textContent = '主任务拆解由「' + (cur.auto ? autoName + '（自动）' : ((agents.find(a => a.id === cur.agentId) || {}).name || cur.agentId)) + '」完成；拆解用模型可在聊天窗下方工具栏选择，仅作用于主调度。';
 }
 $('btn-save-settings').addEventListener('click', async () => {
