@@ -2612,7 +2612,7 @@ async function openProjectDrawer(projectId, preset) {
       skillNames: Array.prototype.map.call(document.querySelectorAll('.pj-skill:checked'), function (x) { return x.value; }),
       nodeRef: JSON.parse(document.getElementById('pj-f-node').value || 'null') || v.nodeRef || null,
     };
-    openDirBrowser(browseAgentId, function (picked) {
+    openDirBrowser({ agent: browseAgentId }, function (picked) {
       keep.workspace = picked;
       openProjectDrawer(projectId, keep);
     });
@@ -6869,7 +6869,14 @@ function openModal(title, bodyHtml, actions) {
 }
 
 // ---------- 远端目录浏览器 ----------
-function openDirBrowser(agentId, onPick) {
+function openDirBrowser(target, onPick) {
+  // target: { agent: 子智能体ID } 或 { nodeJson: dshRef JSON 字符串 }（项目工作目录浏览）
+  const t = (typeof target === 'string') ? { agent: target } : target;
+  const fsListQuery = function (path) {
+    return t.agent
+      ? '/agents/fs/list?agent=' + encodeURIComponent(t.agent) + (path ? '&path=' + encodeURIComponent(path) : '')
+      : '/agents/fs/list?node=' + encodeURIComponent(t.nodeJson) + (path ? '&path=' + encodeURIComponent(path) : '');
+  };
   const st = { path: '', home: '', parent: undefined, entries: [], truncated: false, showHidden: false };
   $('modal-title').textContent = '选择工作目录';
   $('modal-body').innerHTML =
@@ -6901,7 +6908,7 @@ function openDirBrowser(agentId, onPick) {
   }
   async function load(p) {
     st.loading = true; renderList();
-    const r = await api('/agents/fs/list?agent=' + encodeURIComponent(agentId) + (p ? '&path=' + encodeURIComponent(p) : ''));
+    const r = await api(fsListQuery(p));
     st.loading = false;
     if (!r.ok) {
       listEl.innerHTML = '<div class="db-empty" style="color:var(--err)">浏览失败: ' + esc(r.error || '未知') + '</div>';
@@ -6931,7 +6938,8 @@ function openDirBrowser(agentId, onPick) {
     $('db-nf-ok').addEventListener('click', async () => {
       const name = $('db-nf').value.trim();
       if (!name) return;
-      const r = await api('/agents/fs/mkdir', { method: 'POST', body: JSON.stringify({ agent: agentId, path: st.path, name }) });
+      const mkdirBody = t.agent ? { agent: t.agent, path: st.path, name } : { node: t.nodeJson, path: st.path, name };
+      const r = await api('/agents/fs/mkdir', { method: 'POST', body: JSON.stringify(mkdirBody) });
       if (!r.ok) { toast(r.error || '创建失败', true); return; }
       toast('✓ 已创建 ' + name);
       load(st.path);

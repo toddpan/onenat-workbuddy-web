@@ -897,18 +897,31 @@ export class WorkBuddyRouter {
     // 远端目录浏览与工作区文件管理
     if (p === '/api/agents/fs/list' && method === 'GET') {
       const url = new URL(req.url || '/', 'http://localhost')
-      const agentId = String(url.searchParams.get('agent') || '')
-      const agent = this.store.getAgent(agentId)
-      if (!agent) {
-        this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
-        return true
+      // 项目工作目录浏览：node=<dshRef JSON>（与 agent 参数二选一）
+      const nodeParam = url.searchParams.get('node') || ''
+      let target: any = null
+      if (nodeParam) {
+        let nref: any
+        try { nref = JSON.parse(nodeParam) } catch { this.sendJson(res, 400, { ok: false, error: 'node 参数非法（需 dshRef JSON）' }); return true }
+        target = await this.resolver.resolveRef(nref, undefined, 'project-node')
+        if (!target.online || !target.baseUrl) {
+          this.sendJson(res, 502, { ok: false, error: target.error || '节点不可达' })
+          return true
+        }
+      } else {
+        const agentId = String(url.searchParams.get('agent') || '')
+        const agent = this.store.getAgent(agentId)
+        if (!agent) {
+          this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
+          return true
+        }
+        target = await this.resolver.resolve(agent)
+        if (!target.online || !target.baseUrl) {
+          this.sendJson(res, 502, { ok: false, error: target.error || '节点不可达' })
+          return true
+        }
       }
-      const target = await this.resolver.resolve(agent)
-      if (!target.online || !target.baseUrl) {
-        this.sendJson(res, 502, { ok: false, error: target.error || '节点不可达' })
-        return true
-      }
-      const dirPath = url.searchParams.get('path') || agent.workDir || undefined
+      const dirPath = url.searchParams.get('path') || undefined
       const all = url.searchParams.get('all') === '1' || url.searchParams.get('all') === 'true'
       const out = await this.client.fsList(target, dirPath || undefined, all)
       this.sendJson(res, out.ok ? 200 : 400, out.ok ? out : { ok: false, error: out.error })
@@ -1013,6 +1026,17 @@ export class WorkBuddyRouter {
     }
     if (p === '/api/agents/fs/mkdir' && method === 'POST') {
       const body = await this.parseBody(req)
+      // 项目工作目录浏览：node=<dshRef JSON>（与 agent 参数二选一）
+      if (body?.node) {
+        // 兼容字符串 JSON 与对象两种形态
+        const nref = typeof body.node === 'string' ? (() => { try { return JSON.parse(body.node) } catch { return null } })() : body.node
+        if (!nref || !nref.kind) { this.sendJson(res, 400, { ok: false, error: 'node 参数非法（需 dshRef JSON）' }); return true }
+        const nt = await this.resolver.resolveRef(nref, undefined, 'project-node')
+        if (!nt.online || !nt.baseUrl) { this.sendJson(res, 502, { ok: false, error: nt.error || '节点不可达' }); return true }
+        const outM = await this.client.fsMkdir(nt, String(body?.path || ''), String(body?.name || ''))
+        this.sendJson(res, outM.ok ? 200 : 400, outM.ok ? outM : { ok: false, error: outM.error })
+        return true
+      }
       const agent = this.store.getAgent(String(body?.agent || ''))
       if (!agent) {
         this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
