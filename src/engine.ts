@@ -694,13 +694,13 @@ export class TaskEngine {
       this.taskLog(taskId, 'warn', `成员「${issue.name}」不可用: ${issue.error}`)
     }
 
-    // 项目任务：编排成员统一改到项目节点执行（专家与节点解耦）
+    // 编排成员在自己绑定的节点上执行（sub agent=远程执行单元）；
+    // 自身节点不可达时回退任务节点（项目节点/任务所选节点）
     const execO = this.taskExec(task)
-    if (execO.dshRef) {
-      for (const [aid, t] of targets) {
-        const nt = await this.resolver.resolveRef(execO.dshRef, execO.apiKey, aid).catch(() => undefined)
-        if (nt?.online && nt.baseUrl) targets.set(aid, nt)
-      }
+    for (const [aid, t] of targets) {
+      if (t?.online && t.baseUrl || !execO.dshRef) continue
+      const nt = await this.resolver.resolveRef(execO.dshRef, execO.apiKey, aid).catch(() => undefined)
+      if (nt?.online && nt.baseUrl) targets.set(aid, nt)
     }
 
     // @ 了恰好一个智能体：定向直通该智能体（即使任务本身是多成员编排任务）
@@ -846,12 +846,8 @@ export class TaskEngine {
     const agentId = preferredId || task.memberAgentIds.find((id) => targets.has(id)) || [...targets.keys()][0]
     const agent = agentOverride || this.store.getAgent(agentId)!
     const exec = this.taskExec(task)
+    // 执行节点由调用方解析（@ sub agent=自身绑定节点；主会话=任务节点），此处不再覆盖
     let target = targets.get(agentId)!
-    if (exec.dshRef) {
-      // 项目/任务指定节点：专家在指定节点上执行（专家与节点解耦）
-      const nt = await this.resolver.resolveRef(exec.dshRef, exec.apiKey, agentId).catch(() => undefined)
-      if (nt?.online && nt.baseUrl) target = nt
-    }
 
     const session = await this.ensureSession(taskId, agent, target)
     // 凭证刷新/节点重映射后的 target 要传导给后续 prompt/SSE 请求
@@ -1490,20 +1486,22 @@ export class TaskEngine {
    * 单独任务可用 nodeRef/connectorIds/skillNames 覆盖；都没有则专家按遗留默认节点执行。
    */
   /**
-   * 解析智能体的执行目标节点：项目/任务指定了 dshRef 时必须用指定节点（专家与节点解耦），
-   * 指定节点不可达时回退智能体自身绑定节点；未指定则用自身绑定节点。
-   * 所有「建立会话 / 附件上传 / 中止会话 / 文件下载」路径都必须经由本方法，避免绕过项目节点。
-   * agentId = NODE_AGENT_ID 时表示节点主会话（无智能体记录），只按任务节点解析。
+   * 解析 sub agent 的执行目标节点：sub agent = 绑定在某台 DSH 上的远程执行单元，
+   * @ 调用时回到「它自己绑定的节点」执行（workDir/资源/身份同源）；自身节点不可达时
+   * 回退任务节点（项目节点/任务所选节点）。节点主会话（__node__）无智能体记录，
+   * 只按任务节点解析。所有「建立会话 / 附件上传 / 中止会话 / 文件下载」路径都必须经由本方法。
    */
   public async resolveExecTarget(task: WorkTask | undefined, agentId: string): Promise<DshTarget & { online: boolean; error?: string } | undefined> {
+    const agent = this.store.getAgent(agentId)
+    if (!agent) return undefined
+    const own = await this.resolver.resolve(agent).catch(() => undefined)
+    if (own?.online && own.baseUrl) return own
     const exec = task ? this.taskExec(task) : undefined
     if (exec?.dshRef) {
       const nt = await this.resolver.resolveRef(exec.dshRef, exec.apiKey, agentId).catch(() => undefined)
       if (nt?.online && nt.baseUrl) return nt
     }
-    const agent = this.store.getAgent(agentId)
-    if (!agent) return undefined
-    return (await this.resolver.resolve(agent).catch(() => undefined)) || undefined
+    return undefined
   }
 
   /** 主会话的「无身份」执行者：远端节点默认形态 + 项目指令，不注入任何 sub agent 提示词 */
@@ -1566,12 +1564,14 @@ export class TaskEngine {
     private async ensureSession(taskId: string, agent: SubAgent, target: DshTarget, opts?: { cwd?: string; workspace?: string }): Promise<{ ok: boolean; remoteSessionId?: string; reused?: boolean; error?: string; target?: DshTarget }> {
     const task = this.store.getTask(taskId)!
     const exec = this.taskExec(task)
-    // workDir 只在「执行节点 = 智能体自身绑定节点」时适用；新模型跨节点调用 @ sub agent 时，
-    // 其 workDir 属于原节点（如 /data/panzj/...），带到别的节点只会 mkdir ENOENT
+    // 任务/项目工作区只在「执行节点 = 任务节点」时适用（目录属于那台机器）；
+    // sub agent 回自身节点执行时，其 workDir 才是有效目录
+    const rawCwd = opts?.workspace ?? opts?.cwd ?? exec.workspace
+    const execWorkspaceFits = !rawCwd || !(exec.dshRef && exec.dshRef.kind === 'mapping') || (target as any).mappingId === exec.dshRef.mappingId
     const sameNode = (target as any).mappingId
       ? (agent.dshRef.kind === 'mapping' && (target as any).mappingId === agent.dshRef.mappingId)
       : agent.dshRef.kind === 'direct'
-    const wantedCwd = opts?.workspace ?? opts?.cwd ?? exec.workspace ?? (sameNode ? agent.workDir : undefined) ?? undefined
+    const wantedCwd = (execWorkspaceFits ? rawCwd : undefined) ?? (sameNode ? agent.workDir : undefined) ?? undefined
     const existing = task.sessions[agent.id]
     const mainAgent = this.planner.pickMainAgent()
     // 节点主会话（__node__）视同主执行者：模型列表选中值对其生效
