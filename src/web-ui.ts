@@ -1242,6 +1242,8 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .pj-form-row { display: flex; gap: 10px; margin-bottom: 10px; }
 .pj-form-row .field { flex: 1; margin: 0; }
 .pj-checks { display: flex; flex-direction: column; gap: 6px; max-height: 200px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+.pj-checks label { justify-content: flex-start; }
+.pj-checks input[type="checkbox"] { width: auto; flex: none; margin: 0; }
 .pj-checks label { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--tx2); cursor: pointer; }
 .pj-banner { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: var(--pri-light); border: 1px solid rgba(56,189,248,.3); border-radius: var(--rad); margin-bottom: 8px; font-size: 12.5px; }
 .rc-section { margin-bottom: 14px; }
@@ -1387,7 +1389,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <div class="composer-bar">
             <span class="hspacer"></span>
             <span class="model-status" id="model-status"></span>
-            <button class="mini-btn" id="btn-run-config" title="运行配置：执行专家 / 节点与工作区 / 连接器 / 技能 / 模型">🎛 运行配置</button>
+            <button class="mini-btn" id="btn-run-config" title="运行配置：执行子智能体 / 节点与工作区 / 连接器 / 技能 / 模型">🎛 运行配置</button>
             <div class="model-picker" id="model-picker">
               <button class="cfg-sel model-btn" id="chat-model-btn" title="主调度模型 + 执行会话模型（点选即生效）">⚙ 主调度默认模型</button>
               <div class="model-pop" id="model-pop"></div>
@@ -1666,7 +1668,7 @@ async function api(path, opts) {
     // 网络层失败（服务重启间隙/连接被重置等）：不抛出，统一按业务失败处理，避免调用方中断卡死
     return { ok: false, error: '网络错误: ' + (e && e.message ? e.message : 'fetch failed') };
   }
-  ${AUTH_ENABLED ? "if (res.status === 401 && path.indexOf('/auth/') !== 0) { location.replace(PREFIX + '/' + (location.hash || '')); return { ok: false, error: '未登录' }; }" : ''}
+  ${AUTH_ENABLED ? "if (res.status === 401 && path.indexOf('/auth/') !== 0) { location.replace(PREFIX + '/?r=' + Date.now() + (location.hash || '')); return { ok: false, error: '未登录' }; }" : ''}
   let json = null; try { json = await res.json(); } catch (e) {}
   if (!json) json = { ok: false, error: 'HTTP ' + res.status };
   return json;
@@ -1674,14 +1676,14 @@ async function api(path, opts) {
 /** multipart 上传（不设 Content-Type，让浏览器自动带 boundary） */
 async function apiPostMulti(path, formData) {
   const res = await fetch(API + path, { method: 'POST', body: formData });
-  ${AUTH_ENABLED ? "if (res.status === 401) { location.replace(PREFIX + '/'); return { ok: false, error: '未登录' }; }" : ''}
+  ${AUTH_ENABLED ? "if (res.status === 401) { location.replace(PREFIX + '/?r=' + Date.now()); return { ok: false, error: '未登录' }; }" : ''}
   let json = null; try { json = await res.json(); } catch (e) {}
   if (!json) json = { ok: false, error: 'HTTP ' + res.status };
   return json;
 }
 ${AUTH_ENABLED ? `async function doLogout() {
   try { await fetch(API + '/auth/logout', { method: 'POST' }); } catch (e) {}
-  location.replace(PREFIX + '/' + (location.hash || ''));
+  location.replace(PREFIX + '/?r=' + Date.now() + (location.hash || ''));
 }` : ''}
 function fmtTime(ts) {
   if (!ts) return '';
@@ -2635,7 +2637,7 @@ async function openRunConfig(focus) {
             return '<label><input type="radio" name="rc-expert" value="' + esc(a.id) + '"' + (on ? ' checked' : '') + '> ' + esc(a.name) + '</label>';
           }).join('') + '</div>' +
           '<div class="hint">仅影响当前任务后续消息；改全局默认用上方「默认智能体」按钮</div></div>'
-        : '<div class="hint">项目配套专家：' + esc((proj.expertIds || []).map(function (id) { var a = state.agents.find(function (x) { return x.id === id; }); return a ? a.name : id; }).join('、') || '未配置') + '（发起任务后可临时切换）</div>')
+        : '<div class="hint">项目子智能体：' + esc((proj.expertIds || []).map(function (id) { var a = state.agents.find(function (x) { return x.id === id; }); return a ? a.name : id; }).join('、') || '未配置') + '<br>子智能体 = 可执行一类任务的 sub agent（如发飞书消息、发邮件、数据采集）。发起任务后可临时切换。</div>')
     : '<div class="hint">全局默认智能体：' + esc(mainName) + '（在右上角按钮或设置页修改）</div>';
 
   const nodeSection = isProject
@@ -2660,7 +2662,7 @@ async function openRunConfig(focus) {
   const modelSection = '<div class="hint">当前主调度模型：<b>' + esc((state.settings && state.settings.planner && state.settings.planner.model) || '默认模型') + '</b> —— 切换用输入区下方模型按钮（全局生效，含项目任务）</div>';
 
   const bodyHtml =
-    '<div class="rc-section" id="rc-sec-expert"><b>① 执行专家</b>' + expertSection + '</div>' +
+    '<div class="rc-section" id="rc-sec-expert"><b>① 执行子智能体</b>' + expertSection + '</div>' +
     '<div class="rc-section"><b>② 执行节点 与 工作区</b>' + nodeSection + '</div>' +
     '<div class="rc-section"><b>③ 连接器 / 技能</b>' + connSection + skillSection + '</div>' +
     '<div class="rc-section"><b>④ 模型</b>' + modelSection + '</div>';
@@ -2679,14 +2681,14 @@ async function openRunConfig(focus) {
   }
   // 项目任务：保存临时专家切换
   if (isProject && curTask && curMember !== null) {
-    actions.push({ label: '保存专家切换（仅当前任务）', cls: 'pri', act: async function () {
+    actions.push({ label: '保存子智能体切换（仅当前任务）', cls: 'pri', act: async function () {
       const sel = document.querySelector('input[name="rc-expert"]:checked');
-      if (!sel) { toast('请选择专家', true); return; }
+      if (!sel) { toast('请选择子智能体', true); return; }
       const r = await api('/tasks/' + curTask.id, { method: 'PATCH', body: JSON.stringify({ memberAgentIds: [sel.value] }) });
       if (!r.ok) { toast(r.error || '切换失败', true); return; }
       await loadTasks();
       closeModal();
-      toast('✓ 当前任务专家已切换');
+      toast('✓ 当前任务子智能体已切换');
     } });
   }
   actions.push({ label: '关闭', cls: '', act: function () { closeModal(); } });

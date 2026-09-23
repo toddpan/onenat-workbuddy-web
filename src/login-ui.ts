@@ -88,7 +88,17 @@ body::before { content: ''; position: fixed; inset: 0; background: radial-gradie
       });
       var json = null; try { json = await res.json(); } catch (e) {}
       if (res.status === 429) { showErr('尝试次数过多，请 5 分钟后再试'); }
-      else if (json && json.ok) { location.replace(PREFIX + '/' + (location.hash || '')); return; }
+      else if (json && json.ok) {
+        // 目标与当前地址一致（仅 hash 之差或完全相同）时，replace 会被当作片段导航而不重载文档，
+        // 登录页就会留在屏幕上（需手动刷新）。加一次性参数强制真实导航；hash 原样保留恢复页签。
+        const base = PREFIX + '/';
+        const hash = location.hash || '';
+        const url = (base + hash) === (location.pathname + location.search + location.hash)
+          ? base + '?r=' + Date.now() + hash
+          : base + hash;
+        location.replace(url);
+        return;
+      }
       else { showErr((json && json.error) || '用户名或密码错误'); }
     } catch (e) { showErr('网络异常，请重试'); }
     btn.disabled = false; btn.textContent = '登 录';
