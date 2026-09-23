@@ -108,9 +108,12 @@ const HELP = `WorkBuddy CLI — AI 管理 OneNat WorkBuddy（配置: ${CFG.cfgPa
   agent    [list|upsert|delete|ping|preview|models|presets|enable|disable] [--json '{...}'] [--id x]
   task     [list|create|send|wait|status|delete|cancel|members|chat]
            create: --title t --agents a,b --message m [--mode chat|orchestrate]
+                   [--node <DSH映射ID>]（任务节点：无@主会话在此执行）
+                   [--project <项目ID>]（项目任务：自动继承项目节点/工作区/指令）
            send:   --id x --message m     wait: --id x [--timeout ms]
            status: [--id x]               chat: --id x --sub sid|agentId [--followup m]（--agent 为 --sub 的别名）
            members: --id x --agents a,b  （--agents 必填，至少一个非空 ID）
+  project  [list|get|upsert|delete] [--id x] [--json '{name,dshRef,workspace,instruction,expertIds,...}']
   schedule [list|get|upsert|delete|toggle|run] [--json '{...}'] [--id x]
   planner  [get|set|options] [--agent id] [--model provider/model]
   file     [list|mkdir|upload|download|delete]
@@ -180,6 +183,9 @@ async function main() {
         args.message = flags.message
         args.mode = flags.mode
         if (flags.agents) args.memberAgentIds = String(flags.agents).split(',').map((s) => s.trim()).filter(Boolean)
+        // 环境切换：--node 指定任务节点（主 DSH，主会话在此执行）；--project 归属项目（自动继承项目上下文）
+        if (flags.node) args.nodeRef = { kind: 'mapping', mappingId: String(flags.node) }
+        if (flags.project) args.projectId = String(flags.project)
       }
       if (action === 'send') args.message = flags.message
       if (action === 'wait') args.timeoutMs = num(flags.timeout, 120000)
@@ -243,6 +249,14 @@ async function main() {
       if (['get', 'delete', 'test', 'exec'].includes(action)) args.resourceId = flags.id
       if (action === 'exec') args.command = flags.command
       await tool('workbuddy_ssh_resource_manage', args)
+      return
+    }
+    case 'project': {
+      const action = sub || 'list'
+      const args = { action }
+      if (action === 'upsert') args.project = flagsJson(flags, 'json')
+      if (['get', 'delete'].includes(action)) args.projectId = flags.id
+      await tool('workbuddy_project_manage', args)
       return
     }
     default:
