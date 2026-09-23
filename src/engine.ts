@@ -942,63 +942,69 @@ export class TaskEngine {
       this.emit(taskId, { type: 'turn_tool', turnId: turn.id, tool, seq: streamSeq++ })
     }
 
-    const result = await this.dispatchWithFallback(
-      target,
-      session.remoteSessionId!,
-      fullPrompt,
-      {
-        onDelta: (delta) => {
-          // 内存即时可见 + 磁盘尾随合并：每个 delta 全量写盘会同步阻塞事件循环数毫秒，
-          // 长回合累计数秒（详见 WorkStore.scheduleSave），进而拖垮 SSE 收发
-          if (!this.store.appendTurnText(taskId, turn.id, delta)) {
-            this.store.mutateTask(taskId, (t) => {
-              const tt = t.turns.find((x) => x.id === turn.id)
-              if (tt) tt.text += delta
-            })
-          }
-          this.emit(taskId, { type: 'turn_delta', turnId: turn.id, delta, seq: streamSeq++ })
-        },
-        onReasoning: (delta) => {
-          this.emit(taskId, { type: 'turn_reasoning', turnId: turn.id, delta, seq: streamSeq++ })
-        },
-        onToolCall: (info) => {
-          const id = String(info.id || `tool-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`)
-          toolStarts.set(id, Date.now())
-          const isAskTool = info.name === 'ask_user_question' || info.name === 'ask-user-question'
-          // ask_user_question 的 args 必须完整：截断的 JSON 会让前端交互卡解析失败，用户无法答复
-          const tool: TurnToolCall = { id, name: String(info.name || 'unknown'), args: summarize(info.arguments, isAskTool ? 65_536 : 400), status: 'running', at: Date.now() }
-          this.store.updateTurn(taskId, turn.id, (tt) => {
-            tt.tools = tt.tools || []
-            tt.tools.push(tool)
+    // 派发处理器抽为变量：空结果自愈时复用同一组回调重发
+    const streamHandlers: Parameters<DshClient['streamPrompt']>[3] = {
+      onDelta: (delta) => {
+        // 内存即时可见 + 磁盘尾随合并：每个 delta 全量写盘会同步阻塞事件循环数毫秒，
+        // 长回合累计数秒（详见 WorkStore.scheduleSave），进而拖垮 SSE 收发
+        if (!this.store.appendTurnText(taskId, turn.id, delta)) {
+          this.store.mutateTask(taskId, (t) => {
+            const tt = t.turns.find((x) => x.id === turn.id)
+            if (tt) tt.text += delta
           })
-          emitTool(tool)
-          this.taskLog(taskId, 'tool', `工具调用: ${tool.name}${tool.args ? ' · ' + tool.args.slice(0, 120) : ''}`)
-        },
-        onToolResult: (info) => {
-          const id = String(info.id || '')
-          this.store.updateTurn(taskId, turn.id, (tt) => {
-            tt.tools = tt.tools || []
-            // 优先按 callId 配对；退化取最后一个执行中的调用（远端 result 事件可能无 name）
-            let t = id ? tt.tools.find((x) => x.id === id) : undefined
-            if (!t) t = [...tt.tools].reverse().find((x) => x.status === 'running')
-            if (!t) return
-            const isAskResult = t.name === 'ask_user_question' || t.name === 'ask-user-question'
-            t.result = summarize(info.result, isAskResult ? 65_536 : 2000)
-            t.status = info.isError ? 'error' : 'done'
-            const startedAt = toolStarts.get(t.id)
-            if (startedAt) t.ms = Date.now() - startedAt
-            emitTool(t)
-          })
-        },
-        onUsage: (usage) => {
-          if (usage && typeof usage === 'object') {
-            this.store.updateTurn(taskId, turn.id, (tt) => { tt.usage = { ...usage } })
-            this.emit(taskId, { type: 'turn_usage', turnId: turn.id, usage, seq: streamSeq++ })
-          }
-        },
+        }
+        this.emit(taskId, { type: 'turn_delta', turnId: turn.id, delta, seq: streamSeq++ })
       },
-      signal,
-    )
+      onReasoning: (delta) => {
+        this.emit(taskId, { type: 'turn_reasoning', turnId: turn.id, delta, seq: streamSeq++ })
+      },
+      onToolCall: (info) => {
+        const id = String(info.id || `tool-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`)
+        toolStarts.set(id, Date.now())
+        const isAskTool = info.name === 'ask_user_question' || info.name === 'ask-user-question'
+        // ask_user_question 的 args 必须完整：截断的 JSON 会让前端交互卡解析失败，用户无法答复
+        const tool: TurnToolCall = { id, name: String(info.name || 'unknown'), args: summarize(info.arguments, isAskTool ? 65_536 : 400), status: 'running', at: Date.now() }
+        this.store.updateTurn(taskId, turn.id, (tt) => {
+          tt.tools = tt.tools || []
+          tt.tools.push(tool)
+        })
+        emitTool(tool)
+        this.taskLog(taskId, 'tool', `工具调用: ${tool.name}${tool.args ? ' · ' + tool.args.slice(0, 120) : ''}`)
+      },
+      onToolResult: (info) => {
+        const id = String(info.id || '')
+        this.store.updateTurn(taskId, turn.id, (tt) => {
+          tt.tools = tt.tools || []
+          // 优先按 callId 配对；退化取最后一个执行中的调用（远端 result 事件可能无 name）
+          let t = id ? tt.tools.find((x) => x.id === id) : undefined
+          if (!t) t = [...tt.tools].reverse().find((x) => x.status === 'running')
+          if (!t) return
+          const isAskResult = t.name === 'ask_user_question' || t.name === 'ask-user-question'
+          t.result = summarize(info.result, isAskResult ? 65_536 : 2000)
+          t.status = info.isError ? 'error' : 'done'
+          const startedAt = toolStarts.get(t.id)
+          if (startedAt) t.ms = Date.now() - startedAt
+          emitTool(t)
+        })
+      },
+      onUsage: (usage) => {
+        if (usage && typeof usage === 'object') {
+          this.store.updateTurn(taskId, turn.id, (tt) => { tt.usage = { ...usage } })
+          this.emit(taskId, { type: 'turn_usage', turnId: turn.id, usage, seq: streamSeq++ })
+        }
+      },
+    }
+
+    let result = await this.dispatchWithFallback(target, session.remoteSessionId!, fullPrompt, streamHandlers, signal)
+    // 空结果自愈：远端收到指令但零内容零工具（LLM 上游瞬时异常/流丢失）——
+    // 自动重发一次；有工具调用的回合绝不重发（避免发飞书等副作用重复执行）
+    {
+      const turnNow = this.store.getTask(taskId)!.turns.find((x) => x.id === turn.id)
+      if (!signal.aborted && !(turnNow?.tools || []).length && !(streamSeq > 1)) {
+        this.taskLog(taskId, 'warn', `${agent.name} 本轮无任何内容产出（远端流为空），自动重发一次`)
+        result = await this.dispatchWithFallback(target, session.remoteSessionId!, fullPrompt, streamHandlers, signal)
+      }
+    }
 
     this.store.updateTurn(taskId, turn.id, (tt) => {
       tt.streaming = false
@@ -1032,6 +1038,13 @@ export class TaskEngine {
       this.appendSystemTurn(taskId, result.error && result.error.includes('中止')
         ? `⏹ 已停止 — ${agent.name} 的本轮生成被中止，可继续追问`
         : `⚠️ 子智能体「${agent.name}」执行失败: ${result.error}`)
+    }
+    // 重发后仍零内容：显式失败并提示，绝不静默空完成（「没反应」的根源）
+    if (result.ok && !finalTurn.text && !(finalTurn.tools || []).length) {
+      this.appendSystemTurn(taskId, `⚠️ ${agent.name} 连续两轮未返回任何内容——节点 LLM 上游可能异常，请稍后重发，或用右上角切换器换个任务节点`)
+      this.store.mutateTask(taskId, (t) => { t.status = 'failed' })
+      this.emit(taskId, { type: 'task_status', status: 'failed' })
+      return
     }
     this.store.mutateTask(taskId, (t) => {
       t.status = 'completed'
