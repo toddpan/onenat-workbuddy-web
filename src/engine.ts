@@ -1586,10 +1586,13 @@ export class TaskEngine {
    * 只按任务节点解析。所有「建立会话 / 附件上传 / 中止会话 / 文件下载」路径都必须经由本方法。
    */
   public async resolveExecTarget(task: WorkTask | undefined, agentId: string): Promise<DshTarget & { online: boolean; error?: string } | undefined> {
+    // sub agent：自身绑定节点优先（远程执行单元本义）
     const agent = this.store.getAgent(agentId)
-    if (!agent) return undefined
-    const own = await this.resolver.resolve(agent).catch(() => undefined)
-    if (own?.online && own.baseUrl) return own
+    if (agent) {
+      const own = await this.resolver.resolve(agent).catch(() => undefined)
+      if (own?.online && own.baseUrl) return own
+    }
+    // 节点主会话（__node__，无 store 记录）或自身节点不可达：按任务/项目节点解析
     const exec = task ? this.taskExec(task) : undefined
     if (exec?.dshRef) {
       const nt = await this.resolver.resolveRef(exec.dshRef, exec.apiKey, agentId).catch(() => undefined)
