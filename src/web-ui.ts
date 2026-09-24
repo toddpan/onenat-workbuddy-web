@@ -1779,8 +1779,9 @@ function md(text) {
 
 function parseInline(text) {
   let s = esc(text);
-  // @ 智能体与资源高亮（对齐 DSH UI pill）
-  s = s.replace(/@([^\s@,，。!！?？:：;；]+)/g, '<span class="mention-tag">@$1</span>');
+  // @ 智能体与资源高亮（对齐 DSH UI pill）。注意：本文件主体在模板字符串内，\s 必须双写为 \\s——
+  // 单写会被模板求值吞成字母 s，高亮会一路吃到标点或字母 s（线上实测 @提及高亮过长）
+  s = s.replace(/@([^\\s@,，。!！?？:：;；]+)/g, '<span class="mention-tag">@$1</span>');
   // 行内代码
   s = s.replace(/\`([^\`\\n]+)\`/g, '<code>$1</code>');
   // 粗体
@@ -5898,7 +5899,7 @@ function parseScheduleMentions(text) {
       if (!agentIds.includes(hit.id)) agentIds.push(hit.id);
       i += 1 + hit.name.length;
     } else {
-      const seg = /@([^\s@]+)/.exec(rest);
+      const seg = /@([^\\s@]+)/.exec(rest);
       if (seg) { unknown.add(seg[1]); i += 1 + seg[1].length; }
       else i++;
     }

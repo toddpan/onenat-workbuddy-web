@@ -61,6 +61,14 @@ for f in dist/.page-check-*.js; do
 done
 if [ "$page_ok" != "1" ]; then exit 1; fi
 
+# 语义关卡：@提及高亮正则的 \s 必须在「模板求值后」的页面脚本里存活。
+# tsc 会把模板里的 \s 原样打进 dist 文本（grep dist 看起来是对的），
+# 但运行时求值会吞掉反斜杠变成字母 s —— 只有检查求值后的 page-check 产物才算数。
+if ! grep -Fq 's.replace(/@([^\s@' dist/.page-check-console.js 2>/dev/null; then
+  echo "build:standalone 失败：@提及高亮正则的 \\s 被模板求值吞掉（模板字符串内须双写为 \\\\s）" >&2
+  exit 1
+fi
+
 if [ ! -f dist/server.js ]; then
   echo "build:standalone 失败：dist/server.js 未生成" >&2
   exit 1
