@@ -646,10 +646,26 @@ export class MonitorService {
       if (!a.enabled) continue
       if (!a.online) alerts.push({ level: 'error', msg: `子智能体「${a.name}」离线${a.error ? '：' + a.error : ''}`, at: Date.now(), refType: 'agent', refId: a.id })
     }
+    // 失败任务告警：同名任务聚合成一条（连续失败刷屏 5 条同类告警不可读），附次数与最近失败时间
+    const failedByTitle = new Map<string, { count: number; lastAt: number; title: string; refId: string }>()
     for (const t of tasks) {
       if (t.status === 'failed' && now - (t.updatedAt || 0) < 86_400_000) {
-        alerts.push({ level: 'error', msg: `任务「${t.title}」失败`, at: t.updatedAt || now, refType: 'task', refId: t.id })
+        const key = t.title || t.id
+        const cur = failedByTitle.get(key)
+        if (cur) {
+          cur.count++
+          cur.lastAt = Math.max(cur.lastAt, t.updatedAt || 0)
+        } else {
+          failedByTitle.set(key, { count: 1, lastAt: t.updatedAt || now, title: t.title || t.id, refId: t.id })
+        }
       }
+    }
+    const fmtClock = (ms: number) => new Date(ms).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+    for (const f of failedByTitle.values()) {
+      const msg = f.count > 1
+        ? `任务「${f.title}」失败 ${f.count} 次（最近 ${fmtClock(f.lastAt)}）`
+        : `任务「${f.title}」失败`
+      alerts.push({ level: 'error', msg, at: f.lastAt, refType: 'task', refId: f.refId })
     }
     for (const s of scheduleViews) {
       if (s.enabled && s.lastRunOk === false) {
