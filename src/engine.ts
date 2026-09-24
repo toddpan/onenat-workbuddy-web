@@ -1394,6 +1394,18 @@ export class TaskEngine {
     await this.runSubtask(task, sub, agent, target, upstream, mentions.mentionedResourceBindings, signal, mentions)
   }
 
+  /**
+   * 剥离子任务指令里 @执行者自身 的路由 token：路由语义已由 plan.memberAgentIds 表达，
+   * token 残留在指令里（「让远程 DSH @某成员 采集…」）会诱导执行者再去联系「远程 DSH」——就是它自己，
+   * 实测造成经 dsh-web-service 的嵌套自派发，多绕一跳空转 7~25 分钟。
+   */
+  private stripSelfMention(text: string, agent: SubAgent): string {
+    const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const re = new RegExp(`@\\s*(?:${esc(agent.name)}|${esc(agent.id)})(?=\\s|$|[，。；,;、）)】」”])`, 'g')
+    const stripped = text.replace(re, ' ').replace(/[ \t]{2,}/g, ' ').trim()
+    return stripped || text
+  }
+
   /** 执行单个子任务（供 DAG 与单项重试共用） */
   private async runSubtask(
     task: WorkTask,
@@ -1436,6 +1448,9 @@ export class TaskEngine {
     const transformed = await this.transformFileMentionsForAgent(sub.prompt, mentions, agent, task)
 
     const parts: string[] = []
+    // 远程会话创建接口不收 systemPrompt，聊天直发路径靠 sysPrefix 注入角色；编排/直派子任务在此对等注入，
+    // 否则执行者拿不到自己的角色定义，只能靠子任务指令自猜身份
+    if (agent.systemPrompt?.trim()) parts.push(`[执行者角色]（你的职责与约束）:\n${agent.systemPrompt.trim()}`)
     const hasDynamicResources = (extraResources && extraResources.length > 0) || (mentions?.mentionedFiles && mentions.mentionedFiles.length > 0)
     const cachedBlock = hasDynamicResources ? null : this.blockCacheFresh(taskId, agent)
 
@@ -1456,7 +1471,7 @@ export class TaskEngine {
       parts.push(transformed.extraSections.join('\n\n'))
     }
     for (const u of upstream) parts.push(u)
-    parts.push(`[当前子任务指令]:\n${transformed.text}`)
+    parts.push(`[当前子任务指令]:\n${this.stripSelfMention(transformed.text, agent)}`)
     const fullPrompt = parts.join('\n\n')
 
     let deltaCount = 0
