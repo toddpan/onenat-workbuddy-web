@@ -703,18 +703,19 @@ export class TaskEngine {
       if (nt?.online && nt.baseUrl) targets.set(aid, nt)
     }
 
-    // @ 了恰好一个智能体：定向直通该智能体（即使任务本身是多成员编排任务）
+    // @ 了恰好一个智能体：定向委派——与多 sub agent 编排同构：
+    // 子任务在 sub agent 自身绑定节点执行，最终产物（汇总）回任务发起节点
     if (singleExplicitMention && hasExplicitAgentMention) {
       const onlyId = mentions.mentionedAgentIds[0]
       const onlyAgent = this.store.getAgent(onlyId)
-      // 记录本轮路由：单人 @ → 定向直通
+      // 记录本轮路由：单人 @ → 定向委派
       this.store.mutateTask(taskId, (t) => {
         t.lastRoute = { kind: 'direct', agentId: onlyId, agentName: onlyAgent?.name || onlyId }
       })
-      // 只解析被 @ 的那一个智能体（项目任务强制在项目节点执行）
+      // 只解析被 @ 的那一个智能体（sub agent 回自身绑定节点，不可达时回退任务节点）
       const singleTarget = await this.resolveExecTarget(task, onlyId)
       if (singleTarget) {
-        await this.runChatTurn(taskId, text, mentions, new Map([[onlyId, singleTarget]]), signal)
+        await this.runDelegatedTurn(taskId, text, mentions, onlyId, singleTarget, signal)
       } else {
         this.appendSystemTurn(taskId, `⚠️ 被 @ 的智能体「${this.store.getAgent(onlyId)?.name || onlyId}」暂不可用（项目节点与自身节点均不可达）`)
         this.store.mutateTask(taskId, (t) => { t.status = 'failed' })
@@ -1049,6 +1050,68 @@ export class TaskEngine {
   }
 
   // ---------- orchestrate 编排 ----------
+
+  /**
+   * 单 @ 委派的编排式执行（与多 sub agent 编排同构）：
+   * 子任务在 sub agent 自身绑定节点执行（专项产物在其节点），
+   * 最终产物（汇总）回任务发起节点。跳过规划器——@ 即委派，语义明确，省一次规划 LLM。
+   */
+  private async runDelegatedTurn(
+    taskId: string,
+    text: string,
+    mentions: ExtractedMentions,
+    agentId: string,
+    target: DshTarget,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const agent = this.store.getAgent(agentId)
+    const sub: PlanSubtask = {
+      id: `sub-${randomUUID().slice(0, 8)}`,
+      title: (text.replace(/@\S+/g, '').trim() || '执行任务').slice(0, 30),
+      prompt: text,
+      agentId,
+      dependsOn: [],
+      status: 'pending',
+      logs: [],
+    }
+    this.store.mutateTask(taskId, (t) => {
+      t.plan = { strategy: 'parallel', createdAt: Date.now(), subtasks: [sub] }
+    })
+    this.emit(taskId, { type: 'plan_update', plan: this.store.getTask(taskId)!.plan! })
+    this.taskLog(taskId, 'info', `委派子任务给「${agent?.name || agentId}」（在其绑定节点执行），完成后汇总回任务发起节点`)
+
+    await this.executeDag(taskId, mentions, new Map([[agentId, target]]), signal)
+
+    // 最终产物归属发起节点：汇总在任务节点上执行（节点不可达时回退规划器节点）
+    this.appendSystemTurn(taskId, '📊 子任务已完成，正在生成总结报告…')
+    const fresh = this.store.getTask(taskId)!
+    let summaryNodeTarget: DshTarget | undefined
+    const execS = this.taskExec(fresh)
+    if (execS.dshRef) {
+      const nt = await this.resolver.resolveRef(execS.dshRef, execS.apiKey, 'summary').catch(() => undefined)
+      if (nt?.online && nt.baseUrl) summaryNodeTarget = nt
+    }
+    const summary = await this.planner.summarize(text, fresh.plan?.subtasks || [], new Map([[agentId, target]]), summaryNodeTarget)
+    this.store.mutateTask(taskId, (t) => {
+      t.summary = summary
+      t.status = summary.status
+    })
+    this.emit(taskId, { type: 'task_status', status: summary.status })
+    const summaryTurn: TaskTurn = {
+      id: `turn-${randomUUID().slice(0, 8)}`,
+      seq: 0,
+      role: 'agent',
+      agentId: '__planner__',
+      agentName: '🎯 总调度汇总',
+      text: summary.finalConclusion,
+      subtaskIds: [sub.id],
+      at: Date.now(),
+    }
+    this.store.appendTurn(taskId, summaryTurn)
+    this.emit(taskId, { type: 'turn_start', turn: summaryTurn })
+    this.emit(taskId, { type: 'turn_end', turn: summaryTurn })
+    this.store.save()
+  }
 
   private async runOrchestrateTurn(
     taskId: string,
