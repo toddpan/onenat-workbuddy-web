@@ -605,21 +605,58 @@ export class MonitorService {
       // live 视图：取最早开始的运行中任务
       let live: AgentLiveView | undefined
       const liveTask = myRunning.slice().sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))[0]
+      // 编排/委派任务按成员下钻：定位「该智能体自己的子任务」，活动/进度按成员区分——
+      // 否则同一任务里的多个成员会显示完全相同的任务级 headline/live（线上实测反馈）
+      const planSubs = liveTask?.plan?.subtasks || []
+      const mySub = liveTask
+        ? (planSubs.filter((s) => s.agentId === a.id).find((s) => s.status === 'running')
+          || planSubs.filter((s) => s.agentId === a.id).sort((x, y) => (y.startedAt || 0) - (x.startedAt || 0))[0])
+        : undefined
       if (liveTask) {
         const la = this.taskActivity(liveTask, true)
+        let state: AgentLiveView['state'] = la.runningTools.length ? 'tool' : 'thinking'
+        let latestTool = la.latestTool
+        let lastToolAt = la.lastToolAt
+        if (mySub) {
+          // 子任务日志里的远端工具调用（msg 形如「工具调用: bash · {...}」），取最近一条
+          let subTool: { name: string; argsHead?: string; at: number } | undefined
+          for (const lg of mySub.logs || []) {
+            if (lg.level !== 'tool') continue
+            const m = /^工具调用:\s*(.+?)(?:\s+·\s+(.*))?$/.exec(lg.msg)
+            if (m) subTool = { name: m[1].trim(), ...(m[2] ? { argsHead: maskSecrets(m[2]) } : {}), at: lg.ts }
+          }
+          const toolFresh = subTool && Date.now() - subTool.at < 3 * 60_000
+          if (subTool) {
+            state = toolFresh ? 'tool' : 'thinking'
+            latestTool = { ...subTool, running: Boolean(toolFresh) }
+            lastToolAt = subTool.at
+          } else {
+            state = 'thinking'
+            latestTool = undefined
+            lastToolAt = undefined
+          }
+        }
+        const subProgress = la.subtasks
+          ? { total: la.subtasks.total, completed: la.subtasks.completed, failed: la.subtasks.failed, ...(mySub ? { currentTitle: mySub.title } : la.subtasks.currentTitle ? { currentTitle: la.subtasks.currentTitle } : {}) }
+          : undefined
         live = {
           taskId: liveTask.id,
           taskTitle: liveTask.title,
           phase: this.taskHeadline(liveTask, scheduleOfTask.get(liveTask.id)),
-          state: la.runningTools.length ? 'tool' : 'thinking',
-          latestTool: la.latestTool,
-          lastToolAt: la.lastToolAt,
+          state,
+          ...(latestTool ? { latestTool } : {}),
+          ...(lastToolAt ? { lastToolAt } : {}),
           todosDone: la.todosDone,
           todosTotal: la.todosTotal,
           ...(la.todoCurrent ? { todoCurrent: la.todoCurrent } : {}),
-          ...(la.subtasks ? { subtasks: { total: la.subtasks.total, completed: la.subtasks.completed, failed: la.subtasks.failed, ...(la.subtasks.currentTitle ? { currentTitle: la.subtasks.currentTitle } : {}) } } : {}),
+          ...(subProgress ? { subtasks: subProgress } : {}),
         }
       }
+      // 活动一句话：有自己的子任务时按成员显示（⏰ 前缀跟随定时来源），否则退回任务级 headline
+      const schedulePrefix = liveTask && scheduleOfTask.get(liveTask.id) ? '⏰ ' : ''
+      const perAgentAct = liveTask && mySub
+        ? `${schedulePrefix}子任务 ${planSubs.filter((s) => s.status === 'completed').length}/${planSubs.length} 「${mySub.title}」${mySub.status === 'running' ? '执行中' : mySub.status === 'completed' ? '已完成' : mySub.status === 'pending' ? '待执行' : mySub.status}`
+        : act[0]
       return {
         id: a.id,
         name: a.name,
@@ -631,7 +668,7 @@ export class MonitorService {
         runningCount: myRunning.length,
         taskCount: mine.length,
         lastActiveAt,
-        currentActivity: act[0],
+        currentActivity: perAgentAct,
         ...(live ? { live } : {}),
         resources,
       }
