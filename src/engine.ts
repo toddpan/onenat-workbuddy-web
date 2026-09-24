@@ -1206,8 +1206,14 @@ export class TaskEngine {
 
     let planned: Awaited<ReturnType<Planner['planTask']>>
     try {
+      // 规划在任务发起节点（主 DSH）执行 —— 节点模型下无需单独指定拆解器智能体；不可达时回退 pickTarget 链
+      const execForPlan = this.taskExec(task)
+      const planNodeTarget = execForPlan.dshRef
+        ? await this.resolver.resolveRef(execForPlan.dshRef, execForPlan.apiKey, 'planner').catch(() => undefined)
+        : undefined
       planned = await this.planner.planTask(text, rosterMembers, targets, {
         priorityAgentIds: mentions.mentionedAgentIds,
+        taskNodeTarget: planNodeTarget && planNodeTarget.online && planNodeTarget.baseUrl ? planNodeTarget : undefined,
         onLog: (msg, level) => {
           this.taskLog(taskId, level || 'info', `[主调度] ${msg}`)
           planStage(msg)
