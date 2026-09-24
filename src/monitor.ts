@@ -143,6 +143,26 @@ export interface ScheduleMonitor {
   lastRunError?: string
 }
 
+/** 节点主会话（主 DSH）：任务节点上无 @ 直发的会话（含项目任务/定时任务/直通任务） */
+export interface NodeMonitor {
+  key: string
+  name: string
+  tunnelName?: string
+  mappingId?: string
+  baseUrl?: string
+  online: boolean
+  /** 该节点最近一次主会话使用的模型 */
+  model?: string
+  runningCount: number
+  tasksTotal: number
+  tasksToday: number
+  lastActivityAt?: number
+  lastTaskTitle?: string
+  /** 运行中的主会话任务（取最早开始的） */
+  currentTaskId?: string
+  currentActivity?: string
+}
+
 export interface MonitorAlert {
   level: 'warn' | 'error'
   msg: string
@@ -171,6 +191,7 @@ export interface MonitorOverview {
     nextScheduleName?: string
   }
   agents: AgentMonitor[]
+  nodes: NodeMonitor[]
   tasks: TaskMonitor[]
   schedules: ScheduleMonitor[]
   sshPool: Array<{ id: string; name: string; host: string; port: number; ok?: boolean; lastTestedAt?: number; inUse: ResourceUsageHint[] }>
@@ -603,6 +624,40 @@ export class MonitorService {
       }
     })
 
+    // 节点主会话视图（主 DSH）：无 @ 直发/项目/定时任务在任务节点上的活动归到所属节点。
+    // 归属判定：主会话 baseUrl 匹配优先（端口漂移后旧任务按 nodeRef mappingId 兜底）
+    const nodeViews: NodeMonitor[] = this.directory
+      .listEndpoints()
+      .filter((e) => e.kind === 'dsh')
+      .map((ep) => {
+        const nodeTasks = tasks.filter((t) => {
+          if (t.status === 'draft') return false
+          const s = t.sessions?.['__node__']
+          if (s?.baseUrl && ep.baseUrl) return s.baseUrl === ep.baseUrl
+          return t.nodeRef?.kind === 'mapping' && t.nodeRef.mappingId === ep.mappingId
+        })
+        const running = nodeTasks.filter((t) => this.engine.isRunning(t.id))
+        const last = nodeTasks.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0]
+        const current = running.sort((a, b) => (a.updatedAt || 0) - (b.updatedAt || 0))[0]
+        return {
+          key: ep.mappingId,
+          name: ep.appName || ep.tunnelName || ep.mappingId,
+          tunnelName: ep.tunnelName,
+          mappingId: ep.mappingId,
+          baseUrl: ep.baseUrl,
+          online: Boolean(ep.online),
+          model: last?.sessions?.['__node__']?.plannerModel,
+          runningCount: running.length,
+          tasksTotal: nodeTasks.length,
+          tasksToday: nodeTasks.filter((t) => (t.createdAt || 0) >= dayStart.getTime()).length,
+          lastActivityAt: last?.updatedAt,
+          lastTaskTitle: last?.title,
+          currentTaskId: current?.id,
+          currentActivity: current?.title,
+        }
+      })
+      .sort((a, b) => (b.runningCount - a.runningCount) || (b.tasksToday - a.tasksToday))
+
     // SSH 资源池
     const sshPool = this.sshStore.list().map((r) => ({
       id: r.id,
@@ -695,6 +750,7 @@ export class MonitorService {
       at: now,
       kpi,
       agents: agentViews,
+      nodes: nodeViews,
       tasks: taskViews,
       schedules: scheduleViews,
       sshPool,

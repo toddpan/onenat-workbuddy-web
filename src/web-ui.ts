@@ -1439,7 +1439,9 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
         <div class="mon-alerts" id="mon-alerts"></div>
         <div class="mon-grid">
           <div class="mon-col">
-            <div class="mon-sec-title">🤖 子智能体 <span class="cnt" id="mon-ag-cnt"></span><span class="spacer"></span><span style="color:var(--tx3);font-weight:400;font-size:11px">绿 在线 · 红 离线</span></div>
+            <div class="mon-sec-title">🖥 节点主会话（主 DSH） <span class="cnt" id="mon-node-cnt"></span><span class="spacer"></span><span style="color:var(--tx3);font-weight:400;font-size:11px">无 @ 直发 · 项目 · 定时落点</span></div>
+            <div class="mon-list" id="mon-nodes" style="max-height:24vh"><div class="mon-empty">加载中…</div></div>
+            <div class="mon-sec-title" style="margin-top:14px">🤖 子智能体 <span class="cnt" id="mon-ag-cnt"></span><span class="spacer"></span><span style="color:var(--tx3);font-weight:400;font-size:11px">绿 在线 · 红 离线</span></div>
             <div class="mon-list" id="mon-agents"><div class="mon-empty">加载中…</div></div>
             <div class="mon-sec-title" style="margin-top:14px">🗂 资源调用 <span class="cnt" id="mon-res-cnt"></span></div>
             <div class="mon-list" id="mon-resources" style="max-height:26vh"><div class="mon-empty">加载中…</div></div>
@@ -1952,6 +1954,7 @@ async function renderMonitor() {
   monData = r.data;
   renderMonKpis(monData.kpi);
   renderMonAlerts(monData.alerts || []);
+  renderMonNodes(monData.nodes || []);
   renderMonAgents(monData.agents || []);
   renderMonTasks(monData.tasks || []);
   renderMonFeed(monData.events || []);
@@ -2020,6 +2023,38 @@ function renderMonAlerts(alerts) {
   }
   el.className = 'mon-alerts on';
   el.innerHTML = html;
+}
+
+function renderMonNodes(nodes) {
+  var el = $('mon-nodes');
+  if (!el) return;
+  var onlineCnt = nodes.filter(function(n) { return n.online; }).length;
+  $('mon-node-cnt').textContent = onlineCnt + '/' + nodes.length + ' 在线';
+  if (!nodes.length) { el.innerHTML = '<div class="mon-empty">未发现 DSH 节点</div>'; return; }
+  var ordered = nodes.slice().sort(function(a, b) {
+    return (b.runningCount - a.runningCount) || ((b.lastActivityAt || 0) - (a.lastActivityAt || 0));
+  });
+  var html = '';
+  for (var i = 0; i < ordered.length; i++) {
+    var n = ordered[i];
+    var badge = n.runningCount ? '<span class="mon-badge busy">⚡ 执行中 ×' + n.runningCount + '</span>'
+      : (n.online ? '<span class="mon-badge">空闲</span>' : '<span class="mon-badge bad">离线</span>');
+    var act = (n.runningCount && n.currentTaskId)
+      ? '<div class="mon-act">▸ <b>' + esc(n.currentActivity || n.currentTaskId) + '</b></div>'
+      : (n.lastTaskTitle ? '<div class="mon-act" style="color:var(--tx3)">最近：' + esc(n.lastTaskTitle) + (n.lastActivityAt ? ' · ' + fmtTime(n.lastActivityAt) : '') + '</div>' : '');
+    var chips = '<span class="mon-res-chip on">今日 ' + n.tasksToday + ' 任务</span><span class="mon-res-chip">累计 ' + n.tasksTotal + '</span>';
+    if (n.tunnelName && n.tunnelName !== n.name) chips += '<span class="mon-res-chip">' + esc(n.tunnelName) + '</span>';
+    html += '<div class="mon-agent"' + (n.currentTaskId ? ' data-task="' + esc(n.currentTaskId) + '"' : '') +
+      ' title="节点主会话：任务在该节点上无 @ 直发的会话（含项目任务 / 定时任务 / 直通任务）。' + (n.runningCount ? '点击查看运行中的任务。' : n.lastTaskTitle ? '点击查看最近的任务。' : '') + '">' +
+      '<div class="mon-row1"><span class="mon-dot ' + (n.online ? 'on' : 'off') + '"></span><span class="mon-nm">🖥 ' + esc(n.name) + '</span>' +
+      '<span class="mon-md">' + esc(n.model || '') + '</span><span class="mon-spacer"></span>' + badge + '</div>' + act +
+      '<div class="mon-res">' + chips + '</div>' +
+      '</div>';
+  }
+  el.innerHTML = html;
+  el.querySelectorAll('.mon-agent').forEach(function(card) {
+    card.addEventListener('click', function() { if (card.dataset.task) monOpenTask(card.dataset.task); });
+  });
 }
 
 function renderMonAgents(agents) {
