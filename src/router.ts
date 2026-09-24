@@ -205,8 +205,8 @@ export class WorkBuddyRouter {
     if (nodeMappingId && !this.directory.resolveMapping(nodeMappingId)) throw new Error(`DSH 节点不存在: ${nodeMappingId}`)
     const model = String(body?.model || '').trim()
     if (model && !model.includes('/')) throw new Error('模型格式应为 provider/model（如 zai-coding-cn/glm-5.3-flash），留空跟随全局调度模型')
-    // 新模型：节点必填（任务在节点上直发，@ sub agent 写在指令里）；兼容仅含 agentIds 的旧客户端
-    if (!nodeMappingId && !agentIds.length) throw new Error('至少指定一个 DSH 节点（或在指令中 @ 子智能体）')
+    // 新模型：无 @ 子智能体 = 主 DSH 直发（节点可为空，运行时回退首个在线 DSH）；
+    // 有 agentIds 时校验归属
     const message = String(body?.message || '').trim()
     if (!message) throw new Error('任务文本不能为空')
     const existing = body?.id ? this.store.getSchedule(String(body.id)) : undefined
