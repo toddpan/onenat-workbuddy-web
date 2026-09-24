@@ -201,7 +201,10 @@ async function main() {
     case 'schedule': {
       const action = sub || 'list'
       const args = { action }
-      if (action === 'upsert') args.schedule = flagsJson(flags, 'json')
+      if (action === 'upsert') {
+        args.schedule = flagsJson(flags, 'json')
+        if (args.schedule && flags.model) args.schedule.model = String(flags.model)
+      }
       if (['get', 'delete', 'toggle', 'run'].includes(action)) args.scheduleId = flags.id
       await tool('workbuddy_schedule_manage', args)
       return

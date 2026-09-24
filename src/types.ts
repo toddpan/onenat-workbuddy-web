@@ -336,6 +336,8 @@ export interface WorkTask {
   projectId?: string
   /** 单独任务直接指定的执行节点（项目任务走项目节点） */
   nodeRef?: DshRef
+  /** 任务级模型（provider/model）：定时任务实例配置；主会话（__node__）优先于全局调度模型 */
+  model?: string
   /** 任务级连接器覆盖（单独任务临时加挂） */
   connectorIds?: string[]
   /** 任务级技能覆盖（单独任务临时加挂） */
@@ -415,6 +417,8 @@ export interface ScheduledTask {
   agentIds: string[]
   /** 主 DSH 节点（mappingId）：新模型下任务在该节点上直发；为空时回退首个 agentIds 的绑定节点（存量兼容） */
   nodeMappingId?: string
+  /** 实例级模型（provider/model，可选）：留空跟随全局调度模型；无人值守任务建议固定为稳定模型 */
+  model?: string
   /** 固定任务文本（触发时原样派发） */
   message: string
   rule: ScheduleRule

@@ -6037,6 +6037,9 @@ async function openScheduleDrawer(s, tpl) {
     }).join('') +
     '</select>' +
     '<div class="hint">新模型：定时任务固定在所选节点执行；需要专项能力（发飞书、发邮件…）时在指令里 @ 对应 sub agent。</div></div>' +
+    '<div class="field"><label>执行模型（可选，无人值守建议固定稳定模型）</label>' +
+    '<input id="sc-model" style="font-family:var(--mono)" value="' + esc(s && s.model || '') + '" placeholder="留空跟随全局调度模型（当前 ' + esc((state.settings && state.settings.planner && state.settings.planner.model) || '默认') + '）">' +
+    '<div class="hint">格式 provider/model（如 zai-coding-cn/glm-5.3-flash）。主会话与编排汇总均使用该模型，不受模型按钮切换影响。</div></div>' +
     '<div class="field"><label>调度（Host 本地时区 · 错过的触发点不补跑）</label>' +
     '<select id="sc-kind">' +
     '<option value="daily"' + (!s || s.rule.kind === 'daily' ? ' selected' : '') + '>每天（固定时刻，可多个）</option>' +
@@ -6192,7 +6195,8 @@ function collectSchedule(existing) {
     const v = $('sc-at').value;
     rule = { kind: 'once', at: v ? new Date(v).getTime() : NaN };
   }
-  const payload = { name, agentIds, nodeMappingId, rule, message, enabled: existing ? existing.enabled : true };
+  const model = ($('sc-model') || { value: '' }).value.trim();
+  const payload = { name, agentIds, nodeMappingId, model: model || undefined, rule, message, enabled: existing ? existing.enabled : true };
   const desc = $('sc-desc').value.trim();
   if (desc) payload.description = desc;
   if (existing && existing.id) payload.id = existing.id;

@@ -122,6 +122,7 @@ export class ScheduleRunner {
               memberAgentIds: validAgents.map((a) => a.id),
               message: s.message,
               nodeRef,
+              model: s.model,
               scheduleId: scheduleId,
               scheduleName: s.name,
             })
