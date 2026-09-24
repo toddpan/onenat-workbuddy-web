@@ -43,6 +43,8 @@ export interface CreateTaskInput {
   connectorIds?: string[]
   /** 任务级技能（/名 手势） */
   skillNames?: string[]
+  /** 任务级模型（provider/model）：定时任务实例配置；主会话（__node__）优先于全局调度模型 */
+  model?: string
 }
 
 /** 取 prompt 尾部片段：降级轮询时供远端 history 定位本次回合的起点 user 消息（注入消息不含用户文本，天然排除） */
@@ -417,6 +419,7 @@ export class TaskEngine {
       ...(input.scheduleName ? { scheduleName: input.scheduleName } : {}),
       ...(input.projectId ? { projectId: input.projectId } : {}),
       ...(input.nodeRef ? { nodeRef: input.nodeRef } : {}),
+      ...(input.model ? { model: input.model } : {}),
       ...(input.connectorIds?.length ? { connectorIds: input.connectorIds } : {}),
       ...(input.skillNames?.length ? { skillNames: input.skillNames } : {}),
     }
@@ -1646,7 +1649,8 @@ export class TaskEngine {
     // 不被 planner.model 覆盖（否则 planner 恰好指向它时会用坏上游覆盖好配置——07:17 空回合根因）
     const isMain = agent.id === NODE_AGENT_ID
     const settings = this.store.getSettings()
-    const plannerModelSetting = String(settings.planner?.model || '').trim() || undefined
+    // 任务级模型（定时任务实例配置）优先于全局调度模型（模型按钮）
+    const plannerModelSetting = String(task.model || settings.planner?.model || '').trim() || undefined
 
     if (existing?.remoteSessionId && isMain && (existing.plannerModel || undefined) !== plannerModelSetting) {
       // 主智能体的已绑定会话与「模型列表当前选中」不一致（切换过主智能体或模型）→ 就地对齐

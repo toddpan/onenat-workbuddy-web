@@ -202,6 +202,8 @@ export class WorkBuddyRouter {
     }
     const nodeMappingId = String(body?.nodeMappingId || '').trim()
     if (nodeMappingId && !this.directory.resolveMapping(nodeMappingId)) throw new Error(`DSH 节点不存在: ${nodeMappingId}`)
+    const model = String(body?.model || '').trim()
+    if (model && !model.includes('/')) throw new Error('模型格式应为 provider/model（如 zai-coding-cn/glm-5.3-flash），留空跟随全局调度模型')
     // 新模型：节点必填（任务在节点上直发，@ sub agent 写在指令里）；兼容仅含 agentIds 的旧客户端
     if (!nodeMappingId && !agentIds.length) throw new Error('至少指定一个 DSH 节点（或在指令中 @ 子智能体）')
     const message = String(body?.message || '').trim()
@@ -216,7 +218,9 @@ export class WorkBuddyRouter {
       name,
       description: body?.description ? String(body.description) : undefined,
       agentIds,
-      ...(nodeMappingId ? { nodeMappingId } : {}),
+      // 显式传入（含空串=清除）才写；未传保持原值
+      ...(body && 'nodeMappingId' in body ? { nodeMappingId: nodeMappingId || '' } : {}),
+      ...(body && 'model' in body ? { model: model || '' } : {}),
       message,
       rule,
       enabled,
@@ -237,6 +241,7 @@ export class WorkBuddyRouter {
       agents: agents.map((a) => ({ id: a.id, name: a.name, enabled: a.enabled !== false })),
       nodeMappingId: s.nodeMappingId,
       nodeTitle,
+      model: s.model,
       messagePreview: s.message.slice(0, 120),
       rule: s.rule,
       ruleText: ruleText(s.rule),

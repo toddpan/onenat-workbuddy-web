@@ -246,6 +246,8 @@ export class WorkStore {
       name: String(input.name ?? existing?.name ?? '未命名定时任务'),
       description: input.description ?? existing?.description,
       agentIds: [...(input.agentIds ?? existing?.agentIds ?? [])],
+      nodeMappingId: input.nodeMappingId !== undefined ? (input.nodeMappingId || undefined) : existing?.nodeMappingId,
+      model: input.model !== undefined ? (input.model || undefined) : existing?.model,
       message: String(input.message ?? existing?.message ?? ''),
       rule: (input.rule as ScheduledTask['rule']) || existing?.rule || { kind: 'daily', times: ['09:00'] },
       enabled: input.enabled ?? existing?.enabled ?? true,

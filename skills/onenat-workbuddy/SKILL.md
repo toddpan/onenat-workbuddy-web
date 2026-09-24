@@ -101,12 +101,13 @@ overview 看全局；`{action:"events", since:<时间戳>}` 增量拉告警；`{
 
 ```
 schedule_manage {action:"upsert", schedule:{name:"每日站会纪要", nodeMappingId:"<DSH 映射 ID>",
-  message:"生成昨日站会纪要", rule:{kind:"daily", times:["09:00","18:00"]}}}
+  model:"zai-coding-cn/glm-5.3-flash", message:"生成昨日站会纪要", rule:{kind:"daily", times:["09:00","18:00"]}}}
 schedule_manage {action:"run", scheduleId:"sched-…"}     ← 手动触发验证
 ```
 
 规则：daily(times) / weekly(days,time) / hourly(minute) / monthly(days,time) / interval(minutes) / once(at)。
 `nodeMappingId` = 执行节点（主 DSH），到点任务在该节点直发；旧数据（仅 agentIds）自动回退到首个智能体绑定节点。
+`model` = 实例级模型（可选，provider/model 格式）：**无人值守任务建议固定为稳定模型**，留空跟随全局调度模型（模型按钮切错会影响无人值守任务）。
 
 ### 指定编排拆解器（@ 多个 sub agent 编排时拆任务用）
 
