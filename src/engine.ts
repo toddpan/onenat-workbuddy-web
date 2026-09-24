@@ -398,6 +398,28 @@ export class TaskEngine {
     return main ? [main.id] : []
   }
 
+  /**
+   * 启动自愈：服务重启会丢失全部执行上下文（activeJobs/SSE），但 running 状态已持久化——
+   * 不处理的话这些任务永远卡在「运行中」成为僵尸。启动时统一标记失败并附系统说明。
+   * （远端 DSH 会话可能仍在跑，其产出以远端会话为准；后续消息可基于 task.nodeRef/项目重新发起）
+   */
+  public recoverInterruptedTasks(): number {
+    let n = 0
+    for (const t of this.store.getTasks()) {
+      if (t.status !== 'running') continue
+      this.store.mutateTask(t.id, (x) => {
+        x.status = 'failed'
+        for (const turn of x.turns) {
+          if (turn.streaming) turn.streaming = false
+        }
+      })
+      this.appendSystemTurn(t.id, '⚠️ 服务重启导致本轮执行中断，任务已标记为失败；远端可能仍产生过部分结果，如需请重发消息')
+      n++
+    }
+    if (n > 0) console.log(`[onenat-workbuddy] 启动自愈：${n} 个因重启中断的任务已标记为失败`)
+    return n
+  }
+
   public async createTask(input: CreateTaskInput): Promise<WorkTask> {
     const explicit = Array.isArray(input.memberAgentIds) ? input.memberAgentIds.filter((id) => Boolean(id)) : []
     // 新模型：成员账本 = 参与过的 sub agent（@ 时自动追加），不再预填「主智能体」；
