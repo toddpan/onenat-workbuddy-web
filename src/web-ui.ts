@@ -1206,6 +1206,26 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .mon-badge.ok { color: var(--ok); border-color: rgba(52,211,153,.4); }
 .mon-badge.bad { color: var(--err); border-color: rgba(248,113,113,.4); }
 .mon-badge.warn { color: var(--warn); border-color: rgba(251,191,36,.4); }
+/* 执行中的动感：状态点与徽标呼吸灯 */
+@keyframes monBreath { 0%, 100% { opacity: 1; box-shadow: 0 0 4px var(--ok); } 50% { opacity: .45; box-shadow: 0 0 10px var(--ok); } }
+@keyframes monGlow { 0%, 100% { box-shadow: 0 0 0 rgba(56,189,248,0); } 50% { box-shadow: 0 0 12px rgba(56,189,248,.45); } }
+.mon-dot.busy { background: var(--ok); animation: monBreath 1.4s ease-in-out infinite; }
+.mon-agent.running .mon-badge.busy { animation: monGlow 1.8s ease-in-out infinite; }
+/* live 条：智能体当前在干什么 */
+.mon-live { margin-top: 7px; padding: 6px 9px; background: rgba(56,189,248,.06); border: 1px solid rgba(56,189,248,.16); border-radius: 8px; }
+.mon-live.tool { background: rgba(52,211,153,.07); border-color: rgba(52,211,153,.2); }
+.mon-live-row { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--tx2); white-space: nowrap; overflow: hidden; }
+.mon-live-row b { color: var(--tx); }
+.mon-live-tag { flex: none; font-size: 10px; border-radius: 5px; padding: 0 5px; border: 1px solid rgba(52,211,153,.45); color: var(--ok); }
+.mon-live-tag.think { border-color: rgba(56,189,248,.4); color: var(--pri); }
+.mon-args { color: var(--tx3); font-family: var(--mono); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; }
+@keyframes monBlink { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+.mon-live-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-left: auto; animation: monBlink 1.1s ease-in-out infinite; }
+.mon-live.think .mon-live-dot, .mon-live:not(.tool) .mon-live-dot { background: var(--pri); }
+.mon-live-sub { margin-top: 4px; font-size: 11px; color: var(--tx3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mon-live-prog { margin-top: 6px; height: 3px; border-radius: 2px; background: rgba(148,163,184,.15); overflow: hidden; }
+.mon-live-prog span { display: block; height: 100%; border-radius: 2px; background: linear-gradient(90deg, var(--pri), var(--ok)); transition: width .8s ease; }
+.mon-live-meta { margin-top: 3px; font-size: 10.5px; color: var(--tx3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mon-act { margin-top: 4px; font-size: 12px; color: var(--tx2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mon-act b { color: var(--tx); font-weight: 600; }
 .mon-err-line { margin-top: 4px; font-size: 12px; color: var(--err); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -2083,9 +2103,35 @@ function renderMonAgents(agents) {
     }
     var act = a.busy && a.currentActivity ? '<div class="mon-act">▸ <b>' + esc(a.currentActivity) + '</b></div>'
       : (a.online ? '' : '<div class="mon-err-line">' + esc(a.error || '不可达') + '</div>');
-    html += '<div class="mon-agent" data-agent="' + esc(a.id) + '" title="点击查看该智能体的会话列表">' +
-      '<div class="mon-row1"><span class="mon-dot ' + stCls + '"></span><span class="mon-nm">' + esc(a.name) + '</span>' +
-      '<span class="mon-md">' + esc(a.model || '') + '</span><span class="mon-spacer"></span>' + badge + '</div>' + act +
+    // live 条：运行中显示 当前状态/最新工具/进度；空闲显示最近活动时间
+    var liveHtml = '';
+    if (a.busy && a.live) {
+      var lv = a.live;
+      var agoS = lv.lastToolAt ? Math.max(0, Math.round((Date.now() - lv.lastToolAt) / 1000)) : null;
+      var stateLine;
+      if (lv.state === 'tool' && lv.latestTool) {
+        stateLine = '<span class="mon-live-tag">工具</span> <b>' + esc(lv.latestTool.name) + '</b>' +
+          (lv.latestTool.argsHead ? ' <span class="mon-args" title="' + esc(lv.latestTool.argsHead) + '">' + esc(lv.latestTool.argsHead) + '</span>' : '');
+      } else {
+        stateLine = '<span class="mon-live-tag think">思考</span> 模型生成中' +
+          (agoS != null ? ' · 上次工具 ' + (agoS >= 60 ? Math.floor(agoS / 60) + ' 分 ' + (agoS % 60) + ' 秒' : agoS + ' 秒') + '前' : ' · 等待首个输出');
+      }
+      var pct = null;
+      if (lv.subtasks && lv.subtasks.total) pct = Math.round(100 * lv.subtasks.completed / lv.subtasks.total);
+      else if (lv.todosTotal) pct = Math.round(100 * lv.todosDone / lv.todosTotal);
+      liveHtml = '<div class="mon-live' + (lv.state === 'tool' ? ' tool' : '') + '">' +
+        '<div class="mon-live-row">' + stateLine + '<span class="mon-live-dot"></span></div>' +
+        (lv.todoCurrent ? '<div class="mon-live-sub">▸ ' + esc(lv.todoCurrent) + '</div>' : '') +
+        (pct != null ? '<div class="mon-live-prog"><span style="width:' + pct + '%"></span></div><div class="mon-live-meta">' +
+          (lv.subtasks && lv.subtasks.total ? '子任务 ' + lv.subtasks.completed + '/' + lv.subtasks.total : '清单 ' + lv.todosDone + '/' + lv.todosTotal) + ' · ' + esc(lv.taskTitle) + '</div>' : '') +
+        '</div>';
+    } else if (a.online && a.lastActiveAt) {
+      var idleMin = Math.floor((Date.now() - a.lastActiveAt) / 60000);
+      if (idleMin < 60 * 24) liveHtml = '<div class="mon-act" style="color:var(--tx3)">最近活动 ' + (idleMin < 1 ? '刚刚' : idleMin + ' 分钟前') + '</div>';
+    }
+    html += '<div class="mon-agent' + (a.busy ? ' running' : '') + '" data-agent="' + esc(a.id) + '" title="点击查看该智能体的会话列表">' +
+      '<div class="mon-row1"><span class="mon-dot ' + stCls + (a.busy ? ' busy' : '') + '"></span><span class="mon-nm">' + esc(a.name) + '</span>' +
+      '<span class="mon-md">' + esc(a.model || '') + '</span><span class="mon-spacer"></span>' + badge + '</div>' + act + liveHtml +
       (resChips ? '<div class="mon-res">' + resChips + '</div>' : '') +
       '</div>';
   }

@@ -91,7 +91,26 @@ export interface AgentMonitor {
   lastActiveAt?: number
   /** 正在做的一句话（运行中才有） */
   currentActivity?: string
+  /** 实时活动视图（运行中才有）：当前阶段/最新工具调用/进度，供监控大屏 live 条 */
+  live?: AgentLiveView
   resources: AgentResourceView[]
+}
+
+/** 智能体实时活动（取其最早开始的运行中任务） */
+export interface AgentLiveView {
+  taskId: string
+  taskTitle: string
+  /** taskHeadline：任务类型+标题一句话 */
+  phase: string
+  /** tool=正在执行工具；thinking=模型思考/生成中（暂无运行中的工具） */
+  state: 'tool' | 'thinking'
+  /** 最近一次工具调用（含已完成的；running=仍在执行） */
+  latestTool?: { name: string; argsHead?: string; at: number; running: boolean }
+  lastToolAt?: number
+  todoCurrent?: string
+  todosDone: number
+  todosTotal: number
+  subtasks?: { total: number; completed: number; failed: number; currentTitle?: string }
 }
 
 export type TaskType = 'schedule' | 'chat' | 'orchestrate'
@@ -99,6 +118,8 @@ export type TaskType = 'schedule' | 'chat' | 'orchestrate'
 export interface TaskActivity {
   phase: string
   runningTools: Array<{ name: string; ms?: number; argsHead?: string; at: number }>
+  /** 最近一次工具调用（含已完成的；running=仍在执行） */
+  latestTool?: { name: string; argsHead?: string; at: number; running: boolean }
   todoCurrent?: string
   todosDone: number
   todosTotal: number
@@ -581,6 +602,24 @@ export class MonitorService {
       })
       const lastActiveAt = mine.length ? Math.max(...mine.map((t) => t.updatedAt || 0)) : undefined
       const act = myRunning.map((t) => this.taskHeadline(t, scheduleOfTask.get(t.id))).filter(Boolean)
+      // live 视图：取最早开始的运行中任务
+      let live: AgentLiveView | undefined
+      const liveTask = myRunning.slice().sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))[0]
+      if (liveTask) {
+        const la = this.taskActivity(liveTask, true)
+        live = {
+          taskId: liveTask.id,
+          taskTitle: liveTask.title,
+          phase: this.taskHeadline(liveTask, scheduleOfTask.get(liveTask.id)),
+          state: la.runningTools.length ? 'tool' : 'thinking',
+          latestTool: la.latestTool,
+          lastToolAt: la.lastToolAt,
+          todosDone: la.todosDone,
+          todosTotal: la.todosTotal,
+          ...(la.todoCurrent ? { todoCurrent: la.todoCurrent } : {}),
+          ...(la.subtasks ? { subtasks: { total: la.subtasks.total, completed: la.subtasks.completed, failed: la.subtasks.failed, ...(la.subtasks.currentTitle ? { currentTitle: la.subtasks.currentTitle } : {}) } } : {}),
+        }
+      }
       return {
         id: a.id,
         name: a.name,
@@ -593,6 +632,7 @@ export class MonitorService {
         taskCount: mine.length,
         lastActiveAt,
         currentActivity: act[0],
+        ...(live ? { live } : {}),
         resources,
       }
     })
@@ -605,6 +645,12 @@ export class MonitorService {
       const todo = await this.todosOf(t)
       if (todo.todoCurrent) view.activity.todoCurrent = todo.todoCurrent
       if (todo.todosTotal) { view.activity.todosDone = todo.todosDone; view.activity.todosTotal = todo.todosTotal }
+      // live 视图同步补齐 todo 进度
+      for (const av of agentViews) {
+        if (av.live?.taskId !== t.id) continue
+        if (todo.todoCurrent) av.live.todoCurrent = todo.todoCurrent
+        if (todo.todosTotal) { av.live.todosDone = todo.todosDone; av.live.todosTotal = todo.todosTotal }
+      }
     }))
 
     // 定时任务视图
@@ -849,15 +895,18 @@ export class MonitorService {
 
   private taskActivity(t: WorkTask, running: boolean): TaskActivity {
     const turns = t.turns || []
-    const last = turns[turns.length - 1]
     const tools: Array<{ name: string; ms?: number; argsHead?: string; at: number }> = []
     let lastToolAt: number | undefined
+    let latestTool: TaskActivity['latestTool']
     for (const turn of turns.slice(-2)) {
       for (const tool of turn.tools || []) {
         if (tool.status === 'running') {
-          tools.push({ name: tool.name, argsHead: (tool.args || '').slice(0, 80), at: tool.at || turn.at })
+          tools.push({ name: tool.name, argsHead: maskSecrets((tool.args || '').slice(0, 80)), at: tool.at || turn.at })
         }
         if (tool.at && (!lastToolAt || tool.at > lastToolAt)) lastToolAt = tool.at
+        if (!latestTool || (tool.at || 0) > (latestTool.at || 0)) {
+          latestTool = { name: tool.name, argsHead: maskSecrets((tool.args || '').slice(0, 80)), at: tool.at || turn.at, running: tool.status === 'running' }
+        }
       }
     }
     const plan = t.plan
@@ -875,6 +924,7 @@ export class MonitorService {
     return {
       phase: this.taskHeadline(t),
       runningTools: running ? tools : [],
+      ...(running && latestTool ? { latestTool } : {}),
       todosDone: 0,
       todosTotal: 0,
       ...(subtasks ? { subtasks } : {}),
@@ -962,6 +1012,19 @@ export interface MonitorStoreDeps {
 
 function safeJson<T>(line: string): T | undefined {
   try { return JSON.parse(line) as T } catch { return undefined }
+}
+
+/**
+ * 工具参数摘要脱敏：监控大屏（尤其投屏页）会把 argsHead 显示在公屏上，
+ * 密码/token 出现在工具参数里（sshpass -p、--token、Bearer、JSON 凭证字段）必须打码。
+ */
+function maskSecrets(s: string): string {
+  return s
+    .replace(/(sshpass\s+(?:-\w+\s+)?-p\s+)(\S+)/gi, '$1******')
+    .replace(/SSHPASS=\S+/gi, 'SSHPASS=******')
+    .replace(/(password|passwd|pwd|secret|token|api[_-]?key|authorization)(["']?\s*[:=]\s*["']?)(\S+)/gi, '$1$2******')
+    .replace(/(--(?:password|passwd|token|api[_-]?key|secret)\s+)(\S+)/gi, '$1******')
+    .replace(/Bearer\s+\S+/gi, 'Bearer ******')
 }
 
 /** 从任务日志里取最后一条错误 */
