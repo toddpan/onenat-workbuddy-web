@@ -639,6 +639,11 @@ export class MonitorService {
         const running = nodeTasks.filter((t) => this.engine.isRunning(t.id))
         const last = nodeTasks.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0]
         const current = running.sort((a, b) => (a.updatedAt || 0) - (b.updatedAt || 0))[0]
+        // 模型取最近一次真正开过主会话的任务（编排/委派任务的 sessions 里没有 __node__）
+        const model = nodeTasks
+          .slice()
+          .sort((a, b) => (b.sessions?.['__node__']?.createdAt || b.updatedAt || 0) - (a.sessions?.['__node__']?.createdAt || a.updatedAt || 0))
+          .find((t) => t.sessions?.['__node__']?.plannerModel)?.sessions?.['__node__']?.plannerModel
         return {
           key: ep.mappingId,
           name: ep.appName || ep.tunnelName || ep.mappingId,
@@ -646,7 +651,7 @@ export class MonitorService {
           mappingId: ep.mappingId,
           baseUrl: ep.baseUrl,
           online: Boolean(ep.online),
-          model: last?.sessions?.['__node__']?.plannerModel,
+          model,
           runningCount: running.length,
           tasksTotal: nodeTasks.length,
           tasksToday: nodeTasks.filter((t) => (t.createdAt || 0) >= dayStart.getTime()).length,
