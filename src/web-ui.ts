@@ -65,10 +65,8 @@ header {
 .brand small { color: var(--tx3); font-weight: 400; font-size: 11px; margin-left: 4px; }
 nav { display: flex; gap: 2px; align-items: center; }
 .nav-sep { width: 1px; height: 18px; background: var(--line); margin: 0 7px; flex: none; }
-.settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; margin-bottom: 12px; }
+.settings-grid { display: grid; grid-template-columns: 1fr; gap: 12px; align-items: start; margin-bottom: 12px; }
 .settings-grid .card { margin: 0; }
-.settings-grid .ai-card { grid-column: 1 / -1; }
-@media (max-width: 900px) { .settings-grid { grid-template-columns: 1fr; } }
 nav button {
   background: transparent; color: var(--tx2); padding: 6px 12px; border-radius: var(--rad-sm);
   font-size: 13px; font-weight: 500; transition: all .15s ease;
@@ -1528,15 +1526,15 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
       <div class="card" style="padding:0"><div class="tbl-wrap"><table class="res" id="res-table"><thead><tr><th>资源</th><th>类型</th><th>公网入口（实时解析）</th><th>内网目标</th><th>技能</th></tr></thead><tbody></tbody></table></div></div>
     </div></div>
     <div class="view" id="view-settings"><div class="panel" style="max-width:1100px;margin:0 auto">
-      <div class="panel-head"><h2>设置</h2><span class="sub">平台连接 · 主任务调度 · AI 接入</span><span class="hspacer"></span><button class="btn pri" id="btn-save-settings">保存设置</button></div>
+      <div class="panel-head"><h2>设置</h2><span class="sub">平台连接 · AI 接入</span><span class="hspacer"></span><button class="btn pri" id="btn-save-settings">保存设置</button></div>
       <div class="settings-grid">
       <div class="card">
         <h3 style="margin-bottom:12px">ONENAT 平台</h3>
-        <div class="grid2">
+        <div class="grid3">
           <div class="field"><label>Base URL</label><input id="set-base"></div>
           <div class="field"><label>API Key (onk-…)</label><input id="set-key"></div>
+          <div class="field"><label>自动刷新间隔 (ms)</label><input id="set-refresh" type="number"></div>
         </div>
-        <div class="field" style="max-width:280px"><label>自动刷新间隔 (ms)</label><input id="set-refresh" type="number"></div>
       </div>
       <div class="card ai-card">
         <h3 style="margin-bottom:12px">AI 接入（一键安装提示词）</h3>
