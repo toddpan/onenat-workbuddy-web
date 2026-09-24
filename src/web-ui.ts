@@ -1538,10 +1538,6 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
         </div>
         <div class="field" style="max-width:280px"><label>自动刷新间隔 (ms)</label><input id="set-refresh" type="number"></div>
       </div>
-      <div class="card">
-        <h3 style="margin-bottom:12px">LLM 规划器（编排拆解）</h3>
-        <div class="settings-note">主任务拆解在<b>任务发起节点（主 DSH）</b>上执行，无需单独指定拆解器智能体；仅当一条消息 @ 了多个 sub agent 走编排时才需要拆解。拆解用模型可在聊天窗下方工具栏选择，仅作用于主调度。节点不可达时自动回退到可用的其他节点。</div>
-      </div>
       <div class="card ai-card">
         <h3 style="margin-bottom:12px">AI 接入（一键安装提示词）</h3>
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
