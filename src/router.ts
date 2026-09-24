@@ -756,6 +756,25 @@ export class WorkBuddyRouter {
       this.sendJson(res, 200, { ok: true, data: SCHEDULE_TEMPLATES })
       return true
     }
+    // ---------- 按节点拉取可用模型列表（定时任务/运行配置的执行模型选择） ----------
+    if (p === '/api/dsh-models' && method === 'GET') {
+      const mappingId = String(urlObj.searchParams.get('node') || '').trim()
+      const ep = mappingId ? this.directory.resolveMapping(mappingId) : undefined
+      if (!mappingId || !ep) {
+        this.sendJson(res, 200, { ok: false, error: '节点不存在: ' + mappingId })
+        return true
+      }
+      if (!ep.online || !ep.baseUrl) {
+        this.sendJson(res, 200, { ok: false, error: `节点「${ep.tunnelName || mappingId}」当前离线` })
+        return true
+      }
+      const cred = await this.directory.fetchMappingCredentials(mappingId).catch(() => undefined)
+      const key = cred?.ok ? (cred.apiKey || cred.token || undefined) : undefined
+      const client = new DshClient()
+      const r = await client.getModels({ baseUrl: ep.baseUrl, apiKey: key })
+      this.sendJson(res, 200, { ok: r.ok, nodeTitle: ep.tunnelName || mappingId, models: r.models, defaultModel: r.defaultModel, error: r.error })
+      return true
+    }
     if (p === '/api/schedules' && method === 'GET') {
       const list = this.store.getSchedules().map((s) => this.scheduleSummary(s))
       this.sendJson(res, 200, { ok: true, data: list })
