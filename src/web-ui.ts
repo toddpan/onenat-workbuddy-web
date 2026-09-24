@@ -1427,7 +1427,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
       <div class="panel">
         <div class="panel-head">
           <h2>🎙 语音助手</h2>
-          <span class="sub">小智平台 MCP 接入（可多实例）· 工作台 11 个工具注册为语音可调用的 MCP 工具 · 变更即时生效（免重启）</span>
+          <span class="sub">小智平台 MCP 接入（可多实例）· 工作台全部工具注册为语音可调用的 MCP 工具（动态同步，当前 13 个） · 变更即时生效（免重启）</span>
           <span class="hspacer"></span>
           <button class="btn pri" id="btn-xz-add">＋ 添加接入点</button>
         </div>
@@ -7058,7 +7058,7 @@ function renderAiInstall() {
   const base = location.origin + PREFIX;
   const tok = token || '<先生成APIKEY>';
   $('set-ai-install').value =
-    '请安装 OneNat WorkBuddy 技能（多智能体工作台：发任务/管理任务/监控/定时任务/文件管理等 11 个工具）。\\n' +
+    '请安装 OneNat WorkBuddy 技能（多智能体工作台：发任务/管理任务/监控/定时任务/文件管理/答复任务提问等 13 个工具）。\\n' +
     '1. 在终端执行安装命令（会自动装到本机所有 AI 技能目录 DSH/ZCode/Claude 并自检）：\\n' +
     '   curl -fsSL ' + base + '/install-skill.sh | bash -s -- --base-url ' + base + ' --token ' + tok + '\\n' +
     '2. 安装后执行 wb.mjs tools 验证连通，并汇报安装结果。\\n' +

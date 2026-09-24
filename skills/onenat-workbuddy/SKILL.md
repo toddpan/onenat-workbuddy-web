@@ -68,6 +68,7 @@ task_manage {action:"create", projectId:"proj-x",
 | `workbuddy_task_manage` | 任务：list / create（异步回执，支持 `nodeRef`/`projectId`）/ send / **wait** / members / cancel / delete |
 | `workbuddy_task_status` | 任务进度与汇总（默认摘要；`detail:"full"` 回全量） |
 | `workbuddy_task_chat` | 看子任务远端聊天记录 / 向远端会话追问 |
+| `workbuddy_task_ask_answer` | 答复任务里挂起的 ask_user_question 提问（agentId 缺省自动探测提问成员） |
 | `workbuddy_task_evaluate` | 任务汇总报告 |
 | `workbuddy_agent_manage` | 子智能体：list / upsert / delete / ping / preview / models / presets / enable / disable |
 | `workbuddy_project_manage` | 项目：list / get / upsert / delete |

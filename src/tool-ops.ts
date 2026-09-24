@@ -986,6 +986,51 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
     },
   }
 
+  // 13. ask 答复：答复任务里挂起的 ask_user_question 提问（远端交互卡）
+  const askClient = new DshClient()
+  const taskAskAnswer: WorkBuddyToolDef = {
+    name: 'workbuddy_task_ask_answer',
+    description:
+      '答复 WorkBuddy 任务里挂起的 ask_user_question 提问（远端交互卡）。流程：先用 workbuddy_task_status(detail:"full") 或 workbuddy_task_chat ' +
+      '找到提问成员与其 questions 的 id/选项 id，再用本工具提交答复；agentId 缺省时自动探测最近一个未答复提问的成员（含节点主会话 __node__）。' +
+      '无人值守与语音场景关键：任务提问得不到答复会一直挂起。',
+    parameters: {
+      taskId: { type: 'string', description: '任务 ID' },
+      answers: { type: 'json', description: '答复数组 [{id:"提问id", selected:["选项id"], custom:"自定义文本（可选）"}]；提问 id 与选项 id 见提问卡 arguments 里的 questions 字段' },
+      agentId: { type: 'string', description: '可选：答复目标成员 ID；缺省自动探测最近挂起提问的成员' },
+    },
+    async execute(args) {
+      const taskId = String(args.taskId || '').trim()
+      const task = store.getTask(taskId)
+      if (!task) return JSON.stringify({ ok: false, error: `任务不存在: ${taskId}` })
+      let agentId = String(args.agentId || '').trim()
+      if (!agentId) {
+        const turns = task.turns || []
+        for (let i = turns.length - 1; i >= 0; i--) {
+          const ask = (turns[i].tools || []).find((t) => (t.name === 'ask_user_question' || t.name === 'ask-user-question') && t.status === 'running')
+          if (ask) { agentId = turns[i].agentId || '__node__'; break }
+        }
+      }
+      if (!agentId) return JSON.stringify({ ok: false, error: '任务里没有找到挂起的 ask_user_question 提问（先用 task_status detail=full 查看工具列表确认）' })
+      const binding = task.sessions?.[agentId]
+      if (!binding?.remoteSessionId) return JSON.stringify({ ok: false, error: '该成员在任务中没有远端会话绑定', code: 'NO_SESSION' })
+      const agent = store.getAgent(agentId)
+      const target = agent
+        ? await resolver.resolve(agent)
+        : await engine.resolveExecTarget(task, agentId).catch(() => undefined)
+      if (!target || !target.online || !target.baseUrl) {
+        return JSON.stringify({ ok: false, error: (target as any)?.error || '成员节点当前不可达' })
+      }
+      const answers = asJson(args.answers)
+      if (!Array.isArray(answers) || !answers.length) return JSON.stringify({ ok: false, error: 'answers 必须是非空数组 [{id, selected, custom?}]' })
+      const r = await askClient.answerQuestion(target, binding.remoteSessionId, answers)
+      if (!r.ok) {
+        return JSON.stringify({ ok: false, error: r.error || '答复提交失败', ...(r.supported !== undefined ? { supported: r.supported } : {}) })
+      }
+      return JSON.stringify({ ok: true, data: { answered: answers.length, agentId, taskId, consoleUrl } })
+    },
+  }
+
   // 12. 项目管理（项目 = 节点 + 工作区 + 指令 + 可@ sub agent + 连接器 + 技能 的可复用上下文）
   const projectManage: WorkBuddyToolDef = {
     name: 'workbuddy_project_manage',
@@ -1073,5 +1118,5 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
     },
   }
 
-  return [resourceManage, agentManage, taskManage, taskStatus, taskChat, taskEvaluate, sshResourceManage, monitorRead, scheduleManage, plannerManage, fileManage, projectManage]
+  return [resourceManage, agentManage, taskManage, taskStatus, taskChat, taskEvaluate, taskAskAnswer, sshResourceManage, monitorRead, scheduleManage, plannerManage, fileManage, projectManage]
 }
