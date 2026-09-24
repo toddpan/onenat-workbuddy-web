@@ -133,7 +133,7 @@ async function main() {
   check('种子令牌放行 monitor_read', okTok.status === 200 && okTok.json?.ok === true && okTok.json?.result?.kpi, `status=${okTok.status}`)
   const toolsList = await fetch(`${BASE2}${PREFIX}/api/tools`, { headers: { Authorization: 'Bearer seed-token-123' } }).then((r) => r.json())
   const toolNames = (toolsList.tools || []).map((t) => t.name)
-  check('工具清单 12 个（含 project_manage）', toolNames.length === 12 && toolNames.includes('workbuddy_project_manage'), toolNames.join(','))
+  check('工具清单 13 个（含 project_manage 与 task_ask_answer）', toolNames.length === 13 && toolNames.includes('workbuddy_project_manage') && toolNames.includes('workbuddy_task_ask_answer'), toolNames.join(','))
   check('新工具齐全', ['workbuddy_monitor_read', 'workbuddy_schedule_manage', 'workbuddy_planner_manage', 'workbuddy_file_manage'].every((n) => toolNames.includes(n)))
   // project_manage 全链路：upsert → list → create 带projectId → delete
   const projUpsert = await tool(BASE2, 'seed-token-123', 'workbuddy_project_manage', { action: 'upsert', project: { name: '冒烟测试项目', dshRef: { kind: 'mapping', mappingId: 'mock-dsh-live' } } })
