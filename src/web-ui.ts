@@ -6016,8 +6016,14 @@ function renderSchedules() {
   }
 }
 
-function openScheduleDrawer(s, tpl) {
+async function openScheduleDrawer(s, tpl) {
   const isEdit = Boolean(s);
+  // 列表传来的是摘要（无 message 全文）→ 编辑前先拉详情补全，否则指令不回显
+  if (isEdit && s.message === undefined) {
+    const r = await api('/schedules/' + s.id);
+    if (!r.ok) { toast(r.error || '加载定时任务失败', true); return; }
+    s = r.data;
+  }
   const prefill = tpl || {};
   openDrawer(isEdit ? '编辑定时任务' : (prefill.id ? '新建定时任务（模板: ' + prefill.name + '）' : '新建定时任务'));
   $('drawer-body').innerHTML =
