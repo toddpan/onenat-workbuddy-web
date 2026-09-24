@@ -1190,10 +1190,16 @@ export class TaskEngine {
     // 4. DAG 调度 (透传动态 mentions 资源)
     await this.executeDag(taskId, mentions, targets, signal)
 
-    // 5. 汇总
+    // 5. 汇总 —— 最终产物归属发起节点：汇总在任务节点上执行（节点不可达时回退规划器节点）
     this.appendSystemTurn(taskId, '📊 所有子任务已完成，主调度正在综合各方产出生成总结报告…')
     const fresh = this.store.getTask(taskId)!
-    const summary = await this.planner.summarize(text, fresh.plan?.subtasks || [], targets)
+    let summaryNodeTarget: DshTarget | undefined
+    const execS = this.taskExec(fresh)
+    if (execS.dshRef) {
+      const nt = await this.resolver.resolveRef(execS.dshRef, execS.apiKey, 'summary').catch(() => undefined)
+      if (nt?.online && nt.baseUrl) summaryNodeTarget = nt
+    }
+    const summary = await this.planner.summarize(text, fresh.plan?.subtasks || [], targets, summaryNodeTarget)
     this.store.mutateTask(taskId, (t) => {
       t.summary = summary
       t.status = summary.status
