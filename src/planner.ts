@@ -130,7 +130,7 @@ export class Planner {
     // 注意: dsh-web-service /chat/completions 只提交最后一条 user 消息（system 角色被忽略），
     // 因此 JSON 契约、花名册与目标必须合并在单条 user 消息里。
     const user = [
-      '你是多智能体任务规划器。你的唯一产出是一份 JSON 计划，绝对不要亲自执行或回答主任务本身。',
+      '你是多智能体任务规划器。你的唯一产出是一份 JSON 计划，绝对不要亲自执行或回答主任务本身；不要输出思考/推理过程文字，直接给出 JSON 本体。',
       '把主任务拆解为若干子任务，分配给给定的子智能体成员执行。输出严格 JSON（可包在 ```json 围栏中，除此之外不要有任何多余文本）:',
       '{"strategy":"parallel|sequential|dag","subtasks":[{"title":"简短标题","prompt":"给该子智能体的完整执行指令（自包含，含验收标准）","agentId":"成员 id","dependsOn":["依赖的子任务标题，无则空数组"]}]}',
       '规则: agentId 必须逐字取自花名册中的 id; 每个成员可被分配 0~2 个子任务; 子任务数量 2~6 个（只有一个成员或任务不可拆分时允许只出 1 个，禁止为凑数拆出空转/重复的子任务）;',
@@ -217,61 +217,83 @@ export class Planner {
     return { plan: { strategy, subtasks }, plannerModel: optionsModel(picked.target) }
   }
 
-  /** 解析模型输出里的 JSON（容忍 ```json 围栏与前后杂文） */
+  /** 解析模型输出里的 JSON（容忍 ```json 围栏、前后杂文与 JSON 之前的思考过程——qwen3.8 实测会先输出推理文字再给 JSON） */
   private parsePlanJson(text: string): PlanDraft | undefined {
-    const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(text)
-    const raw = (fenced ? fenced[1] : text).trim()
-    const start = raw.indexOf('{')
-    const end = raw.lastIndexOf('}')
-    if (start < 0 || end <= start) return undefined
-    try {
-      const obj = JSON.parse(raw.slice(start, end + 1))
-      if (!obj || !Array.isArray(obj.subtasks)) return undefined
-      return {
-        strategy: obj.strategy,
-        subtasks: obj.subtasks.map((s: any) => ({
-          title: String(s.title || ''),
-          prompt: String(s.prompt || ''),
-          agentId: String(s.agentId || ''),
-          dependsOn: Array.isArray(s.dependsOn) ? s.dependsOn.map(String) : [],
-        })),
+    const candidates: string[] = []
+    for (const m of text.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)) candidates.push(m[1])
+    candidates.push(text)
+    for (const cand of candidates) {
+      // 逐个「平衡花括号候选块」尝试：第一个 { 到与之配对的 }，失败再从下一个 { 试起。
+      // 只截 first-{/last-} 时，思考杂文里的杂散花括号会让整段解析必然失败（线上实测回退静态拆解）。
+      for (let i = cand.indexOf('{'); i >= 0; i = cand.indexOf('{', i + 1)) {
+        const obj = this.scanBalancedJson(cand, i)
+        if (!obj) continue
+        const draft = this.toDraft(obj)
+        if (draft) return draft
       }
-    } catch {
-      return undefined
+    }
+    return undefined
+  }
+
+  /** 从 from 起扫描一个平衡的 {...} 块并 JSON.parse（跳过字符串内的花括号与转义） */
+  private scanBalancedJson(text: string, from: number): Record<string, unknown> | undefined {
+    let depth = 0
+    let inStr = false
+    let esc = false
+    for (let j = from; j < text.length; j++) {
+      const ch = text[j]
+      if (inStr) {
+        if (esc) esc = false
+        else if (ch === '\\') esc = true
+        else if (ch === '"') inStr = false
+        continue
+      }
+      if (ch === '"') inStr = true
+      else if (ch === '{') depth++
+      else if (ch === '}') {
+        depth--
+        if (depth === 0) {
+          try {
+            const obj = JSON.parse(text.slice(from, j + 1))
+            return obj && typeof obj === 'object' && !Array.isArray(obj) ? (obj as Record<string, unknown>) : undefined
+          } catch {
+            return undefined
+          }
+        }
+      }
+    }
+    return undefined
+  }
+
+  private toDraft(obj: Record<string, unknown>): PlanDraft | undefined {
+    if (!Array.isArray(obj.subtasks)) return undefined
+    return {
+      strategy: obj.strategy as PlanDraft['strategy'],
+      subtasks: obj.subtasks.map((s: any) => ({
+        title: String(s?.title || ''),
+        prompt: String(s?.prompt || ''),
+        agentId: String(s?.agentId || ''),
+        dependsOn: Array.isArray(s?.dependsOn) ? s.dependsOn.map(String) : [],
+      })),
     }
   }
 
-  /** 静态三段兜底拆解（沿袭 dsh-remote-orchestrator） */
+  /** 静态兜底拆解（规划器不可用时）。不做虚假的阶段分工：旧模板「方案规划专家→核心执行→质检」
+   *  会把同一目标原文塞给每个成员并错误角色化，导致重复执行与任务错位；改为统一执行指令、独立完成。 */
   public static fallbackPlan(objective: string, members: PlannerMember[]): PlanDraft {
-    const n = members.length
-    if (n === 1) {
+    const base = `【总目标】\n${objective}\n\n【执行要求】你是被指派的执行成员：直接执行目标中属于你的部分；若目标未明确分工，独立完成整个目标并输出你的执行结果与关键结论。不要提问，不要转派给其他成员，不要再次派发子任务。`
+    if (members.length === 1) {
       return {
         strategy: 'sequential',
-        subtasks: [{ title: '完整执行与验证', prompt: `请完成以下任务目标，并详细输出执行过程与最终验证结果：\n${objective}`, agentId: members[0].agent.id, dependsOn: [] }],
+        subtasks: [{ title: '完整执行与验证', prompt: base, agentId: members[0].agent.id, dependsOn: [] }],
       }
     }
-    const subtasks: PlanDraft['subtasks'] = [
-      {
-        title: '阶段一：需求分析与方案规划',
-        prompt: `作为方案规划专家，请针对以下总目标进行深入的技术选型、可行性分析与关键拆解规划：\n${objective}`,
-        agentId: members[0].agent.id,
-        dependsOn: [],
-      },
-      {
-        title: '阶段二：核心执行与具体实施',
-        prompt: `作为核心执行工程师，请针对以下总目标落实具体实现，产出核心方案、代码或详细交付内容：\n${objective}`,
-        agentId: members[1 % n].agent.id,
-        dependsOn: [],
-      },
-    ]
-    if (n >= 3) {
-      subtasks.push({
-        title: '阶段三：质量审查与优化建议',
-        prompt: `作为质检与安全审查员，请对上述总目标及其执行方案进行边界测试、安全审查与性能优化推演：\n${objective}`,
-        agentId: members[2 % n].agent.id,
-        dependsOn: [],
-      })
-    }
+    const subtasks: PlanDraft['subtasks'] = members.slice(0, 3).map((m, i) => ({
+      title: `执行${i + 1}：${m.agent.name}`,
+      prompt: base,
+      agentId: m.agent.id,
+      dependsOn: [],
+    }))
     return { strategy: 'parallel', subtasks }
   }
 
