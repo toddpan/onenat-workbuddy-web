@@ -1540,11 +1540,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
       </div>
       <div class="card">
         <h3 style="margin-bottom:12px">LLM 规划器（编排拆解）</h3>
-        <div class="field" style="max-width:420px">
-          <label>编排拆解器（@ 多个 sub agent 编排时拆解任务）</label>
-          <select id="set-planner-agent"></select>
-        </div>
-        <div class="settings-note" id="set-planner-note">普通任务直接在所选节点执行，不经规划器；仅当一条消息 @ 了多个 sub agent 走编排时，由该拆解器生成执行计划。拆解用模型可在聊天窗下方工具栏选择。</div>
+        <div class="settings-note">主任务拆解在<b>任务发起节点（主 DSH）</b>上执行，无需单独指定拆解器智能体；仅当一条消息 @ 了多个 sub agent 走编排时才需要拆解。拆解用模型可在聊天窗下方工具栏选择，仅作用于主调度。节点不可达时自动回退到可用的其他节点。</div>
       </div>
       <div class="card ai-card">
         <h3 style="margin-bottom:12px">AI 接入（一键安装提示词）</h3>
@@ -4935,7 +4931,6 @@ async function selectMainAgent(agentId) {
     if (btn) flashBtnOk(btn, '✓ 已切为「' + displayName + '」', mainAgentBtnLabel());
     hintComposer('✓ 主智能体已切到「' + displayName + '」');
     loadPlannerOptions();
-    if ($('set-planner-agent')) fillPlannerAgentSetting();
     if (state.currentTaskId) refreshChatHead();
   } else {
     toast(r.error || '切换主智能体失败', true);
@@ -6943,7 +6938,6 @@ function renderSettings() {
   $('set-refresh').value = s.onenat.autoRefreshMs || 60000;
   $('set-ai-token').value = s.aiToken || '';
   renderAiInstall();
-  fillPlannerAgentSetting();
 }
 /** AI 安装提示词：以浏览器当前访问地址为准（反代/远程场景自动匹配），内嵌 APIKEY，发给 AI 照做即可 */
 function renderAiInstall() {
@@ -6971,49 +6965,15 @@ $('btn-reset-ai-token').addEventListener('click', async () => {
     toast('✓ 新 APIKEY 已生成（无需重启）');
   } else toast(r.error || '生成失败', true);
 });
-async function fillPlannerAgentSetting() {
-  const sel = $('set-planner-agent'), note = $('set-planner-note');
-  const r = await api('/planner/options');
-  const d = (r.ok && r.data) || {};
-  const agents = d.agents || [];
-  const cur = d.current || {};
-  let opts = '';
-  const autoName = (agents.find(a => a.id === cur.agentId) || {}).name || (cur.auto ? '未配置' : '');
-  opts += '<option value=""' + (cur.auto ? ' selected' : '') + '>（自动）' + esc(autoName || '本地子智能体优先') + '</option>';
-  for (const a of agents) {
-    opts += '<option value="' + esc(a.id) + '"' + (!cur.auto && cur.agentId === a.id ? ' selected' : '') + '>' + esc(a.name) + '</option>';
-  }
-  sel.innerHTML = opts;
-  if (d.error) note.textContent = '⚠️ 规划器当前不可用：' + d.error + '。可在上方指定其他子智能体。';
-  else note.textContent = '主任务拆解由「' + (cur.auto ? autoName + '（自动）' : ((agents.find(a => a.id === cur.agentId) || {}).name || cur.agentId)) + '」完成；拆解用模型可在聊天窗下方工具栏选择，仅作用于主调度。';
-}
 $('btn-save-settings').addEventListener('click', async () => {
-  const plannerAgentId = $('set-planner-agent').value.trim();
   const payload = {
     onenat: { baseUrl: $('set-base').value.trim(), apiKey: $('set-key').value.trim(), autoRefreshMs: Number($('set-refresh').value) || 60000 },
-    planner: { agentId: plannerAgentId },
   };
   const r = await api('/settings', { method: 'POST', body: JSON.stringify(payload) });
   if (r.ok) {
     state.settings = r.data;
     toast('✓ 设置已保存');
     loadResources();
-    // 主智能体也可能在这里被改掉：走同一条切换通道，立即同步侧栏列表成员账本（免刷新）
-    const pr = await api('/planner/config', {
-      method: 'POST',
-      body: JSON.stringify({ agentId: plannerAgentId, taskId: state.currentTaskId || '' })
-    });
-    if (pr.ok) {
-      const d = pr.data || {};
-      applyMainAgentSelection({
-        agentId: d.agentId || '',
-        auto: !d.agentId,
-        resolvedAgentId: d.resolvedAgentId,
-        resolvedAgentName: d.resolvedAgentName,
-      });
-      applyTaskSummaries(d.tasks);
-      loadPlannerOptions();
-    }
   }
   else toast(r.error || '保存失败', true);
 });

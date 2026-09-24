@@ -852,10 +852,10 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
   const plannerManage: WorkBuddyToolDef = {
     name: 'workbuddy_planner_manage',
     description:
-      '查看与设置 WorkBuddy 主调度: 主任务拆解由哪个子智能体完成（agentId，空串=自动挑选）、主调度使用哪个模型。action: get（当前配置）/ set（修改）/ options（候选子智能体清单 + 当前节点可用模型列表）',
+      '查看与设置 WorkBuddy 主调度: 主任务拆解默认在任务发起节点（主 DSH）执行，无需指定拆解器智能体（agentId 仅作节点不可达时的兜底，空串=自动挑选）、主调度模型在此设置。action: get（当前配置）/ set（修改）/ options（候选子智能体清单 + 当前节点可用模型列表）',
     parameters: {
       action: { type: 'string', description: '操作: get / set / options' },
-      agentId: { type: 'string', description: 'set 用：拆解子智能体 ID；空串 = 自动挑选' },
+      agentId: { type: 'string', description: 'set 用：兜底拆解子智能体 ID（仅任务节点不可达时使用）；空串 = 自动挑选' },
       model: { type: 'string', description: 'set 用：主调度模型（provider/model-id，如 deepseek/deepseek-v3）；空串 = 默认模型' },
     },
     async execute(args) {

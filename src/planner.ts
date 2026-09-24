@@ -105,13 +105,19 @@ export class Planner {
     memberTargets: Map<string, DshTarget>,
     opts?: {
       priorityAgentIds?: string[]
+      /** 任务发起节点（主 DSH）：规划优先在该节点执行 —— 节点模型下无需单独指定拆解器智能体 */
+      taskNodeTarget?: DshTarget
       /** 阶段/思考日志回传（进任务日志抽屉 + SSE log 事件） */
       onLog?: (msg: string, level?: 'info' | 'warn') => void
       /** 主调度思考过程增量（实时进规划消息的思考块） */
       onReasoning?: (delta: string) => void
     },
   ): Promise<{ plan: PlanDraft; plannerModel?: string } | { error: string; raw?: string }> {
-    const picked = await this.pickTarget(memberTargets)
+    // 规划目标优先级：任务发起节点（主 DSH）→ 配置/自动挑选的拆解器子智能体（兜底：任务未绑定节点或节点不可达）
+    const nodeTarget = opts?.taskNodeTarget
+    const picked = nodeTarget?.baseUrl
+      ? { target: nodeTarget, source: '任务节点（主 DSH）', agent: undefined as unknown as SubAgent, auto: false }
+      : await this.pickTarget(memberTargets)
     if ('error' in picked) return { error: picked.error }
 
     const roster = members

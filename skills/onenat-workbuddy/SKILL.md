@@ -72,7 +72,7 @@ task_manage {action:"create", projectId:"proj-x",
 | `workbuddy_agent_manage` | 子智能体：list / upsert / delete / ping / preview / models / presets / enable / disable |
 | `workbuddy_project_manage` | 项目：list / get / upsert / delete |
 | `workbuddy_schedule_manage` | 定时任务：list / get / upsert / delete / toggle / run |
-| `workbuddy_planner_manage` | 编排拆解器：get / set / options |
+| `workbuddy_planner_manage` | 主调度：get / set（模型、兜底拆解智能体）/ options |
 | `workbuddy_file_manage` | 工作区文件：list / mkdir / upload / download / delete |
 | `workbuddy_resource_manage` | 资源目录：list / dsh / resolve / refresh |
 | `workbuddy_ssh_resource_manage` | SSH 资源池：list / get / upsert / delete / test / exec |
@@ -109,9 +109,9 @@ schedule_manage {action:"run", scheduleId:"sched-…"}     ← 手动触发验�
 `nodeMappingId` = 执行节点（主 DSH），到点任务在该节点直发；旧数据（仅 agentIds）自动回退到首个智能体绑定节点。
 `model` = 实例级模型（可选，provider/model 格式）：**无人值守任务建议固定为稳定模型**，留空跟随全局调度模型（模型按钮切错会影响无人值守任务）。
 
-### 指定编排拆解器（@ 多个 sub agent 编排时拆任务用）
+### 主调度（@ 多个 sub agent 编排时拆任务用）
 
-`planner_manage {action:"set", agentId:"agent-x", model:"deepseek/deepseek-v3"}`；`agentId:""` 恢复自动挑选。普通任务不经规划器。
+编排拆解默认在**任务发起节点（主 DSH）**上执行，无需指定拆解器智能体；`agentId` 仅作任务节点不可达时的兜底。模型：`planner_manage {action:"set", model:"zai-coding-cn/glm-5.3-flash"}`（建议给无人值守场景固定稳定模型）。普通任务不经规划器。
 
 ### 新建子智能体（sub agent）
 
