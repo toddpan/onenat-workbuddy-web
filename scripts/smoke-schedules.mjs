@@ -170,8 +170,10 @@ async function main() {
   check('准备 2 个子智能体', Boolean(id1) && Boolean(id2), `${id1} / ${id2}`)
 
   // ---------- 4. 创建 + 入参校验 ----------
+  // 新语义：无 @ 子智能体 = 主 DSH 直发（运行时回退首个在线 DSH），允许创建
   const bad1 = await req('POST', `${PREFIX}/api/schedules`, { name: '坏-无成员', agentIds: [], message: 'x', rule: { kind: 'interval', minutes: 5 } })
-  check('无子智能体被拒（400）', bad1.status === 400 && /至少指定一个/.test(bad1.json?.error || ''))
+  check('无子智能体允许创建（主 DSH 直发语义）', bad1.status === 200 && Boolean(bad1.json?.data?.id), `status=${bad1.status}`)
+  const bad1Del = await req('DELETE', `${PREFIX}/api/schedules/${bad1.json?.data?.id || ''}`)
   const bad2 = await req('POST', `${PREFIX}/api/schedules`, { name: '坏-未知成员', agentIds: ['agent-nope'], message: 'x', rule: { kind: 'interval', minutes: 5 } })
   check('未知子智能体被拒（400）', bad2.status === 400 && /不存在/.test(bad2.json?.error || ''))
   const bad3 = await req('POST', `${PREFIX}/api/schedules`, { name: '坏-空文本', agentIds: [id1], message: '  ', rule: { kind: 'interval', minutes: 5 } })
@@ -282,6 +284,7 @@ async function main() {
   const del = await req('DELETE', `${PREFIX}/api/schedules/${sid}`)
   const delOnce = await req('DELETE', `${PREFIX}/api/schedules/${onceId}`)
   const listAfterDel = await req('GET', `${PREFIX}/api/schedules`)
+  const delExtra = await req('DELETE', `${PREFIX}/api/schedules/${bad1.json?.data?.id || ''}`)
   check('删除定时任务', del.json?.data?.deleted === true && delOnce.json?.data?.deleted === true && (listAfterDel.json?.data || []).length === 0)
 
   // ---------- 结果 ----------
