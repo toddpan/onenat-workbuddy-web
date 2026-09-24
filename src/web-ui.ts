@@ -2520,6 +2520,7 @@ function renderProjects() {
       '<div class="ops" style="display:flex;gap:8px;margin-top:10px">' +
       '<button class="mini-btn pj-enter">🚀 进入工作台</button>' +
       '<button class="mini-btn pj-edit">⚙ 编辑</button>' +
+      '<button class="mini-btn pj-copy">📋 复制</button>' +
       '<button class="mini-btn pj-del">🗑 删除</button></div>' +
       '</div>';
   }).join('');
@@ -2527,6 +2528,20 @@ function renderProjects() {
     var pid = card.dataset.proj;
     card.querySelector('.pj-enter').addEventListener('click', function () { enterProject(pid); });
     card.querySelector('.pj-edit').addEventListener('click', function () { openProjectDrawer(pid); });
+    card.querySelector('.pj-copy').addEventListener('click', function () {
+      // 复制：preset 通道进「新建」抽屉；只复制配置（节点/工作区/指令/专家/连接器/技能），任务历史不带走
+      const src = state.projects.find(function (x) { return x.id === pid; });
+      if (!src) return;
+      openProjectDrawer(null, {
+        name: src.name + ' - 副本',
+        workspace: src.workspace || '',
+        instruction: src.instruction || '',
+        expertIds: (src.expertIds || []).slice(),
+        connectorIds: (src.connectorIds || []).slice(),
+        skillNames: (src.skillNames || []).slice(),
+        nodeRef: src.dshRef || null,
+      });
+    });
     card.querySelector('.pj-del').addEventListener('click', async function () {
       if (!confirm('删除项目「' + (state.projects.find(function (x) { return x.id === pid; }) || {}).name + '」？项目下的任务不会被删除。')) return;
       const r = await api('/projects/' + encodeURIComponent(pid), { method: 'DELETE' });
@@ -5465,7 +5480,7 @@ function renderAgents() {
       '<div class="desc">DSH 实体: <span class="mono">' + esc(dshDesc) + '</span><br>绑定资源: ' + esc(resDesc) +
       '<br>绑定技能: <span class="mono">' + (skillNames.length ? skillNames.map(s => '<span class="tag" style="margin:2px 4px 2px 0">🎯 ' + esc(s) + '</span>').join('') : '<span class="sub">无</span>') + '</span>' +
       (a.systemPrompt ? '<br>角色: ' + esc(a.systemPrompt.slice(0, 80)) : '') + '</div>' +
-      '<div class="ops"><button class="btn pri" data-op="enter">🚀 进入工作台</button><button class="btn" data-op="edit">编辑</button><button class="btn" data-op="ping">Ping 探活</button><button class="btn" data-op="preview">提示词预览</button><button class="btn" data-op="skills">🎯 技能</button><button class="btn danger" data-op="del">删除</button></div>';
+      '<div class="ops"><button class="btn pri" data-op="enter">🚀 进入工作台</button><button class="btn" data-op="edit">编辑</button><button class="btn" data-op="copy">📋 复制</button><button class="btn" data-op="ping">Ping 探活</button><button class="btn" data-op="preview">提示词预览</button><button class="btn" data-op="skills">🎯 技能</button><button class="btn danger" data-op="del">删除</button></div>';
     card.querySelector('[data-op=enter]').addEventListener('click', async () => {
       // 新模型：进入工作台并把任务节点切到该智能体绑定的节点（主 DSH 跟节点走）
       if (state.projectId) exitProject();
@@ -5475,6 +5490,10 @@ function renderAgents() {
       else initNodeState();
     });
     card.querySelector('[data-op=edit]').addEventListener('click', () => openAgentDrawer(a));
+    card.querySelector('[data-op=copy]').addEventListener('click', () => {
+      // 复制：完整配置进抽屉、id 剥掉 → 保存走「新建」；只复制配置，不带任务历史与会话
+      openAgentDrawer(Object.assign({}, a, { id: undefined, name: a.name + ' - 副本' }), true);
+    });
     card.querySelector('[data-op=skills]').addEventListener('click', () => openSkillCenter(a));
     card.querySelector('[data-op=ping]').addEventListener('click', async () => {
       toast('探测中…');
@@ -5626,9 +5645,10 @@ function skillRowHtml(s, bound, i) {
     '<button class="mini-btn danger" data-sk="del" data-name="' + esc(s.name) + '">删除</button></div></div>';
 }
 
-function openAgentDrawer(agent) {
-  const isEdit = Boolean(agent);
-  openDrawer(isEdit ? '编辑子智能体' : '新建子智能体');
+function openAgentDrawer(agent, copyMode) {
+  // copyMode: 传入了带完整配置的源对象但 id 已剥掉 —— 抽屉按「新建」保存（POST 无 id 即创建）
+  const isEdit = Boolean(agent) && !copyMode;
+  openDrawer(copyMode ? '复制子智能体（另存为新实体）' : (isEdit ? '编辑子智能体' : '新建子智能体'));
   const dshOptions = state.resources.filter(x => x.kind === 'dsh' && x.online)
     .map(x => '<option value="mapping:' + esc(x.mappingId) + '">' + esc(x.tunnelName + ' · ' + (x.appName || x.note) + ' → ' + x.baseUrl) + '</option>').join('');
   const resOptions = state.resources.map(x => '<option value="' + esc(x.mappingId) + '">' + esc('[' + x.kind + '] ' + x.tunnelName + ' · ' + (x.appName || x.note || x.mappingId) + (x.online ? '' : '（离线）')) + '</option>').join('');
@@ -5653,7 +5673,7 @@ function openAgentDrawer(agent) {
     '<div class="ops" style="display:flex;gap:10px;margin-top:14px"><button class="btn pri" id="ag-save">保存</button><button class="btn" id="ag-cancel">取消</button></div>';
 
   const dshSel = $('ag-dsh'), directInput = $('ag-direct');
-  if (isEdit && agent.dshRef) {
+  if (agent && agent.dshRef) {
     if (agent.dshRef.kind === 'mapping') dshSel.value = 'mapping:' + agent.dshRef.mappingId;
     else if (agent.dshRef.kind === 'direct') { dshSel.value = 'direct:'; directInput.style.display = ''; directInput.value = agent.dshRef.apiBaseUrl; }
   }
@@ -5795,6 +5815,10 @@ function collectAgent(existing) {
   if ($('ag-model').value.trim()) payload.model = $('ag-model').value.trim();
   payload.workDir = $('ag-workdir').value.trim() || '';
   if (existing && existing.id) payload.id = existing.id;
+  // 复制场景（无 id 新建）必须显式携带：upsertAgent 对新实体不会从 target 兜底这些字段
+  if (existing && existing.skills) payload.skills = existing.skills;
+  if (existing && existing.tags) payload.tags = existing.tags;
+  if (existing && existing.description) payload.description = existing.description;
   return payload;
 }
 
@@ -6050,10 +6074,12 @@ function renderSchedules() {
       ' · 已运行 <b>' + (s.totalRuns || 0) + '</b> 次' +
       (successRate !== null ? ' · 派发成功率 ' + successRate + '%' : '') + '</div>' +
       '<div class="ops"><button class="btn" data-op="detail">详情</button><button class="btn" data-op="edit">编辑</button>' +
+      '<button class="btn" data-op="copy">📋 复制</button>' +
       '<button class="btn" data-op="run">▶ 立即执行</button><button class="btn" data-op="toggle">' + (s.enabled ? '停用' : '启用') + '</button>' +
       '<button class="btn danger" data-op="del">删除</button></div>';
     card.querySelector('[data-op=detail]').addEventListener('click', () => openScheduleDetail(s.id));
     card.querySelector('[data-op=edit]').addEventListener('click', () => openScheduleDrawer(s));
+    card.querySelector('[data-op=copy]').addEventListener('click', () => openScheduleDrawer(s, null, true));
     card.querySelector('[data-op=run]').addEventListener('click', async () => {
       const runBtn = card.querySelector('[data-op=run]')
       if (runBtn.disabled) return
@@ -6087,16 +6113,28 @@ function renderSchedules() {
   }
 }
 
-async function openScheduleDrawer(s, tpl) {
-  const isEdit = Boolean(s);
-  // 列表传来的是摘要（无 message 全文）→ 编辑前先拉详情补全，否则指令不回显
-  if (isEdit && s.message === undefined) {
+async function openScheduleDrawer(s, tpl, copyMode) {
+  // copyMode: 复制既有任务 —— 拉全量配置、剥掉 id 与运行时字段，按「新建」保存（POST 无 id 即创建）
+  const isEdit = Boolean(s) && !copyMode;
+  // 列表传来的是摘要（无 message 全文）→ 编辑/复制前先拉详情补全，否则指令不回显
+  if (s && s.message === undefined && s.id) {
     const r = await api('/schedules/' + s.id);
     if (!r.ok) { toast(r.error || '加载定时任务失败', true); return; }
     s = r.data;
   }
+  if (copyMode && s) {
+    s = Object.assign({}, s, {
+      id: undefined,
+      name: s.name + ' - 副本',
+      runs: undefined, totalRuns: undefined, successRuns: undefined,
+      lastRunAt: undefined, nextRunAt: undefined, lastRunOk: undefined, lastRunError: undefined,
+      // 过期的一次性时刻保存会被拒：复制时自动顺延 1 小时，用户可在表单里改
+      rule: (s.rule && s.rule.kind === 'once' && Number(s.rule.at) <= Date.now())
+        ? { kind: 'once', at: Date.now() + 3_600_000 } : s.rule,
+    });
+  }
   const prefill = tpl || {};
-  openDrawer(isEdit ? '编辑定时任务' : (prefill.id ? '新建定时任务（模板: ' + prefill.name + '）' : '新建定时任务'));
+  openDrawer(copyMode ? '复制定时任务（另存为新任务）' : (isEdit ? '编辑定时任务' : (prefill.id ? '新建定时任务（模板: ' + prefill.name + '）' : '新建定时任务')));
   $('drawer-body').innerHTML =
     '<div class="field"><label>任务标题</label><input id="sc-name" value="' + esc(s ? s.name : (prefill.name || '')) + '" placeholder="如: 每日站会摘要"></div>' +
     '<div class="field"><label>执行节点（主 DSH：主会话在该节点上直发，@ sub agent 回其绑定节点远程执行）</label>' +
@@ -6248,7 +6286,7 @@ async function openScheduleDrawer(s, tpl) {
   $('sc-save').addEventListener('click', async () => {
     const btn = $('sc-save');
     if (btn.disabled) return;
-    const payload = collectSchedule(isEdit ? s : null);
+    const payload = collectSchedule(s && (isEdit || copyMode) ? s : null);
     if (!payload) return;
     btn.disabled = true; btn.textContent = '保存中…';
     try {
