@@ -127,6 +127,7 @@ export class WorkBuddyRouter {
       dshRef: proj.dshRef,
       nodeTitle: nodeTitle || '(未配置节点)',
       workspace: proj.workspace || '',
+      instruction: proj.instruction || '',
       instructionPreview: (proj.instruction || '').slice(0, 120),
       expertIds: proj.expertIds,
       experts: proj.expertIds.map((id) => ({ id, name: this.store.getAgent(id)?.name || id })),
