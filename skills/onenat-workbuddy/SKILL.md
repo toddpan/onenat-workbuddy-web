@@ -105,7 +105,7 @@ schedule_manage {action:"upsert", schedule:{name:"每日站会纪要", nodeMappi
 schedule_manage {action:"run", scheduleId:"sched-…"}     ← 手动触发验证
 ```
 
-规则：daily(times) / weekly(days,time) / hourly(minute) / monthly(days,time) / interval(minutes) / once(at)。
+规则：daily(times) / weekly(days,time) / hourly(minute) / monthly(days,time) / interval(minutes) / once(at，**毫秒时间戳**如 `Date.now()+3600000`，不接受日期字符串)。
 `nodeMappingId` = 执行节点（主 DSH），到点任务在该节点直发；旧数据（仅 agentIds）自动回退到首个智能体绑定节点。
 `model` = 实例级模型（可选，provider/model 格式）：**无人值守任务建议固定为稳定模型**，留空跟随全局调度模型（模型按钮切错会影响无人值守任务）。
 
