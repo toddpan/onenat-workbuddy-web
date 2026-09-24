@@ -207,7 +207,7 @@ async function main() {
   // ---------- 6. 工具 HTTP 通道 ----------
   const toolList = await req('GET', `${PREFIX}/api/tools`)
   const toolNames = (toolList.json?.tools || []).map((t) => t.name)
-  check('工具清单暴露 11 个工具', toolList.status === 200 && toolNames.length === 11, toolNames.join(','))
+  check('工具清单暴露 12 个工具', toolList.status === 200 && toolNames.length === 12 && toolNames.includes('workbuddy_project_manage'), toolNames.join(','))
   check('工具清单含参数 schema', (toolList.json?.tools || []).every((t) => t.parameters && typeof t.parameters === 'object'))
 
   const toolListCall = await req('POST', `${PREFIX}/api/tools/workbuddy_resource_manage`, { action: 'list' })
