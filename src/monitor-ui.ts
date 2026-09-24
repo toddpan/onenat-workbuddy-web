@@ -159,7 +159,9 @@ header .sub { color: var(--tx3); font-size: 12.5px; }
 
   <div class="grid">
     <div class="panel">
-      <h2>🤖 子智能体 <span class="cnt" id="ag-cnt"></span><span class="spacer"></span><span class="mini">绿=在线 · 红=离线 · 灰=停用</span></h2>
+      <h2>🖥 节点主会话 <span class="cnt" id="node-cnt"></span><span class="spacer"></span><span class="mini">无 @ 直发 · 项目 · 定时落点</span></h2>
+      <div class="agent-list" id="nodes" style="max-height:30vh"><div class="empty">加载中…</div></div>
+      <h2 style="margin-top:16px">🤖 子智能体 <span class="cnt" id="ag-cnt"></span><span class="spacer"></span><span class="mini">绿=在线 · 红=离线 · 灰=停用</span></h2>
       <div class="agent-list" id="agents"><div class="empty">加载中…</div></div>
     </div>
     <div class="panel">
@@ -263,6 +265,36 @@ function renderKpi(k) {
     html += '<div class="kpi"><div class="lb">' + t.lb + '</div><div class="v ' + t.cls + '">' + t.v + '</div><div class="d">' + t.d + '</div></div>';
   }
   document.getElementById('kpis').innerHTML = html;
+}
+
+function renderNodes(nodes) {
+  var el = document.getElementById('nodes');
+  if (!el) return;
+  var onlineCnt = nodes.filter(function(n) { return n.online; }).length;
+  document.getElementById('node-cnt').textContent = onlineCnt + '/' + nodes.length + ' 在线';
+  if (!nodes.length) { el.innerHTML = '<div class="empty">未发现 DSH 节点</div>'; return; }
+  var ordered = nodes.slice().sort(function(a, b) {
+    return (b.runningCount - a.runningCount) || ((b.lastActivityAt || 0) - (a.lastActivityAt || 0));
+  });
+  var html = '';
+  for (var i = 0; i < ordered.length; i++) {
+    var n = ordered[i];
+    var badge = n.runningCount
+      ? '<span class="badge busy">⚡ 执行中 ×' + n.runningCount + '</span>'
+      : (n.online ? '<span class="badge idle">空闲</span>' : '<span class="badge idle" style="color:var(--err)">离线</span>');
+    var last = n.lastTaskTitle
+      ? '<div class="act" style="color:var(--tx3)">最近：' + esc(n.lastTaskTitle) + (n.lastActivityAt ? ' · ' + new Date(n.lastActivityAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '') + '</div>'
+      : '';
+    var act = (n.runningCount && n.currentActivity)
+      ? '<div class="act">▸ <b>' + esc(n.currentActivity) + '</b></div>' : last;
+    var chips = '<span class="res-chip on">今日 ' + n.tasksToday + ' 任务</span><span class="res-chip">累计 ' + n.tasksTotal + '</span>';
+    if (n.tunnelName && n.tunnelName !== n.name) chips += '<span class="res-chip">' + esc(n.tunnelName) + '</span>';
+    html += '<div class="agent"><div class="row1"><span class="st ' + (n.online ? 'on' : 'off') + '"></span><span class="nm">🖥 ' + esc(n.name) + '</span>' +
+      '<span class="md">' + esc(n.model || '') + '</span><span class="spacer"></span>' + badge + '</div>' + act +
+      '<div class="res">' + chips + '</div>' +
+      '</div>';
+  }
+  el.innerHTML = html;
 }
 
 function renderAgents(agents) {
@@ -471,6 +503,7 @@ async function poll() {
   txt.textContent = '实时连接正常';
   overview = r.data;
   renderKpi(overview.kpi);
+  renderNodes(overview.nodes || []);
   renderAgents(overview.agents || []);
   renderTasks(overview.tasks || []);
   renderFeed(overview.events || []);
