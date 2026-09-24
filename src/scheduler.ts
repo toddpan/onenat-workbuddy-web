@@ -32,6 +32,7 @@ export class ScheduleRunner {
     private store: WorkStore,
     private engine: TaskEngine,
     private log: (msg: string) => void = () => {},
+    private directory?: import('./onenat.js').OnenatDirectory,
   ) {}
 
   public start(): void {
@@ -104,15 +105,25 @@ export class ScheduleRunner {
       const validAgents = s.agentIds
         .map((aid) => this.store.getAgent(aid))
         .filter((a): a is NonNullable<typeof a> => Boolean(a))
-      // 主 DSH 节点：新模型优先 schedule.nodeMappingId；存量无节点时回退首个子智能体的绑定映射节点
+      // 主 DSH 节点：新模型优先 schedule.nodeMappingId；存量无节点时回退首个子智能体的绑定映射节点；
+      // 仍无节点（无 @ 子智能体 + 未配置节点）→ 用户语义「无子智能体=主 DSH 执行」：取目录首个在线 DSH 作为主节点
       const legacyNodeMappingId = validAgents.find((a) => a.dshRef?.kind === 'mapping' && a.dshRef.mappingId)?.dshRef as { kind: 'mapping'; mappingId: string } | undefined
-      const nodeMappingId = s.nodeMappingId || legacyNodeMappingId?.mappingId || ''
+      let nodeMappingId = s.nodeMappingId || legacyNodeMappingId?.mappingId || ''
+      let nodeFallbackNote = ''
+      if (!nodeMappingId) {
+        const onlineDsh = this.directory?.listDshEndpoints().find((e: any) => e.online && e.baseUrl && e.mappingId)
+        if (onlineDsh?.mappingId) {
+          nodeMappingId = onlineDsh.mappingId
+          nodeFallbackNote = `（未配置执行节点，已回退首个在线 DSH「${onlineDsh.tunnelName || onlineDsh.mappingId}」）`
+          this.log(`定时任务「${s.name}」未配置执行节点且无 @ 子智能体，已回退首个在线 DSH「${onlineDsh.tunnelName || onlineDsh.mappingId}」执行`)
+        }
+      }
       const nodeRef = nodeMappingId ? { kind: 'mapping' as const, mappingId: nodeMappingId } : undefined
       // 单任务派发：指令原样交给 TaskEngine（与「新建任务」输入框同语义）——
       // 引擎 extractMentions 解析 @子智能体（@多个=协同编排）与 @资源（入口/凭证按绑定策略注入提示词）
       const items: ScheduleRunItem[] = []
       if (!validAgents.length && !nodeRef) {
-        items.push({ agentId: s.agentIds[0] || '', agentName: s.agentIds[0] || '（无目标）', error: '子智能体不存在（可能已删除）且未配置任务节点' })
+        items.push({ agentId: s.agentIds[0] || '', agentName: s.agentIds[0] || '（无目标）', error: '任务未配置执行节点，且当前没有任何在线 DSH 节点可回退；请在编辑中选择执行节点' })
       } else {
         let lastErr = ''
         for (let attempt = 1; attempt <= 1 + DISPATCH_RETRIES; attempt++) {
@@ -131,7 +142,8 @@ export class ScheduleRunner {
                 items.push({ agentId: a.id, agentName: a.name, taskId: task.id, taskTitle: task.title, attempts: attempt })
               }
             } else {
-              items.push({ agentId: '__node__', agentName: '节点主会话', taskId: task.id, taskTitle: task.title, attempts: attempt })
+              const nodeTitle = nodeMappingId === s.nodeMappingId ? (s.nodeMappingId || '') : nodeMappingId
+              items.push({ agentId: '__node__', agentName: `主 DSH 执行${nodeFallbackNote}`, taskId: task.id, taskTitle: task.title, attempts: attempt })
             }
             break
           } catch (err: any) {
