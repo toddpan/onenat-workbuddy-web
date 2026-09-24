@@ -275,8 +275,12 @@ export class Planner {
     return { strategy: 'parallel', subtasks }
   }
 
-  /** 综合各子任务产出生成汇总（LLM 结论 + 静态兜底） */
-  public async summarize(objective: string, subtasks: PlanSubtask[], memberTargets: Map<string, DshTarget>): Promise<TaskSummary> {
+  /**
+   * 综合各子任务产出生成汇总（LLM 结论 + 静态兜底）。
+   * taskNodeTarget：任务发起节点的 target——有则汇总在该节点上执行（最终产物归属发起节点）；
+   * 未传时回退规划器主智能体的绑定节点。
+   */
+  public async summarize(objective: string, subtasks: PlanSubtask[], memberTargets: Map<string, DshTarget>, taskNodeTarget?: DshTarget): Promise<TaskSummary> {
     const completed = subtasks.filter((s) => s.status === 'completed').length
     const failed = subtasks.filter((s) => s.status === 'failed').length
     const total = subtasks.length
@@ -292,7 +296,10 @@ export class Planner {
     })
 
     let finalConclusion = ''
-    const picked = await this.pickTarget(memberTargets)
+    // 最终产物归属发起节点：任务节点可达时汇总在其上执行；否则回退规划器主智能体节点
+    const picked = taskNodeTarget
+      ? { target: taskNodeTarget }
+      : await this.pickTarget(memberTargets)
     if ('target' in picked) {
       const digest = subtasks
         .map((s) => `## ${s.title} [${s.status}]\n${(s.result?.content || s.error || '').slice(0, 1200)}`)
