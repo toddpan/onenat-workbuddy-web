@@ -1,6 +1,6 @@
 {
   "name": "onenat-workbuddy-web",
-  "version": "2026.9.15",
+  "version": "2026.9.24",
   "description": "OneNat WorkBuddy — 独立部署的多智能体协作 WEB 服务（基于 ONENAT 资源面 + 多 DSH 算力面：任务多轮聊天 / 子智能体 / 资源提示词注入 / LLM 编排）",
   "private": true,
   "repository": {

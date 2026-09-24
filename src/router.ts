@@ -1544,14 +1544,13 @@ export class WorkBuddyRouter {
         this.sendJson(res, 400, { ok: false, error: '该成员在任务中没有远端会话绑定', code: 'NO_SESSION' })
         return true
       }
+      // 节点主会话（__node__）无 store 记录：按任务节点解析答复目标
       const agent = this.store.getAgent(agentId)
-      if (!agent) {
-        this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
-        return true
-      }
-      const target = await this.resolver.resolve(agent)
-      if (!target.online || !target.baseUrl) {
-        this.sendJson(res, 502, { ok: false, error: target.error || '成员节点当前不可达' })
+      const target = agent
+        ? await this.resolver.resolve(agent)
+        : await this.engine.resolveExecTarget(task, agentId)
+      if (!target || !target.online || !target.baseUrl) {
+        this.sendJson(res, 502, { ok: false, error: (target as any)?.error || '成员节点当前不可达' })
         return true
       }
       const answers = Array.isArray(body?.answers) ? body.answers : []
@@ -1574,21 +1573,20 @@ export class WorkBuddyRouter {
         this.sendJson(res, 404, { ok: false, error: 'Task not found' })
         return true
       }
-      // 未指定 agentId 时默认作用于「当前主智能体」（与聊天窗模型切换语义一致）
-      const agentId = String(body?.agentId || '') || this.planner.pickMainAgent()?.id || ''
+      // 未指定 agentId 时：优先任务的主会话（__node__），否则当前主智能体（与聊天窗模型切换语义一致）
+      const agentId = String(body?.agentId || '') || (task.sessions?.['__node__']?.remoteSessionId ? '__node__' : this.planner.pickMainAgent()?.id || '')
       const binding = task.sessions?.[agentId]
       if (!agentId || !binding?.remoteSessionId) {
         this.sendJson(res, 400, { ok: false, error: '该成员在任务中没有远端会话绑定', code: 'NO_SESSION' })
         return true
       }
+      // 节点主会话（__node__）无 store 记录：按任务节点解析
       const agent = this.store.getAgent(agentId)
-      if (!agent) {
-        this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
-        return true
-      }
-      const target = await this.resolver.resolve(agent)
-      if (!target.online || !target.baseUrl) {
-        this.sendJson(res, 502, { ok: false, error: target.error || '成员节点当前不可达' })
+      const target = agent
+        ? await this.resolver.resolve(agent)
+        : await this.engine.resolveExecTarget(task, agentId)
+      if (!target || !target.online || !target.baseUrl) {
+        this.sendJson(res, 502, { ok: false, error: (target as any)?.error || '成员节点当前不可达' })
         return true
       }
       const r = await this.client.updateSessionModel(target, binding.remoteSessionId, {
