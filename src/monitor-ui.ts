@@ -69,6 +69,23 @@ header .sub { color: var(--tx3); font-size: 12.5px; }
 .agent .st.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
 .agent .st.off { background: var(--err); box-shadow: 0 0 8px var(--err); }
 .agent .st.dis { background: var(--tx3); }
+@keyframes breath { 0%, 100% { opacity: 1; box-shadow: 0 0 5px var(--ok); } 50% { opacity: .4; box-shadow: 0 0 12px var(--ok); } }
+.agent .st.busy { background: var(--ok); animation: breath 1.4s ease-in-out infinite; }
+/* live 条 */
+.agent .live { margin-top: 7px; padding: 7px 10px; background: rgba(56,189,248,.06); border: 1px solid rgba(56,189,248,.16); border-radius: 9px; }
+.agent .live.tool { background: rgba(52,211,153,.07); border-color: rgba(52,211,153,.2); }
+.agent .live-row { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--tx2); white-space: nowrap; overflow: hidden; }
+.agent .live-row b { color: var(--tx); }
+.live-tag { flex: none; font-size: 10.5px; border-radius: 5px; padding: 1px 6px; border: 1px solid rgba(52,211,153,.45); color: var(--ok); }
+.live-tag.think { border-color: rgba(56,189,248,.4); color: var(--pri); }
+.agent .args { color: var(--tx3); font-family: var(--mono); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+@keyframes blink { 0%, 100% { opacity: .2; } 50% { opacity: 1; } }
+.live-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); margin-left: auto; animation: blink 1.1s ease-in-out infinite; }
+.live:not(.tool) .live-dot { background: var(--pri); }
+.live-sub { margin-top: 4px; font-size: 11.5px; color: var(--tx3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.live-prog { margin-top: 6px; height: 4px; border-radius: 2px; background: rgba(148,163,184,.15); overflow: hidden; }
+.live-prog span { display: block; height: 100%; border-radius: 2px; background: linear-gradient(90deg, var(--pri), var(--ok)); transition: width .8s ease; }
+.live-meta { margin-top: 4px; font-size: 11px; color: var(--tx3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .agent .nm { font-weight: 700; font-size: 14.5px; }
 .agent .md { color: var(--tx3); font-size: 11.5px; }
 .agent .spacer { flex: 1; }
@@ -326,8 +343,30 @@ function renderAgents(agents) {
     var act = a.busy && a.currentActivity
       ? '<div class="act">▸ <b>' + esc(a.currentActivity) + '</b></div>'
       : (a.online ? '' : '<div class="act" style="color:var(--err)">' + esc(a.error || '不可达') + '</div>');
-    html += '<div class="agent"><div class="row1"><span class="st ' + stCls + '"></span><span class="nm">' + esc(a.name) + '</span>' +
-      '<span class="md">' + esc(a.model || '') + '</span><span class="spacer"></span>' + badge + '</div>' + act +
+    var liveHtml = '';
+    if (a.busy && a.live) {
+      var lv = a.live;
+      var agoS = lv.lastToolAt ? Math.max(0, Math.round((Date.now() - lv.lastToolAt) / 1000)) : null;
+      var stateLine;
+      if (lv.state === 'tool' && lv.latestTool) {
+        stateLine = '<span class="live-tag">工具</span> <b>' + esc(lv.latestTool.name) + '</b>' +
+          (lv.latestTool.argsHead ? ' <span class="args">' + esc(lv.latestTool.argsHead) + '</span>' : '');
+      } else {
+        stateLine = '<span class="live-tag think">思考</span> 模型生成中' +
+          (agoS != null ? ' · 上次工具 ' + (agoS >= 60 ? Math.floor(agoS / 60) + ' 分 ' + (agoS % 60) + ' 秒' : agoS + ' 秒') + '前' : ' · 等待首个输出');
+      }
+      var pct = null;
+      if (lv.subtasks && lv.subtasks.total) pct = Math.round(100 * lv.subtasks.completed / lv.subtasks.total);
+      else if (lv.todosTotal) pct = Math.round(100 * lv.todosDone / lv.todosTotal);
+      liveHtml = '<div class="live' + (lv.state === 'tool' ? ' tool' : '') + '">' +
+        '<div class="live-row">' + stateLine + '<span class="live-dot"></span></div>' +
+        (lv.todoCurrent ? '<div class="live-sub">▸ ' + esc(lv.todoCurrent) + '</div>' : '') +
+        (pct != null ? '<div class="live-prog"><span style="width:' + pct + '%"></span></div><div class="live-meta">' +
+          (lv.subtasks && lv.subtasks.total ? '子任务 ' + lv.subtasks.completed + '/' + lv.subtasks.total : '清单 ' + lv.todosDone + '/' + lv.todosTotal) + ' · ' + esc(lv.taskTitle) + '</div>' : '') +
+        '</div>';
+    }
+    html += '<div class="agent' + (a.busy ? ' running' : '') + '"><div class="row1"><span class="st ' + stCls + (a.busy ? ' busy' : '') + '"></span><span class="nm">' + esc(a.name) + '</span>' +
+      '<span class="md">' + esc(a.model || '') + '</span><span class="spacer"></span>' + badge + '</div>' + act + liveHtml +
       (resChips ? '<div class="res">' + resChips + '</div>' : '') +
       '</div>';
   }
