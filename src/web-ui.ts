@@ -1174,16 +1174,19 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 /* ---------- 监控大屏 ---------- */
 .mon-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
 .mon-status { color: var(--tx3); font-size: 12px; }
-.mon-kpis { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; margin-bottom: 12px; }
-.mon-kpi { background: var(--bg2); border: 1px solid var(--line); border-radius: var(--rad); padding: 9px 12px; min-width: 0; }
-.mon-kpi .lb { color: var(--tx3); font-size: 11.5px; white-space: nowrap; }
-.mon-kpi .v { font-size: 19px; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mon-kpi .d { color: var(--tx3); font-size: 10.5px; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mon-kpis { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; margin-bottom: 10px; }
+.mon-kpi { background: var(--bg2); border: 1px solid var(--line); border-radius: var(--rad); padding: 5px 11px; min-width: 0; }
+.mon-kpi .lb { color: var(--tx3); font-size: 11px; white-space: nowrap; }
+.mon-kpi .v { font-size: 16px; font-weight: 700; margin-top: 1px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mon-kpi .d { color: var(--tx3); font-size: 10px; margin-top: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mon-kpi .v.ok { color: var(--ok); } .mon-kpi .v.err { color: var(--err); }
 .mon-kpi .v.pri { color: var(--pri); } .mon-kpi .v.warn { color: var(--warn); }
-.mon-alerts { display: none; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.mon-alerts { display: none; gap: 6px; flex-wrap: nowrap; margin-bottom: 10px; overflow: hidden; }
 .mon-alerts.on { display: flex; }
-.mon-alert { font-size: 12px; border: 1px solid rgba(248,113,113,.4); background: var(--err-light); color: #fca5a5; border-radius: 8px; padding: 4px 10px; }
+.mon-alert { font-size: 11.5px; border: 1px solid rgba(248,113,113,.4); background: var(--err-light); color: #fca5a5; border-radius: 8px; padding: 3px 10px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mon-alert.link { cursor: pointer; }
+.mon-alert.link:hover { border-color: var(--err); color: #fecaca; }
+.mon-alert.more { color: var(--tx3); border-style: dashed; background: transparent; flex: none; }
 .mon-alert.warn { border-color: rgba(251,191,36,.4); background: var(--warn-light); color: #fcd34d; }
 .mon-grid { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 5fr) minmax(0, 4fr); gap: 12px; align-items: start; }
 .mon-col { min-width: 0; }
@@ -1192,6 +1195,10 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .mon-sec-title .spacer { flex: 1; }
 .mon-list { display: flex; flex-direction: column; gap: 7px; max-height: 44vh; overflow: auto; padding-right: 2px; }
 .mon-agent, .mon-task { border: 1px solid var(--line); border-radius: var(--rad); background: var(--bg2); padding: 8px 11px; cursor: pointer; transition: border-color .15s; min-width: 0; }
+.mon-task.done { padding: 5px 11px; background: color-mix(in srgb, var(--bg2) 88%, transparent); }
+.mon-task.done .mon-nm { font-weight: 500; color: var(--tx2); }
+.mon-meta { margin-top: 2px; font-size: 11px; color: var(--tx3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mon-meta .sep { margin: 0 5px; opacity: .55; }
 .mon-agent:hover, .mon-task:hover { border-color: var(--line2); }
 .mon-row1 { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .mon-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--tx3); flex: none; }
@@ -1243,7 +1250,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .mon-bar { margin-top: 5px; height: 3px; border-radius: 3px; background: var(--line); overflow: hidden; }
 .mon-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--pri), var(--ok)); transition: width .5s; }
 .mon-feed { display: flex; flex-direction: column; max-height: 60vh; overflow: auto; }
-.mon-ev { display: flex; gap: 7px; padding: 4px 2px; border-bottom: 1px dashed var(--line); font-size: 12px; line-height: 1.45; }
+.mon-ev { display: flex; gap: 7px; padding: 3px 2px; border-bottom: 1px dashed var(--line); font-size: 11.5px; line-height: 1.4; }
 .mon-ev:last-child { border-bottom: none; }
 .mon-ev .t { color: var(--tx3); font-size: 11px; font-variant-numeric: tabular-nums; flex: none; padding-top: 1px; }
 .mon-ev .m { color: var(--tx2); min-width: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
@@ -1468,7 +1475,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           </div>
           <div class="mon-col">
             <div class="mon-sec-title">📋 任务会话 <span class="cnt" id="mon-task-cnt"></span><span class="spacer"></span><span style="color:var(--tx3);font-weight:400;font-size:11px">⏰ 定时 · 🎯 编排 · 💬 直通</span></div>
-            <div class="mon-list" id="mon-tasks"><div class="mon-empty">加载中…</div></div>
+            <div class="mon-list" id="mon-tasks" style="max-height:56vh"><div class="mon-empty">加载中…</div></div>
           </div>
           <div class="mon-col">
             <div class="mon-sec-title">🔔 实时动态</div>
@@ -2018,18 +2025,19 @@ var MON_EV_ICON = {
 
 function renderMonKpis(k) {
   var tiles = [
-    { lb: '🤖 在线智能体', v: k.agentsOnline + ' / ' + k.agentsTotal, cls: k.agentsOnline ? 'ok' : 'err', d: k.agentsBusy + ' 执行中' + (k.agentsDisabled ? ' · ' + k.agentsDisabled + ' 停用' : '') },
-    { lb: '⚡ 运行中任务', v: String(k.tasksRunning), cls: 'pri', d: '并发执行' },
-    { lb: '✅ 今日完成', v: String(k.tasksCompletedToday), cls: 'ok', d: '自 0 点' },
-    { lb: '❌ 今日失败', v: String(k.tasksFailedToday), cls: k.tasksFailedToday ? 'err' : '', d: k.tasksFailedToday ? '需关注' : '正常' },
-    { lb: '🪙 今日 Token', v: monFmtTok(k.tokensInputToday + k.tokensOutputToday), cls: '', d: '缓存命中 ' + monFmtTok(k.cacheReadToday) },
-    { lb: '🛠 今日工具调用', v: String(k.toolCallsToday), cls: '', d: k.schedulesEnabled + '/' + k.schedulesTotal + ' 定时启用' },
-    { lb: '⏰ 下次定时', v: k.nextScheduleAt ? monFmtCountdown(k.nextScheduleAt) : '—', cls: 'warn', d: k.nextScheduleName || '无启用定时任务' }
+    { lb: '🤖 在线智能体', v: k.agentsOnline + ' / ' + k.agentsTotal, cls: k.agentsOnline ? 'ok' : 'err', d: (k.agentsBusy ? k.agentsBusy + ' 执行中' : '') + (k.agentsDisabled ? (k.agentsBusy ? ' · ' : '') + k.agentsDisabled + ' 停用' : '') },
+    { lb: '⚡ 运行中任务', v: String(k.tasksRunning), cls: 'pri', d: '' },
+    { lb: '✅ 今日完成', v: String(k.tasksCompletedToday), cls: 'ok', d: '' },
+    { lb: '❌ 今日失败', v: String(k.tasksFailedToday), cls: k.tasksFailedToday ? 'err' : '', d: k.tasksFailedToday ? '需关注' : '' },
+    { lb: '🪙 今日 Token', v: monFmtTok(k.tokensInputToday + k.tokensOutputToday), cls: '', d: k.cacheReadToday ? '缓存 ' + monFmtTok(k.cacheReadToday) : '' },
+    { lb: '🛠 今日工具调用', v: String(k.toolCallsToday), cls: '', d: '' },
+    { lb: '⏰ 下次定时', v: k.nextScheduleAt ? monFmtCountdown(k.nextScheduleAt) : '—', cls: 'warn', d: k.nextScheduleName || '' }
   ];
   var html = '';
   for (var i = 0; i < tiles.length; i++) {
     var t = tiles[i];
-    html += '<div class="mon-kpi"><div class="lb">' + t.lb + '</div><div class="v ' + t.cls + '" title="' + esc(t.v) + '">' + esc(t.v) + '</div><div class="d" title="' + esc(t.d) + '">' + esc(t.d) + '</div></div>';
+    // d 缺省不渲染：KPI 卡从四行压到两行，次要信息只在有意义时出现
+    html += '<div class="mon-kpi"><div class="lb">' + t.lb + '</div><div class="v ' + t.cls + '" title="' + esc(t.v) + '">' + esc(t.v) + '</div>' + (t.d ? '<div class="d" title="' + esc(t.d) + '">' + esc(t.d) + '</div>' : '') + '</div>';
   }
   $('mon-kpis').innerHTML = html;
 }
@@ -2037,12 +2045,21 @@ function renderMonKpis(k) {
 function renderMonAlerts(alerts) {
   var el = $('mon-alerts');
   if (!alerts.length) { el.className = 'mon-alerts'; el.innerHTML = ''; return; }
+  // 折叠：默认最多 3 条（单行截断），其余以「还有 N 条」收口；任务类告警可点击打开详情
+  var MAX = 3;
   var html = '';
-  for (var i = 0; i < Math.min(alerts.length, 6); i++) {
-    html += '<span class="mon-alert ' + (alerts[i].level === 'warn' ? 'warn' : '') + '">⚠ ' + esc(alerts[i].msg) + '</span>';
+  for (var i = 0; i < Math.min(alerts.length, MAX); i++) {
+    var a = alerts[i];
+    var clickable = a.refType === 'task' && a.refId;
+    html += '<span class="mon-alert ' + (a.level === 'warn' ? 'warn' : '') + (clickable ? ' link' : '') + '"' +
+      (clickable ? ' data-task="' + esc(a.refId) + '" title="点击查看任务详情"' : '') + '>⚠ ' + esc(a.msg) + '</span>';
   }
+  if (alerts.length > MAX) html += '<span class="mon-alert more">还有 ' + (alerts.length - MAX) + ' 条</span>';
   el.className = 'mon-alerts on';
   el.innerHTML = html;
+  el.querySelectorAll('.mon-alert.link').forEach(function(n) {
+    n.addEventListener('click', function() { monOpenTask(n.dataset.task); });
+  });
 }
 
 function renderMonNodes(nodes) {
@@ -2178,16 +2195,22 @@ function renderMonTasks(tasks) {
       sub = '清单 ' + act.todosDone + '/' + act.todosTotal;
     }
     var pct = (act.subtasks && act.subtasks.total) ? Math.round(100 * act.subtasks.completed / act.subtasks.total) : null;
-    html += '<div class="mon-task' + (t.running ? '' : ' done') + '" data-task="' + esc(t.id) + '" title="点击查看任务详情">' +
+    // 完成态紧凑：两行（标题+状态 / 元信息），headline 与描述并入悬停提示；运行中保留完整 live 信息
+    var metaBits = [];
+    if (t.agentNames && t.agentNames.length) metaBits.push(esc(t.agentNames.join('、')));
+    if (sub) metaBits.push(sub);
+    if (!t.running && t.updatedAt) metaBits.push(fmtTime(t.updatedAt));
+    var cardTitle = '点击查看任务详情' + (t.description ? ' · ' + t.description : '');
+    html += '<div class="mon-task' + (t.running ? '' : ' done') + '" data-task="' + esc(t.id) + '" title="' + esc(cardTitle) + '">' +
       '<div class="mon-row1"><span>' + t.typeIcon + '</span><span class="mon-nm">' + esc(monTaskTitle(t)) + '</span>' +
       '<span class="mon-spacer"></span>' +
       (t.running ? '<span class="mon-badge run">⏱ ' + monFmtElapse(t.elapsedMs) + '</span>' : '') +
       '<span class="mon-badge ' + (t.running ? 'run' : monHlCls(t) === 'bad' ? 'bad' : monHlCls(t) === 'ok' ? 'ok' : monHlCls(t) === 'stop' ? 'warn' : '') + '">' + esc(t.status === 'running' ? '运行中' : t.status === 'completed' || t.status === 'success' ? '完成' : t.status === 'failed' ? '失败' : t.status === 'cancelled' ? '已中止' : t.status === 'draft' ? '草稿' : '部分成功') + '</span>' +
       '</div>' +
-      '<div class="mon-hl ' + monHlCls(t) + '">' + esc(t.headline) + '</div>' +
-      (t.description ? '<div class="mon-desc" title="' + esc(t.description) + '">' + esc(t.description) + '</div>' : '') +
-      (sub ? '<div class="mon-desc">' + sub + '</div>' : '') +
-      (pct != null ? '<div class="mon-bar"><i style="width:' + pct + '%"></i></div>' : '') +
+      (t.running && t.headline ? '<div class="mon-hl ' + monHlCls(t) + '">' + esc(t.headline) + '</div>' : '') +
+      (metaBits.length ? '<div class="mon-meta">' + metaBits.join('<span class="sep">·</span>') + '</div>' : '') +
+      (t.running && t.description ? '<div class="mon-desc" title="' + esc(t.description) + '">' + esc(t.description) + '</div>' : '') +
+      (t.running && pct != null ? '<div class="mon-bar"><i style="width:' + pct + '%"></i></div>' : '') +
       '</div>';
   }
   el.innerHTML = html;

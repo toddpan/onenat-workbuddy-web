@@ -104,7 +104,14 @@ header .sub { color: var(--tx3); font-size: 12.5px; }
 
 .task-list { display: flex; flex-direction: column; gap: 8px; max-height: 46vh; overflow: auto; }
 .task { border: 1px solid var(--line); border-radius: 12px; padding: 9px 12px; background: var(--panel2); }
-.task.done { opacity: .72; }
+.task.done { opacity: .78; padding: 6px 12px; }
+.task.done .tt { font-weight: 500; color: var(--tx2); }
+.task .meta { margin-top: 3px; font-size: 11.5px; color: var(--tx3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.task .meta .sep { margin: 0 5px; opacity: .55; }
+.task .badge.run { color: var(--pri); border-color: rgba(56,189,248,.5); }
+.task .badge.ok { color: var(--ok); border-color: rgba(52,211,153,.4); }
+.task .badge.bad { color: var(--err); border-color: rgba(248,113,113,.45); }
+.task .badge.warn { color: var(--warn); border-color: rgba(251,191,36,.45); }
 .task .row1 { display: flex; align-items: center; gap: 8px; }
 .task .ic { font-size: 15px; flex: none; }
 .task .tt { font-weight: 700; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -407,13 +414,20 @@ function renderTasks(tasks) {
     }
     var pct = (act.subtasks && act.subtasks.total) ? Math.round(100 * act.subtasks.completed / act.subtasks.total) : null;
     var agentsLine = t.agentNames && t.agentNames.length ? ' · ' + esc(t.agentNames.join('、')) : '';
-    html += '<div class="task' + (t.running ? '' : ' done') + '">' +
+    // 完成态紧凑：标题+状态行 / 元信息行；headline、角色开场白描述与满格进度条只在运行中保留
+    var done = !t.running;
+    var metaBits = [];
+    if (t.agentNames && t.agentNames.length) metaBits.push(esc(t.agentNames.join('、')));
+    if (sub) metaBits.push(sub);
+    if (done && t.updatedAt) metaBits.push(new Date(t.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }));
+    html += '<div class="task' + (done ? ' done' : '') + '">' +
       '<div class="row1"><span class="ic">' + t.typeIcon + '</span><span class="tt" title="' + esc(t.title) + '">' + esc(titleOf(t)) + '</span>' +
-      '<span class="spacer"></span>' + (t.elapsedMs != null ? '<span class="el">⏱ ' + fmtElapse(t.elapsedMs) + '</span>' : '') + '</div>' +
-      '<div class="hl ' + hlClass(t) + '">' + esc(t.headline) + '</div>' +
-      (t.description ? '<div class="sub" title="' + esc(t.description) + '">' + esc(t.description) + agentsLine + '</div>' : '') +
-      (sub ? '<div class="sub">' + sub + '</div>' : '') +
-      (pct != null ? '<div class="bar"><i style="width:' + pct + '%"></i></div>' : '') +
+      '<span class="spacer"></span>' + (t.running && t.elapsedMs != null ? '<span class="el">⏱ ' + fmtElapse(t.elapsedMs) + '</span>' : '') +
+      '<span class="badge ' + hlClass(t) + '">' + esc(t.status === 'running' ? '运行中' : t.status === 'completed' || t.status === 'success' ? '完成' : t.status === 'failed' ? '失败' : t.status === 'cancelled' ? '已中止' : '部分成功') + '</span>' + '</div>' +
+      (!done && t.headline ? '<div class="hl ' + hlClass(t) + '">' + esc(t.headline) + '</div>' : '') +
+      (metaBits.length ? '<div class="meta">' + metaBits.join('<span class="sep">·</span>') + '</div>' : '') +
+      (!done && t.description ? '<div class="sub" title="' + esc(t.description) + '">' + esc(t.description) + agentsLine + '</div>' : '') +
+      (!done && pct != null ? '<div class="bar"><i style="width:' + pct + '%"></i></div>' : '') +
       '</div>';
   }
   el.innerHTML = html;
