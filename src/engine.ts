@@ -18,6 +18,7 @@ import type { OnenatDirectory } from './onenat.js'
 import type { WorkStore } from './store.js'
 import type { SubtaskLogEntry, AgentResourceBinding, DshRef, ExtractedFileMention, ExtractedMentions, PlanSubtask, Project, SubAgent, TaskEvent, TaskTurn, TurnToolCall, WorkTask } from './types.js'
 import type { SshResourceStore } from './ssh-store.js'
+import { expertPersona } from './expert-templates.js'
 
 /**
  * 节点主会话的伪 agentId：新模型下无 @ 的主会话不绑定任何 sub agent 身份，
@@ -914,8 +915,8 @@ export class TaskEngine {
     this.emit(taskId, { type: 'turn_start', turn })
 
     const transformed = await this.transformFileMentionsForAgent(text, mentions, agent, task)
-    // 项目指令 + 专家系统提示词 + 项目 SSH 连接器：注入本轮提示词最前（项目上下文）
-    const sysPrefix = [exec.instruction, agent.systemPrompt].filter(Boolean).join('\n\n')
+    // 项目指令 + 专家人格（角色声明/职责约束/执行指导，见 expert-templates）+ 项目 SSH 连接器：注入本轮提示词最前（项目上下文）
+    const sysPrefix = [exec.instruction, expertPersona(agent)].filter(Boolean).join('\n\n')
     const sshSection = exec.sshConnectors.length
       ? '[项目 SSH 连接器]（已可用 onenat_ssh 工具直接操作，连接信息如下）:\n' + exec.sshConnectors.map((c) => '- ' + c.name + ' → ' + c.host + ':' + c.port).join('\n')
       : ''
@@ -1253,6 +1254,8 @@ export class TaskEngine {
         prompt: s.prompt,
         agentId: s.agentId,
         dependsOn: [],
+        ...(s.objective ? { objective: s.objective } : {}),
+        ...(s.acceptance?.length ? { acceptance: s.acceptance } : {}),
         status: 'pending',
         logs: [],
       }
@@ -1389,12 +1392,21 @@ export class TaskEngine {
       return
     }
 
-    // 上游产出摘要
+    // 上游产出摘要（预算截断：单项 ≤2000 字符、总预算 12000，移植 dsh-agent-teams formatDependencyOutputs）
     const upstream: string[] = []
+    let upstreamBudget = 12000
     for (const depId of sub.dependsOn) {
+      if (upstreamBudget <= 0) {
+        upstream.push('### 其余上游产出\n因总预算截断未纳入本提示词，需要时查看对应子任务的完整产出。')
+        break
+      }
       const dep = task.plan?.subtasks.find((s) => s.id === depId)
       if (dep?.result?.content) {
-        upstream.push(`### 上游子任务《${dep.title}》产出摘要\n${dep.result.content.slice(0, 800)}`)
+        const cap = Math.min(2000, upstreamBudget)
+        const clipped = dep.result.content.slice(0, cap)
+        upstreamBudget -= clipped.length
+        const suffix = dep.result.content.length > cap ? `…[已截断，完整产出见子任务《${dep.title}》]` : ''
+        upstream.push(`### 上游子任务《${dep.title}》产出摘要\n${clipped}${suffix}`)
       }
     }
     await this.runSubtask(task, sub, agent, target, upstream, mentions.mentionedResourceBindings, signal, mentions)
@@ -1455,8 +1467,9 @@ export class TaskEngine {
 
     const parts: string[] = []
     // 远程会话创建接口不收 systemPrompt，聊天直发路径靠 sysPrefix 注入角色；编排/直派子任务在此对等注入，
-    // 否则执行者拿不到自己的角色定义，只能靠子任务指令自猜身份
-    if (agent.systemPrompt?.trim()) parts.push(`[执行者角色]（你的职责与约束）:\n${agent.systemPrompt.trim()}`)
+    // 否则执行者拿不到自己的角色定义，只能靠子任务指令自猜身份。
+    // 专家人格（expertPersona）：角色声明 + 职责约束（systemPrompt）+ 执行指导（executionPrompt）。
+    parts.push(`[执行者角色]（你的身份、职责与约束）:\n${expertPersona(agent)}`)
     const hasDynamicResources = (extraResources && extraResources.length > 0) || (mentions?.mentionedFiles && mentions.mentionedFiles.length > 0)
     const cachedBlock = hasDynamicResources ? null : this.blockCacheFresh(taskId, agent)
 
@@ -1477,7 +1490,17 @@ export class TaskEngine {
       parts.push(transformed.extraSections.join('\n\n'))
     }
     for (const u of upstream) parts.push(u)
+    // 任务合同（移植 dsh-agent-teams assignmentPrompt 契约结构）：目标 + 验收标准，执行者须逐条对照
+    const contractLines: string[] = []
+    if (sub.objective?.trim()) contractLines.push(`目标: ${sub.objective.trim()}`)
+    if (sub.acceptance?.length) {
+      contractLines.push(`验收标准:\n${sub.acceptance.map((a, i) => `${i + 1}. ${String(a).trim()}`).filter((l) => l.length > 3).join('\n')}`)
+    }
+    if (contractLines.length) parts.push(`[任务合同]:\n${contractLines.join('\n')}`)
     parts.push(`[当前子任务指令]:\n${this.stripSelfMention(transformed.text, agent)}`)
+    parts.push(sub.acceptance?.length
+      ? '[完成要求]: 输出末尾附「验收对照」：逐条列出验收标准 → 通过情况与证据；无法满足的如实标注失败原因，不要虚报完成。只做本任务，不要转派子任务。'
+      : '[完成要求]: 输出执行结果与关键结论；不要转派子任务。')
     const fullPrompt = parts.join('\n\n')
 
     let deltaCount = 0

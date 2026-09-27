@@ -192,6 +192,8 @@ export class WorkStore {
       model: input.model ?? target?.model,
       reasoningEffort: input.reasoningEffort ?? target?.reasoningEffort,
       systemPrompt: input.systemPrompt ?? target?.systemPrompt,
+      role: input.role !== undefined ? String(input.role).trim() || undefined : target?.role,
+      executionPrompt: input.executionPrompt !== undefined ? String(input.executionPrompt).trim() || undefined : target?.executionPrompt,
       workDir: input.workDir !== undefined ? normalizeWorkDir(input.workDir) : target?.workDir,
       resources,
       skills: input.skills !== undefined ? input.skills : target?.skills,

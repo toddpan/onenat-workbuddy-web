@@ -2684,10 +2684,10 @@ async function openProjectDrawer(projectId, preset) {
     '<div style="display:flex;gap:8px;align-items:center"><input id="pj-f-ws" style="font-family:var(--mono);flex:1" value="' + esc(v.workspace) + '" placeholder="/workspace/project">' +
     '<button class="mini-btn" id="pj-f-browse" style="padding:10px 14px;white-space:nowrap">📁 浏览节点目录</button></div></div>' +
     '<div class="field" style="margin-bottom:10px"><label>项目指令（注入每次任务，角色/阶段/规范）</label><textarea id="pj-f-ins" rows="6" style="font-family:var(--mono);font-size:12px" placeholder="# 角色\\n你是一个…助手…">' + esc(v.instruction) + '</textarea></div>' +
-    '<div class="field" style="margin-bottom:10px"><label>项目子智能体（勾选 = 项目内任务的执行单元）</label><div class="pj-checks">' +
+    '<div class="field" style="margin-bottom:10px"><label>项目专家（勾选 = 项目内任务的默认执行专家；角色与执行指导随派工注入）</label><div class="pj-checks">' +
     state.agents.map(function (a) {
       const on = v.expertIds.indexOf(a.id) >= 0;
-      return '<label><input type="checkbox" class="pj-exp" value="' + esc(a.id) + '"' + (on ? ' checked' : '') + '> ' + esc(a.name) + '</label>';
+      return '<label><input type="checkbox" class="pj-exp" value="' + esc(a.id) + '"' + (on ? ' checked' : '') + '> ' + esc(a.name) + (a.role ? '（' + esc(a.role) + '）' : '') + '</label>';
     }).join('') +
     '</div></div>' +
     '<div class="field" style="margin-bottom:10px"><label>项目连接器（勾选后项目任务可用）</label><div class="pj-checks">' +
@@ -5495,6 +5495,7 @@ function renderAgents() {
     const skillNames = (a.skills || []).filter(Boolean);
     const skillDesc = skillNames.length ? skillNames.map(esc).join('、') : '无';
     card.innerHTML = '<div class="row1"><h3>' + esc(a.name) + '</h3>' +
+      (a.role ? '<span class="tag" title="专家角色">🧑‍🔬 ' + esc(a.role) + '</span>' : '') +
       (a.enabled === false ? '<span class="tag err">停用</span>' : '<span class="tag ok">启用</span>') +
       '<span class="tag">' + esc(a.agentPreset || 'cordis') + '</span>' +
       (a.model ? '<span class="tag">' + esc(a.model) + '</span>' : '') +
@@ -5502,7 +5503,7 @@ function renderAgents() {
       (skillNames.length ? '<span class="tag" title="绑定技能（派发时手势加载）">🎯 ' + skillNames.length + ' 技能</span>' : '') + '</div>' +
       '<div class="desc">DSH 实体: <span class="mono">' + esc(dshDesc) + '</span><br>绑定资源: ' + esc(resDesc) +
       '<br>绑定技能: <span class="mono">' + (skillNames.length ? skillNames.map(s => '<span class="tag" style="margin:2px 4px 2px 0">🎯 ' + esc(s) + '</span>').join('') : '<span class="sub">无</span>') + '</span>' +
-      (a.systemPrompt ? '<br>角色: ' + esc(a.systemPrompt.slice(0, 80)) : '') + '</div>' +
+      (a.role || a.systemPrompt ? '<br>角色: ' + esc((a.role ? a.role + ' · ' : '') + (a.systemPrompt || '').slice(0, 80)) : '') + '</div>' +
       '<div class="ops"><button class="btn pri" data-op="enter">🚀 进入工作台</button><button class="btn" data-op="edit">编辑</button><button class="btn" data-op="copy">📋 复制</button><button class="btn" data-op="ping">Ping 探活</button><button class="btn" data-op="preview">提示词预览</button><button class="btn" data-op="skills">🎯 技能</button><button class="btn danger" data-op="del">删除</button></div>';
     card.querySelector('[data-op=enter]').addEventListener('click', async () => {
       // 新模型：进入工作台并把任务节点切到该智能体绑定的节点（主 DSH 跟节点走）
@@ -5678,6 +5679,7 @@ function openAgentDrawer(agent, copyMode) {
   const binds = (agent && agent.resources || []).map((r, i) => bindRowHtml(r, i, resOptions)).join('');
   $('drawer-body').innerHTML =
     '<div class="field"><label>名称</label><input id="ag-name" value="' + esc(agent ? agent.name : '') + '" placeholder="如: 136-执行者 / 169-质检员"></div>' +
+    '<div class="field"><label>内置专家模板（点选预填角色与提示词，可再改）</label><div id="ag-tpl-bar" style="display:flex;flex-wrap:wrap;gap:6px"><span class="hint" style="margin:0">加载中…</span></div></div>' +
     '<div class="field"><label>DSH 实体（稳定 ID 绑定 · 端口漂移免疫）</label><select id="ag-dsh"><option value="">— 选择 ONENAT 上的 DSH 实例 —</option>' + dshOptions +
       '<option value="direct:">直连地址（手工输入）…</option></select>' +
       '<input id="ag-direct" placeholder="http://host:port/api/v1" style="display:none;margin-top:8px">' +
@@ -5690,10 +5692,30 @@ function openAgentDrawer(agent, copyMode) {
     '<div class="field"><label>Model</label><input id="ag-model" value="' + esc(agent && agent.model || '') + '" placeholder="远端默认"></div></div>' +
     '<div class="field"><label>工作目录（绝对路径 · 对齐 DSH 工作区）</label><div style="display:flex;gap:8px"><input id="ag-workdir" value="' + esc(agent && agent.workDir || '') + '" placeholder="如 /data/panzj/workspace/demo"><button class="mini-btn" id="ag-browse" style="flex:none;padding:10px 12px" title="浏览远端目录并选择">📁 浏览</button></div>' +
     '<div class="hint">该成员远端会话的 cwd：文件工具根目录、附件落盘处。</div></div>' +
-    '<div class="field"><label>角色提示词 systemPrompt</label><textarea id="ag-sp" placeholder="你是……负责……">' + esc(agent && agent.systemPrompt || '') + '</textarea></div>' +
+    '<div class="field"><label>专家角色 role（花名册与卡片展示；空 = 通用执行者）</label><input id="ag-role" value="' + esc(agent && agent.role || '') + '" placeholder="如: 需求分析师 / 评审专家"></div>' +
+    '<div class="field"><label>角色提示词 systemPrompt（职责与约束）</label><textarea id="ag-sp" placeholder="你是……负责……">' + esc(agent && agent.systemPrompt || '') + '</textarea></div>' +
+    '<div class="field"><label>执行提示词 executionPrompt（角色专属工作方法与产出结构，随派工注入「执行指导」）</label><textarea id="ag-ep" style="min-height:88px" placeholder="工作方法：…&#10;产出结构：…">' + esc(agent && agent.executionPrompt || '') + '</textarea></div>' +
     '<div class="field"><label>可用资源绑定（连接方式+技能将注入该智能体的提示词）</label><div id="bind-list">' + binds + '</div>' +
     '<button class="mini-btn" id="bind-add" style="margin-top:4px">＋ 添加资源绑定</button></div>' +
     '<div class="ops" style="display:flex;gap:10px;margin-top:14px"><button class="btn pri" id="ag-save">保存</button><button class="btn" id="ag-cancel">取消</button></div>';
+
+  // 内置专家模板快捷区：点选预填（新建/编辑均可用，覆盖当前表单值）
+  api('/agents/expert-templates').then(r => {
+    const bar = $('ag-tpl-bar');
+    if (!bar) return;
+    if (!r.ok || !Array.isArray(r.data) || !r.data.length) { bar.innerHTML = '<span class="hint" style="margin:0">模板不可用</span>'; return; }
+    bar.innerHTML = r.data.map(t =>
+      '<button class="mini-btn" data-tpl-id="' + esc(t.id) + '" title="' + esc(t.description) + '">' + esc((t.icon ? t.icon + ' ' : '') + t.name) + '</button>').join('');
+    bar.querySelectorAll('[data-tpl-id]').forEach(chip => chip.addEventListener('click', () => {
+      const t = r.data.find(x => x.id === chip.getAttribute('data-tpl-id'));
+      if (!t) return;
+      if (!$('ag-name').value.trim()) $('ag-name').value = t.name;
+      $('ag-role').value = t.role || '';
+      $('ag-sp').value = t.systemPrompt || '';
+      $('ag-ep').value = t.executionPrompt || '';
+      toast('已预填「' + t.name + '」，可继续调整');
+    }));
+  }).catch(() => { const bar = $('ag-tpl-bar'); if (bar) bar.innerHTML = '<span class="hint" style="margin:0">模板加载失败</span>'; });
 
   const dshSel = $('ag-dsh'), directInput = $('ag-direct');
   if (agent && agent.dshRef) {
@@ -5831,6 +5853,9 @@ function collectAgent(existing) {
     resources,
     agentPreset: $('ag-preset').value.trim() || 'cordis',
     systemPrompt: $('ag-sp').value.trim() || undefined,
+    // 角色与执行提示词传空串表示清空（store 端 trim 归一化）
+    role: $('ag-role').value.trim(),
+    executionPrompt: $('ag-ep').value.trim(),
     enabled: true,
   };
   if ($('ag-key').value.trim()) payload.apiKey = $('ag-key').value.trim();
@@ -6184,15 +6209,36 @@ async function openScheduleDrawer(s, tpl, copyMode) {
     '<div id="sc-rule-box" style="margin-top:8px"></div>' +
     '<div class="hint" id="sc-preview" style="margin-top:6px;color:var(--pri)"></div></div>' +
     '<div class="field"><label>指令（用 @ 提及子智能体与资源，与新建任务同语义）</label>' +
+    '<div id="sc-expert-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px"></div>' +
     '<div style="position:relative">' +
     '<textarea id="sc-message" style="min-height:110px" placeholder="如: 让 @苦力兔 把 @136 上的日志收集过来，分析系统运行情况&#10;输入 @ 唤起子智能体 / 资源联想">' + esc(s ? s.message : (prefill.message || '')) + '</textarea>' +
     '<div class="mention-popup below" id="sc-mention-popup" style="left:0;right:0;width:auto">' +
     '<div class="mention-popup-head">提及子智能体或资源</div>' +
     '<div class="mention-popup-list" id="sc-mention-list"></div>' +
     '</div></div>' +
-    '<div class="hint">触发时自动解析 @提及：被 @ 的子智能体进入执行（@ 多个 = 协同编排），@ 的资源把入口与凭证按绑定策略注入提示词。</div></div>' +
+    '<div class="hint">触发时自动解析 @提及：被 @ 的子智能体进入执行（@ 多个 = 协同编排），@ 的资源把入口与凭证按绑定策略注入提示词。点上方专家名快速插入 @提及，其角色提示词与执行指导将随派工注入。</div></div>' +
     '<div class="field"><label>备注（可选）</label><input id="sc-desc" value="' + esc(s && s.description || (prefill.description || '')) + '"></div>' +
     '<div class="ops" style="display:flex;gap:10px;margin-top:14px"><button class="btn pri" id="sc-save">' + (isEdit ? '保存' : '创建定时任务') + '</button><button class="btn" id="sc-cancel">取消</button></div>';
+
+  // 专家快捷插入：列出带角色/执行提示词的子智能体，点击在光标处插入 @专家名（人格随 @ 委派链路自动注入）
+  (function () {
+    const chipBar = $('sc-expert-chips');
+    const experts = (state.agents || []).filter(x => x.enabled !== false && (x.role || x.executionPrompt));
+    if (!chipBar) return;
+    if (!experts.length) { chipBar.innerHTML = '<span class="hint" style="margin:0">尚无专家：在子智能体页为其设置角色/执行提示词后，可在此快速插入。</span>'; return; }
+    chipBar.innerHTML = '<span class="hint" style="margin:0;align-self:center">专家:</span>' + experts.map(x =>
+      '<button class="mini-btn" data-expert-name="' + esc(x.name) + '" title="' + esc(x.role || '专家') + '">🧑‍🔬 ' + esc(x.name) + (x.role ? ' · ' + esc(x.role) : '') + '</button>').join('');
+    chipBar.querySelectorAll('[data-expert-name]').forEach(chip => chip.addEventListener('click', () => {
+      const ta = $('sc-message');
+      const name = chip.getAttribute('data-expert-name');
+      const token = '@' + name + ' ';
+      const at = ta.selectionStart != null ? ta.selectionStart : ta.value.length;
+      ta.value = ta.value.slice(0, at) + token + ta.value.slice(ta.selectionEnd != null ? ta.selectionEnd : at);
+      ta.focus();
+      const pos = at + token.length;
+      ta.setSelectionRange(pos, pos);
+    }));
+  })();
 
   // @ 提及联想（候选与主输入框共用 /mentions/candidates）
   setupScheduleMention($('sc-message'), $('sc-mention-popup'), $('sc-mention-list'));

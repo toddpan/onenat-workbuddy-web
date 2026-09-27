@@ -28,7 +28,16 @@ export interface PlannerHost {
 
 export interface PlanDraft {
   strategy: 'parallel' | 'sequential' | 'dag'
-  subtasks: Array<{ title: string; prompt: string; agentId: string; dependsOn: string[] }>
+  subtasks: Array<{
+    title: string
+    prompt: string
+    agentId: string
+    dependsOn: string[]
+    /** 一句话目标（可选，进派工任务合同） */
+    objective?: string
+    /** 验收标准清单（可选，进派工任务合同） */
+    acceptance?: string[]
+  }>
 }
 
 export class Planner {
@@ -123,9 +132,11 @@ export class Planner {
     const roster = members
       .map((m, i) => {
         const a = m.agent
-        const role = a.systemPrompt ? a.systemPrompt.replace(/\s+/g, ' ').slice(0, 120) : '通用执行者'
+        // 专家角色：role 字段优先（对齐 dsh-agent-teams Member.role），回退 systemPrompt 摘要
+        const role = a.role?.trim() || (a.systemPrompt ? a.systemPrompt.replace(/\s+/g, ' ').slice(0, 120) : '通用执行者')
+        const execDigest = a.executionPrompt?.trim() ? ` 执行方法=${a.executionPrompt.replace(/\s+/g, ' ').slice(0, 100)}` : ''
         const isPriority = opts?.priorityAgentIds?.includes(a.id)
-        return `${i + 1}. id=${a.id} 名称=${a.name}${isPriority ? ' 【用户显式 @ 重点指定】' : ''} 角色=${role}${m.resourceSummary ? ` 可用资源=${m.resourceSummary}` : ''}`
+        return `${i + 1}. id=${a.id} 名称=${a.name}${isPriority ? ' 【用户显式 @ 重点指定】' : ''} 角色=${role}${execDigest}${m.resourceSummary ? ` 可用资源=${m.resourceSummary}` : ''}`
       })
       .join('\n')
 
@@ -138,9 +149,11 @@ export class Planner {
     const user = [
       '你是多智能体任务规划器。你的唯一产出是一份 JSON 计划，绝对不要亲自执行或回答主任务本身；不要输出思考/推理过程文字，直接给出 JSON 本体。',
       '把主任务拆解为若干子任务，分配给给定的子智能体成员执行。输出严格 JSON（可包在 ```json 围栏中，除此之外不要有任何多余文本）:',
-      '{"strategy":"parallel|sequential|dag","subtasks":[{"title":"简短标题","prompt":"给该子智能体的完整执行指令（自包含，含验收标准）","agentId":"成员 id","dependsOn":["依赖的子任务标题，无则空数组"]}]}',
+      '{"strategy":"parallel|sequential|dag","subtasks":[{"title":"简短标题","objective":"一句话目标","acceptance":["可检验的验收标准"],"prompt":"给该子智能体的完整执行指令（自包含，含验收标准）","agentId":"成员 id","dependsOn":["依赖的子任务标题，无则空数组"]}]}',
       '规则: agentId 必须逐字取自花名册中的 id; 每个成员可被分配 0~2 个子任务; 子任务数量 2~6 个（只有一个成员或任务不可拆分时允许只出 1 个，禁止为凑数拆出空转/重复的子任务）;',
       'prompt 必须自包含（执行者看不到本规划过程），且必须改写为面向执行者的祈使句: 执行者就是被分配的成员本人，剥离原消息中的 @提及与「让远程 DSH / 你把它…」等转述委派语气，不得指示执行者再联系它自己或再派发子任务; strategy=parallel 全部同时执行, sequential 按 dependsOn 链式, dag 有部分依赖。',
+      'objective/acceptance 建议尽量给出: objective 是该子任务的一句话目标; acceptance 是可检验的验收标准数组（命令可跑、文件可查、行为可测，避免「尽量/合理」等模糊表述），执行者会按它逐条对照并输出验收对照。',
+      '质量把关: 涉及代码实现或方案定型的关键路径，建议追加校验/评审类子任务（分配给其他成员）依赖其后，形成交叉检查；不要给同一成员排自己的评审。',
       priorityHint,
       '# 主任务目标（仅用于拆解，不要回答它）',
       objective,
@@ -280,6 +293,10 @@ export class Planner {
         prompt: String(s?.prompt || ''),
         agentId: String(s?.agentId || ''),
         dependsOn: Array.isArray(s?.dependsOn) ? s.dependsOn.map(String) : [],
+        objective: typeof s?.objective === 'string' && s.objective.trim() ? s.objective.trim() : undefined,
+        acceptance: Array.isArray(s?.acceptance)
+          ? s.acceptance.map((a: unknown) => String(a ?? '').trim()).filter(Boolean)
+          : undefined,
       })),
     }
   }
@@ -330,7 +347,7 @@ export class Planner {
       : await this.pickTarget(memberTargets)
     if ('target' in picked) {
       const digest = subtasks
-        .map((s) => `## ${s.title} [${s.status}]\n${(s.result?.content || s.error || '').slice(0, 1200)}`)
+        .map((s) => `## ${s.title}${s.objective ? `（目标：${s.objective}）` : ''} [${s.status}]\n${(s.result?.content || s.error || '').slice(0, 1200)}`)
         .join('\n\n')
       const res = await this.client.chat(
         picked.target,
