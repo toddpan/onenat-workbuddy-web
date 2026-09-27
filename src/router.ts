@@ -19,6 +19,7 @@ import type { SshResourceStore } from './ssh-store.js'
 import type { ScheduleRunner } from './scheduler.js'
 import { normalizeRule, nextRun, ruleText } from './scheduler.js'
 import { SCHEDULE_TEMPLATES } from './schedule-templates.js'
+import { EXPERT_TEMPLATES, expertPersona } from './expert-templates.js'
 import type { AuthService } from './auth.js'
 import type { XiaozhiMcpClient } from './xiaozhi-mcp.js'
 import type { DshRef, Project, SubAgent, WorkTask, ScheduledTask } from './types.js'
@@ -917,6 +918,11 @@ export class WorkBuddyRouter {
       this.sendJson(res, 200, { ok: true, data: this.store.getAgents() })
       return true
     }
+    // 内置专家模板清单（子智能体抽屉一键创建用）
+    if (p === '/api/agents/expert-templates' && method === 'GET') {
+      this.sendJson(res, 200, { ok: true, data: EXPERT_TEMPLATES })
+      return true
+    }
     if (p === '/api/agents' && method === 'POST') {
       const body = await this.parseBody(req)
       // 部分更新：带 id 时 dshRef 缺省回退已有值
@@ -1355,10 +1361,12 @@ export class WorkBuddyRouter {
         ok: true,
         data: {
           systemPrompt: agent.systemPrompt || '',
+          role: agent.role || '',
+          executionPrompt: agent.executionPrompt || '',
           resourceBlock: composed.block,
           resources: composed.resources,
           warnings: composed.warnings,
-          full: [agent.systemPrompt, composed.block].filter(Boolean).join('\n\n'),
+          full: [expertPersona(agent), composed.block].filter(Boolean).join('\n\n'),
         },
       })
       return true

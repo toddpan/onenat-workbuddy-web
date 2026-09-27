@@ -147,6 +147,10 @@ export interface SubAgent {
   model?: string
   reasoningEffort?: string
   systemPrompt?: string
+  /** 专家正式角色名（如"需求分析师"）：编排花名册与卡片展示用；空 = 通用执行者 */
+  role?: string
+  /** 专家执行提示词：角色专属工作方法与产出结构要求（注入派工提示词的「执行指导」段） */
+  executionPrompt?: string
   /** 远端工作目录（绝对路径）：该成员所有远端会话的 cwd，即其文件工具根目录与附件落盘处；留空用远端默认 */
   workDir?: string
   resources: AgentResourceBinding[]
@@ -282,6 +286,10 @@ export interface PlanSubtask {
   prompt: string
   agentId: string
   dependsOn: string[]
+  /** 一句话目标（规划器产出，进派工任务合同） */
+  objective?: string
+  /** 验收标准清单（规划器产出，进派工任务合同；执行者末尾须逐条对照） */
+  acceptance?: string[]
   status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
   remoteSessionId?: string
   result?: { content: string; reasoning?: string }
