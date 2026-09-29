@@ -273,6 +273,7 @@ export class MonitorService {
   // ---------- 生命周期 ----------
 
   public start(): void {
+    this.backfillEventsFromDisk()
     this.unsubEngine = this.engine.onTap((taskId, e) => this.onTaskEvent(taskId, e))
     if (this.scheduler) {
       this.scheduler.onRunFinished = (scheduleId, run) => {
@@ -308,6 +309,29 @@ export class MonitorService {
     this.unsubEngine = undefined
     if (this.healthTimer) { clearInterval(this.healthTimer); this.healthTimer = null }
     if (this.snapTimer) { clearInterval(this.snapTimer); this.snapTimer = null }
+  }
+
+  /** 重启后从最近两天的 JSONL 回读事件，避免「实时动态」因进程重启而清空 */
+  private backfillEventsFromDisk(): void {
+    try {
+      if (!existsSync(this.monitorDir)) return
+      const files = readdirSync(this.monitorDir)
+        .filter((f) => /^events-\d{4}-\d{2}-\d{2}\.jsonl$/.test(f))
+        .sort()
+        .slice(-2)
+      const loaded: MonitorEvent[] = []
+      for (const f of files) {
+        try {
+          for (const line of readFileSync(join(this.monitorDir, f), 'utf-8').split('\n')) {
+            const e = safeJson<MonitorEvent>(line)
+            if (e && typeof e.at === 'number' && e.kind && e.msg) loaded.push(e)
+          }
+        } catch { /* 单个文件损坏不影响其余 */ }
+      }
+      if (!loaded.length) return
+      loaded.sort((a, b) => b.at - a.at)
+      this.ring = loaded.slice(0, 500)
+    } catch { /* 回读失败降级为纯内存 */ }
   }
 
   // ---------- 事件采集 ----------
