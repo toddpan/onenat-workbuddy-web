@@ -37,6 +37,7 @@ import { SshResourceStore } from './ssh-store.js'
 import { createWorkBuddyToolDefs, HTTP_TOOL_CTX, type WorkBuddyToolDef } from './tool-ops.js'
 import { AuthService, SESSION_COOKIE } from './auth.js'
 import { renderLoginUi } from './login-ui.js'
+import { SkillPluginLibrary } from './library.js'
 import { formatDateVersion, readPackageVersion } from './date-version.js'
 
 // ---------------------------------------------------------------- 配置解析
@@ -243,7 +244,8 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
     }
     xiaozhi.configureAll(endpoints)
   }
-  const router = new WorkBuddyRouter(store, directory, resolver, composer, planner, engine, sshStore, scheduler, monitor, auth, xiaozhi)
+  const library = new SkillPluginLibrary(cfg.dataDir, store, log)
+  const router = new WorkBuddyRouter(store, directory, resolver, composer, planner, engine, sshStore, scheduler, monitor, auth, xiaozhi, library)
 
   const { port } = cfg
   const consoleUrl = `http://${cfg.host === '0.0.0.0' ? '127.0.0.1' : cfg.host}:${port}${cfg.prefix || '/'}`
@@ -352,6 +354,26 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
         res.statusCode = 200
         res.setHeader('Content-Type', url.pathname.endsWith('.sh') ? 'text/x-shellscript; charset=utf-8' : url.pathname.endsWith('.md') ? 'text/markdown; charset=utf-8' : 'text/javascript; charset=utf-8')
         res.end(file)
+        return
+      }
+
+      // ---------- 技能插件库文件下载（公开但需签名 token：DSH 节点无平台登录态，安装任务提示词里带 token 链接） ----------
+      const libFileMatch = prefix ? new RegExp(`^${prefix}/library/file/(skill|plugin)/([\\w-]+)$`) : /^\/library\/file\/(skill|plugin)\/([\w-]+)$/
+      if (underPrefix && method === 'GET' && libFileMatch.exec(url.pathname)) {
+        const lm = libFileMatch.exec(url.pathname)!
+        const token = url.searchParams.get('token') || ''
+        const entry = library.get(lm[2])
+        const buf = entry && entry.kind === lm[1] && library.verifyDownloadToken(lm[2], token) ? library.readFile(lm[2]) : undefined
+        if (!entry || !buf) {
+          sendJson(res, 403, { ok: false, error: '下载链接无效或已过期（token 有效期 30 分钟，请重新发起安装）' })
+          return
+        }
+        res.statusCode = 200
+        res.setHeader('Content-Type', entry.filename.toLowerCase().endsWith('.zip') ? 'application/zip' : 'application/gzip')
+        res.setHeader('Content-Length', String(buf.length))
+        res.setHeader('Content-Disposition', `attachment; filename="${entry.filename.replace(/[^\x20-\x7e]/g, '_')}"`)
+        res.setHeader('Cache-Control', 'no-store')
+        res.end(buf)
         return
       }
 

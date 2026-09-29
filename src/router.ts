@@ -24,6 +24,8 @@ import type { AuthService } from './auth.js'
 import type { XiaozhiMcpClient } from './xiaozhi-mcp.js'
 import type { DshRef, Project, SubAgent, WorkTask, ScheduledTask } from './types.js'
 import type { MonitorService } from './monitor.js'
+import { SkillPluginLibrary, buildSkillInstallPrompt, buildPluginInstallPrompt, buildPluginExportPrompt, extractExportedPaths } from './library.js'
+import type { LibKind } from './library.js'
 import { renderWebUi } from './web-ui.js'
 import { renderMonitorUi } from './monitor-ui.js'
 import { formatDateVersion, parseDateVersion, readPackageVersion } from './date-version.js'
@@ -60,7 +62,52 @@ export class WorkBuddyRouter {
     private monitor?: MonitorService,
     private auth?: AuthService,
     private xiaozhi?: XiaozhiMcpClient,
+    private library?: SkillPluginLibrary,
   ) {}
+
+  /** 插件导出任务的回收结果缓存（taskId → 已拉取结果），保证 poll 幂等 */
+  private pluginImportDone = new Map<string, { ok: boolean; imported?: any[]; failed?: Array<{ file: string; error: string }>; error?: string }>()
+
+  /** 生成给 DSH 用的库文件下载链接：优先用配置的公网基址，否则按请求头推断 */
+  private externalBase(req: IncomingMessage, prefix: string): string {
+    const configured = this.library?.publicBaseUrl()
+    if (configured) return configured
+    const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() || 'http'
+    const host = String(req.headers.host || 'localhost')
+    return `${proto}://${host}${prefix}`
+  }
+
+  /** 插件导出任务收尾：从任务轮次解析 tgz 绝对路径，经远端 /fs/download 拉回入库 */
+  private async pullExportedPlugins(taskId: string, agent: SubAgent): Promise<{ ok: boolean; imported?: any[]; failed?: Array<{ file: string; error: string }>; error?: string }> {
+    if (!this.library) return { ok: false, error: '库未启用' }
+    const task = this.store.getTask(taskId)
+    if (!task) return { ok: false, error: '导出任务不存在' }
+    const texts = task.turns.filter((t) => t.role === 'agent' || t.role === 'system').map((t) => t.text || '')
+    const paths = extractExportedPaths(texts.join('\n'))
+    if (!paths.length) return { ok: false, error: '导出任务已完成，但未从其汇报中解析到 tgz 路径（可到任务会话查看节点执行情况）' }
+    const target = await this.resolver.resolve(agent)
+    if (!target.online) return { ok: false, error: target.error || '节点不可达，无法拉取导出文件' }
+    const seen = new Set(this.library.list('plugin').map((e) => `${e.filename}:${e.size}`))
+    const imported: any[] = []
+    const failed: Array<{ file: string; error: string }> = []
+    for (const p of paths) {
+      try {
+        const dl = await this.client.fsDownload(target, p)
+        if (!dl.ok || !dl.res) {
+          failed.push({ file: p, error: dl.error || '下载失败' })
+          continue
+        }
+        const buf = Buffer.from(await dl.res.arrayBuffer())
+        const filename = p.split('/').pop() || 'plugin.tgz'
+        if (seen.has(`${filename}:${buf.length}`)) continue
+        imported.push(await this.library.add('plugin', { filename, data: buf }, 'import', agent.name))
+        seen.add(`${filename}:${buf.length}`)
+      } catch (err: any) {
+        failed.push({ file: p, error: err?.message || String(err) })
+      }
+    }
+    return { ok: true, imported, failed }
+  }
 
   private sendJson(res: ServerResponse, statusCode: number, data: any): void {
     res.statusCode = statusCode
@@ -70,6 +117,26 @@ export class WorkBuddyRouter {
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS')
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
     res.end(JSON.stringify(data))
+  }
+
+  /**
+   * 解析 fs 通道目标节点：优先 node=<dshRef JSON>（项目工作区浏览，无需子智能体），
+   * 否则回退 agent=<id>（子智能体所在节点）。三个返回字段与 list/mkdir 既有行为一致。
+   */
+  private async resolveFsTarget(url: URL, fallbackAgentId?: string): Promise<{ ok: true; target: any } | { ok: false; status: number; error: string }> {
+    const nodeParam = url.searchParams.get('node') || ''
+    if (nodeParam) {
+      let nref: any
+      try { nref = JSON.parse(nodeParam) } catch { return { ok: false, status: 400, error: 'node 参数非法（需 dshRef JSON）' } }
+      const target = await this.resolver.resolveRef(nref, undefined, 'project-node')
+      if (!target.online || !target.baseUrl) return { ok: false, status: 502, error: target.error || '节点不可达' }
+      return { ok: true, target }
+    }
+    const agent = this.store.getAgent(String(url.searchParams.get('agent') || fallbackAgentId || ''))
+    if (!agent) return { ok: false, status: 404, error: 'Agent not found' }
+    const target = await this.resolver.resolve(agent)
+    if (!target.online || !target.baseUrl) return { ok: false, status: 502, error: target.error || '节点不可达' }
+    return { ok: true, target }
   }
 
   private async parseBody(req: IncomingMessage): Promise<any> {
@@ -945,29 +1012,12 @@ export class WorkBuddyRouter {
     if (p === '/api/agents/fs/list' && method === 'GET') {
       const url = new URL(req.url || '/', 'http://localhost')
       // 项目工作目录浏览：node=<dshRef JSON>（与 agent 参数二选一）
-      const nodeParam = url.searchParams.get('node') || ''
-      let target: any = null
-      if (nodeParam) {
-        let nref: any
-        try { nref = JSON.parse(nodeParam) } catch { this.sendJson(res, 400, { ok: false, error: 'node 参数非法（需 dshRef JSON）' }); return true }
-        target = await this.resolver.resolveRef(nref, undefined, 'project-node')
-        if (!target.online || !target.baseUrl) {
-          this.sendJson(res, 502, { ok: false, error: target.error || '节点不可达' })
-          return true
-        }
-      } else {
-        const agentId = String(url.searchParams.get('agent') || '')
-        const agent = this.store.getAgent(agentId)
-        if (!agent) {
-          this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
-          return true
-        }
-        target = await this.resolver.resolve(agent)
-        if (!target.online || !target.baseUrl) {
-          this.sendJson(res, 502, { ok: false, error: target.error || '节点不可达' })
-          return true
-        }
+      const targetRes = await this.resolveFsTarget(url)
+      if (!targetRes.ok) {
+        this.sendJson(res, targetRes.status, { ok: false, error: targetRes.error })
+        return true
       }
+      const target = targetRes.target
       const dirPath = url.searchParams.get('path') || undefined
       const all = url.searchParams.get('all') === '1' || url.searchParams.get('all') === 'true'
       const out = await this.client.fsList(target, dirPath || undefined, all)
@@ -976,17 +1026,12 @@ export class WorkBuddyRouter {
     }
     if (p === '/api/agents/fs/download' && method === 'GET') {
       const url = new URL(req.url || '/', 'http://localhost')
-      const agentId = String(url.searchParams.get('agent') || '')
-      const agent = this.store.getAgent(agentId)
-      if (!agent) {
-        this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
+      const targetRes = await this.resolveFsTarget(url)
+      if (!targetRes.ok) {
+        this.sendJson(res, targetRes.status, { ok: false, error: targetRes.error })
         return true
       }
-      const target = await this.resolver.resolve(agent)
-      if (!target.online || !target.baseUrl) {
-        this.sendJson(res, 502, { ok: false, error: target.error || '节点不可达' })
-        return true
-      }
+      const target = targetRes.target
       const filePath = String(url.searchParams.get('path') || '').trim()
       if (!filePath) {
         this.sendJson(res, 400, { ok: false, error: '缺少 path 参数' })
@@ -1015,20 +1060,15 @@ export class WorkBuddyRouter {
     }
     if (p === '/api/agents/fs/upload' && method === 'POST') {
       const url = new URL(req.url || '/', 'http://localhost')
-      const agentId = String(url.searchParams.get('agent') || '')
       const destDir = String(url.searchParams.get('path') || '').trim()
-      const agent = this.store.getAgent(agentId)
-      if (!agent) {
-        this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
+      const targetRes = await this.resolveFsTarget(url)
+      if (!targetRes.ok) {
+        this.sendJson(res, targetRes.status, { ok: false, error: targetRes.error })
         return true
       }
+      const target = targetRes.target
       if (!destDir) {
         this.sendJson(res, 400, { ok: false, error: '缺少目标目录 path' })
-        return true
-      }
-      const target = await this.resolver.resolve(agent)
-      if (!target.online || !target.baseUrl) {
-        this.sendJson(res, 502, { ok: false, error: target.error || '节点不可达' })
         return true
       }
       const contentType = String(req.headers['content-type'] || '')
@@ -1051,20 +1091,15 @@ export class WorkBuddyRouter {
     if (p === '/api/agents/fs/remove' && (method === 'DELETE' || method === 'POST')) {
       const url = new URL(req.url || '/', 'http://localhost')
       const body = method === 'POST' ? await this.parseBody(req) : null
-      const agentId = String(url.searchParams.get('agent') || body?.agent || '')
       const targetPath = String(url.searchParams.get('path') || body?.path || '').trim()
-      const agent = this.store.getAgent(agentId)
-      if (!agent) {
-        this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
+      const targetRes = await this.resolveFsTarget(url, body?.agent)
+      if (!targetRes.ok) {
+        this.sendJson(res, targetRes.status, { ok: false, error: targetRes.error })
         return true
       }
+      const target = targetRes.target
       if (!targetPath) {
         this.sendJson(res, 400, { ok: false, error: '缺少 path 参数' })
-        return true
-      }
-      const target = await this.resolver.resolve(agent)
-      if (!target.online || !target.baseUrl) {
-        this.sendJson(res, 502, { ok: false, error: target.error || '节点不可达' })
         return true
       }
       const out = await this.client.fsRemove(target, targetPath)
@@ -1341,6 +1376,225 @@ export class WorkBuddyRouter {
         stream.pipe(res)
       }
       return true
+    }
+    // ---------- 技能与插件库（平台级：入库 / 下载 / 安装任务 / 从节点导入） ----------
+    if (this.library) {
+      const libOverviewMatch = /^\/api\/library\/overview$/.exec(p)
+      if (libOverviewMatch && method === 'GET') {
+        this.sendJson(res, 200, {
+          ok: true,
+          data: {
+            skills: this.library.list('skill'),
+            plugins: this.library.list('plugin'),
+            installs: this.library.syncInstalls().slice(0, 30),
+            publicBaseUrl: this.library.publicBaseUrl() || '',
+          },
+        })
+        return true
+      }
+      const libUploadMatch = /^\/api\/library\/(skill|plugin)\/upload$/.exec(p)
+      if (libUploadMatch && method === 'POST') {
+        const kind = libUploadMatch[1] as LibKind
+        const contentType = String(req.headers['content-type'] || '')
+        const raw = await readRawBuffer(req, 200 * 1024 * 1024)
+        const parts = parseMultipartParts(raw, contentType)
+        const files = parts.filter((pt) => pt.filename !== undefined && pt.data.length > 0)
+        if (!files.length) {
+          this.sendJson(res, 400, { ok: false, error: 'multipart 中未找到压缩包文件字段' })
+          return true
+        }
+        const imported: any[] = []
+        const failed: Array<{ filename: string; error: string }> = []
+        for (const f of files) {
+          try {
+            imported.push(await this.library.add(kind, { filename: f.filename || 'archive.bin', data: f.data }, 'upload'))
+          } catch (err: any) {
+            failed.push({ filename: f.filename || '?', error: err?.message || String(err) })
+          }
+        }
+        this.sendJson(res, 200, { ok: failed.length === 0, data: { imported, failed } })
+        return true
+      }
+      const libSettingsMatch = /^\/api\/library\/settings$/.exec(p)
+      if (libSettingsMatch && method === 'POST') {
+        const body = await this.parseBody(req)
+        this.library.setPublicBaseUrl(String(body?.publicBaseUrl || ''))
+        this.sendJson(res, 200, { ok: true, data: { publicBaseUrl: this.library.publicBaseUrl() || '' } })
+        return true
+      }
+      const libDelMatch = /^\/api\/library\/(skill|plugin)\/([^/]+)$/.exec(p)
+      if (libDelMatch && method === 'DELETE') {
+        const ok = this.library.remove(decodeURIComponent(libDelMatch[2]))
+        if (!ok) this.sendJson(res, 404, { ok: false, error: '条目不存在' })
+        else this.sendJson(res, 200, { ok: true })
+        return true
+      }
+      const libDlMatch = /^\/api\/library\/(skill|plugin)\/([^/]+)\/download$/.exec(p)
+      if (libDlMatch && method === 'GET') {
+        const entry = this.library.get(decodeURIComponent(libDlMatch[2]))
+        const buf = entry ? this.library.readFile(entry.id) : undefined
+        if (!entry || !buf) {
+          this.sendJson(res, 404, { ok: false, error: '条目不存在' })
+          return true
+        }
+        const ascii = entry.filename.replace(/[^\x20-\x7e]/g, '_')
+        res.statusCode = 200
+        res.setHeader('Content-Type', entry.filename.toLowerCase().endsWith('.zip') ? 'application/zip' : 'application/gzip')
+        res.setHeader('Content-Length', String(buf.length))
+        res.setHeader('Content-Disposition', `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(entry.filename)}`)
+        res.setHeader('Cache-Control', 'no-store')
+        res.end(buf)
+        return true
+      }
+      const libInstallMatch = /^\/api\/library\/(skill|plugin)\/([^/]+)\/install$/.exec(p)
+      if (libInstallMatch && method === 'POST') {
+        const kind = libInstallMatch[1] as LibKind
+        const entry = this.library.get(decodeURIComponent(libInstallMatch[2]))
+        if (!entry || entry.kind !== kind) {
+          this.sendJson(res, 404, { ok: false, error: '条目不存在' })
+          return true
+        }
+        const body = await this.parseBody(req)
+        const agentIds: string[] = Array.isArray(body?.agentIds) ? body.agentIds.map((s: any) => String(s)).filter(Boolean) : []
+        if (!agentIds.length) {
+          this.sendJson(res, 400, { ok: false, error: '缺少 agentIds（安装目标子智能体）' })
+          return true
+        }
+        // 目标按节点去重：同节点多个智能体只需安装一次（技能/插件都在节点级生效），取该节点首个智能体执行任务
+        const nodeKeyOf = (a: SubAgent) => a.dshRef.kind === 'mapping' ? `m:${a.dshRef.mappingId}` : a.dshRef.kind === 'app' ? `a:${a.dshRef.appId}` : `d:${a.dshRef.apiBaseUrl}`
+        const byNode = new Map<string, SubAgent>()
+        const missing: string[] = []
+        for (const aid of agentIds) {
+          const agent = this.store.getAgent(aid)
+          if (!agent) { missing.push(aid); continue }
+          const k = nodeKeyOf(agent)
+          if (!byNode.has(k)) byNode.set(k, agent)
+        }
+        if (!byNode.size) {
+          this.sendJson(res, 400, { ok: false, error: '安装目标均不存在' })
+          return true
+        }
+        const base = this.externalBase(req, prefix)
+        const url = `${base}/library/file/${kind}/${entry.id}?token=${this.library.downloadToken(entry.id)}`
+        const label = kind === 'skill' ? '技能' : '插件'
+        const prompt = kind === 'skill' ? buildSkillInstallPrompt(entry, url) : buildPluginInstallPrompt(entry, url)
+        const targets: Array<{ agentId: string; agentName: string; taskId: string }> = []
+        const dispatchFailed: Array<{ agent: string; error: string }> = []
+        for (const agent of byNode.values()) {
+          try {
+            const task = await this.engine.createTask({
+              title: `安装${label}「${entry.name}」→ ${agent.name}`,
+              memberAgentIds: [agent.id],
+              message: prompt,
+              creator: 'console',
+            })
+            targets.push({ agentId: agent.id, agentName: agent.name, taskId: task.id })
+          } catch (err: any) {
+            dispatchFailed.push({ agent: agent.name, error: err?.message || String(err) })
+          }
+        }
+        const record = targets.length ? this.library.createInstall(kind, entry, targets) : undefined
+        this.sendJson(res, 200, {
+          ok: targets.length > 0,
+          data: { record, targets, dispatchFailed, ...(missing.length ? { missing } : {}) },
+        })
+        return true
+      }
+      const libInstallsMatch = /^\/api\/library\/installs$/.exec(p)
+      if (libInstallsMatch && method === 'GET') {
+        this.sendJson(res, 200, { ok: true, data: { installs: this.library.syncInstalls().slice(0, 30) } })
+        return true
+      }
+      // 从节点导入技能：直接拉远端 /skills/:name/archive 归档入库（只读操作，不发任务）
+      const libImpSkillMatch = /^\/api\/library\/import\/skills$/.exec(p)
+      if (libImpSkillMatch && method === 'POST') {
+        const body = await this.parseBody(req)
+        const agent = this.store.getAgent(String(body?.agentId || ''))
+        if (!agent) {
+          this.sendJson(res, 404, { ok: false, error: '子智能体不存在' })
+          return true
+        }
+        const names: string[] = Array.isArray(body?.names) ? body.names.map((s: any) => String(s)).filter(Boolean) : []
+        if (!names.length) {
+          this.sendJson(res, 400, { ok: false, error: '缺少 names（要导入的技能名）' })
+          return true
+        }
+        const target = await this.resolver.resolve(agent)
+        if (!target.online) {
+          this.sendJson(res, 200, { ok: false, error: target.error || '节点不可达' })
+          return true
+        }
+        const imported: any[] = []
+        const skipped: Array<{ name: string; reason: string }> = []
+        const existing = new Set(this.library.list('skill').map((e) => e.name))
+        for (const name of names) {
+          if (existing.has(name)) {
+            skipped.push({ name, reason: '库中已有同名技能' })
+            continue
+          }
+          const r = await this.client.downloadSkillArchive(target, name, { cwd: agent.workDir || undefined })
+          if (!r.ok || !r.res) {
+            skipped.push({ name, reason: r.error || '下载失败' })
+            continue
+          }
+          try {
+            const buf = Buffer.from(await r.res.arrayBuffer())
+            imported.push(await this.library.add('skill', { filename: r.name || `${name}.tgz`, data: buf }, 'import', agent.name))
+            existing.add(name)
+          } catch (err: any) {
+            skipped.push({ name, reason: err?.message || '入库失败' })
+          }
+        }
+        this.sendJson(res, 200, { ok: true, data: { imported, skipped } })
+        return true
+      }
+      // 从节点导入插件：发导出任务（节点上 npm pack），平台随后经 /fs 拉回
+      const libImpPluginMatch = /^\/api\/library\/import\/plugins$/.exec(p)
+      if (libImpPluginMatch && method === 'POST') {
+        const body = await this.parseBody(req)
+        const agent = this.store.getAgent(String(body?.agentId || ''))
+        if (!agent) {
+          this.sendJson(res, 404, { ok: false, error: '子智能体不存在' })
+          return true
+        }
+        const task = await this.engine.createTask({
+          title: `导出插件 ← ${agent.name}`,
+          memberAgentIds: [agent.id],
+          message: buildPluginExportPrompt(),
+          creator: 'console',
+        })
+        this.sendJson(res, 200, { ok: true, data: { taskId: task.id, agentId: agent.id } })
+        return true
+      }
+      const libImpPollMatch = /^\/api\/library\/import\/plugins\/poll$/.exec(p)
+      if (libImpPollMatch && method === 'GET') {
+        const url = new URL(req.url || '/', 'http://localhost')
+        const taskId = url.searchParams.get('taskId') || ''
+        const cached = this.pluginImportDone.get(taskId)
+        if (cached) {
+          this.sendJson(res, 200, { ok: true, data: { done: true, ...cached } })
+          return true
+        }
+        const task = this.store.getTask(taskId)
+        if (!task) {
+          this.sendJson(res, 200, { ok: true, data: { done: true, error: '导出任务不存在' } })
+          return true
+        }
+        if (task.status === 'draft' || task.status === 'running' || this.engine.isRunning(taskId)) {
+          this.sendJson(res, 200, { ok: true, data: { done: false, status: task.status } })
+          return true
+        }
+        const agentId = url.searchParams.get('agentId') || ''
+        const agent = this.store.getAgent(agentId)
+        if (!agent) {
+          this.sendJson(res, 200, { ok: true, data: { done: true, error: '子智能体不存在' } })
+          return true
+        }
+        const result = await this.pullExportedPlugins(taskId, agent)
+        this.pluginImportDone.set(taskId, result)
+        this.sendJson(res, 200, { ok: true, data: { done: true, ...result } })
+        return true
+      }
     }
     const previewMatch = /^\/api\/agents\/([^/]+)\/prompt-preview$/.exec(p)
     if (previewMatch && method === 'GET') {
