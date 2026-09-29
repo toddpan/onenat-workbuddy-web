@@ -11,26 +11,26 @@ export function renderLoginUi(prefix: string, errmsg?: string, version?: string)
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<meta name="theme-color" content="#090e17">
+<meta name="theme-color" content="#f7f8fa">
 <title>登录 · OneNat WorkBuddy</title>
 <style>
 :root {
-  --bg: #090e17; --bg2: #0f172a; --bg3: #182238; --line: #202e48; --line2: #2e4166;
-  --tx: #f1f5f9; --tx2: #94a3b8; --tx3: #64748b;
-  --pri: #38bdf8; --pri-d: #0284c7; --pri-light: rgba(56, 189, 248, 0.12);
-  --err: #f87171; --err-light: rgba(248, 113, 113, 0.12);
+  --bg: #f7f8fa; --bg2: #ffffff; --bg3: #f2f3f5; --line: #e8eaed; --line2: #d9dce1;
+  --tx: #1f2329; --tx2: #5f6673; --tx3: #8f959e;
+  --pri: #4d6bfe; --pri-d: #3a56d6; --pri-light: rgba(77, 107, 254, 0.08);
+  --err: #e5484d; --err-light: rgba(229, 72, 77, 0.08);
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { height: 100%; }
 body { background: var(--bg); color: var(--tx); font-family: var(--font); display: flex; align-items: center; justify-content: center; -webkit-font-smoothing: antialiased; padding: 20px; }
-body::before { content: ''; position: fixed; inset: 0; background: radial-gradient(600px 300px at 50% 0%, rgba(56,189,248,.08), transparent); pointer-events: none; }
+body::before { content: ''; position: fixed; inset: 0; background: radial-gradient(600px 300px at 50% 0%, rgba(77,107,254,.08), transparent); pointer-events: none; }
 .card {
   width: 380px; max-width: 94vw; background: var(--bg2); border: 1px solid var(--line);
-  border-radius: 16px; padding: 34px 30px 28px; box-shadow: 0 20px 60px rgba(0,0,0,.5); position: relative; z-index: 1;
+  border-radius: 16px; padding: 34px 30px 28px; box-shadow: 0 20px 60px rgba(31,35,41,.12); position: relative; z-index: 1;
 }
 .brand { display: flex; align-items: center; gap: 10px; justify-content: center; margin-bottom: 6px; }
-.brand .logo { width: 40px; height: 40px; border-radius: 10px; background: linear-gradient(135deg, #0284c7, #818cf8); display: flex; align-items: center; justify-content: center; font-size: 20px; box-shadow: 0 0 16px rgba(56,189,248,.35); }
+.brand .logo { width: 40px; height: 40px; border-radius: 10px; background: linear-gradient(135deg, #4d6bfe, #7a8cff); display: flex; align-items: center; justify-content: center; font-size: 20px; box-shadow: 0 0 12px rgba(77,107,254,.2); }
 .brand b { font-size: 18px; }
 .sub { text-align: center; color: var(--tx3); font-size: 12.5px; margin-bottom: 24px; }
 .field { margin-bottom: 14px; }
@@ -41,15 +41,15 @@ body::before { content: ''; position: fixed; inset: 0; background: radial-gradie
 }
 .field input:focus { border-color: var(--pri); }
 .btn-login {
-  width: 100%; margin-top: 6px; background: linear-gradient(135deg, #0284c7, #2563eb); color: #fff;
+  width: 100%; margin-top: 6px; background: linear-gradient(135deg, #4d6bfe, #6b85ff); color: #fff;
   border: none; border-radius: 8px; padding: 12px; font-size: 14px; font-weight: 600; cursor: pointer;
-  box-shadow: 0 4px 14px rgba(2, 132, 199, 0.35); transition: filter .15s ease;
+  box-shadow: 0 4px 14px rgba(77, 107, 254, 0.35); transition: filter .15s ease;
 }
 .btn-login:hover { filter: brightness(1.12); }
 .btn-login:disabled { opacity: .55; cursor: not-allowed; }
 .err {
-  display: none; margin-bottom: 14px; padding: 9px 12px; font-size: 12.5px; color: #fecaca;
-  background: var(--err-light); border: 1px solid rgba(248,113,113,.4); border-radius: 8px;
+  display: none; margin-bottom: 14px; padding: 9px 12px; font-size: 12.5px; color: #d33a41;
+  background: var(--err-light); border: 1px solid rgba(229,72,77,.4); border-radius: 8px;
 }
 .err.on { display: block; }
 .hint { margin-top: 18px; text-align: center; color: var(--tx3); font-size: 11.5px; line-height: 1.7; }
