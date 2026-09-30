@@ -1784,9 +1784,17 @@ export class WorkBuddyRouter {
           this.sendJson(res, 404, { ok: false, error: 'Task not found' })
           return true
         }
-        // taskLogs 前端未使用（日志抽屉走子任务日志 + SSE），剔除以减小载荷
+        // 默认剔除 taskLogs 以减小载荷；轨迹视图通过 ?withLogs=1 显式携带（日志进轨迹账本）
+        const withLogs = new URL(req.url || '/', 'http://x').searchParams.get('withLogs') === '1'
         const { taskLogs: _drop, ...rest } = task as any
-        this.sendJson(res, 200, { ok: true, data: { ...rest, running: this.engine.isRunning(taskId) } })
+        this.sendJson(res, 200, {
+          ok: true,
+          data: {
+            ...(withLogs ? { taskLogs: task.taskLogs ?? [] } : {}),
+            ...rest,
+            running: this.engine.isRunning(taskId),
+          },
+        })
         return true
       }
       if (method === 'DELETE') {
