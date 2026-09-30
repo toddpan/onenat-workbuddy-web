@@ -20,6 +20,7 @@ import type { ScheduleRunner } from './scheduler.js'
 import { normalizeRule, nextRun, ruleText } from './scheduler.js'
 import { SCHEDULE_TEMPLATES } from './schedule-templates.js'
 import { EXPERT_TEMPLATES, expertPersona } from './expert-templates.js'
+import { ExpertRoster } from './expert-roster.js'
 import type { AuthService } from './auth.js'
 import type { XiaozhiMcpClient } from './xiaozhi-mcp.js'
 import type { DshRef, Project, SubAgent, WorkTask, ScheduledTask } from './types.js'
@@ -49,6 +50,8 @@ interface MemberTodos {
 export class WorkBuddyRouter {
   private client = new DshClient()
   private version = formatDateVersion(readPackageVersion())
+  /** 内置专家名册（The Agency persona 快照），根目录可用 WORKBUDDY_EXPERT_ROOT 覆盖 */
+  private roster = new ExpertRoster()
 
   constructor(
     private store: WorkStore,
@@ -988,6 +991,23 @@ export class WorkBuddyRouter {
     // 内置专家模板清单（子智能体抽屉一键创建用）
     if (p === '/api/agents/expert-templates' && method === 'GET') {
       this.sendJson(res, 200, { ok: true, data: EXPERT_TEMPLATES })
+      return true
+    }
+    // ---------- 专家名册（321 位 The Agency persona 快照，一键创建子智能体用） ----------
+    if (p === '/api/experts/roster' && method === 'GET') {
+      this.sendJson(res, 200, { ok: true, data: await this.roster.index() })
+      return true
+    }
+    if (p === '/api/experts/roster/detail' && method === 'GET') {
+      const url = new URL(req.url || '/', 'http://localhost')
+      const division = String(url.searchParams.get('division') || '')
+      const slug = String(url.searchParams.get('slug') || '')
+      try {
+        const out = await this.roster.getPrompt(slug, division)
+        this.sendJson(res, 200, { ok: true, data: { ...out.expert, prompt: out.prompt } })
+      } catch (err: any) {
+        this.sendJson(res, 404, { ok: false, error: err?.message || '专家不存在' })
+      }
       return true
     }
     if (p === '/api/agents' && method === 'POST') {

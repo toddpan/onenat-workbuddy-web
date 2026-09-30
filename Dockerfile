@@ -32,6 +32,7 @@ WORKDIR /app
 # ssh2 / undici 均为可选依赖：缺失时 SSH exec 降级 / SSE 长静默段使用默认超时，服务照常可用
 COPY --from=build /src/dist ./dist
 COPY --from=build /src/skills ./skills
+COPY --from=build /src/assets ./assets
 COPY --from=build /src/scripts/install-skill.sh ./scripts/install-skill.sh
 COPY package.json ./
 RUN mkdir -p /data

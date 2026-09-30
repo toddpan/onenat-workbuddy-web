@@ -802,6 +802,14 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .modal-head b { flex: 1; font-size: 15px; }
 .modal-body { padding: 18px 20px; overflow-y: auto; }
 .modal-foot { padding: 12px 20px; border-top: 1px solid var(--line); display: flex; gap: 10px; justify-content: flex-end; }
+.ros-bar { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
+.ros-list { max-height: 52vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.ros-row { display: flex; gap: 8px; align-items: baseline; padding: 8px 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.ros-row:last-child { border-bottom: none; }
+.ros-row:hover { background: var(--bg3); }
+.ros-row b { font-size: 13px; white-space: nowrap; }
+.ros-row .ros-desc { color: var(--tx3); font-size: 12px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ros-empty { padding: 18px; text-align: center; color: var(--tx3); }
 .pre-block { background: #f7f8fa; border: 1px solid var(--line); border-radius: 8px; padding: 12px; font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 420px; overflow-y: auto; color: #454c58; font-family: var(--mono); }
 .agent-check { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; cursor: pointer; }
 .agent-check:hover { border-color: var(--line2); }
@@ -6025,6 +6033,7 @@ function openAgentDrawer(agent, copyMode) {
   $('drawer-body').innerHTML =
     '<div class="field"><label>名称</label><input id="ag-name" value="' + esc(agent ? agent.name : '') + '" placeholder="如: 136-执行者 / 169-质检员"></div>' +
     '<div class="field"><label>内置专家模板（点选预填角色与提示词，可再改）</label><div id="ag-tpl-bar" style="display:flex;flex-wrap:wrap;gap:6px"><span class="hint" style="margin:0">加载中…</span></div></div>' +
+    '<div class="field"><label>专家名册库（321 位专业智能体 · 点选预填人格与提示词）</label><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="mini-btn" id="ag-roster">🎓 从专家库选择…</button><span class="hint" style="margin:0">按分类浏览或搜索 The Agency 名册，选中后自动预填，可再改</span></div></div>' +
     '<div class="field"><label>DSH 实体（稳定 ID 绑定 · 端口漂移免疫）</label><select id="ag-dsh"><option value="">— 选择 ONENAT 上的 DSH 实例 —</option>' + dshOptions +
       '<option value="direct:">直连地址（手工输入）…</option></select>' +
       '<input id="ag-direct" placeholder="http://host:port/api/v1" style="display:none;margin-top:8px">' +
@@ -6061,6 +6070,9 @@ function openAgentDrawer(agent, copyMode) {
       toast('已预填「' + t.name + '」，可继续调整');
     }));
   }).catch(() => { const bar = $('ag-tpl-bar'); if (bar) bar.innerHTML = '<span class="hint" style="margin:0">模板加载失败</span>'; });
+
+  // 专家名册选择器：分类浏览/搜索 → 选中读取 persona 正文预填表单（新建/编辑均可用）
+  $('ag-roster').addEventListener('click', () => { openExpertRosterPicker().catch(e => toast(e && e.message || '名册加载失败', true)); });
 
   const dshSel = $('ag-dsh'), directInput = $('ag-direct');
   if (agent && agent.dshRef) {
@@ -8053,6 +8065,56 @@ function openModal(title, bodyHtml, actions) {
     $('modal-foot').innerHTML = '<button class="btn" onclick="closeModal()">关闭</button>';
   }
   $('modal-mask').classList.add('on');
+}
+
+// ---------- 专家名册选择器（The Agency 321 位专家，索引全量拉取后前端过滤） ----------
+var rosterCache = null;
+async function openExpertRosterPicker() {
+  if (!rosterCache) {
+    const r = await api('/experts/roster');
+    rosterCache = r.ok ? r.data : null;
+    if (!rosterCache || !rosterCache.total) { toast((r && r.error) || '专家名册不可用', true); return; }
+  }
+  const d = rosterCache;
+  const st = { division: '', q: '' };
+  openModal('从专家库选择（' + d.total + ' 位）', '', null);
+  $('modal-body').innerHTML =
+    '<div class="ros-bar">' +
+    '<select id="ros-div" style="flex:0 0 auto;min-width:150px"><option value="">全部分类</option>' +
+    d.divisions.map(x => '<option value="' + esc(x.division) + '">' + esc(x.divisionZh + '（' + x.count + '）') + '</option>').join('') +
+    '</select>' +
+    '<input id="ros-q" placeholder="搜索名称 / 领域 / 关键词" style="flex:1">' +
+    '<span class="hint" id="ros-count" style="margin:0;flex:none"></span></div>' +
+    '<div class="ros-list" id="ros-list"></div>';
+  const listEl = $('ros-list');
+  function renderRos() {
+    const q = st.q.trim().toLowerCase();
+    const rows = [];
+    for (const div of d.divisions) {
+      if (st.division && div.division !== st.division) continue;
+      for (const e of div.experts) {
+        if (q && !((e.name + ' ' + e.nameEn + ' ' + e.description).toLowerCase().includes(q))) continue;
+        rows.push('<div class="ros-row" data-division="' + esc(div.division) + '" data-slug="' + esc(e.slug) + '" title="' + esc(e.description) + '">' +
+          '<span>' + esc(e.emoji || '🧩') + '</span><b>' + esc(e.name) + '</b>' +
+          '<span class="ros-desc">' + esc(e.description) + '</span></div>');
+      }
+    }
+    listEl.innerHTML = rows.length ? rows.join('') : '<div class="ros-empty">没有匹配的专家</div>';
+    $('ros-count').textContent = '共 ' + rows.length + ' 位';
+    listEl.querySelectorAll('.ros-row').forEach(row => row.addEventListener('click', async () => {
+      const r = await api('/experts/roster/detail?division=' + encodeURIComponent(row.dataset.division) + '&slug=' + encodeURIComponent(row.dataset.slug));
+      if (!r.ok) { toast(r.error || '读取专家失败', true); return; }
+      const e = r.data;
+      if (!$('ag-name').value.trim()) $('ag-name').value = e.name;
+      $('ag-role').value = e.name;
+      $('ag-sp').value = e.prompt || '';
+      closeModal();
+      toast('已预填「' + e.name + '」，可继续调整');
+    }));
+  }
+  $('ros-div').addEventListener('change', () => { st.division = $('ros-div').value; renderRos(); });
+  $('ros-q').addEventListener('input', () => { st.q = $('ros-q').value; renderRos(); });
+  renderRos();
 }
 
 // ---------- 远端目录浏览器 ----------
