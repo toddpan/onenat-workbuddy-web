@@ -65,6 +65,23 @@ header {
 .brand small { color: var(--tx3); font-weight: 400; font-size: 11px; margin-left: 4px; }
 nav { display: flex; gap: 2px; align-items: center; }
 .nav-sep { width: 1px; height: 18px; background: var(--line); margin: 0 7px; flex: none; }
+/* ---- 「更多」折叠菜单：低频入口收进下拉 ---- */
+.nav-more { position: relative; display: inline-flex; align-items: center; }
+.nav-more > button .ic { font-size: 15px; letter-spacing: 1px; margin-right: -2px; }
+.nav-more > button .chev { font-size: 9px; opacity: .55; margin-left: -1px; }
+.nav-more-pop {
+  position: absolute; top: calc(100% + 10px); right: 0; z-index: 80;
+  min-width: 176px; padding: 6px; display: none; flex-direction: column; gap: 2px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 14px 38px rgba(15,18,25,.16);
+}
+.nav-more.open .nav-more-pop { display: flex; }
+.nav-more-pop button {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  justify-content: flex-start; padding: 8px 10px; border-radius: 8px;
+}
+.nav-more-pop button.on { box-shadow: none; }
+.nav-more-sep { height: 1px; background: var(--line); margin: 4px 6px; flex: none; }
 .settings-grid { display: grid; grid-template-columns: 1fr; gap: 12px; align-items: start; margin-bottom: 12px; }
 .settings-grid .card { margin: 0; }
 nav button {
@@ -934,6 +951,21 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
   body.kb-open nav { display: none; }
   body.kb-open main { padding-bottom: 0; }
 
+  /* ---- 底部 Tab 的「更多」：整体作为一个 Tab，弹层向上展开 ---- */
+  .nav-more { flex: 1 1 0; min-width: 0; display: flex; }
+  .nav-more > button { flex: 1 1 0; width: 100%; }
+  .nav-more > button .chev { display: none; }
+  .nav-more-pop {
+    top: auto; bottom: calc(100% + 10px); right: 4px; min-width: 158px;
+    padding-bottom: 8px; box-shadow: 0 -10px 34px rgba(15,18,25,.18);
+  }
+  .nav-more-pop button {
+    flex: none; flex-direction: row; justify-content: flex-start; align-items: center;
+    min-height: 0; margin: 0; padding: 10px 10px; gap: 8px; width: 100%;
+    font-size: 13px !important; border-radius: 9px;
+  }
+  .nav-more-pop button .ic { font-size: 16px; }
+
   /* ---- 工作台：侧栏变抽屉 ---- */
   #view-work { position: relative; }
   .task-side {
@@ -1367,16 +1399,20 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
       <button data-v="work" class="on"><span class="ic">💬</span><span class="lb">工作台</span></button>
       <button data-v="projects"><span class="ic">📦</span><span class="lb">项目</span></button>
       <button data-v="monitor"><span class="ic">📊</span><span class="lb">监控大屏</span></button>
-      <span class="nav-sep" aria-hidden="true"></span>
       <button data-v="agents"><span class="ic">🤖</span><span class="lb">子智能体</span></button>
-      <button data-v="resources"><span class="ic">🗂</span><span class="lb">资源目录</span></button>
-      <button data-v="library"><span class="ic">🧩</span><span class="lb">技能插件</span></button>
-      <button data-v="voice"><span class="ic">🎙</span><span class="lb">语音助手</span></button>
       <span class="nav-sep" aria-hidden="true"></span>
-      <button data-v="schedules"><span class="ic">⏰</span><span class="lb">定时任务</span></button>
-      <button data-v="files"><span class="ic">📁</span><span class="lb">文件管理</span></button>
-      <span class="nav-sep" aria-hidden="true"></span>
-      <button data-v="settings"><span class="ic">⚙️</span><span class="lb">设置</span></button>
+      <div class="nav-more" id="nav-more">
+        <button id="nav-more-btn" type="button" title="更多功能入口"><span class="ic">⋯</span><span class="lb">更多</span><span class="chev">▾</span></button>
+        <div class="nav-more-pop" id="nav-more-pop" role="menu">
+          <button data-v="resources" type="button" role="menuitem"><span class="ic">🗂</span><span class="lb">资源目录</span></button>
+          <button data-v="library" type="button" role="menuitem"><span class="ic">🧩</span><span class="lb">技能插件</span></button>
+          <button data-v="voice" type="button" role="menuitem"><span class="ic">🎙</span><span class="lb">语音助手</span></button>
+          <button data-v="schedules" type="button" role="menuitem"><span class="ic">⏰</span><span class="lb">定时任务</span></button>
+          <button data-v="files" type="button" role="menuitem"><span class="ic">📁</span><span class="lb">文件管理</span></button>
+          <span class="nav-more-sep" aria-hidden="true"></span>
+          <button data-v="settings" type="button" role="menuitem"><span class="ic">⚙️</span><span class="lb">设置</span></button>
+        </div>
+      </div>
     </nav>
     <div class="hspacer"></div>
     <div class="chip" id="onenat-chip"><span class="dot" id="onenat-dot"></span><span id="onenat-text">ONENAT 连接中…</span></div>
@@ -3205,8 +3241,21 @@ async function openRunConfig(focus) {
 }
 
 // ---------- 导航 ----------
+// 折叠进「更多」的低频页签；switchView 高亮与弹层展开都依赖这份清单
+var MORE_VIEWS = ['resources', 'library', 'voice', 'schedules', 'files', 'settings'];
+var navMore = document.getElementById('nav-more');
+var navMoreBtn = document.getElementById('nav-more-btn');
+function closeNavMore() { if (navMore) navMore.classList.remove('open'); }
+if (navMoreBtn && navMore) {
+  navMoreBtn.addEventListener('click', () => navMore.classList.toggle('open'));
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#nav-more')) navMore.classList.remove('open');
+  });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeNavMore(); });
+}
 document.querySelectorAll('#nav button').forEach(btn => {
-  btn.addEventListener('click', () => switchView(btn.dataset.v));
+  if (btn.id === 'nav-more-btn') return; // 更多按钮已单独绑定 toggle，走这里会刚展开就被 closeNavMore 关掉
+  btn.addEventListener('click', () => { switchView(btn.dataset.v); closeNavMore(); });
 });
 ${AUTH_ENABLED ? `var logoutBtn = document.getElementById('logout-btn');
 if (logoutBtn) logoutBtn.addEventListener('click', doLogout);` : ''}var currentView = 'work';
@@ -3214,6 +3263,8 @@ function switchView(v) {
   if (!document.getElementById('view-' + v)) return;
   currentView = v;
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
+  // 激活的是折叠页签时，「更多」按钮保持高亮，提示当前位置
+  if (navMoreBtn) navMoreBtn.classList.toggle('on', MORE_VIEWS.indexOf(v) >= 0);
   document.querySelectorAll('.view').forEach(x => x.classList.toggle('on', x.id === 'view-' + v));
   if (v === 'files') renderFilesView();
   if (v === 'resources') renderResources();
@@ -3282,10 +3333,12 @@ const NAV_LABELS = {
   resources: { full: '资源目录', short: '资源' },
   library: { full: '技能插件', short: '技能' },
   settings: { full: '设置', short: '设置' },
+  more: { full: '更多', short: '更多' },
 };
 function applyNavLabels() {
   const short = isMobile();
   document.querySelectorAll('#nav button').forEach(b => {
+    if (b.closest('.nav-more-pop')) return; // 弹层菜单纵向排列，保持全称更易读
     const lb = b.querySelector('.lb');
     const cfg = NAV_LABELS[b.dataset.v];
     if (lb && cfg) lb.textContent = short ? cfg.short : cfg.full;
