@@ -29,7 +29,8 @@ const NODE_AGENT_ID = '__node__'
 
 export interface CreateTaskInput {
   title?: string
-  memberAgentIds: string[]
+  /** 成员智能体；nodeRef 直发主会话任务时可省略（engine 内部以 __node__ 虚拟执行者直连节点） */
+  memberAgentIds?: string[]
   mode?: 'chat' | 'orchestrate'
   message?: string
   /** 由定时任务派生时记录来源（任务列表/监控屏的 ⏰ 类型标识随任务持久化） */

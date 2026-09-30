@@ -71,6 +71,21 @@ export class WorkBuddyRouter {
 
   /** 插件导出任务的回收结果缓存（taskId → 已拉取结果），保证 poll 幂等 */
   private pluginImportDone = new Map<string, { ok: boolean; imported?: any[]; failed?: Array<{ file: string; error: string }>; error?: string }>()
+  /** 插件导出任务的来源节点（taskId → dshRef + 展示名）：poll 回拉时按节点取 /fs，不再依赖子智能体 */
+  private pluginImportRefs = new Map<string, { ref: DshRef; label: string }>()
+
+  /** DSH 节点展示名（映射节点取隧道名/应用名；直连取 baseUrl） */
+  private nodeLabelOf(ref: DshRef): string {
+    if (ref.kind === 'mapping') {
+      const m = this.directory.resolveMapping(ref.mappingId)
+      return m?.tunnelName || m?.appName || ref.mappingId
+    }
+    if (ref.kind === 'app') {
+      const a = this.directory.resolveApp(ref.appId)
+      return a?.appName || ref.appId
+    }
+    return String(ref.apiBaseUrl || '直连节点')
+  }
 
   /** 生成给 DSH 用的库文件下载链接：优先用配置的公网基址，否则按请求头推断 */
   private externalBase(req: IncomingMessage, prefix: string): string {
@@ -83,13 +98,26 @@ export class WorkBuddyRouter {
 
   /** 插件导出任务收尾：从任务轮次解析 tgz 绝对路径，经远端 /fs/download 拉回入库 */
   private async pullExportedPlugins(taskId: string, agent: SubAgent): Promise<{ ok: boolean; imported?: any[]; failed?: Array<{ file: string; error: string }>; error?: string }> {
+    return this.pullExportedPluginsInner(taskId, () => this.resolver.resolve(agent), agent.name)
+  }
+
+  /** nodeRef 直发路径的回拉：按发起时记录的来源节点取 /fs，不依赖子智能体 */
+  private async pullExportedPluginsByRef(taskId: string, ref: DshRef, label: string): Promise<{ ok: boolean; imported?: any[]; failed?: Array<{ file: string; error: string }>; error?: string }> {
+    return this.pullExportedPluginsInner(taskId, () => this.resolver.resolveRef(ref, undefined, 'library-node'), label)
+  }
+
+  private async pullExportedPluginsInner(
+    taskId: string,
+    resolveTarget: () => Promise<any>,
+    sourceLabel: string,
+  ): Promise<{ ok: boolean; imported?: any[]; failed?: Array<{ file: string; error: string }>; error?: string }> {
     if (!this.library) return { ok: false, error: '库未启用' }
     const task = this.store.getTask(taskId)
     if (!task) return { ok: false, error: '导出任务不存在' }
     const texts = task.turns.filter((t) => t.role === 'agent' || t.role === 'system').map((t) => t.text || '')
     const paths = extractExportedPaths(texts.join('\n'))
     if (!paths.length) return { ok: false, error: '导出任务已完成，但未从其汇报中解析到 tgz 路径（可到任务会话查看节点执行情况）' }
-    const target = await this.resolver.resolve(agent)
+    const target = await resolveTarget()
     if (!target.online) return { ok: false, error: target.error || '节点不可达，无法拉取导出文件' }
     const seen = new Set(this.library.list('plugin').map((e) => `${e.filename}:${e.size}`))
     const imported: any[] = []
@@ -104,7 +132,7 @@ export class WorkBuddyRouter {
         const buf = Buffer.from(await dl.res.arrayBuffer())
         const filename = p.split('/').pop() || 'plugin.tgz'
         if (seen.has(`${filename}:${buf.length}`)) continue
-        imported.push(await this.library.add('plugin', { filename, data: buf }, 'import', agent.name))
+        imported.push(await this.library.add('plugin', { filename, data: buf }, 'import', sourceLabel))
         seen.add(`${filename}:${buf.length}`)
       } catch (err: any) {
         failed.push({ file: p, error: err?.message || String(err) })
@@ -1510,9 +1538,48 @@ export class WorkBuddyRouter {
           return true
         }
         const body = await this.parseBody(req)
+        // 新模型：安装目标 = DSH 主节点（nodeRefs）。技能/插件都在节点级生效，
+        // 向节点直发主会话任务（engine nodeRef，无需子智能体）。
+        const nodeRefs: DshRef[] = Array.isArray(body?.nodeRefs)
+          ? body.nodeRefs.map((r: any) => r as DshRef).filter((r: DshRef) => r && typeof r === 'object' && typeof (r as any).kind === 'string')
+          : []
+        if (nodeRefs.length) {
+          const base = this.externalBase(req, prefix)
+          const url = `${base}/library/file/${kind}/${entry.id}?token=${this.library.downloadToken(entry.id)}`
+          const label = kind === 'skill' ? '技能' : '插件'
+          const prompt = kind === 'skill' ? buildSkillInstallPrompt(entry, url) : buildPluginInstallPrompt(entry, url)
+          const byNode = new Map<string, DshRef>()
+          for (const ref of nodeRefs) {
+            const key = ref.kind === 'mapping' ? `m:${ref.mappingId}` : ref.kind === 'app' ? `a:${ref.appId}` : `d:${(ref as any).apiBaseUrl}`
+            if (!byNode.has(key)) byNode.set(key, ref)
+          }
+          const targets: Array<{ agentId: string; agentName: string; taskId: string }> = []
+          const dispatchFailed: Array<{ agent: string; error: string }> = []
+          for (const [key, ref] of byNode) {
+            const nodeLabel = this.nodeLabelOf(ref)
+            try {
+              const task = await this.engine.createTask({
+                title: `安装${label}「${entry.name}」→ ${nodeLabel}`,
+                nodeRef: ref,
+                message: prompt,
+                creator: 'console',
+              })
+              targets.push({ agentId: key, agentName: nodeLabel, taskId: task.id })
+            } catch (err: any) {
+              dispatchFailed.push({ agent: nodeLabel, error: err?.message || String(err) })
+            }
+          }
+          const record = targets.length ? this.library.createInstall(kind, entry, targets) : undefined
+          this.sendJson(res, 200, {
+            ok: targets.length > 0,
+            data: { record, targets, dispatchFailed },
+          })
+          return true
+        }
+        // 兼容旧调用（工具通道/旧客户端）：agentIds → 按其所在节点去重派发
         const agentIds: string[] = Array.isArray(body?.agentIds) ? body.agentIds.map((s: any) => String(s)).filter(Boolean) : []
         if (!agentIds.length) {
-          this.sendJson(res, 400, { ok: false, error: '缺少 agentIds（安装目标子智能体）' })
+          this.sendJson(res, 400, { ok: false, error: '缺少 nodeRefs（安装目标 DSH 主节点）' })
           return true
         }
         // 目标按节点去重：同节点多个智能体只需安装一次（技能/插件都在节点级生效），取该节点首个智能体执行任务
@@ -1560,13 +1627,14 @@ export class WorkBuddyRouter {
         this.sendJson(res, 200, { ok: true, data: { installs: this.library.syncInstalls().slice(0, 30) } })
         return true
       }
-      // 从节点导入技能：直接拉远端 /skills/:name/archive 归档入库（只读操作，不发任务）
+      // 从节点导入技能：按 DSH 主节点（nodeRef）直接拉远端 /skills/:name/archive 归档入库（只读，不发任务）
       const libImpSkillMatch = /^\/api\/library\/import\/skills$/.exec(p)
       if (libImpSkillMatch && method === 'POST') {
         const body = await this.parseBody(req)
-        const agent = this.store.getAgent(String(body?.agentId || ''))
-        if (!agent) {
-          this.sendJson(res, 404, { ok: false, error: '子智能体不存在' })
+        const nodeRef = body?.nodeRef && typeof body.nodeRef === 'object' ? (body.nodeRef as DshRef) : undefined
+        const legacyAgent = this.store.getAgent(String(body?.agentId || ''))
+        if (!nodeRef && !legacyAgent) {
+          this.sendJson(res, 404, { ok: false, error: '缺少 nodeRef（来源 DSH 主节点）' })
           return true
         }
         const names: string[] = Array.isArray(body?.names) ? body.names.map((s: any) => String(s)).filter(Boolean) : []
@@ -1574,11 +1642,14 @@ export class WorkBuddyRouter {
           this.sendJson(res, 400, { ok: false, error: '缺少 names（要导入的技能名）' })
           return true
         }
-        const target = await this.resolver.resolve(agent)
+        const target = nodeRef
+          ? await this.resolver.resolveRef(nodeRef, undefined, 'library-node')
+          : await this.resolver.resolve(legacyAgent!)
         if (!target.online) {
           this.sendJson(res, 200, { ok: false, error: target.error || '节点不可达' })
           return true
         }
+        const sourceLabel = nodeRef ? this.nodeLabelOf(nodeRef) : legacyAgent!.name
         const imported: any[] = []
         const skipped: Array<{ name: string; reason: string }> = []
         const existing = new Set(this.library.list('skill').map((e) => e.name))
@@ -1587,14 +1658,14 @@ export class WorkBuddyRouter {
             skipped.push({ name, reason: '库中已有同名技能' })
             continue
           }
-          const r = await this.client.downloadSkillArchive(target, name, { cwd: agent.workDir || undefined })
+          const r = await this.client.downloadSkillArchive(target, name, { cwd: legacyAgent?.workDir || undefined })
           if (!r.ok || !r.res) {
             skipped.push({ name, reason: r.error || '下载失败' })
             continue
           }
           try {
             const buf = Buffer.from(await r.res.arrayBuffer())
-            imported.push(await this.library.add('skill', { filename: r.name || `${name}.tgz`, data: buf }, 'import', agent.name))
+            imported.push(await this.library.add('skill', { filename: r.name || `${name}.tgz`, data: buf }, 'import', sourceLabel))
             existing.add(name)
           } catch (err: any) {
             skipped.push({ name, reason: err?.message || '入库失败' })
@@ -1603,22 +1674,35 @@ export class WorkBuddyRouter {
         this.sendJson(res, 200, { ok: true, data: { imported, skipped } })
         return true
       }
-      // 从节点导入插件：发导出任务（节点上 npm pack），平台随后经 /fs 拉回
+      // 从节点导入插件：向选中的 DSH 主节点发起主会话导出任务（npm pack），平台随后经 /fs 拉回
       const libImpPluginMatch = /^\/api\/library\/import\/plugins$/.exec(p)
       if (libImpPluginMatch && method === 'POST') {
         const body = await this.parseBody(req)
-        const agent = this.store.getAgent(String(body?.agentId || ''))
-        if (!agent) {
-          this.sendJson(res, 404, { ok: false, error: '子智能体不存在' })
+        const nodeRef = body?.nodeRef && typeof body.nodeRef === 'object' ? (body.nodeRef as DshRef) : undefined
+        const legacyAgent = this.store.getAgent(String(body?.agentId || ''))
+        if (!nodeRef && !legacyAgent) {
+          this.sendJson(res, 404, { ok: false, error: '缺少 nodeRef（来源 DSH 主节点）' })
           return true
         }
-        const task = await this.engine.createTask({
-          title: `导出插件 ← ${agent.name}`,
-          memberAgentIds: [agent.id],
-          message: buildPluginExportPrompt(),
-          creator: 'console',
+        const nodeLabel = nodeRef ? this.nodeLabelOf(nodeRef) : legacyAgent!.name
+        const task = nodeRef
+          ? await this.engine.createTask({
+            title: `导出插件 ← ${nodeLabel}`,
+            nodeRef,
+            message: buildPluginExportPrompt(),
+            creator: 'console',
+          })
+          : await this.engine.createTask({
+            title: `导出插件 ← ${legacyAgent!.name}`,
+            memberAgentIds: [legacyAgent!.id],
+            message: buildPluginExportPrompt(),
+            creator: 'console',
+          })
+        if (nodeRef) this.pluginImportRefs.set(task.id, { ref: nodeRef, label: nodeLabel })
+        this.sendJson(res, 200, {
+          ok: true,
+          data: { taskId: task.id, ...(nodeRef ? { nodeLabel } : { agentId: legacyAgent!.id }) },
         })
-        this.sendJson(res, 200, { ok: true, data: { taskId: task.id, agentId: agent.id } })
         return true
       }
       const libImpPollMatch = /^\/api\/library\/import\/plugins\/poll$/.exec(p)
@@ -1639,15 +1723,44 @@ export class WorkBuddyRouter {
           this.sendJson(res, 200, { ok: true, data: { done: false, status: task.status } })
           return true
         }
-        const agentId = url.searchParams.get('agentId') || ''
-        const agent = this.store.getAgent(agentId)
-        if (!agent) {
-          this.sendJson(res, 200, { ok: true, data: { done: true, error: '子智能体不存在' } })
+        // 回拉目标：优先取发起时记录的来源节点（nodeRef 直发路径）；否则回退 agentId（旧路径）
+        const stashed = this.pluginImportRefs.get(taskId)
+        const legacyAgent = this.store.getAgent(url.searchParams.get('agentId') || '')
+        if (!stashed && !legacyAgent) {
+          this.sendJson(res, 200, { ok: true, data: { done: true, error: '来源节点缺失' } })
           return true
         }
-        const result = await this.pullExportedPlugins(taskId, agent)
+        const result = stashed
+          ? await this.pullExportedPluginsByRef(taskId, stashed.ref, stashed.label)
+          : await this.pullExportedPlugins(taskId, legacyAgent!)
         this.pluginImportDone.set(taskId, result)
         this.sendJson(res, 200, { ok: true, data: { done: true, ...result } })
+        return true
+      }
+      // 节点已装技能清单（从节点导入技能的选择来源；node = dshRef JSON）
+      const libNodeSkillsMatch = /^\/api\/library\/nodes\/skills$/.exec(p)
+      if (libNodeSkillsMatch && method === 'GET') {
+        const url = new URL(req.url || '/', 'http://localhost')
+        let nref: any
+        try { nref = JSON.parse(url.searchParams.get('node') || '') } catch { /* below */ }
+        if (!nref || typeof nref !== 'object') {
+          this.sendJson(res, 400, { ok: false, error: 'node 参数非法（需 dshRef JSON）' })
+          return true
+        }
+        const target = await this.resolver.resolveRef(nref as DshRef, undefined, 'library-node')
+        if (!target.online) {
+          this.sendJson(res, 200, { ok: false, error: target.error || '节点不可达', data: { skills: [] } })
+          return true
+        }
+        const r = await this.client.listSkills(target, {
+          root: url.searchParams.get('root') || undefined,
+          search: url.searchParams.get('search') || undefined,
+        })
+        if (r.unsupported) {
+          this.sendJson(res, 200, { ok: false, error: r.error, data: { skills: [], unsupported: true } })
+          return true
+        }
+        this.sendJson(res, 200, { ok: true, data: { skills: r.skills, count: r.count, root: r.root } })
         return true
       }
     }
