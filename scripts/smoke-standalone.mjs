@@ -238,11 +238,48 @@ async function main() {
   const sshDel = await req('POST', `${PREFIX}/api/tools/workbuddy_ssh_resource_manage`, { action: 'delete', resourceId: sshId })
   check('SSH 资源 delete', sshDel.json?.ok === true && sshDel.json?.result?.deleted === true)
 
+  // ---------- 6.5 专家团（合同式团队） ----------
+  const teamAgentA = await req('POST', `${PREFIX}/api/agents`, { name: '冒烟评审甲', dshRef: { kind: 'mapping', mappingId: 'map-dsh-live' }, role: '评审专家' })
+  const teamAgentB = await req('POST', `${PREFIX}/api/agents`, { name: '冒烟评审乙', dshRef: { kind: 'mapping', mappingId: 'map-dsh-live' }, role: '实现工程师' })
+  const teamAgentAId = teamAgentA.json?.data?.id
+  const teamAgentBId = teamAgentB.json?.data?.id
+  const teamTooSmall = await req('POST', `${PREFIX}/api/teams`, { name: '坏团队', goal: 'g', members: [{ agentId: teamAgentAId, duty: '评审' }] })
+  check('专家团成员不足 2 人被拒', teamTooSmall.status === 400)
+  const teamDupMember = await req('POST', `${PREFIX}/api/teams`, { name: '坏团队2', goal: 'g', members: [{ agentId: teamAgentAId, duty: 'a' }, { agentId: teamAgentAId, duty: 'b' }] })
+  check('专家团成员重复被拒', teamDupMember.status === 400)
+  const teamNoDuty = await req('POST', `${PREFIX}/api/teams`, { name: '坏团队3', goal: 'g', members: [{ agentId: teamAgentAId, duty: 'a' }, { agentId: teamAgentBId, duty: '' }] })
+  check('专家团成员缺职责分工被拒', teamNoDuty.status === 400)
+  const teamCreated = await req('POST', `${PREFIX}/api/teams`, {
+    name: '冒烟评审团',
+    description: '冒烟用合同式团队',
+    goal: '评审冒烟方案并定位交付风险',
+    constraints: '仅分析评审，不实际修改',
+    deliveryRequirements: '风险与验收清单',
+    members: [
+      { agentId: teamAgentAId, duty: '架构与风险评审', instructions: '按严重度排序输出' },
+      { agentId: teamAgentBId, duty: '实现与验收边界' },
+    ],
+  })
+  const teamId = teamCreated.json?.data?.id
+  check('创建专家团（合同字段回读）', teamCreated.status === 200 && Boolean(teamId) && teamCreated.json?.data?.members?.length === 2 && teamCreated.json?.data?.goal === '评审冒烟方案并定位交付风险')
+  const teamsList = await req('GET', `${PREFIX}/api/teams`)
+  check('专家团列表回读', (teamsList.json?.data || []).some((t) => t.id === teamId))
+  const teamTask = await req('POST', `${PREFIX}/api/tasks`, { title: '冒烟团队任务', teamId })
+  check('团队任务按名册展开成员并进入编排模式', [200, 201].includes(teamTask.status) && teamTask.json?.data?.teamId === teamId && (teamTask.json?.data?.memberAgentIds || []).length === 2 && teamTask.json?.data?.mode === 'orchestrate')
+  const teamTaskBad = await req('POST', `${PREFIX}/api/tasks`, { title: 'x', teamId: 'team-none' })
+  check('不存在的专家团创建任务被拒（400）', teamTaskBad.status === 400)
+
   // ---------- 7. 数据落盘（独立服务的数据目录） ----------
   const storeFile = join(dataDir, 'store.json')
   await waitFor(() => existsSync(storeFile), 'store.json 落盘', 5000)
   const store = JSON.parse(readFileSync(storeFile, 'utf-8'))
-  check('数据落盘到 --data 目录', store.agents.length === 1 && store.tasks.length === 1)
+  check('数据落盘到 --data 目录（含专家团）', store.agents.length === 3 && store.tasks.length === 2 && store.teams?.length === 1, `agents=${store.agents.length} tasks=${store.tasks.length} teams=${store.teams?.length}`)
+
+  // 团队删除（任务保留，仅摘除 teamId 标记）
+  const teamDeleted = await req('DELETE', `${PREFIX}/api/teams/${teamId}`)
+  check('删除专家团', teamDeleted.json?.data?.deleted === true)
+  const orphanTeamTask = await req('GET', `${PREFIX}/api/tasks/${teamTask.json?.data?.id}`)
+  check('删除团队后历史任务的 teamId 标记被摘除', orphanTeamTask.json?.data?.teamId === undefined)
 
   // ---------- 8. 工具令牌保护（第二个实例） ----------
   const PORT2 = PORT + 1

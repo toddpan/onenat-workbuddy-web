@@ -1632,6 +1632,8 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
     <div class="view" id="view-agents"><div class="panel">
       <div class="panel-head"><h2>子智能体管理</h2><span class="sub">绑定 ONENAT 上的 DSH 实体（稳定 ID，端口变化不影响）· 配置模式/模型/提示词/可用资源</span><span class="hspacer"></span><button class="btn pri" id="btn-new-agent">＋ 新建子智能体</button></div>
       <div id="agent-list"></div>
+      <div class="panel-head" style="margin-top:26px"><h2 style="font-size:15px">🧩 专家团</h2><span class="sub">合同式团队：共同目标/约束/交付要求 + 成员分工 · 团队任务按合同注入主调度规划、成员派工与汇总核对</span><span class="hspacer"></span><button class="btn" id="btn-new-team">＋ 新建专家团</button></div>
+      <div id="team-list"></div>
     </div></div>
     <div class="view" id="view-schedules"><div class="panel">
       <div class="panel-head"><h2>定时任务</h2><span class="sub">按规则定时把固定任务文本派发给一个或多个子智能体 · Host 侧调度（关闭页面不影响触发，错过的触发点不补跑）</span><span class="hspacer"></span><button class="btn pri" id="btn-new-schedule">＋ 新建定时任务</button></div>
@@ -1702,6 +1704,7 @@ const VERSION = ${JSON.stringify(VERSION)};
 const state = {
   resources: [],
   agents: [],
+  teams: [],
   tasks: [],
   projects: [],
   projectId: null,   // 项目工作台：当前进入的项目（null = 全部/普通任务）
@@ -3300,7 +3303,7 @@ async function boot() {
   document.querySelectorAll('.qe-card[data-qe]').forEach((card) => {
     card.addEventListener('click', () => switchView(card.dataset.qe));
   });
-  await Promise.all([loadResources(), loadAgents(), loadTasks(), loadSettings(), loadSchedules(), loadPlannerOptions(), loadProjects()]);
+  await Promise.all([loadResources(), loadAgents(), loadTasks(), loadSettings(), loadSchedules(), loadPlannerOptions(), loadProjects(), loadTeams()]);
   await refreshMentionCandidates();
   // 刷新后恢复项目工作台（sessionStorage 记忆，项目不存在则忽略）
   var savedPid = null;
@@ -3346,6 +3349,7 @@ async function loadAgents() {
   if (r.ok) {
     state.agents = Array.isArray(r.data) ? r.data : [];
     if (mainAgentState.loaded) renderMainAgentPop();
+    renderTeams(); // 专家团卡片展示成员名，子智能体增删改名后同步刷新
   }
 }
 async function loadTasks() {
@@ -5901,6 +5905,127 @@ function describeDshRef(a) {
   }
   const ep = state.resources.find(x => x.appId === a.dshRef.appId);
   return '应用 ' + a.dshRef.appId + (ep ? ' → ' + (ep.baseUrl || '离线') : '');
+}
+
+// ---------- 专家团（合同式团队：共同目标/约束/交付要求 + 成员分工，移植 dsh-agency-agents ExpertTeam） ----------
+async function loadTeams() {
+  const r = await api('/teams');
+  if (r.ok) state.teams = Array.isArray(r.data) ? r.data : [];
+  renderTeams();
+}
+function agentNameOf(id) {
+  const a = state.agents.find(x => x.id === id);
+  return a ? a.name : id;
+}
+function renderTeams() {
+  const el = $('team-list');
+  if (!el) return;
+  el.innerHTML = '';
+  if (!state.teams.length) {
+    el.innerHTML = '<div class="card"><span class="sub" style="color:var(--tx3)">还没有专家团。把已建的子智能体编成一个团：设定共同目标/约束/交付要求与每个成员的职责分工，发任务时按合同注入主调度规划、成员派工与汇总核对。</span></div>';
+    return;
+  }
+  for (const tm of state.teams) {
+    const card = document.createElement('div'); card.className = 'card';
+    const memberChips = tm.members.map(m => '<span class="tag" style="margin:2px 6px 2px 0" title="' + esc(m.duty) + '">' + esc(agentNameOf(m.agentId)) + ' · ' + esc((m.duty || '').slice(0, 16)) + '</span>').join('');
+    card.innerHTML = '<div class="row1"><h3>' + esc(tm.name) + '</h3>' +
+      (tm.enabled === false ? '<span class="tag err">停用</span>' : '<span class="tag ok">启用</span>') +
+      '<span class="tag">' + tm.members.length + ' 名成员</span></div>' +
+      (tm.description ? '<div class="desc">' + esc(tm.description) + '</div>' : '') +
+      '<div class="desc">目标: ' + esc((tm.goal || '').slice(0, 120)) + ((tm.goal || '').length > 120 ? '…' : '') +
+      (tm.deliveryRequirements ? '<br>交付要求: ' + esc(tm.deliveryRequirements.slice(0, 80)) : '') + '</div>' +
+      '<div class="desc" style="margin-top:4px">' + memberChips + '</div>' +
+      '<div class="ops"><button class="btn pri" data-op="task">🚀 发任务</button><button class="btn" data-op="edit">编辑</button>' +
+      (tm.enabled === false ? '<button class="btn" data-op="toggle">启用</button>' : '<button class="btn" data-op="toggle">停用</button>') +
+      '<button class="btn danger" data-op="del">删除</button></div>';
+    card.querySelector('[data-op=task]').addEventListener('click', async () => {
+      const r = await api('/tasks', { method: 'POST', body: JSON.stringify({ title: '🧩 ' + tm.name, teamId: tm.id }) });
+      if (!r.ok) { toast(r.error || '创建团队任务失败', true); return; }
+      switchView('work');
+      await loadTasks(); await openTask(r.data.id);
+      const input = $('input');
+      if (input) input.focus();
+      toast('团队任务已创建（' + tm.members.length + ' 名成员），输入目标即按合同编排');
+    });
+    card.querySelector('[data-op=edit]').addEventListener('click', () => openTeamDrawer(tm));
+    card.querySelector('[data-op=toggle]').addEventListener('click', async () => {
+      const r = await api('/teams', { method: 'POST', body: JSON.stringify(Object.assign({}, tm, { enabled: tm.enabled === false })) });
+      if (!r.ok) { toast(r.error || '保存失败', true); return; }
+      await loadTeams();
+      toast(tm.enabled === false ? '已启用' : '已停用');
+    });
+    card.querySelector('[data-op=del]').addEventListener('click', async () => {
+      if (!confirm('删除专家团「' + tm.name + '」？（不影响子智能体与历史任务）')) return;
+      await api('/teams/' + tm.id, { method: 'DELETE' });
+      await loadTeams();
+      toast('已删除');
+    });
+    el.appendChild(card);
+  }
+}
+$('btn-new-team').addEventListener('click', () => openTeamDrawer(null));
+function openTeamDrawer(team) {
+  const isEdit = Boolean(team);
+  openDrawer(isEdit ? '编辑专家团' : '新建专家团');
+  const members = (team && Array.isArray(team.members) ? JSON.parse(JSON.stringify(team.members)) : []);
+  function agentOptions(selected) {
+    return '<option value="">— 选择子智能体 —</option>' + state.agents.map(a =>
+      '<option value="' + esc(a.id) + '"' + (a.id === selected ? ' selected' : '') + '>' + esc(a.name + (a.enabled === false ? '（停用）' : '')) + '</option>').join('');
+  }
+  function renderMemberRows() {
+    const box = $('tm-members');
+    box.innerHTML = members.map((m, i) =>
+      '<div class="bind-row" data-idx="' + i + '">' +
+      '<div style="display:flex;gap:8px;margin-bottom:6px"><select data-f="agentId" style="flex:1">' + agentOptions(m.agentId) + '</select>' +
+      '<button class="mini-btn danger" data-del="' + i + '" style="flex:none">移除</button></div>' +
+      '<div class="field" style="margin-bottom:6px"><label>职责分工（一句话，进规划花名册与派工职责边界）</label>' +
+      '<input data-f="duty" value="' + esc(m.duty || '') + '" placeholder="如: 架构与扩展性评审"></div>' +
+      '<div class="field" style="margin-bottom:0"><label>执行指示（可选：角色专属工作方法与产出结构）</label>' +
+      '<textarea data-f="instructions" style="min-height:56px" placeholder="工作方法：…&#10;产出结构：…">' + esc(m.instructions || '') + '</textarea></div></div>').join('') ||
+      '<div class="hint" style="margin:0">还没有成员。点击「＋ 添加成员」从子智能体中选取（2~8 人）。</div>';
+    box.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => {
+      members.splice(Number(b.getAttribute('data-del')), 1);
+      renderMemberRows();
+    }));
+    box.querySelectorAll('.bind-row').forEach(row => {
+      const i = Number(row.getAttribute('data-idx'));
+      row.querySelector('[data-f=agentId]').addEventListener('change', e => { members[i].agentId = e.target.value; });
+      row.querySelector('[data-f=duty]').addEventListener('input', e => { members[i].duty = e.target.value; });
+      row.querySelector('[data-f=instructions]').addEventListener('input', e => { members[i].instructions = e.target.value; });
+    });
+  }
+  $('drawer-body').innerHTML =
+    '<div class="field"><label>团队名称</label><input id="tm-name" value="' + esc(team && team.name || '') + '" placeholder="如: 技术方案评审团"></div>' +
+    '<div class="field"><label>简介（可选：适合什么场景）</label><input id="tm-desc" value="' + esc(team && team.description || '') + '"></div>' +
+    '<div class="field"><label>共同目标（注入每个成员派工与主调度规划）</label><textarea id="tm-goal" placeholder="如: 从架构、安全和质量三个角度评审技术方案，定位交付风险。">' + esc(team && team.goal || '') + '</textarea></div>' +
+    '<div class="field"><label>共同约束（可选）</label><textarea id="tm-constraints" style="min-height:56px" placeholder="如: 仅进行分析评审；依据不足时明确说明，不擅自修改。">' + esc(team && team.constraints || '') + '</textarea></div>' +
+    '<div class="field"><label>共同交付要求（可选）</label><input id="tm-delivery" value="' + esc(team && team.deliveryRequirements || '') + '" placeholder="如: 风险与验收清单"></div>' +
+    '<div class="field"><label>团队成员（2~8 人，每人配职责分工）</label><div id="tm-members"></div>' +
+    '<button class="mini-btn" id="tm-add" style="margin-top:6px">＋ 添加成员</button></div>' +
+    '<div class="field"><label>主理人补充规则（可选：注入主调度规划与汇总，空 = 默认协作规范）</label>' +
+    '<textarea id="tm-coord" style="min-height:64px" placeholder="如: 优先核对安全风险的放行条件；汇总按严重度排序。">' + esc(team && team.coordinatorPrompt || '') + '</textarea></div>' +
+    '<div class="ops" style="display:flex;gap:10px;margin-top:14px"><button class="btn pri" id="tm-save">保存</button><button class="btn" id="tm-cancel">取消</button></div>';
+  renderMemberRows();
+  $('tm-add').addEventListener('click', () => { members.push({ agentId: '', duty: '' }); renderMemberRows(); });
+  $('tm-cancel').addEventListener('click', closeDrawer);
+  $('tm-save').addEventListener('click', async () => {
+    const body = {
+      id: team && team.id,
+      name: $('tm-name').value,
+      description: $('tm-desc').value,
+      goal: $('tm-goal').value,
+      constraints: $('tm-constraints').value,
+      deliveryRequirements: $('tm-delivery').value,
+      coordinatorPrompt: $('tm-coord').value,
+      enabled: team ? team.enabled !== false : true,
+      members: members,
+    };
+    const r = await api('/teams', { method: 'POST', body: JSON.stringify(body) });
+    if (!r.ok) { toast(r.error || '保存失败', true); return; }
+    closeDrawer();
+    await loadTeams();
+    toast('✓ 专家团已保存');
+  });
 }
 
 // ---------- 技能中心（管理 + 绑定子智能体节点的技能） ----------

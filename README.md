@@ -67,6 +67,8 @@ node dist/server.js --port 3081 \
    绑定可用资源（SSH/HTTP/DSH，各配凭证策略 `self-fetch|inline|omit` 与技能策略 `all|none`）→ 提示词预览。
    也可一键使用内置模板（7 个质量门禁角色）或**专家名册库**（321 位专业智能体，分类浏览/搜索，选中预填人格与提示词）。
 3. **工作台**新建任务：选 1 个成员=直通聊天；选多个=协同编排（LLM 拆解→DAG 派发→🎯汇总）。
+   也可在「子智能体 → 专家团」把成员编成合同式团队（共同目标/约束/交付要求 + 每人职责分工），
+   点「🚀 发任务」创建团队任务——输入目标即按合同编排：主调度按分工拆解、成员派工注入职责边界与五段回传格式、汇总对照职责核对并产出 coverage 覆盖度报告（部分失败时归因到职责缺口）。
 4. 每个任务一个聊天窗口：流式输出/思维链折叠/工具调用过程/停止按钮/输入框下方 composer 工具栏（成员 chips + 主调度模型下拉；主任务拆解由设置页指定的子智能体完成，模型仅作用于主调度）/附件逐文件上传进度面板（排队→上传中 N%→✓ 已上传（含落盘路径与成员同步数）/✗ 失败，XHR onprogress 实时）/多轮追问/成员增删/失败子任务重试。；输入框下方任务实时统计条（轮/步 · LLM 与工具耗时 · 首 token 均值与 tok/s · 缓存命中 · 输入输出 token）
 5. 编排计划与子任务进度直接在任务聊天内查看（计划卡片可展开子任务工作日志与远端会话）。
 6. 协同编排拆解时，主调度思考流（💭 实时推理过程，可折叠）与拆解阶段日志实时打印在聊天窗「🎯 主调度规划」气泡内，拆解完成后收敛为「✅ 拆解完成 — 策略 · 子任务数 · 耗时」结论行并保留完整流水与思考文本（历史回放同样可见）。
@@ -81,6 +83,10 @@ GET|POST /api/agents               DELETE /api/agents/:id
 GET  /api/agents/expert-templates  内置专家模板清单（一键创建子智能体用）
 GET  /api/experts/roster           内置专家名册索引（321 位，按分类分组；资产缺失时 available:false 降级）
 GET  /api/experts/roster/detail    ?division&slug — 单位专家 persona 正文（中文优先，缺译文回退英文）
+GET|POST /api/teams                专家团列表 / 新建或更新（body: name, goal, constraints?, deliveryRequirements?,
+                                   members[{agentId,duty,instructions?}], coordinatorPrompt?, enabled?；2~8 名成员）
+GET|DELETE /api/teams/:id          详情 / 删除（关联任务仅摘除 teamId 标记，历史保留）
+POST /api/tasks                    body 可含 teamId —— 团队任务：按团队名册展开成员并进入编排模式
 POST /api/agents/:id/ping          GET /api/agents/:id/models|presets|prompt-preview
 GET  /api/agents/fs/list           ?agent&path — 代理远端目录浏览（编辑器「📁 浏览」选工作目录用）
 POST /api/agents/fs/mkdir          {agent,path,name} — 远端新建文件夹
@@ -226,6 +232,28 @@ JSON-RPC 2024-11-05，平台下发 initialize / tools/list / tools/call / ping�
 
 授权边界：persona 快照继续采用 MIT（见 `assets/expert-roster/NOTICE` 与各目录内 `LICENSE`）；
 目录扫描与懒加载实现移植自 dsh-agency-agents（Apache-2.0）。
+
+## 专家团（合同式团队编排）
+
+「子智能体」页下半区的**专家团**：把已建的子智能体编成一个团，配置共同目标/约束/交付要求、
+每个成员的职责分工（duty）与执行指示（instructions），可选主理人补充规则。合同模型与协作规范
+移植自 [dsh-agency-agents](https://github.com/MichengAI/dsh-agency-agents)（Apache-2.0）的
+ExpertTeam/executeTeam/MEMBER_HANDOFF，落点对齐 workbuddy 既有编排骨架：
+
+- **无团长智能体**：主调度（Planner）即主理人 —— 团队合同拆成三份注入：
+  规划（`teamPlannerBrief`：团队契约 + 按分工拆解/补齐职责覆盖的规则）、
+  派工（`[专家团协作]` 段：共同目标/约束/交付要求 + **全员职责边界** + 自己的分工与执行指示 +
+  五段回传格式「结论/证据与定位/风险与条件/建议与验收/交接给主调度」）、
+  汇总（对照职责核对覆盖、处理分歧、标注缺口）；
+- **团队任务语义**：`POST /api/tasks {teamId}` 按团队名册展开成员并进入编排模式；
+  团队任务内**无 @ 的消息也按合同走编排**（不落入「无 @ = 主会话直发」）；
+- **coverage 覆盖度报告**：任务结束产出 `summary.coverage`（complete/partial/failed + 缺口清单，
+  缺口归因到成员职责分工）；它只反映成员返回情况，不代表质量验收通过；
+- **成员即子智能体**：团队不复制实体，成员引用子智能体 id —— 删除子智能体时自动从团队摘除
+  （成员不足 2 人时团队保留但不可用）；发任务前校验成员可用性。
+
+冒烟测试：`npm run smoke`（专家团 CRUD 校验/团队任务成员展开/落盘/删除级联等 9 项断言，
+共 49 项）。
 
 ## 代码来源
 

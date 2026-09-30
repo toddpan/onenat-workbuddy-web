@@ -19,6 +19,7 @@ import type { WorkStore } from './store.js'
 import type { SubtaskLogEntry, AgentResourceBinding, DshRef, ExtractedFileMention, ExtractedMentions, PlanSubtask, Project, SubAgent, TaskEvent, TaskTurn, TurnToolCall, WorkTask } from './types.js'
 import type { SshResourceStore } from './ssh-store.js'
 import { expertPersona } from './expert-templates.js'
+import { teamMemberContract } from './expert-teams.js'
 
 /**
  * 节点主会话的伪 agentId：新模型下无 @ 的主会话不绑定任何 sub agent 身份，
@@ -46,6 +47,8 @@ export interface CreateTaskInput {
   skillNames?: string[]
   /** 任务级模型（provider/model）：定时任务实例配置；主会话（__node__）优先于全局调度模型 */
   model?: string
+  /** 专家团任务：按团队合同展开成员并注入规划/派工/汇总（memberAgentIds 未显式给定时以团队名册为准） */
+  teamId?: string
 }
 
 /** 取 prompt 尾部片段：降级轮询时供远端 history 定位本次回合的起点 user 消息（注入消息不含用户文本，天然排除） */
@@ -423,9 +426,22 @@ export class TaskEngine {
 
   public async createTask(input: CreateTaskInput): Promise<WorkTask> {
     const explicit = Array.isArray(input.memberAgentIds) ? input.memberAgentIds.filter((id) => Boolean(id)) : []
+    // 专家团任务：团队名册是成员账本的默认来源（显式传入的 memberAgentIds 优先，teamId 仅作合同标记保留）
+    const team = input.teamId ? this.store.getTeam(input.teamId) : undefined
+    if (input.teamId && !team) throw new Error(`专家团不存在: ${input.teamId}`)
+    if (team && !team.enabled) throw new Error(`专家团「${team.name}」已停用，请先在子智能体页启用`)
+    let memberAgentIds = explicit.length ? [...new Set(explicit)] : []
+    if (team && !explicit.length) {
+      const missing = team.members
+        .map((m) => ({ m, agent: this.store.getAgent(m.agentId) }))
+        .filter((x) => !x.agent || x.agent.enabled === false)
+      if (missing.length) {
+        throw new Error(`专家团「${team.name}」成员不可用: ${missing.map((x) => x.agent?.name || x.m.agentId).join('、')}（不存在或已停用）`)
+      }
+      memberAgentIds = team.members.map((m) => m.agentId)
+    }
     // 新模型：成员账本 = 参与过的 sub agent（@ 时自动追加），不再预填「主智能体」；
     // 无 @ 的主会话直接在任务节点上执行（processUserMessage → runChatTurn 节点直发）
-    const memberAgentIds = explicit.length ? [...new Set(explicit)] : []
     const mode: WorkTask['mode'] = input.mode || (memberAgentIds.length > 1 ? 'orchestrate' : 'chat')
     const task: WorkTask = {
       id: `task-${randomUUID().slice(0, 8)}`,
@@ -445,6 +461,7 @@ export class TaskEngine {
       ...(input.model ? { model: input.model } : {}),
       ...(input.connectorIds?.length ? { connectorIds: input.connectorIds } : {}),
       ...(input.skillNames?.length ? { skillNames: input.skillNames } : {}),
+      ...(team ? { teamId: team.id } : {}),
     }
     this.store.upsertTask(task)
     if (input.message?.trim()) {
@@ -674,8 +691,11 @@ export class TaskEngine {
     // 本轮是否明确 @ 了“恰好一个”智能体 —— 用户只想把这件事交给那一个智能体，
     // 不应被任务已有的多成员/编排模式放大成跨多智能体流水线
     const singleExplicitMention = mentions.mentionedAgentIds.length === 1
+    // 专家团任务：团队合同（团队名册 + 分工）是任务的主语义，无 @ 的消息也按合同走编排，
+    // 不落入「无 @ = 主会话直发」——否则团队任务的目标会被单智能体消化，合同形同虚设。
+    const teamOrchestrate = Boolean(task.teamId) && task.mode === 'orchestrate' && !hasExplicitAgentMention
 
-    if (!hasExplicitAgentMention) {
+    if (!hasExplicitAgentMention && !teamOrchestrate) {
       // 新模型：无 @ = 主会话直发任务节点。项目任务=项目配置节点；非项目任务=创建时所选节点。
       // 主会话不绑定任何 sub agent 身份（远端默认形态 + 项目指令），sub agent 通过 @ 在该节点上调用。
       const exec0 = this.taskExec(task)
@@ -761,7 +781,7 @@ export class TaskEngine {
       return
     }
 
-    if (task.mode === 'chat' || targets.size === 1 || (!hasExplicitAgentMention && targets.size > 1)) {
+    if (!teamOrchestrate && (task.mode === 'chat' || targets.size === 1 || (!hasExplicitAgentMention && targets.size > 1))) {
       // 单智能体、直通模式或普通对话：走直通对话
       const targetAgentId = [...targets.keys()][0]
       this.store.mutateTask(taskId, (t) => {
@@ -1148,6 +1168,10 @@ export class TaskEngine {
   ): Promise<void> {
     const task = this.store.getTask(taskId)!
 
+    // 专家团任务：团队合同注入规划与派工（teamId 失效时按普通编排降级并记录）
+    const team = task.teamId ? this.store.getTeam(task.teamId) : undefined
+    if (task.teamId && !team) this.taskLog(taskId, 'warn', `专家团 ${task.teamId} 已不存在，本次按普通编排执行`)
+
     // 1. 花名册（资源摘要用轻量解析，不抓技能全文）
     const rosterMembers = task.memberAgentIds
       .map((id) => this.store.getAgent(id))
@@ -1215,6 +1239,7 @@ export class TaskEngine {
       planned = await this.planner.planTask(text, rosterMembers, targets, {
         priorityAgentIds: mentions.mentionedAgentIds,
         taskNodeTarget: planNodeTarget && planNodeTarget.online && planNodeTarget.baseUrl ? planNodeTarget : undefined,
+        ...(team ? { team } : {}),
         onLog: (msg, level) => {
           this.taskLog(taskId, level || 'info', `[主调度] ${msg}`)
           planStage(msg)
@@ -1296,7 +1321,7 @@ export class TaskEngine {
       const nt = await this.resolver.resolveRef(execS.dshRef, execS.apiKey, 'summary').catch(() => undefined)
       if (nt?.online && nt.baseUrl) summaryNodeTarget = nt
     }
-    const summary = await this.planner.summarize(text, fresh.plan?.subtasks || [], targets, summaryNodeTarget)
+    const summary = await this.planner.summarize(text, fresh.plan?.subtasks || [], targets, summaryNodeTarget, team ? { team } : undefined)
     this.store.mutateTask(taskId, (t) => {
       t.summary = summary
       t.status = summary.status
@@ -1470,6 +1495,14 @@ export class TaskEngine {
     // 否则执行者拿不到自己的角色定义，只能靠子任务指令自猜身份。
     // 专家人格（expertPersona）：角色声明 + 职责约束（systemPrompt）+ 执行指导（executionPrompt）。
     parts.push(`[执行者角色]（你的身份、职责与约束）:\n${expertPersona(agent)}`)
+    // 专家团合同段（移植 dsh-agency-agents executeTeam 成员提示词结构）：共同目标/约束/交付要求 +
+    // 全员职责边界 + 自己的分工与执行指示 + 五段回传格式；紧跟执行者角色，先于任务合同。
+    const team = task.teamId ? this.store.getTeam(task.teamId) : undefined
+    const teamMember = team?.members.find((m) => m.agentId === agent.id)
+    if (team && teamMember) {
+      const agentById = new Map(this.store.getAgents().map((a) => [a.id, a]))
+      parts.push(teamMemberContract(team, teamMember, agentById))
+    }
     const hasDynamicResources = (extraResources && extraResources.length > 0) || (mentions?.mentionedFiles && mentions.mentionedFiles.length > 0)
     const cachedBlock = hasDynamicResources ? null : this.blockCacheFresh(taskId, agent)
 

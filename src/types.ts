@@ -312,6 +312,8 @@ export interface TaskSummary {
   subtaskSummaries: Array<{ id: string; title: string; status: string; keyPoints: string }>
   finalConclusion: string
   completedAt: number
+  /** 专家团任务的覆盖度报告（task.teamId 存在时产出） */
+  coverage?: TeamCoverage
 }
 
 export interface WorkTask {
@@ -350,6 +352,8 @@ export interface WorkTask {
   connectorIds?: string[]
   /** 任务级技能覆盖（单独任务临时加挂） */
   skillNames?: string[]
+  /** 专家团任务来源：记录创建团队，编排/派工/汇总按团队合同注入 */
+  teamId?: string
 }
 
 export interface TaskAttachment {
@@ -508,5 +512,50 @@ export interface StorageData {
   tasks: WorkTask[]
   schedules: ScheduledTask[]
   projects: Project[]
+  teams: ExpertTeam[]
   settings: WorkBuddySettings
+}
+
+// ---------- 专家团（合同式团队配置，移植 dsh-agency-agents ExpertTeam） ----------
+
+/** 专家团成员：引用已有子智能体 + 团队内的分工（对齐 dsh-agent-teams Member.role） */
+export interface ExpertTeamMember {
+  agentId: string
+  /** 职责边界一句话：进规划花名册与派工提示词「职责边界」，也是 coverage 缺口归因的依据 */
+  duty: string
+  /** 执行指示：角色专属工作方法与产出结构（仅团队任务派工时注入） */
+  instructions?: string
+}
+
+/**
+ * 专家团：目标/约束/交付要求 + 成员分工的合同式配置。
+ * 编排时注入 Planner 花名册与主调度规则、派工提示词与汇总核对；
+ * 成员引用子智能体 id —— 删除子智能体时由 store 级联摘除。
+ */
+export interface ExpertTeam {
+  id: string
+  name: string
+  description?: string
+  /** 共同目标（注入每个成员的派工提示词与主调度规划） */
+  goal: string
+  /** 共同约束（可空） */
+  constraints?: string
+  /** 共同交付要求（可空） */
+  deliveryRequirements?: string
+  /** 2~8 名成员；agentId 不得重复 */
+  members: ExpertTeamMember[]
+  /** 主理人补充规则（注入规划与汇总提示词；空 = 仅默认协作规范） */
+  coordinatorPrompt?: string
+  enabled: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+/** 专家团任务的覆盖度报告（对齐 dsh-agency-agents executeTeam coverage；只反映成员返回情况，不代表质量验收） */
+export interface TeamCoverage {
+  status: 'complete' | 'partial' | 'failed'
+  completed: number
+  total: number
+  /** 未成功成员的职责缺口（skipped 计入缺口） */
+  missing: Array<{ title: string; agentId: string; agentName: string; duty?: string; error?: string }>
 }

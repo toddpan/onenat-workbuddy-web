@@ -5,7 +5,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
-import type { AgentResourceBinding, DshRef, Project, StorageData, SubAgent, WorkBuddySettings, WorkTask, PlanSubtask, TaskTurn, ScheduledTask } from './types.js'
+import type { AgentResourceBinding, DshRef, ExpertTeam, Project, StorageData, SubAgent, WorkBuddySettings, WorkTask, PlanSubtask, TaskTurn, ScheduledTask } from './types.js'
 
 function defaultSettings(): WorkBuddySettings {
   return {
@@ -42,7 +42,7 @@ export class WorkStore {
   constructor(customPath?: string) {
     const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh')
     this.filePath = customPath || join(dshHome, 'onenat-workbuddy', 'store.json')
-    this.data = { agents: [], tasks: [], schedules: [], projects: [], settings: { ...defaultSettings(), xiaozhi: {} } }
+    this.data = { agents: [], tasks: [], schedules: [], projects: [], teams: [], settings: { ...defaultSettings(), xiaozhi: {} } }
     this.load()
     // 进程退出前把尾随写入落盘（SIGKILL 除外），避免最后 250ms 的流式增量丢失。
     // 只挂 'exit'：SIGINT/SIGTERM 走默认终止路径同样会触发 exit，且不会劫持 Ctrl-C 语义。
@@ -68,6 +68,7 @@ export class WorkStore {
           tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
           schedules: Array.isArray(parsed.schedules) ? parsed.schedules : [],
           projects: Array.isArray(parsed.projects) ? parsed.projects : [],
+          teams: Array.isArray(parsed.teams) ? parsed.teams : [],
           settings: {
             onenat: { ...defaultSettings().onenat, ...(parsed.settings?.onenat || {}) },
             planner: { ...defaultSettings().planner, ...(parsed.settings?.planner || {}) },
@@ -225,7 +226,60 @@ export class WorkStore {
         s.agentIds = s.agentIds.filter((x) => x !== id)
       }
     }
+    // 同步从专家团成员里摘除（成员不足 2 人时团队保留但不可用，需编辑补齐）
+    for (const team of this.data.teams) {
+      if (team.members.some((m) => m.agentId === id)) {
+        team.members = team.members.filter((m) => m.agentId !== id)
+        team.updatedAt = Date.now()
+      }
+    }
     const changed = this.data.agents.length !== before
+    if (changed) this.save()
+    return changed
+  }
+
+  // ---- ExpertTeams（专家团） ----
+
+  public getTeams(): ExpertTeam[] {
+    return [...this.data.teams].sort((a, b) => b.createdAt - a.createdAt)
+  }
+
+  public getTeam(id: string): ExpertTeam | undefined {
+    return this.data.teams.find((t) => t.id === id)
+  }
+
+  /** 无校验落库（校验在 router 的 parseTeamInput）；成员引用的子智能体由调用方保证存在 */
+  public upsertTeam(input: Partial<ExpertTeam>): ExpertTeam {
+    const now = Date.now()
+    const existing = input.id ? this.data.teams.find((t) => t.id === input.id) : undefined
+    const team: ExpertTeam = {
+      id: existing?.id || `team-${Math.random().toString(36).slice(2, 10)}`,
+      name: String(input.name ?? existing?.name ?? '未命名专家团'),
+      description: input.description !== undefined ? (String(input.description).trim() || undefined) : existing?.description,
+      goal: String(input.goal ?? existing?.goal ?? ''),
+      constraints: input.constraints !== undefined ? (String(input.constraints).trim() || undefined) : existing?.constraints,
+      deliveryRequirements: input.deliveryRequirements !== undefined ? (String(input.deliveryRequirements).trim() || undefined) : existing?.deliveryRequirements,
+      members: (input.members as ExpertTeam['members']) || existing?.members || [],
+      coordinatorPrompt: input.coordinatorPrompt !== undefined ? (String(input.coordinatorPrompt).trim() || undefined) : existing?.coordinatorPrompt,
+      enabled: input.enabled ?? existing?.enabled ?? true,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    }
+    const idx = this.data.teams.findIndex((t) => t.id === team.id)
+    if (idx >= 0) this.data.teams[idx] = team
+    else this.data.teams.push(team)
+    this.save()
+    return team
+  }
+
+  public deleteTeam(id: string): boolean {
+    const before = this.data.teams.length
+    this.data.teams = this.data.teams.filter((t) => t.id !== id)
+    // 关联任务只摘除 teamId 标记（历史任务与产出保留）
+    for (const t of this.data.tasks) {
+      if (t.teamId === id) delete t.teamId
+    }
+    const changed = this.data.teams.length !== before
     if (changed) this.save()
     return changed
   }
