@@ -1886,10 +1886,9 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .mtd-tool.err .tn { color: var(--err); }
 .mtd-tool.run .tn { color: var(--pri); }
 /* 技能与插件库 */
-#view-library { flex-direction: column; overflow: auto; padding: 12px 16px 20px; gap: 0; }
-#view-library .panel { flex: 0 0 auto; overflow: visible; }
-.lib-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
-@media (max-width: 1100px) { .lib-grid { grid-template-columns: 1fr; } }
+#view-library, #view-plugins { flex-direction: column; overflow: auto; padding: 12px 16px 20px; gap: 0; }
+#view-library .panel, #view-plugins .panel { flex: 0 0 auto; overflow: visible; }
+/* （技能库/插件库已拆分为两个独立页面，原双栏 .lib-grid 布局移除） */
 .lib-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .lib-head b { font-size: 13px; }
 .lib-head .cnt { color: var(--pri); font-size: 11.5px; }
@@ -1935,7 +1934,8 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
         <button id="nav-more-btn" type="button" title="更多功能入口"><span class="ic">⋯</span><span class="lb">更多</span><span class="chev">▾</span></button>
         <div class="nav-more-pop" id="nav-more-pop" role="menu">
           <button data-v="resources" type="button" role="menuitem"><span class="ic">🗂</span><span class="lb">资源目录</span></button>
-          <button data-v="library" type="button" role="menuitem"><span class="ic">🧩</span><span class="lb">技能插件</span></button>
+          <button data-v="library" type="button" role="menuitem"><span class="ic">📚</span><span class="lb">技能库</span></button>
+          <button data-v="plugins" type="button" role="menuitem"><span class="ic">🔌</span><span class="lb">插件库</span></button>
           <button data-v="voice" type="button" role="menuitem"><span class="ic">🎙</span><span class="lb">语音助手</span></button>
           <button data-v="schedules" type="button" role="menuitem"><span class="ic">⏰</span><span class="lb">定时任务</span></button>
           <button data-v="files" type="button" role="menuitem"><span class="ic">📁</span><span class="lb">文件管理</span></button>
@@ -2158,40 +2158,60 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
     <div class="view" id="view-library">
       <div class="panel" style="margin-bottom:12px">
         <div class="lib-head" style="border-bottom:none">
-          <b style="font-size:14px">🧩 技能与插件</b>
-          <span class="lib-tip">压缩包统一入库 · 安装 = 向目标节点子智能体发起执行任务（按节点去重）· 下载链接 30 分钟有效</span>
+          <b style="font-size:14px">📚 技能库</b>
+          <span class="lib-tip">压缩包统一入库 · 安装 = 向选中的 DSH 主节点发起主会话任务（节点直接执行）· 下载链接 30 分钟有效</span>
           <span class="lib-hspacer"></span>
         </div>
       </div>
-      <div class="lib-grid">
-        <div class="panel">
-          <div class="lib-head"><b>📚 技能库</b><span class="cnt" id="lib-skill-cnt"></span><span class="lib-hspacer"></span>
-            <button class="mini-btn" id="lib-skill-import" title="拉取指定节点已安装的技能归档入库">⬇ 从节点导入</button>
-            <button class="mini-btn" id="lib-skill-upload">＋ 上传</button>
-            <input type="file" id="lib-skill-file" multiple accept=".zip,.tgz,.tar.gz" style="display:none">
-          </div>
-          <div class="lib-list" id="lib-skill-list"><div class="lib-empty">加载中…</div></div>
+      <div class="panel">
+        <div class="lib-head"><b>技能列表</b><span class="cnt" id="lib-skill-cnt"></span><span class="lib-hspacer"></span>
+          <button class="mini-btn" id="lib-skill-import" title="选择 DSH 主节点，只读拉取其已安装技能归档入库（不发任务）">⬇ 从节点导入</button>
+          <button class="mini-btn" id="lib-skill-upload">＋ 上传</button>
+          <input type="file" id="lib-skill-file" multiple accept=".zip,.tgz,.tar.gz" style="display:none">
         </div>
-        <div class="panel">
-          <div class="lib-head"><b>🔌 插件库</b><span class="cnt" id="lib-plugin-cnt"></span><span class="lib-hspacer"></span>
-            <button class="mini-btn" id="lib-plugin-import" title="向指定节点发导出任务（npm pack），完成后自动拉回入库">⬇ 从节点导入</button>
-            <button class="mini-btn" id="lib-plugin-upload">＋ 上传</button>
-            <input type="file" id="lib-plugin-file" multiple accept=".tgz,.tar.gz,.zip" style="display:none">
-          </div>
-          <div class="lib-list" id="lib-plugin-list"><div class="lib-empty">加载中…</div></div>
-        </div>
+        <div class="lib-list" id="lib-skill-list" style="max-height:50vh"><div class="lib-empty">加载中…</div></div>
       </div>
       <div class="panel" style="margin-top:12px">
-        <div class="lib-head"><b>🧾 安装记录</b><span class="lib-tip">每目标一个任务，状态随任务会话自动回写</span><span class="lib-hspacer"></span>
+        <div class="lib-head"><b>🧾 安装记录 · 技能</b><span class="lib-tip">每个目标节点一个主会话任务，状态随任务会话自动回写</span><span class="lib-hspacer"></span>
           <button class="mini-btn" id="lib-installs-refresh">刷新</button>
         </div>
-        <div class="lib-list" id="lib-installs" style="max-height:32vh"><div class="lib-empty">加载中…</div></div>
+        <div class="lib-list" id="lib-installs-skill" style="max-height:30vh"><div class="lib-empty">加载中…</div></div>
       </div>
       <div class="panel" style="margin-top:12px">
         <div class="lib-head"><b>🔗 平台公网地址</b><span class="lib-tip">安装任务里给 DSH 的下载链接基址；留空 = 按浏览器访问域名自动推断</span></div>
         <div style="padding:10px 14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
           <input id="lib-base" placeholder="例如 https://onenat.yikaihui.com/onenat-workbuddy" style="flex:1;min-width:260px;width:auto">
           <button class="mini-btn" id="lib-base-save">保存</button>
+        </div>
+      </div>
+    </div>
+    <div class="view" id="view-plugins">
+      <div class="panel" style="margin-bottom:12px">
+        <div class="lib-head" style="border-bottom:none">
+          <b style="font-size:14px">🔌 插件库</b>
+          <span class="lib-tip">压缩包统一入库 · 安装 = 向选中的 DSH 主节点发起主会话任务（dsh plugin add）· 下载链接 30 分钟有效</span>
+          <span class="lib-hspacer"></span>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="lib-head"><b>插件列表</b><span class="cnt" id="lib-plugin-cnt"></span><span class="lib-hspacer"></span>
+          <button class="mini-btn" id="lib-plugin-import" title="向选中的 DSH 主节点发起导出任务（npm pack），完成后自动拉回入库">⬇ 从节点导入</button>
+          <button class="mini-btn" id="lib-plugin-upload">＋ 上传</button>
+          <input type="file" id="lib-plugin-file" multiple accept=".tgz,.tar.gz,.zip" style="display:none">
+        </div>
+        <div class="lib-list" id="lib-plugin-list" style="max-height:50vh"><div class="lib-empty">加载中…</div></div>
+      </div>
+      <div class="panel" style="margin-top:12px">
+        <div class="lib-head"><b>🧾 安装记录 · 插件</b><span class="lib-tip">每个目标节点一个主会话任务，状态随任务会话自动回写</span><span class="lib-hspacer"></span>
+          <button class="mini-btn" id="lib-installs-refresh-p">刷新</button>
+        </div>
+        <div class="lib-list" id="lib-installs-plugin" style="max-height:30vh"><div class="lib-empty">加载中…</div></div>
+      </div>
+      <div class="panel" style="margin-top:12px">
+        <div class="lib-head"><b>🔗 平台公网地址</b><span class="lib-tip">安装任务里给 DSH 的下载链接基址；留空 = 按浏览器访问域名自动推断</span></div>
+        <div style="padding:10px 14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <input id="lib-base2" placeholder="例如 https://onenat.yikaihui.com/onenat-workbuddy" style="flex:1;min-width:260px;width:auto">
+          <button class="mini-btn" id="lib-base2-save">保存</button>
         </div>
       </div>
     </div>
@@ -2709,7 +2729,7 @@ function fmtSize(n) {
   return (n / 1048576).toFixed(1) + 'MB';
 }
 
-// ---------- 技能与插件库 ----------
+// ---------- 技能库 / 插件库（两个独立页面） ----------
 var libState = { data: null };
 
 async function libLoad() {
@@ -2722,9 +2742,12 @@ async function libLoad() {
   libState.data = r.data;
   libRenderList('skill');
   libRenderList('plugin');
-  libRenderInstalls();
+  libRenderInstalls('skill', 'lib-installs-skill');
+  libRenderInstalls('plugin', 'lib-installs-plugin');
   var b = $('lib-base');
   if (b && document.activeElement !== b) b.value = r.data.publicBaseUrl || '';
+  var b2 = $('lib-base2');
+  if (b2 && document.activeElement !== b2) b2.value = r.data.publicBaseUrl || '';
 }
 
 function libFmtSize(n) {
@@ -2781,9 +2804,10 @@ function libItemAction(kind, entry, act) {
   }
 }
 
-function libRenderInstalls() {
-  var el = $('lib-installs');
-  var recs = (libState.data || {}).installs || [];
+function libRenderInstalls(kind, elId) {
+  var el = $(elId);
+  if (!el) return;
+  var recs = ((libState.data || {}).installs || []).filter(function(r) { return r.kind === kind; });
   if (!recs.length) { el.innerHTML = '<div class="lib-empty">暂无安装记录</div>'; return; }
   var html = '';
   for (var i = 0; i < recs.length; i++) {
@@ -2793,8 +2817,8 @@ function libRenderInstalls() {
       var lb = t.status === 'success' ? '成功' : t.status === 'failed' ? '失败' : '执行中';
       return '<span class="lib-st ' + cls + '" title="任务 ' + esc(t.taskId) + '（可在任务会话查看执行过程）">' + esc(t.agentName) + ' · ' + lb + '</span>';
     }).join('');
-    html += '<div class="lib-item"><div class="lib-main"><div class="lib-nm">' + (rec.kind === 'skill' ? '技能' : '插件') + '「' + esc(rec.name) + '」</div>' +
-      '<div class="lib-meta">' + fmtTime(rec.at) + '<span class="sep">·</span>' + (rec.targets || []).length + ' 个目标</div></div>' +
+    html += '<div class="lib-item"><div class="lib-main"><div class="lib-nm">「' + esc(rec.name) + '」</div>' +
+      '<div class="lib-meta">' + fmtTime(rec.at) + '<span class="sep">·</span>' + (rec.targets || []).length + ' 个节点</div></div>' +
       '<div class="lib-ops">' + chips + '</div></div>';
   }
   el.innerHTML = html;
@@ -2815,19 +2839,26 @@ function libModal(title) {
   };
 }
 
-function libAgentOptions() {
-  return (state.agents || []).filter(function(a) { return a.enabled; });
+/** DSH 主节点选项（与工作台节点选择器同一来源：ONENAT 资源目录的 DSH 映射） */
+function libNodeOptions() {
+  var out = [];
+  (state.resources || []).forEach(function(r) {
+    if (r.kind === 'dsh' && r.mappingId) {
+      out.push({ label: (r.title || r.appName || r.note || r.mappingId), ref: { kind: 'mapping', mappingId: r.mappingId } });
+    }
+  });
+  return out;
 }
 
 async function libInstallModal(kind, entry) {
   var label = kind === 'skill' ? '技能' : '插件';
-  var agents = libAgentOptions();
-  var m = libModal('安装' + label + '「' + entry.name + '」');
-  if (!agents.length) { m.body.innerHTML = '<div class="lib-empty">没有可用的子智能体</div>'; return; }
-  var html = '<div class="lib-tip">勾选目标子智能体；同节点多个智能体只发起一次安装（技能/插件都在节点级生效）。</div><div class="lib-check" id="lib-tgts">';
-  for (var i = 0; i < agents.length; i++) {
-    var a = agents[i];
-    html += '<label><input type="checkbox" value="' + esc(a.id) + '"><b>' + esc(a.name) + '</b><span class="sub">' + esc(a.description || a.role || '') + '</span></label>';
+  var nodes = libNodeOptions();
+  var m = libModal('安装' + label + '「' + entry.name + '」到节点');
+  if (!nodes.length) { m.body.innerHTML = '<div class="lib-empty">没有可用的 DSH 主节点 —— 请到「资源目录」确认 ONENAT 映射已同步</div>'; return; }
+  var html = '<div class="lib-tip">勾选目标 <b>DSH 主节点</b>；将为每个节点直发一个<b>主会话安装任务</b>（节点自身下载安装，无需子智能体；技能/插件都在节点级生效）。</div><div class="lib-check" id="lib-tgts">';
+  for (var i = 0; i < nodes.length; i++) {
+    var n = nodes[i];
+    html += '<label><input type="checkbox" value="' + i + '"><b>' + esc(n.label) + '</b><span class="sub">DSH 主节点 · ' + esc(n.ref.mappingId) + '</span></label>';
   }
   html += '</div>';
   m.body.innerHTML = html;
@@ -2840,17 +2871,17 @@ async function libInstallModal(kind, entry) {
   m.foot.querySelector('#lib-install-go').addEventListener('click', async function() {
     var btn = this;
     var msgEl = m.foot.querySelector('#lib-install-msg');
-    var ids = [];
-    m.body.querySelectorAll('#lib-tgts input:checked').forEach(function(cb) { ids.push(cb.value); });
-    if (!ids.length) { msgEl.textContent = '请先勾选目标'; return; }
+    var refs = [];
+    m.body.querySelectorAll('#lib-tgts input:checked').forEach(function(cb) { refs.push(nodes[+cb.value].ref); });
+    if (!refs.length) { msgEl.textContent = '请先勾选目标节点'; return; }
     btn.disabled = true;
     msgEl.textContent = '发起中…';
-    var r = await api('/library/' + kind + '/' + entry.id + '/install', { method: 'POST', body: JSON.stringify({ agentIds: ids }) });
+    var r = await api('/library/' + kind + '/' + entry.id + '/install', { method: 'POST', body: JSON.stringify({ nodeRefs: refs }) });
     if (!r.ok) { msgEl.textContent = r.error || '发起失败'; btn.disabled = false; return; }
     var d = r.data || {};
-    var html2 = '<div class="lib-tip">已按节点发起 ' + (d.targets || []).length + ' 个安装任务（每个目标节点的子智能体会下载文件并执行安装）：</div><div class="lib-check">';
+    var html2 = '<div class="lib-tip">已向 ' + (d.targets || []).length + ' 个节点发起主会话安装任务（各节点将下载压缩包并在本机执行安装）：</div><div class="lib-check">';
     (d.targets || []).forEach(function(t) {
-      html2 += '<label>▸ <b>' + esc(t.agentName) + '</b><span class="sub">任务 ' + esc(t.taskId) + ' · 到任务会话 / 监控大屏查看执行过程</span></label>';
+      html2 += '<label>▸ <b>' + esc(t.agentName) + '</b><span class="sub">任务 ' + esc(t.taskId) + ' · 到任务会话 / 轨迹 / 监控大屏查看执行过程</span></label>';
     });
     (d.dispatchFailed || []).forEach(function(f) {
       html2 += '<label style="color:var(--err)">✕ ' + esc(f.agent) + '<span class="sub">' + esc(f.error) + '</span></label>';
@@ -2863,20 +2894,21 @@ async function libInstallModal(kind, entry) {
 }
 
 async function libImportSkillModal() {
-  var agents = libAgentOptions();
+  var nodes = libNodeOptions();
   var m = libModal('从节点导入技能');
-  if (!agents.length) { m.body.innerHTML = '<div class="lib-empty">没有可用的子智能体</div>'; return; }
-  var opts = agents.map(function(a) { return '<option value="' + esc(a.id) + '">' + esc(a.name) + '</option>'; }).join('');
-  m.body.innerHTML = '<div class="lib-tip">选择来源子智能体（只读取其节点已安装技能的归档，不影响节点）。同名技能已入库的会跳过。</div>' +
-    '<select id="lib-imp-agent" style="margin-top:8px">' + opts + '</select>' +
+  if (!nodes.length) { m.body.innerHTML = '<div class="lib-empty">没有可用的 DSH 主节点 —— 请到「资源目录」确认 ONENAT 映射已同步</div>'; return; }
+  var opts = nodes.map(function(n, i) { return '<option value="' + i + '">' + esc(n.label) + '</option>'; }).join('');
+  m.body.innerHTML = '<div class="lib-tip">选择来源 <b>DSH 主节点</b>（只读拉取该节点已安装技能的归档，不发起任务、不影响节点）。同名技能已入库的会跳过。</div>' +
+    '<select id="lib-imp-node" style="margin-top:8px">' + opts + '</select>' +
     '<div id="lib-imp-skills" class="lib-tip" style="margin-top:8px">点下方「读取技能清单」拉取该节点已装技能。</div>';
   m.foot.style.display = 'flex';
   m.foot.innerHTML = '<button class="mini-btn" id="lib-imp-read">读取技能清单</button><span class="lib-tip" id="lib-imp-msg"></span><button class="mini-btn" id="lib-imp-go" style="display:none">⬇ 导入勾选项</button>';
   m.foot.querySelector('#lib-imp-read').addEventListener('click', async function() {
-    var aid = m.body.querySelector('#lib-imp-agent').value;
+    var idx = +m.body.querySelector('#lib-imp-node').value || 0;
+    var node = nodes[idx];
     var box = m.body.querySelector('#lib-imp-skills');
     box.innerHTML = '读取中…';
-    var r = await api('/agents/' + encodeURIComponent(aid) + '/skills');
+    var r = await api('/library/nodes/skills?node=' + encodeURIComponent(JSON.stringify(node.ref)));
     var skills = (r.ok && r.data && r.data.skills) || [];
     if (!skills.length) { box.innerHTML = '<span style="color:var(--err)">' + esc((r.ok ? '该节点暂无已装技能' : (r.error || '读取失败'))) + (r.ok && r.data && r.data.unsupported ? '（远端 dsh-web-service 缺少 /skills 端点）' : '') + '</span>'; return; }
     var inLib = {};
@@ -2892,13 +2924,14 @@ async function libImportSkillModal() {
   });
   m.foot.querySelector('#lib-imp-go').addEventListener('click', async function() {
     var btn = this;
-    var aid = m.body.querySelector('#lib-imp-agent').value;
+    var idx = +m.body.querySelector('#lib-imp-node').value || 0;
+    var node = nodes[idx];
     var names = [];
     m.body.querySelectorAll('#lib-imp-skills input:checked').forEach(function(cb) { names.push(cb.value); });
     if (!names.length) { toast('请先勾选要导入的技能', true); return; }
     btn.disabled = true;
     m.foot.querySelector('#lib-imp-msg').textContent = '导入中…';
-    var r = await api('/library/import/skills', { method: 'POST', body: JSON.stringify({ agentId: aid, names: names }) });
+    var r = await api('/library/import/skills', { method: 'POST', body: JSON.stringify({ nodeRef: node.ref, names: names }) });
     btn.disabled = false;
     if (!r.ok) { m.foot.querySelector('#lib-imp-msg').textContent = r.error || '导入失败'; return; }
     var d = r.data || {};
@@ -2910,23 +2943,24 @@ async function libImportSkillModal() {
 }
 
 async function libImportPluginModal() {
-  var agents = libAgentOptions();
+  var nodes = libNodeOptions();
   var m = libModal('从节点导入插件');
-  if (!agents.length) { m.body.innerHTML = '<div class="lib-empty">没有可用的子智能体</div>'; return; }
-  var opts = agents.map(function(a) { return '<option value="' + esc(a.id) + '">' + esc(a.name) + '</option>'; }).join('');
-  m.body.innerHTML = '<div class="lib-tip">将向所选节点发起一个<b>导出任务</b>：节点上的智能体会对每个已安装插件执行 npm pack，平台随后自动拉回入库。耗时通常 1~3 分钟，期间请勿删除该任务。</div>' +
-    '<select id="lib-imp-agent" style="margin-top:8px">' + opts + '</select><div id="lib-imp-prog" class="lib-tip" style="margin-top:8px"></div>';
+  if (!nodes.length) { m.body.innerHTML = '<div class="lib-empty">没有可用的 DSH 主节点 —— 请到「资源目录」确认 ONENAT 映射已同步</div>'; return; }
+  var opts = nodes.map(function(n, i) { return '<option value="' + i + '">' + esc(n.label) + '</option>'; }).join('');
+  m.body.innerHTML = '<div class="lib-tip">将向选中的 <b>DSH 主节点</b>发起一个<b>主会话导出任务</b>：节点对每个已安装插件执行 npm pack，平台随后自动拉回入库。耗时通常 1~3 分钟，期间请勿删除该任务。</div>' +
+    '<select id="lib-imp-node" style="margin-top:8px">' + opts + '</select><div id="lib-imp-prog" class="lib-tip" style="margin-top:8px"></div>';
   m.foot.style.display = 'flex';
   m.foot.innerHTML = '<span class="lib-tip" id="lib-imp-msg"></span><button class="mini-btn" id="lib-imp-go">📤 发起导出任务</button>';
   m.foot.querySelector('#lib-imp-go').addEventListener('click', async function() {
     var btn = this;
-    var aid = m.body.querySelector('#lib-imp-agent').value;
+    var idx = +m.body.querySelector('#lib-imp-node').value || 0;
+    var node = nodes[idx];
     btn.disabled = true;
     m.foot.querySelector('#lib-imp-msg').textContent = '发起中…';
-    var r = await api('/library/import/plugins', { method: 'POST', body: JSON.stringify({ agentId: aid }) });
+    var r = await api('/library/import/plugins', { method: 'POST', body: JSON.stringify({ nodeRef: node.ref }) });
     if (!r.ok) { m.foot.querySelector('#lib-imp-msg').textContent = r.error || '发起失败'; btn.disabled = false; return; }
     var taskId = r.data.taskId;
-    m.body.querySelector('#lib-imp-prog').innerHTML = '导出任务 <b>' + esc(taskId) + '</b> 已发起，正在等待节点打包（每 5 秒自动查询，最长等 6 分钟）…';
+    m.body.querySelector('#lib-imp-prog').innerHTML = '导出任务 <b>' + esc(taskId) + '</b> 已发往节点 <b>' + esc(node.label) + '</b>，正在等待打包（每 5 秒自动查询，最长等 6 分钟）…';
     var tries = 0;
     var timer = setInterval(async function() {
       tries++;
@@ -2936,7 +2970,7 @@ async function libImportPluginModal() {
         btn.disabled = false;
         return;
       }
-      var pr = await api('/library/import/plugins/poll?taskId=' + encodeURIComponent(taskId) + '&agentId=' + encodeURIComponent(aid));
+      var pr = await api('/library/import/plugins/poll?taskId=' + encodeURIComponent(taskId));
       if (!pr.ok) return;
       var d = pr.data || {};
       if (!d.done) return;
@@ -2985,11 +3019,14 @@ async function libImportPluginModal() {
   $('lib-skill-import').addEventListener('click', libImportSkillModal);
   $('lib-plugin-import').addEventListener('click', libImportPluginModal);
   $('lib-installs-refresh').addEventListener('click', libLoad);
-  $('lib-base-save').addEventListener('click', async function() {
-    var r = await api('/library/settings', { method: 'POST', body: JSON.stringify({ publicBaseUrl: $('lib-base').value.trim() }) });
+  $('lib-installs-refresh-p').addEventListener('click', libLoad);
+  async function libSaveBase(inputId) {
+    var r = await api('/library/settings', { method: 'POST', body: JSON.stringify({ publicBaseUrl: $(inputId).value.trim() }) });
     if (r.ok) toast('已保存公网地址');
     else toast(r.error || '保存失败', true);
-  });
+  }
+  $('lib-base-save').addEventListener('click', function() { libSaveBase('lib-base'); });
+  $('lib-base2-save').addEventListener('click', function() { libSaveBase('lib-base2'); });
 })();
 
 // ---------- 监控大屏 ----------
@@ -3872,7 +3909,7 @@ async function openRunConfig(focus) {
 
 // ---------- 导航 ----------
 // 折叠进「更多」的低频页签；switchView 高亮与弹层展开都依赖这份清单
-var MORE_VIEWS = ['resources', 'library', 'voice', 'schedules', 'files', 'settings'];
+var MORE_VIEWS = ['resources', 'library', 'plugins', 'voice', 'schedules', 'files', 'settings'];
 var navMore = document.getElementById('nav-more');
 var navMoreBtn = document.getElementById('nav-more-btn');
 function closeNavMore() { if (navMore) navMore.classList.remove('open'); }
@@ -3904,7 +3941,7 @@ function switchView(v) {
   if (v === 'voice') voiceStart(); else voiceStop();
   if (v === 'monitor') monitorStart(); else monitorStop();
   if (v === 'projects') renderProjects();
-  if (v === 'library') libLoad();
+  if (v === 'library' || v === 'plugins') libLoad();
   // 当前页签写入 hash：刷新/分享链接都停留在原页签（replaceState 不产生历史噪音）
   var h = '#' + v;
   if (location.hash !== h) { try { history.replaceState(null, '', h); } catch (e) { location.hash = h; } }
@@ -3961,7 +3998,8 @@ const NAV_LABELS = {
   schedules: { full: '定时任务', short: '定时' },
   voice: { full: '语音助手', short: '语音' },
   resources: { full: '资源目录', short: '资源' },
-  library: { full: '技能插件', short: '技能' },
+  library: { full: '技能库', short: '技能' },
+  plugins: { full: '插件库', short: '插件' },
   settings: { full: '设置', short: '设置' },
   more: { full: '更多', short: '更多' },
 };
