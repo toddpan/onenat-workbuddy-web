@@ -21,6 +21,7 @@ import { normalizeRule, nextRun, ruleText } from './scheduler.js'
 import { SCHEDULE_TEMPLATES } from './schedule-templates.js'
 import { EXPERT_TEMPLATES, expertPersona } from './expert-templates.js'
 import { ExpertRoster } from './expert-roster.js'
+import { parseTeamInput } from './expert-teams.js'
 import type { AuthService } from './auth.js'
 import type { XiaozhiMcpClient } from './xiaozhi-mcp.js'
 import type { DshRef, Project, SubAgent, WorkTask, ScheduledTask } from './types.js'
@@ -1009,6 +1010,40 @@ export class WorkBuddyRouter {
         this.sendJson(res, 404, { ok: false, error: err?.message || '专家不存在' })
       }
       return true
+    }
+    // ---------- 专家团（合同式团队：共同目标/约束/交付要求 + 成员分工） ----------
+    if (p === '/api/teams' && method === 'GET') {
+      this.sendJson(res, 200, { ok: true, data: this.store.getTeams() })
+      return true
+    }
+    if (p === '/api/teams' && method === 'POST') {
+      const body = await this.parseBody(req)
+      const parsed = parseTeamInput(body, {
+        getAgent: (id) => this.store.getAgent(id),
+        teams: this.store.getTeams(),
+        currentId: body?.id ? String(body.id) : undefined,
+      })
+      if (!parsed.ok) {
+        this.sendJson(res, 400, { ok: false, error: parsed.error })
+        return true
+      }
+      // 语义：无 id 新建；带 id 更新既有团队（成员/合同字段整体替换）
+      const saved = this.store.upsertTeam({ ...parsed.value, id: body?.id || undefined })
+      this.sendJson(res, 200, { ok: true, data: saved })
+      return true
+    }
+    const teamMatch = /^\/api\/teams\/([^/]+)$/.exec(p)
+    if (teamMatch) {
+      const teamId = decodeURIComponent(teamMatch[1])
+      if (method === 'GET') {
+        const team = this.store.getTeam(teamId)
+        this.sendJson(res, team ? 200 : 404, team ? { ok: true, data: team } : { ok: false, error: '专家团不存在' })
+        return true
+      }
+      if (method === 'DELETE') {
+        this.sendJson(res, 200, { ok: true, data: { deleted: this.store.deleteTeam(teamId) } })
+        return true
+      }
     }
     if (p === '/api/agents' && method === 'POST') {
       const body = await this.parseBody(req)

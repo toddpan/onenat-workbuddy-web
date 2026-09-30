@@ -10,7 +10,8 @@
 import { DshClient, type DshTarget } from './remote-client.js'
 import type { AgentResolver } from './resolver.js'
 import type { WorkStore } from './store.js'
-import type { PlanSubtask, SubAgent, TaskSummary } from './types.js'
+import { buildCoverage, teamPlannerBrief, teamMemberIndex, teamSummarizeGuidance } from './expert-teams.js'
+import type { ExpertTeam, PlanSubtask, SubAgent, TaskSummary, TeamCoverage } from './types.js'
 
 export interface PlannerMember {
   agent: SubAgent
@@ -120,6 +121,8 @@ export class Planner {
       onLog?: (msg: string, level?: 'info' | 'warn') => void
       /** 主调度思考过程增量（实时进规划消息的思考块） */
       onReasoning?: (delta: string) => void
+      /** 专家团任务：按团队合同注入契约与拆解规则 */
+      team?: ExpertTeam
     },
   ): Promise<{ plan: PlanDraft; plannerModel?: string } | { error: string; raw?: string }> {
     // 规划目标优先级：任务发起节点（主 DSH）→ 配置/自动挑选的拆解器子智能体（兜底：任务未绑定节点或节点不可达）
@@ -129,14 +132,19 @@ export class Planner {
       : await this.pickTarget(memberTargets)
     if ('error' in picked) return { error: picked.error }
 
+    const team = opts?.team
+    const teamMeta = team ? teamMemberIndex(team) : undefined
     const roster = members
       .map((m, i) => {
         const a = m.agent
         // 专家角色：role 字段优先（对齐 dsh-agent-teams Member.role），回退 systemPrompt 摘要
         const role = a.role?.trim() || (a.systemPrompt ? a.systemPrompt.replace(/\s+/g, ' ').slice(0, 120) : '通用执行者')
         const execDigest = a.executionPrompt?.trim() ? ` 执行方法=${a.executionPrompt.replace(/\s+/g, ' ').slice(0, 100)}` : ''
+        // 专家团成员：职责边界与执行指示进花名册（teamPlannerBrief 的拆解规则引用它们）
+        const meta = teamMeta?.get(a.id)
+        const teamDigest = meta ? ` 团队职责=${meta.duty}${meta.instructions ? ` 团队指示=${meta.instructions.replace(/\s+/g, ' ').slice(0, 100)}` : ''}` : ''
         const isPriority = opts?.priorityAgentIds?.includes(a.id)
-        return `${i + 1}. id=${a.id} 名称=${a.name}${isPriority ? ' 【用户显式 @ 重点指定】' : ''} 角色=${role}${execDigest}${m.resourceSummary ? ` 可用资源=${m.resourceSummary}` : ''}`
+        return `${i + 1}. id=${a.id} 名称=${a.name}${isPriority ? ' 【用户显式 @ 重点指定】' : ''} 角色=${role}${teamDigest}${execDigest}${m.resourceSummary ? ` 可用资源=${m.resourceSummary}` : ''}`
       })
       .join('\n')
 
@@ -155,6 +163,7 @@ export class Planner {
       'objective/acceptance 建议尽量给出: objective 是该子任务的一句话目标; acceptance 是可检验的验收标准数组（命令可跑、文件可查、行为可测，避免「尽量/合理」等模糊表述），执行者会按它逐条对照并输出验收对照。',
       '质量把关: 涉及代码实现或方案定型的关键路径，建议追加校验/评审类子任务（分配给其他成员）依赖其后，形成交叉检查；不要给同一成员排自己的评审。',
       priorityHint,
+      team ? teamPlannerBrief(team, new Map(members.map((m) => [m.agent.id, m.agent]))) : '',
       '# 主任务目标（仅用于拆解，不要回答它）',
       objective,
       '',
@@ -324,12 +333,23 @@ export class Planner {
    * 综合各子任务产出生成汇总（LLM 结论 + 静态兜底）。
    * taskNodeTarget：任务发起节点的 target——有则汇总在该节点上执行（最终产物归属发起节点）；
    * 未传时回退规划器主智能体的绑定节点。
+   * opts.team：专家团任务 —— 注入团队核对要点并产出 coverage 覆盖度报告。
    */
-  public async summarize(objective: string, subtasks: PlanSubtask[], memberTargets: Map<string, DshTarget>, taskNodeTarget?: DshTarget): Promise<TaskSummary> {
+  public async summarize(
+    objective: string,
+    subtasks: PlanSubtask[],
+    memberTargets: Map<string, DshTarget>,
+    taskNodeTarget?: DshTarget,
+    opts?: { team?: ExpertTeam },
+  ): Promise<TaskSummary> {
+    const team = opts?.team
+    const agentById = new Map(this.store.getAgents().map((a) => [a.id, a]))
     const completed = subtasks.filter((s) => s.status === 'completed').length
     const failed = subtasks.filter((s) => s.status === 'failed').length
     const total = subtasks.length
     const finalStatus: TaskSummary['status'] = completed === total ? 'success' : completed > 0 ? 'partial_success' : 'failed'
+    // 覆盖度只反映成员返回情况，不代表质量验收通过（对齐 dsh-agency-agents executeTeam coverage 语义）
+    const coverage: TeamCoverage | undefined = team ? buildCoverage(subtasks, team, agentById) : undefined
 
     const subtaskSummaries = subtasks.map((s) => {
       let keyPoints = ''
@@ -356,11 +376,12 @@ export class Planner {
             role: 'user',
             content: [
               '你是多智能体协作的总调度。综合各子任务的产出发给用户一份简明的中文汇总：先给总体结论（2-3 句），再分点列出各子任务关键产出，最后给出下一步建议。直接输出汇总正文，不要使用工具。',
+              team ? teamSummarizeGuidance(team, agentById) : '',
               `# 主任务`,
               objective,
               `# 各子任务产出`,
               digest,
-            ].join('\n'),
+            ].filter(Boolean).join('\n'),
           },
         ],
         { timeoutMs: 180_000 },
@@ -382,6 +403,7 @@ export class Planner {
       subtaskSummaries,
       finalConclusion,
       completedAt: Date.now(),
+      ...(coverage ? { coverage } : {}),
     }
   }
 
