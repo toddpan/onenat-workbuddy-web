@@ -7893,6 +7893,35 @@ function openAgentDrawer(agent, copyMode) {
     else if (agent.dshRef.kind === 'direct') { dshSel.value = 'direct:'; directInput.style.display = ''; directInput.value = agent.dshRef.apiBaseUrl; }
   }
   dshSel.addEventListener('change', () => { directInput.style.display = dshSel.value === 'direct:' ? '' : 'none'; });
+  // 编辑已有实体：打开抽屉即自动拉远端模型目录，Provider/Model 原地换成联动下拉（可选项而非手填，避免填出节点上不存在的模型）
+  if (isEdit && agent) {
+    $('ag-opts-hint').textContent = '正在从远端 DSH 拉取模型目录…';
+    api('/agents/' + agent.id + '/models').then(mr => {
+      const models = (mr.ok && mr.data && mr.data.models) || [];
+      if (!models.length) { $('ag-opts-hint').textContent = '模型目录拉取失败' + (mr.error ? '：' + mr.error : '') + '，可手填或点「同步远端选项」重试'; return; }
+      applyAgentModelSelects(models);
+      $('ag-opts-hint').textContent = '✓ 已加载 ' + models.length + ' 个远端模型（Provider 过滤 Model）';
+    }).catch(() => { $('ag-opts-hint').textContent = '模型目录拉取失败，可手填或点「同步远端选项」重试'; });
+  }
+  /** 把 ag-provider / ag-model 输入框替换为联动下拉（provider 变化时过滤 model 选项） */
+  function applyAgentModelSelects(models) {
+    const curProvider = $('ag-provider').value.trim();
+    const curModel = $('ag-model').value.trim();
+    const providers = [];
+    for (const m of models) if (m.provider && !providers.includes(m.provider)) providers.push(m.provider);
+    function modelOpts(provider, cur) {
+      const list = provider ? models.filter(m => m.provider === provider) : models;
+      return '<option value=""' + (!cur ? ' selected' : '') + '>远端默认</option>' + list.map(m =>
+        '<option value="' + esc(m.id) + '"' + (m.id === cur ? ' selected' : '') + '>' + esc(m.id + (m.isDefault ? '（默认）' : '') + (provider ? '' : ' · ' + m.provider)) + '</option>').join('');
+    }
+    $('ag-provider').outerHTML = '<select id="ag-provider"><option value=""' + (!curProvider ? ' selected' : '') + '>远端默认</option>' + providers.map(pv => '<option value="' + esc(pv) + '"' + (pv === curProvider ? ' selected' : '') + '>' + esc(pv) + '</option>').join('') + '</select>';
+    $('ag-model').outerHTML = '<select id="ag-model">' + modelOpts(curProvider, curModel) + '</select>';
+    $('ag-provider').addEventListener('change', () => {
+      const pv = $('ag-provider').value;
+      const cur = $('ag-model').value;
+      $('ag-model').outerHTML = '<select id="ag-model">' + modelOpts(pv, cur) + '</select>';
+    });
+  }
   $('bind-add').addEventListener('click', () => {
     const div = document.createElement('div');
     div.innerHTML = bindRowHtml({ ref: { kind: 'mapping', mappingId: '' }, credentialMode: 'self-fetch', skillMode: 'all' }, Date.now(), resOptions);
@@ -7926,25 +7955,12 @@ function openAgentDrawer(agent, copyMode) {
         toast(e, true); return;
       }
       const curPreset = $('ag-preset').value.trim();
-      const curProvider = $('ag-provider').value.trim();
-      const curModel = $('ag-model').value.trim();
       const providers = [];
       for (const m of models) if (m.provider && !providers.includes(m.provider)) providers.push(m.provider);
       const presetOpts = presets.slice();
       if (curPreset && !presetOpts.includes(curPreset)) presetOpts.unshift(curPreset);
       $('ag-preset').outerHTML = '<select id="ag-preset">' + presetOpts.map(p => '<option value="' + esc(p) + '"' + (p === curPreset ? ' selected' : '') + '>' + esc(p === curPreset && !presets.includes(p) ? p + '（当前）' : p) + '</option>').join('') + '</select>';
-      $('ag-provider').outerHTML = '<select id="ag-provider"><option value=""' + (!curProvider ? ' selected' : '') + '>远端默认</option>' + providers.map(p => '<option value="' + esc(p) + '"' + (p === curProvider ? ' selected' : '') + '>' + esc(p) + '</option>').join('') + '</select>';
-      function modelOpts(provider, cur) {
-        const list = provider ? models.filter(m => m.provider === provider) : models;
-        return '<option value=""' + (!cur ? ' selected' : '') + '>远端默认</option>' + list.map(m =>
-          '<option value="' + esc(m.id) + '"' + (m.id === cur ? ' selected' : '') + '>' + esc(m.id + (m.isDefault ? '（默认）' : '') + (provider ? '' : ' · ' + m.provider)) + '</option>').join('');
-      }
-      $('ag-model').outerHTML = '<select id="ag-model">' + modelOpts(curProvider, curModel) + '</select>';
-      $('ag-provider').addEventListener('change', () => {
-        const pv = $('ag-provider').value;
-        const cur = $('ag-model').value;
-        $('ag-model').outerHTML = '<select id="ag-model">' + modelOpts(pv, cur) + '</select>';
-      });
+      applyAgentModelSelects(models);
       hint.textContent = '✓ 已同步 ' + presets.length + ' 个预设 · ' + providers.length + ' 个提供商 · ' + models.length + ' 个模型';
       toast('✓ 远端选项已同步');
     } catch (e) {

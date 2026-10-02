@@ -1216,6 +1216,20 @@ export class WorkBuddyRouter {
       this.sendJson(res, out.ok ? 200 : out.error?.includes('已存在') ? 409 : 400, out.ok ? out : { ok: false, error: out.error })
       return true
     }
+    // 按节点拉模型目录（新建智能体尚未保存时 / 聊天框模型切换用）：node=<dshRef JSON>。
+    // 注意必须放在下方 agentMatch（/api/agents/:id）之前，否则 "models" 会被当成 agentId
+    const nodeModelsMatch = p === '/api/agents/models' && method === 'GET'
+    if (nodeModelsMatch) {
+      const url = new URL(req.url || '/', 'http://localhost')
+      const targetRes = await this.resolveFsTarget(url)
+      if (!targetRes.ok) {
+        this.sendJson(res, targetRes.status, { ok: false, error: targetRes.error, data: { models: [] } })
+        return true
+      }
+      const mr = await this.client.getModels(targetRes.target)
+      this.sendJson(res, 200, { ok: mr.ok, error: mr.error, data: { models: mr.models || [], defaultModel: mr.defaultModel } })
+      return true
+    }
     const agentMatch = /^\/api\/agents\/([^/]+)$/.exec(p)
     if (agentMatch && method === 'DELETE') {
       const id = decodeURIComponent(agentMatch[1])
@@ -1261,6 +1275,24 @@ export class WorkBuddyRouter {
         return true
       }
       this.sendJson(res, 200, { ok: true, data: await this.client.getModels(target) })
+      return true
+    }
+    // 任务节点模型目录（聊天输入框模型切换弹层用）：按任务/项目绑定节点解析
+    const taskModelsMatch = /^\/api\/tasks\/([^/]+)\/models$/.exec(p)
+    if (taskModelsMatch && method === 'GET') {
+      const task = this.store.getTask(decodeURIComponent(taskModelsMatch[1]))
+      if (!task) {
+        this.sendJson(res, 404, { ok: false, error: 'Task not found' })
+        return true
+      }
+      // __node__（节点主会话）无 store 记录 → resolveExecTarget 按任务/项目节点解析（公开方法）
+      const target = await this.engine.resolveExecTarget(task, '__node__').catch(() => undefined)
+      if (!target?.online || !target?.baseUrl) {
+        this.sendJson(res, 200, { ok: false, error: (target as any)?.error || '任务节点不可达', data: { models: [] } })
+        return true
+      }
+      const mr = await this.client.getModels(target)
+      this.sendJson(res, 200, { ok: mr.ok, error: mr.error, data: { models: mr.models || [], defaultModel: mr.defaultModel } })
       return true
     }
     const presetsMatch = /^\/api\/agents\/([^/]+)\/presets$/.exec(p)
@@ -2037,6 +2069,21 @@ export class WorkBuddyRouter {
         return true
       }
       this.sendJson(res, 200, { ok: true, data: { selected: r.selected } })
+      return true
+    }
+    // 任务级模型（无远端会话时的模型选择落点）：engine ensureSession 的 plannerModelSetting
+    // 优先读 task.model，下一轮建会话即生效；也会作为模型回退自愈的目标模型
+    const taskModelMatch = /^\/api\/tasks\/([^/]+)\/model$/.exec(p)
+    if (taskModelMatch && method === 'PUT') {
+      const body = await this.parseBody(req)
+      const updated = this.store.mutateTask(decodeURIComponent(taskModelMatch[1]), (t): WorkTask => {
+        const m = String(body?.model || '').trim()
+        if (m) t.model = m
+        else delete t.model
+        return t
+      })
+      if (!updated) this.sendJson(res, 404, { ok: false, error: 'Task not found' })
+      else this.sendJson(res, 200, { ok: true, data: { model: updated.model || '' } })
       return true
     }
     // 重命名会话（对齐 DSH web 的 session.rename 动词）
