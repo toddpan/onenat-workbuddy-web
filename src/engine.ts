@@ -1481,6 +1481,7 @@ export class TaskEngine {
       this.emit(taskId, { type: 'subtask_status', subtask: this.store.getTask(taskId)!.plan!.subtasks.find((x) => x.id === sub.id)! })
       return
     }
+    let activeSession = session
     const subLog = (msg: string, level: SubtaskLogEntry['level'] = 'info'): void => {
       this.store.mutateSubtask(taskId, sub.id, (s) => {
         s.logs.push({ ts: Date.now(), level, msg })
@@ -1540,27 +1541,45 @@ export class TaskEngine {
     let deltaCount = 0
     const dispatchStartedAt = Date.now()
     let firstDeltaLogged = false
-    const result = await this.dispatchWithFallback(
-      target,
-      session.remoteSessionId!,
-      fullPrompt,
-      {
-        onDelta: (delta) => {
-          if (!firstDeltaLogged) {
-            firstDeltaLogged = true
-            subLog(`收到首个增量（等待 ${((Date.now() - dispatchStartedAt) / 1000).toFixed(1)}s），开始流式接收`)
-          }
-          this.store.mutateSubtask(taskId, sub.id, (s) => {
-            s.result = { content: (s.result?.content || '') + delta }
-          })
-          if (++deltaCount % 25 === 0) this.store.save() // 崩溃恢复粒度
-        },
-        onLog: (msg, level) => {
-          subLog(msg, level || 'info')
-        },
+    // 派发处理器抽为工厂：模型回退重试时重置计数器后复用同一组回调
+    const makeHandlers = (): Parameters<DshClient['streamPrompt']>[3] => ({
+      onDelta: (delta) => {
+        if (!firstDeltaLogged) {
+          firstDeltaLogged = true
+          subLog(`收到首个增量（等待 ${((Date.now() - dispatchStartedAt) / 1000).toFixed(1)}s），开始流式接收`)
+        }
+        this.store.mutateSubtask(taskId, sub.id, (s) => {
+          s.result = { content: (s.result?.content || '') + delta }
+        })
+        if (++deltaCount % 25 === 0) this.store.save() // 崩溃恢复粒度
       },
-      signal,
-    )
+      onLog: (msg, level) => {
+        subLog(msg, level || 'info')
+      },
+    })
+    let result = await this.dispatchWithFallback(target, activeSession.remoteSessionId!, fullPrompt, makeHandlers(), signal)
+
+    // 模型回退自愈：sub agent 自带 provider/model 首轮零产出（含对账后 ok=true 但整轮无文本——
+    // 远端轮次 error 结束时对账也拿不到内容）→ 丢弃该会话，按调度模型重建重试一次。
+    // 路由语义不变，只换执行模型；有部分产出或已中止不重试。
+    let fellBackToDefault = false
+    const firstRoundEmpty = !(result.content && result.content.trim())
+    const plannerModel = String(task.model || this.store.getSettings().planner?.model || '').trim() || undefined
+    if (firstRoundEmpty && !signal.aborted && (agent.provider || agent.model)) {
+      const ownModel = `${agent.provider || '(默认)'}/${agent.model || '(默认)'}`
+      this.store.mutateTask(taskId, (t) => { delete t.sessions[agent.id] })
+      this.store.mutateSubtask(taskId, sub.id, (s) => { s.result = undefined })
+      const retried = await this.ensureSession(taskId, agent, target, { cwd: exec.workspace, workspace: exec.workspace, modelOverride: 'default' })
+      if (retried.target) target = retried.target
+      if (retried.ok && retried.remoteSessionId) {
+        activeSession = retried
+        deltaCount = 0
+        firstDeltaLogged = false
+        fellBackToDefault = true
+        subLog(`首轮无产出（${ownModel} 上游可能不可用），已按调度模型${plannerModel ? `「${plannerModel}」` : '（节点默认）'}回退重试`)
+        result = await this.dispatchWithFallback(target, retried.remoteSessionId, fullPrompt, makeHandlers(), signal)
+      }
+    }
     const viaText = result.via === 'sse' ? 'SSE 流式' : result.via === 'sync' ? '同步调用' : result.via === 'poll' ? '轮询' : '未知通道'
 
     this.store.mutateSubtask(taskId, sub.id, (s) => {
@@ -1579,7 +1598,10 @@ export class TaskEngine {
         s.error = result.error
       } else {
         s.status = 'failed'
-        s.error = result.error || (result.content ? '' : '远程节点返回空回答（Provider/Model 可能不可用）')
+        const baseErr = result.error || (result.content ? '' : '远程节点返回空回答（Provider/Model 可能不可用）')
+        s.error = fellBackToDefault
+          ? `${baseErr}（${agent.provider || '(默认)'}/${agent.model || '(默认)'} 与节点默认模型均无产出）`
+          : baseErr
       }
       s.completedAt = Date.now()
     })
@@ -1736,7 +1758,7 @@ export class TaskEngine {
     }
   }
 
-    private async ensureSession(taskId: string, agent: SubAgent, target: DshTarget, opts?: { cwd?: string; workspace?: string }): Promise<{ ok: boolean; remoteSessionId?: string; reused?: boolean; error?: string; target?: DshTarget }> {
+    private async ensureSession(taskId: string, agent: SubAgent, target: DshTarget, opts?: { cwd?: string; workspace?: string; modelOverride?: 'default' }): Promise<{ ok: boolean; remoteSessionId?: string; reused?: boolean; error?: string; target?: DshTarget }> {
     const task = this.store.getTask(taskId)!
     const exec = this.taskExec(task)
     // 任务/项目工作区只在「执行节点 = 任务节点」时适用（目录属于那台机器）；
@@ -1791,7 +1813,15 @@ export class TaskEngine {
     // 若为主智能体且配置了主调度模型，优先采用该模型作为远端会话创建参数
     let targetProvider = agent.provider
     let targetModel = agent.model
-    if (isMain && plannerModelSetting) {
+    if (opts?.modelOverride === 'default') {
+      // 模型回退自愈（runSubtask）：agent 自带模型上游失败后重建会话。
+      // 回退目标 = 调度模型（任务级/全局 planner 选中值）——不是「不带模型」：节点默认模型
+      // 本身也可能就是坏的（实测 KB136 defaultModel 指向不可用的 qwen38）。调度模型也空时才用节点默认。
+      const pm = plannerModelSetting || ''
+      const slash = pm.indexOf('/')
+      targetProvider = slash >= 0 ? pm.slice(0, slash).trim() || undefined : undefined
+      targetModel = slash >= 0 ? pm.slice(slash + 1).trim() : (pm.trim() || undefined)
+    } else if (isMain && plannerModelSetting) {
       const pm = plannerModelSetting
       const slash = pm.indexOf('/')
       if (slash >= 0) {
