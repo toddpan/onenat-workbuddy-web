@@ -149,6 +149,50 @@ header .sub { color: var(--tx3); font-size: 12.5px; }
 .sched.off { opacity: .5; }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 8px; }
+/* ---------- 统一输入（MCP 通道） ---------- */
+.cmdbar { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 50;
+  width: min(860px, calc(100vw - 32px)); }
+.cmdlog { margin-bottom: 8px; max-height: 34vh; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+.cmdlog:empty { display: none; }
+.cmd-item { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 8px 12px;
+  font-size: 12.5px; line-height: 1.5; box-shadow: 0 4px 16px rgba(31,35,41,.06); word-break: break-all; }
+.cmd-item .ci-head { display: flex; align-items: center; gap: 8px; }
+.cmd-item .ci-ic { font-size: 14px; }
+.cmd-item .ci-tool { color: var(--pri); font-family: var(--mono); font-size: 11.5px; }
+.cmd-item .ci-time { color: var(--tx3); font-size: 11px; margin-left: auto; font-variant-numeric: tabular-nums; }
+.cmd-item .ci-body { margin-top: 4px; color: var(--tx2); white-space: pre-wrap; max-height: 200px; overflow: auto; }
+.cmd-item.err { border-color: rgba(229,72,77,.5); }
+.cmd-item.err .ci-body { color: var(--err); }
+.cmd-input-row { display: flex; gap: 8px; align-items: center; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 999px; padding: 6px 8px 6px 16px; box-shadow: 0 6px 24px rgba(31,35,41,.10); }
+.cmd-input-row:focus-within { border-color: var(--pri); }
+#cmd-target { flex: none; display: none; align-items: center; gap: 5px; background: rgba(77,107,254,.08);
+  border: 1px solid rgba(77,107,254,.35); color: var(--pri); border-radius: 999px; padding: 3px 10px; font-size: 12px;
+  max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+#cmd-input { flex: 1; border: none; outline: none; background: transparent; font-size: 13.5px; color: var(--tx);
+  font-family: inherit; padding: 6px 0; }
+#cmd-input::placeholder { color: var(--tx3); }
+.cmd-send { flex: none; border: none; background: var(--pri); color: #fff; border-radius: 999px;
+  padding: 7px 18px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.cmd-send:disabled { opacity: .55; cursor: default; }
+.cmd-tools { flex: none; border: 1px solid var(--line); background: var(--panel2); color: var(--tx2);
+  border-radius: 999px; padding: 6px 12px; font-size: 12.5px; cursor: pointer; }
+.cmd-tools:hover, .cmd-tools.on { color: var(--pri); border-color: var(--pri); }
+.cmd-hint { margin-top: 5px; text-align: center; font-size: 11px; color: var(--tx3); text-shadow: 0 1px 0 var(--bg); }
+.cmd-hint b { color: var(--tx2); font-weight: 600; }
+.task { cursor: pointer; }
+.task.target { border-color: var(--pri); box-shadow: 0 0 0 2px rgba(77,107,254,.15); }
+.toolpanel { position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%); z-index: 60;
+  width: min(860px, calc(100vw - 32px)); max-height: 44vh; overflow: auto; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; box-shadow: 0 10px 32px rgba(31,35,41,.14); display: none; }
+.toolpanel.open { display: block; }
+.toolpanel .tp-title { font-size: 12.5px; color: var(--tx2); margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+.toolpanel .tp-title .spacer { flex: 1; }
+.toolpanel .tp-title .tp-x { cursor: pointer; color: var(--tx3); font-size: 14px; }
+.tp-tool { border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; margin-bottom: 6px; cursor: pointer; }
+.tp-tool:hover { border-color: var(--pri); background: rgba(77,107,254,.04); }
+.tp-tool .tp-n { font-family: var(--mono); font-size: 12px; color: var(--pri); font-weight: 600; }
+.tp-tool .tp-d { font-size: 11.5px; color: var(--tx3); margin-top: 2px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 @media (max-width: 1100px) {
   .kpis { grid-template-columns: repeat(3, 1fr); }
   .grid { grid-template-columns: 1fr; }
@@ -205,6 +249,22 @@ header .sub { color: var(--tx3); font-size: 12.5px; }
     <h2>⏰ 定时任务 <span class="spacer"></span><span class="mini">蓝色为下次触发倒计时</span></h2>
     <div class="sched-strip" id="scheds"><span class="empty">暂无定时任务</span></div>
   </div>
+</div>
+
+<div class="toolpanel" id="toolpanel">
+  <div class="tp-title">🧰 MCP 工具（点击回填命令行，改参数后回车执行）<span class="spacer"></span><span id="tp-cnt"></span><span class="tp-x" onclick="toggleTools(false)">✕</span></div>
+  <div id="tp-list"><div class="empty">加载中…</div></div>
+</div>
+
+<div class="cmdbar">
+  <div class="cmdlog" id="cmdlog"></div>
+  <div class="cmd-input-row">
+    <span id="cmd-target" onclick="clearTarget()" title="点击取消目标，输入将创建新任务"></span>
+    <input id="cmd-input" placeholder="输入指令回车执行 · 直接输入=建任务/发消息 · 点击任务卡片可设定目标 · /workbuddy_xxx {参数}=直调 MCP 工具" autocomplete="off" />
+    <button class="cmd-tools" id="btn-tools" onclick="toggleTools()" title="浏览全部 MCP 工具">🧰 工具</button>
+    <button class="cmd-send" id="cmd-send" onclick="submitCmd()">发送</button>
+  </div>
+  <div class="cmd-hint">统一输入 · 经 <b>MCP Server</b> 下发（initialize → tools/call，与会话/平台管理同一通道）</div>
 </div>
 
 <script>
@@ -412,7 +472,7 @@ function renderTasks(tasks) {
     if (t.agentNames && t.agentNames.length) metaBits.push(esc(t.agentNames.join('、')));
     if (sub) metaBits.push(sub);
     if (done && t.updatedAt) metaBits.push(new Date(t.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }));
-    html += '<div class="task' + (done ? ' done' : '') + '">' +
+    html += '<div class="task' + (done ? ' done' : '') + (cmdTarget && cmdTarget.id === t.id ? ' target' : '') + '" data-tid="' + esc(t.id) + '" onclick="pickTarget(this)">' +
       '<div class="row1"><span class="ic">' + t.typeIcon + '</span><span class="tt" title="' + esc(t.title) + '">' + esc(titleOf(t)) + '</span>' +
       '<span class="spacer"></span>' + (t.running && t.elapsedMs != null ? '<span class="el">⏱ ' + fmtElapse(t.elapsedMs) + '</span>' : '') +
       '<span class="badge ' + hlClass(t) + '">' + esc(t.status === 'running' ? '运行中' : t.status === 'completed' || t.status === 'success' ? '完成' : t.status === 'failed' ? '失败' : t.status === 'cancelled' ? '已中止' : '部分成功') + '</span>' + '</div>' +
@@ -520,6 +580,189 @@ function renderCharts() {
     { color: '#d48806', pts: recent.map(function(s) { return s.tokensOutputToday; }), fill: false }
   ]);
 }
+
+// ---------- 统一输入（MCP 通道） ----------
+
+var MCP = '${API}'.replace(/\\/api$/, '') + '/mcp';
+var mcpSid = '';
+var mcpTools = [];
+var mcpReadyPromise = null;
+var cmdTarget = null;   // 当前目标任务 {id,title}；设定后输入作为多轮消息发送
+var cmdBusy = false;
+
+async function mcpRaw(method, params, needSession) {
+  var headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+  if (needSession && mcpSid) headers['Mcp-Session-Id'] = mcpSid;
+  var res = await fetch(MCP, { method: 'POST', headers: headers, body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: method, params: params || {} }) });
+  if (res.status === 401) { location.reload(); throw new Error('登录已过期，请重新登录'); }
+  var sid = res.headers.get('Mcp-Session-Id');
+  if (sid) mcpSid = sid;
+  var j = await res.json().catch(function() { return null; });
+  if (!j) throw new Error('MCP 应答解析失败（HTTP ' + res.status + '）');
+  if (j.error) throw new Error('MCP ' + (j.error.message || ('错误码 ' + j.error.code)));
+  return j.result;
+}
+
+function mcpReady() {
+  if (!mcpReadyPromise) {
+    mcpReadyPromise = (async function() {
+      await mcpRaw('initialize', { protocolVersion: '2024-11-05', clientInfo: { name: 'monitor-console', version: '1.0' } });
+      var r = await mcpRaw('tools/list', {}, true);
+      mcpTools = r.tools || [];
+      renderToolPanel();
+    })().catch(function(e) { mcpReadyPromise = null; throw e; });
+  }
+  return mcpReadyPromise;
+}
+
+async function mcpTool(name, args) {
+  await mcpReady();
+  var r = await mcpRaw('tools/call', { name: name, arguments: args || {} }, true);
+  var text = r && r.content && r.content[0] ? r.content[0].text : '';
+  var parsed = null;
+  try { parsed = JSON.parse(text); } catch (e) { /* 非 JSON 原文返回 */ }
+  if (r && r.isError) throw new Error((parsed && parsed.error) || (text || '工具执行失败').slice(0, 300));
+  return parsed !== null ? parsed : text;
+}
+
+function addLog(icon, toolLabel, cls, body) {
+  var el = document.getElementById('cmdlog');
+  var item = document.createElement('div');
+  item.className = 'cmd-item' + (cls ? ' ' + cls : '');
+  var time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  var pre = document.createElement('pre');
+  pre.style.cssText = 'margin:0;font-family:inherit;white-space:pre-wrap;word-break:break-all';
+  pre.textContent = String(body || '').slice(0, 4000);
+  item.innerHTML = '<div class="ci-head"><span class="ci-ic">' + icon + '</span><span class="ci-tool">' + esc(toolLabel) + '</span><span class="ci-time">' + time + '</span></div>';
+  var bodyEl = document.createElement('div');
+  bodyEl.className = 'ci-body';
+  bodyEl.appendChild(pre);
+  item.appendChild(bodyEl);
+  el.insertBefore(item, el.firstChild);
+  while (el.children.length > 30) el.removeChild(el.lastChild);
+}
+
+function setSend(busy) {
+  document.getElementById('cmd-send').disabled = busy;
+  document.getElementById('cmd-send').textContent = busy ? '执行中…' : '发送';
+}
+
+function setTarget(t) {
+  cmdTarget = t;
+  var chip = document.getElementById('cmd-target');
+  if (t) {
+    chip.style.display = 'inline-flex';
+    chip.textContent = '🎯 ' + (t.title || t.id) + ' ✕';
+    document.getElementById('cmd-input').placeholder = '输入将作为多轮消息发送到「' + (t.title || t.id) + '」…';
+  } else {
+    chip.style.display = 'none';
+    chip.textContent = '';
+    document.getElementById('cmd-input').placeholder = '输入指令回车执行 · 直接输入=建任务/发消息 · 点击任务卡片可设定目标 · /workbuddy_xxx {参数}=直调 MCP 工具';
+  }
+  document.querySelectorAll('.task').forEach(function(el) {
+    el.classList.toggle('target', !!t && el.getAttribute('data-tid') === t.id);
+  });
+}
+
+function pickTarget(el) {
+  if (event && event.stopPropagation) event.stopPropagation();
+  var id = el.getAttribute('data-tid');
+  if (!id) return;
+  if (cmdTarget && cmdTarget.id === id) { setTarget(null); return; }
+  var tt = el.querySelector('.tt');
+  setTarget({ id: id, title: tt ? tt.textContent : id });
+}
+
+function clearTarget() { setTarget(null); }
+
+async function createTask(text) {
+  var r = await mcpTool('workbuddy_task_manage', { action: 'create', message: text });
+  var line = (r.deduped ? '♻️ 命中去重，复用既有任务' : '✅ 任务已创建，正在执行') +
+    (r.taskId ? ' · ID ' + r.taskId : '') + (r.nextAction ? '\\n' + r.nextAction : '');
+  addLog('🚀', 'workbuddy_task_manage/create', '', line + (r.title ? '\\n标题：' + r.title : ''));
+  if (r.taskId) setTarget({ id: r.taskId, title: r.title || r.taskId });
+}
+
+async function sendToTarget(text) {
+  var r = await mcpTool('workbuddy_task_manage', { action: 'send', taskId: cmdTarget.id, message: text });
+  addLog('💬', 'workbuddy_task_manage/send → ' + (cmdTarget.title || cmdTarget.id), '',
+    '✅ 消息已投递' + (r && r.receipt ? '\\n' + r.receipt : ''));
+}
+
+async function runSlash(text) {
+  var m = text.slice(1).trim();
+  var sp = m.indexOf(' ');
+  var name = sp === -1 ? m : m.slice(0, sp);
+  var rest = sp === -1 ? '' : m.slice(sp + 1).trim();
+  await mcpReady();
+  var def = null;
+  for (var i = 0; i < mcpTools.length; i++) if (mcpTools[i].name === name) { def = mcpTools[i]; break; }
+  if (!def) {
+    var names = mcpTools.map(function(t) { return t.name; }).join(' / ');
+    throw new Error('未知工具: ' + name + '。可用: ' + names);
+  }
+  if (!rest) {
+    var usage = Object.keys(def.inputSchema && def.inputSchema.properties || {}).map(function(k) {
+      return k + ': ' + (def.inputSchema.properties[k].description || def.inputSchema.properties[k].type);
+    }).join('\\n');
+    addLog('📖', name, '', '参数说明（用法 /' + name + ' {"action":"..."}）：\\n' + (usage || '（无参数）'));
+    return;
+  }
+  var args;
+  try { args = JSON.parse(rest); } catch (e) { throw new Error('参数必须是 JSON 对象，如 /' + name + ' {"action":"list"}'); }
+  var r = await mcpTool(name, args);
+  addLog('🧰', name, '', typeof r === 'string' ? r : JSON.stringify(r, null, 2));
+}
+
+async function submitCmd() {
+  var inp = document.getElementById('cmd-input');
+  var text = (inp.value || '').trim();
+  if (!text || cmdBusy) return;
+  inp.value = '';
+  cmdBusy = true; setSend(true);
+  try {
+    if (text.charAt(0) === '/') await runSlash(text);
+    else if (cmdTarget) await sendToTarget(text);
+    else await createTask(text);
+  } catch (e) {
+    addLog('❌', text.slice(0, 80), 'error', String((e && e.message) || e));
+  } finally {
+    cmdBusy = false; setSend(false); poll();
+  }
+}
+
+function renderToolPanel() {
+  document.getElementById('tp-cnt').textContent = mcpTools.length + ' 个';
+  var el = document.getElementById('tp-list');
+  el.innerHTML = '';
+  for (var i = 0; i < mcpTools.length; i++) {
+    (function(t) {
+      var d = document.createElement('div');
+      d.className = 'tp-tool';
+      d.innerHTML = '<div class="tp-n">/' + esc(t.name) + '</div><div class="tp-d">' + esc(t.description) + '</div>';
+      d.onclick = function() {
+        var inp = document.getElementById('cmd-input');
+        inp.value = '/' + t.name + ' ';
+        toggleTools(false);
+        inp.focus();
+      };
+      el.appendChild(d);
+    })(mcpTools[i]);
+  }
+}
+
+function toggleTools(force) {
+  var p = document.getElementById('toolpanel');
+  var open = typeof force === 'boolean' ? force : !p.classList.contains('open');
+  p.classList.toggle('open', open);
+  document.getElementById('btn-tools').classList.toggle('on', open);
+  if (open) mcpReady().catch(function(e) { addLog('❌', 'tools/list', 'error', String((e && e.message) || e)); });
+}
+
+document.getElementById('cmd-input').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); submitCmd(); }
+});
+mcpReady().catch(function() { /* 首次握手失败不打扰大屏，发送时会重试并报错 */ });
 
 // ---------- 轮询 ----------
 
