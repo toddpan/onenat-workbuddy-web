@@ -872,8 +872,45 @@ export class TaskEngine {
     targetAgent: SubAgent,
     task?: WorkTask,
   ): Promise<{ text: string; extraSections: string[] }> {
+    const extraSections: string[] = []
+    // 工作区跨机访问注入（@智能体 即触发，需在 files 早退之前）
+    // @智能体 → 注入发起方项目工作区的跨机访问指引：
+    // 让异机智能体可通过节点 URL 下载/浏览/预览工作区内任意文件（不限消息中点名的文件）
+    const mentionedAgentCount = mentions?.mentionedAgentIds?.length || 0
+    if (mentionedAgentCount > 0 && task) {
+      const exec0 = this.taskExec(task)
+      // 工作区来源链：项目 workspace → 节点主会话 cwd → 最近路由成员会话 cwd → 成员 workDir
+      const ws =
+        exec0.workspace ||
+        task.sessions?.['__node__']?.cwd ||
+        (task.lastRoute?.agentId ? task.sessions?.[task.lastRoute.agentId]?.cwd : undefined) ||
+        (task.memberAgentIds[0] ? task.sessions?.[task.memberAgentIds[0]]?.cwd : undefined) ||
+        (task.memberAgentIds[0] ? this.store.getAgent(task.memberAgentIds[0])?.workDir : undefined) ||
+        ''
+      if (ws) {
+        // 源节点 = 发起方成员智能体绑定节点（异机访问的文件就在它的工作区里）
+        const srcAgent = task.memberAgentIds[0] ? this.store.getAgent(task.memberAgentIds[0]) : undefined
+        let nodeTarget = srcAgent ? await this.resolver.resolve(srcAgent).catch(() => undefined) : undefined
+        if (!nodeTarget?.baseUrl && exec0.dshRef) {
+          nodeTarget = await this.resolver.resolveRef(exec0.dshRef, exec0.apiKey, '__node__').catch(() => undefined)
+        }
+        if (nodeTarget?.baseUrl) {
+          const base = nodeTarget.baseUrl.replace(/\/+$/, '')
+          const auth = nodeTarget.apiKey ? ` -H "Authorization: Bearer ${nodeTarget.apiKey}"` : ''
+          extraSections.push([
+            '[项目工作区跨机访问]（消息 @ 了你 —— 如需读取发起方工作区内的任意文件，用以下远程访问方式）:',
+            `- 工作区路径: \`${ws}\`（若与你同机，可直接按该绝对路径读取）`,
+            `- 下载文件: curl${auth} "${base}/fs/download?path=<工作区内文件路径>" -o <保存文件名>`,
+            `- 预览文件（inline 文本直出）: curl${auth} "${base}/fs/download?path=<文件路径>&inline=1"`,
+            `- 浏览目录: curl${auth} "${base}/fs/list?path=<目录路径>"`,
+            `- 说明: path 支持工作区相对路径或绝对路径；同机时优先直接读路径，异机用 URL`,
+          ].join('\n'))
+        }
+      }
+    }
+
     const files = mentions?.mentionedFiles || []
-    if (!files.length) return { text, extraSections: [] }
+    if (!files.length) return { text, extraSections }
 
     let resultText = text
     const localFiles: ExtractedFileMention[] = []
@@ -912,7 +949,6 @@ export class TaskEngine {
       }
     }
 
-    const extraSections: string[] = []
 
     if (localFiles.length > 0) {
       const lines = localFiles.map(
@@ -938,6 +974,7 @@ export class TaskEngine {
   }
 
   // ---------- chat 直通 ----------
+  // NOTE: workspace-access injection appended below (see injectWorkspaceAccess)
 
   private async runChatTurn(
     taskId: string,
