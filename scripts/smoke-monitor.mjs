@@ -140,6 +140,11 @@ async function main() {
   check('未登录访问投屏页 → 登录页', anonPage.status === 200 && anonPage.text.includes('登录'), `status=${anonPage.status}`)
   check('登录成功', await login('workbuddy', 'ThunderSoft@88'))
 
+  // ---------- 1b. 统一输入（MCP 通道）页面结构 ----------
+  const page = await req('GET', `${PREFIX}/monitor`, undefined, true)
+  check('投屏页含统一输入条与 MCP 客户端', page.status === 200 && page.text.includes('cmdbar') && page.text.includes('/mcp') && page.text.includes("mcpRaw('initialize'"), `status=${page.status}`)
+  check('统一输入支持自然语言建任务与 /命令直调', page.text.includes('workbuddy_task_manage') && page.text.includes('runSlash') && page.text.includes('tools/list'))
+
   // ---------- 2. overview 形状 ----------
   const ov = await req('GET', `${PREFIX}/api/monitor/overview`)
   const data = ov.json?.data
