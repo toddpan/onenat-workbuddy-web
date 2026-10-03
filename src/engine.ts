@@ -1758,6 +1758,20 @@ export class TaskEngine {
     }
   }
 
+    /** 在目标节点逐级创建目录（mkdir -p 语义）；已存在的层级静默跳过；任一级失败返回 false */
+    private async ensureRemoteDir(target: DshTarget, absPath: string): Promise<boolean> {
+      if (!absPath.startsWith('/')) return false
+      const parts = absPath.split('/').filter(Boolean)
+      let cur = ''
+      for (const p of parts) {
+        const parent = cur || '/'
+        cur = cur + '/' + p
+        const r = await this.client.fsMkdir(target, parent, p).catch(() => ({ ok: false, error: 'mkdir 异常' }))
+        if (!r.ok && !/exist|已存在|EEXIST/i.test(r.error || '')) return false
+      }
+      return true
+    }
+
     private async ensureSession(taskId: string, agent: SubAgent, target: DshTarget, opts?: { cwd?: string; workspace?: string; modelOverride?: 'default' }): Promise<{ ok: boolean; remoteSessionId?: string; reused?: boolean; error?: string; target?: DshTarget }> {
     const task = this.store.getTask(taskId)!
     const exec = this.taskExec(task)
@@ -1854,25 +1868,44 @@ export class TaskEngine {
         res = await this.client.createSession(effTarget, `[WorkBuddy] ${task.title}`, createPayload)
       }
     }
-    // 自愈 2：工作目录在目标节点不存在（ENOENT mkdir，如项目 workspace/agent workDir 属于另一台机器）
-    // → 去掉目录约束回退远端默认目录重建会话，并在任务日志注明
+    // 自愈 2：工作目录在目标节点不存在（ENOENT mkdir）→ 先逐级创建（mkdir -p 语义，
+    // 项目 workspace / 智能体 workDir 绑定的目录由此保证存在），再按原目录重建会话；
+    // 创建失败才回退远端默认目录，并在任务日志注明
     let cwdFellBack = false
     if (!res.ok && res.error && /ensure project directory|ENOENT/i.test(res.error) && (workspaceId || wantedCwd)) {
-      this.taskLog(taskId, 'warn', `工作目录 ${wantedCwd || '(workspace)'} 在目标节点不可用（目录不存在且无法创建），已回退远端默认目录重建会话`)
-      cwdFellBack = true
-      const fallbackPayload = { agentPreset: agent.agentPreset, provider: targetProvider, model: targetModel }
-      res = await this.client.createSession(effTarget, `[WorkBuddy] ${task.title}`, fallbackPayload)
+      if (wantedCwd && wantedCwd.startsWith('/')) {
+        const created = await this.ensureRemoteDir(effTarget, wantedCwd)
+        if (created) {
+          this.taskLog(taskId, 'info', `工作目录 ${wantedCwd} 在目标节点不存在，已自动创建，按原目录重建会话`)
+          res = await this.client.createSession(effTarget, `[WorkBuddy] ${task.title}`, createPayload)
+        }
+      }
+      if (!res.ok && res.error && /ensure project directory|ENOENT/i.test(res.error)) {
+        this.taskLog(taskId, 'warn', `工作目录 ${wantedCwd || '(workspace)'} 无法自动创建，已回退远端默认目录重建会话`)
+        cwdFellBack = true
+        const fallbackPayload = { agentPreset: agent.agentPreset, provider: targetProvider, model: targetModel }
+        res = await this.client.createSession(effTarget, `[WorkBuddy] ${task.title}`, fallbackPayload)
+      }
     }
     // 自愈 3：瞬时失败退避重试（ONENAT 隧道抖动/串端口——无 /root 的机器瞬移、远端重启窗口、5xx）
     if (!res.ok && res.error && /ENOENT|ECONN|EPIPE|EHOST|fetch failed|terminated|HTTP 5\d\d|timed? ?out/i.test(res.error)) {
       this.taskLog(taskId, 'info', `创建会话瞬时失败（${res.error.slice(0, 80)}），1.5s 后自动重试一次`)
       await new Promise((r) => setTimeout(r, 1500))
       res = await this.client.createSession(effTarget, `[WorkBuddy] ${task.title}`, createPayload)
-      // 若瞬时失败源于目录（重试带目录又 ENOENT），再走一次目录回退
+      // 若瞬时失败源于目录（重试带目录又 ENOENT），先尝试创建目录，失败再回退
       if (!res.ok && res.error && /ensure project directory|ENOENT/i.test(res.error) && (workspaceId || wantedCwd) && !cwdFellBack) {
-        cwdFellBack = true
-        const fallbackPayload = { agentPreset: agent.agentPreset, provider: targetProvider, model: targetModel }
-        res = await this.client.createSession(effTarget, `[WorkBuddy] ${task.title}`, fallbackPayload)
+        if (wantedCwd && wantedCwd.startsWith('/')) {
+          const created = await this.ensureRemoteDir(effTarget, wantedCwd)
+          if (created) {
+            this.taskLog(taskId, 'info', `工作目录 ${wantedCwd} 在目标节点不存在，已自动创建，按原目录重建会话`)
+            res = await this.client.createSession(effTarget, `[WorkBuddy] ${task.title}`, createPayload)
+          }
+        }
+        if (!res.ok && res.error && /ensure project directory|ENOENT/i.test(res.error)) {
+          cwdFellBack = true
+          const fallbackPayload = { agentPreset: agent.agentPreset, provider: targetProvider, model: targetModel }
+          res = await this.client.createSession(effTarget, `[WorkBuddy] ${task.title}`, fallbackPayload)
+        }
       }
     }
     if (workspaceId) {
