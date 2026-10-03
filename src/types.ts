@@ -257,6 +257,8 @@ export interface TaskTurn {
   agentId?: string
   agentName?: string
   text: string
+  /** 执行中的排队消息：当前轮结束后自动补发（立即发送/插话后清除） */
+  queued?: boolean
   reasoning?: string
   /** 本轮工具调用过程（对齐 DSH ui-chat 的 turn-process 展示） */
   tools?: TurnToolCall[]
@@ -350,6 +352,8 @@ export interface WorkTask {
   model?: string
   /** 任务级运行权限（如 danger-full-access / workspace-write / ask）：派发时注入提示词，优先于智能体实体默认 */
   permission?: string
+  /** 执行中的排队消息（轮次结束自动补发；「立即发送」= steer 插话到运行中回合） */
+  queue?: Array<{ text: string; at: number; turnId: string }>
   /** 任务级连接器覆盖（单独任务临时加挂） */
   connectorIds?: string[]
   /** 任务级技能覆盖（单独任务临时加挂） */

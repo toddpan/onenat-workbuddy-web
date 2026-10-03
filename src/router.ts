@@ -2112,6 +2112,14 @@ export class WorkBuddyRouter {
       this.sendJson(res, out.ok ? 200 : 502, out)
       return true
     }
+    // 队列「立即发送」：按 turnId 取出排队消息 → 运行中 steer 插话，否则立即派发
+    const queueSendMatch = /^\/api\/tasks\/([^/]+)\/queue\/send$/.exec(p)
+    if (queueSendMatch && method === 'POST') {
+      const body = await this.parseBody(req)
+      const out = await this.engine.sendQueuedNow(decodeURIComponent(queueSendMatch[1]), String(body?.turnId || ''))
+      this.sendJson(res, out.ok ? 200 : 400, out)
+      return true
+    }
     // 重命名会话（对齐 DSH web 的 session.rename 动词）
     const renameMatch = /^\/api\/tasks\/([^/]+)\/rename$/.exec(p)
     if (renameMatch && method === 'POST') {
