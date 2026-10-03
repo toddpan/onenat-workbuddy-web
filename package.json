@@ -46,7 +46,8 @@
     "test:streaming": "node e2e-artifacts/run-streaming-tests.mjs",
     "test:streaming:e2e": "node e2e-artifacts/e2e-workbuddy-turn.mjs",
     "typecheck": "tsc -p tsconfig.server.json --noEmit",
-    "smoke:xiaozhi": "node scripts/smoke-xiaozhi-mcp.mjs"
+    "smoke:xiaozhi": "node scripts/smoke-xiaozhi-mcp.mjs",
+    "smoke:mcp": "node scripts/smoke-mcp-server.mjs"
   },
   "dependencies": {
     "ssh2": "^1.17.0",

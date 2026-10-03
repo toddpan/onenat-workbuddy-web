@@ -33,6 +33,7 @@ import { ScheduleRunner } from './scheduler.js'
 import { WorkBuddyRouter } from './router.js'
 import { MonitorService } from './monitor.js'
 import { XiaozhiMcpClient } from './xiaozhi-mcp.js'
+import { WorkBuddyMcpServer } from './mcp-server.js'
 import { SshResourceStore } from './ssh-store.js'
 import { createWorkBuddyToolDefs, HTTP_TOOL_CTX, type WorkBuddyToolDef } from './tool-ops.js'
 import { AuthService, SESSION_COOKIE } from './auth.js'
@@ -189,6 +190,8 @@ export interface StandaloneApp {
   port: number
   consoleUrl: string
   auth: AuthService
+  /** 对外 MCP Server（Streamable HTTP，{prefix}/mcp） */
+  mcp: WorkBuddyMcpServer
   close(): Promise<void>
 }
 
@@ -246,6 +249,14 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
   }
   const library = new SkillPluginLibrary(cfg.dataDir, store, log)
   const router = new WorkBuddyRouter(store, directory, resolver, composer, planner, engine, sshStore, scheduler, monitor, auth, xiaozhi, library)
+
+  // 对外 MCP Server：标准 Streamable HTTP（{prefix}/mcp），外部智能体经 MCP 进行会话管理与平台管理
+  const mcpServer = new WorkBuddyMcpServer({
+    serverName: 'onenat-workbuddy',
+    serverVersion: pkgVersion(),
+    getTools: () => tools,
+    log,
+  })
 
   const { port } = cfg
   const consoleUrl = `http://${cfg.host === '0.0.0.0' ? '127.0.0.1' : cfg.host}:${port}${cfg.prefix || '/'}`
@@ -430,6 +441,18 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
         return
       }
 
+      // ---------- 对外 MCP Server（Streamable HTTP；登录会话或 AI 令牌，门禁已在上方统一完成） ----------
+      const mcpPath = `${prefix}/mcp`
+      if (underPrefix && (url.pathname === mcpPath || url.pathname === `${mcpPath}/`)) {
+        await mcpServer.handleRequest(req, res, method)
+        return
+      }
+      // MCP 运行状态（诊断 / 冒烟）
+      if (underPrefix && method === 'GET' && url.pathname === `${prefix}/api/mcp/status`) {
+        sendJson(res, 200, { ok: true, mcp: { endpoint: `${consoleUrl.replace(/\/$/, '')}/mcp`, protocolVersion: '2024-11-05', tools: tools.length, ...mcpServer.getStatus() } })
+        return
+      }
+
       // ---------- 业务路由（控制台 + REST + SSE） ----------
       const handled = await router.dispatch(req, res, prefix, { auth: true })
       if (!handled && !res.headersSent) {
@@ -451,6 +474,7 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
     port,
     consoleUrl,
     auth,
+    mcp: mcpServer,
     async close() {
       monitor.stop()
       xiaozhi.stop()
@@ -474,6 +498,9 @@ function extractAiToken(req: http.IncomingMessage, url: URL): string {
 function isAiTokenAllowedPath(pathname: string, prefix: string): boolean {
   const p = prefix && pathname.startsWith(prefix) ? pathname.slice(prefix.length) || '/' : pathname
   if (p === '/api/tools' || p.startsWith('/api/tools/')) return true
+  // 对外 MCP Server（Streamable HTTP）与运行状态
+  if (p === '/mcp' || p === '/mcp/') return true
+  if (p === '/api/mcp/status') return true
   if (p.startsWith('/api/monitor/')) return true
   if (p === '/api/schedules' || p.startsWith('/api/schedules/')) return true
   if (p === '/api/schedule-templates') return true
@@ -583,12 +610,14 @@ async function main(): Promise<void> {
   }
 
   const app = await start(cfg)
+  const consoleUrlNoTrail = app.consoleUrl.replace(/\/$/, '')
   console.log('')
   console.log(`  ⚡ OneNat WorkBuddy — 独立部署 WEB 服务（不依赖 DSH）  v${pkgVersion()}`)
   console.log(`  ├─ 控制台      ${app.consoleUrl}`)
   console.log(`  ├─ 监控投屏    ${app.consoleUrl.replace(/\/$/, '')}/monitor`)
   console.log(`  ├─ 健康检查    http://${cfg.host === '0.0.0.0' ? '127.0.0.1' : cfg.host}:${app.port}/healthz`)
   console.log(`  ├─ 工具通道    ${app.tools.length} 个工具：${app.tools.map((t) => t.name).join(' / ')}`)
+  console.log(`  ├─ MCP Server  ${consoleUrlNoTrail}/mcp（标准 Streamable HTTP；AI 令牌鉴权；供外部智能体会话/平台管理）`)
   console.log(`  ├─ 数据目录    ${cfg.dataDir}`)
   console.log(`  ├─ ONENAT      ${app.directory.endpoint || '(未配置，可在控制台「设置」页填写)'}`)
   console.log('  ├─ 登录鉴权    已启用（未登录访问控制台/API 将被拦截）')

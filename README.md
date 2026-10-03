@@ -168,6 +168,25 @@ curl -fsSL http://127.0.0.1:3081/onenat-workbuddy/install-skill.sh | bash -s -- 
 
 冒烟测试：`npm run smoke:ai`（双实例覆盖 fail-closed / 令牌种子与重置 / 11 工具 / 安装资源端点 / wb.mjs 实跑，36 项断言）。
 
+## MCP Server（对外接入）
+
+WorkBuddy 自身作为一个标准 **MCP Server**（Streamable HTTP，协议版本 2024-11-05）对外开放全部工具能力：
+任意外部智能体（DSH / Claude / Cursor / 其它 Agent 框架）把 `{prefix}/mcp` 注册为 MCP 服务地址即可进行
+**会话管理**（任务创建 / 多轮聊天 / 状态跟踪 / 追问）与 **平台管理**（子智能体 / ONENAT 资源 / SSH /
+定时任务 / 规划器 / 文件 / 监控）。
+
+- 端点：`POST {prefix}/mcp`（JSON-RPC，单条或批量；客户端 `Accept: text/event-stream` 时以单帧 SSE 回包）、
+  `GET {prefix}/mcp` → 405（无服务端主动推送）、`DELETE {prefix}/mcp` → 结束会话。
+- 会话：`initialize` 签发 `Mcp-Session-Id`（内存 TTL 30 分钟）；后续请求须回带，失效/未知会话 → `-32001` 要求重新握手。
+- 鉴权：与小智桥接、HTTP 工具通道同一把 **AI APIKEY**（`Authorization: Bearer <APIKEY>`），fail-closed。
+- 工具清单：`tools/list` 动态映射工具通道全部工具（与 /api/tools、小智通道永远同步，全量开放）；
+  `tools/call` 进程内直接执行，按结果 `ok:false` 自动标 `isError`。
+- 可靠性与小智通道同源：同会话 + 同 JSON-RPC id + 同参数 → 幂等回放（TTL 10 分钟）不重复执行副作用；
+  单次调用最多阻塞 120s（超时「立即回执 + 轮询」）；单帧 64KB 上限（超限替换为结构化提示）。
+- 运行状态：`GET /api/mcp/status`（会话数 / 调用 / 失败 / 幂等命中 / 最近工具）。
+- 实现 `src/mcp-server.ts`；冒烟测试 `npm run smoke:mcp`（鉴权 / 握手 / SSE / tools 全量同步 / 真实调用 /
+  幂等回放 / 未知方法与会话校验 / DELETE，25 项断言）。
+
 ## 小智语音助手（MCP 接入）
 
 把工作台全部 11 个工具注册到小智平台的 MCP 插件：协议对齐 `xiaozhi-esp32-mcp`（WebSocket MCP 客户端，
