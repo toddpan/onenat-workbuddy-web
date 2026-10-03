@@ -1266,6 +1266,33 @@ export class DshClient {
   }
 
   /**
+   * steer 插话：把文本注入节点正在运行的回合（prompt-stream mode=steer）。
+   * 节点在请求进入时即完成注入，响应 SSE 无需消费 —— 确认 200 后立即断开。
+   */
+  public async steerSession(
+    target: DshTarget,
+    sessionId: string,
+    text: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const res = await fetch(`${clean(target.baseUrl)}/sessions/${encodeURIComponent(sessionId)}/prompt-stream`, {
+        method: 'POST',
+        headers: this.headers(target.apiKey),
+        body: JSON.stringify({ prompt: text, mode: 'steer' }),
+        signal: AbortSignal.timeout(15_000),
+      })
+      if (!res.ok || !res.body) {
+        const t = await res.text().catch(() => '')
+        return { ok: false, error: `steer HTTP ${res.status}: ${t.slice(0, 120)}` }
+      }
+      await res.body.cancel().catch(() => {})
+      return { ok: true }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || 'steer 失败' }
+    }
+  }
+
+  /**
    * OpenAI 兼容对话（带 function-calling）：供 App「AI 控制台」透传 —— 服务端持节点凭证，
    * App 无需知道节点 API Key。返回完整 assistant message（含 tool_calls，由调用方执行后回填续轮）。
    */

@@ -606,11 +606,20 @@ export class TaskEngine {
 
   // ---------- 多轮消息入口 ----------
 
-  public async sendUserMessage(taskId: string, text: string): Promise<{ ok: boolean; turn?: TaskTurn; error?: string }> {
+  public async sendUserMessage(taskId: string, text: string): Promise<{ ok: boolean; turn?: TaskTurn; queued?: boolean; error?: string }> {
     const task = this.store.getTask(taskId)
     if (!task) return { ok: false, error: '任务不存在' }
     if (!text.trim()) return { ok: false, error: '消息为空' }
-    if (this.activeJobs.has(taskId)) return { ok: false, error: '上一轮仍在执行中，请稍候或先中止' }
+    // 执行中 → 排队：登记为 queued 轮次，本轮结束后自动补发（queue/send 可立即插话）
+    if (this.activeJobs.has(taskId)) {
+      const turn: TaskTurn = { id: `turn-${randomUUID().slice(0, 8)}`, seq: 0, role: 'user', text: text.trim(), at: Date.now(), queued: true }
+      this.store.appendTurn(taskId, turn)
+      this.store.mutateTask(taskId, (t) => {
+        t.queue = t.queue || []
+        t.queue.push({ text: text.trim(), at: Date.now(), turnId: turn.id })
+      })
+      return { ok: true, queued: true, turn }
+    }
 
     const turn: TaskTurn = { id: `turn-${randomUUID().slice(0, 8)}`, seq: 0, role: 'user', text: text.trim(), at: Date.now() }
     this.store.appendTurn(taskId, turn)
@@ -650,8 +659,60 @@ export class TaskEngine {
       })
       .finally(() => {
         this.activeJobs.delete(taskId)
+        void this.flushMessageQueue(taskId)
       })
     return { ok: true, turn }
+  }
+
+  /** 轮次收尾：补发排队消息（FIFO，逐条）；轮次排队标记随之清除 */
+  private async flushMessageQueue(taskId: string) {
+    await new Promise((r) => setTimeout(r, 800)) // 等状态落定
+    const task = this.store.getTask(taskId)
+    const next = task?.queue?.[0]
+    if (!next) return
+    this.store.mutateTask(taskId, (t) => {
+      t.queue = (t.queue || []).filter((q) => q.turnId !== next.turnId)
+      const turn = t.turns.find((x) => x.id === next.turnId)
+      if (turn) delete turn.queued
+    })
+    await this.sendUserMessage(taskId, next.text).catch(() => undefined)
+  }
+
+  /**
+   * 「立即发送」：steer 插话 —— 把文本注入正在运行的远端回合（不新开轮次）。
+   * 目标会话：优先节点主会话（__node__），其次最近路由的成员会话，再次任意绑定会话。
+   */
+  public async steerTaskMessage(taskId: string, text: string): Promise<{ ok: boolean; error?: string }> {
+    const task = this.store.getTask(taskId)
+    if (!task) return { ok: false, error: '任务不存在' }
+    const entries = Object.entries(task.sessions || {}).filter(([, b]) => b.remoteSessionId)
+    if (!entries.length) return { ok: false, error: '任务尚无远端会话，无法插话' }
+    const pick =
+      entries.find(([k]) => k === '__node__') ||
+      entries.find(([k]) => k === task.lastRoute?.agentId) ||
+      entries[0]
+    const [agentId, binding] = pick
+    const agent = this.store.getAgent(agentId)
+    const target = agent ? await this.resolver.resolve(agent) : await this.resolveExecTarget(task, agentId)
+    if (!target || !target.online || !target.baseUrl) return { ok: false, error: '节点不可达' }
+    const r = await this.client.steerSession(target, binding.remoteSessionId!, text)
+    if (!r.ok) return { ok: false, error: r.error }
+    this.taskLog(taskId, 'info', `已插话到运行中回合（${agent?.name || agentId}）`)
+    return { ok: true }
+  }
+
+  /** 队列「立即发送」：按 turnId 取出排队消息 → 运行中则插话，否则立即派发 */
+  public async sendQueuedNow(taskId: string, turnId: string): Promise<{ ok: boolean; error?: string }> {
+    const task = this.store.getTask(taskId)
+    const entry = task?.queue?.find((q) => q.turnId === turnId)
+    if (!entry) return { ok: false, error: '排队消息不存在或已发送' }
+    this.store.mutateTask(taskId, (t) => {
+      t.queue = (t.queue || []).filter((q) => q.turnId !== turnId)
+      const turn = t.turns.find((x) => x.id === turnId)
+      if (turn) delete turn.queued
+    })
+    if (this.activeJobs.has(taskId)) return await this.steerTaskMessage(taskId, entry.text)
+    return await this.sendUserMessage(taskId, entry.text)
   }
 
   private appendSystemTurn(taskId: string, text: string): TaskTurn {
