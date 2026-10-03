@@ -936,8 +936,10 @@ export class TaskEngine {
     this.emit(taskId, { type: 'turn_start', turn })
 
     const transformed = await this.transformFileMentionsForAgent(text, mentions, agent, task)
+    // 运行权限注入：任务级 permission 优先于智能体实体默认；随本轮提示词下发给远端执行会话
+    const permLine = (task.permission || agent.permission || '').trim()
     // 项目指令 + 专家人格（角色声明/职责约束/执行指导，见 expert-templates）+ 项目 SSH 连接器：注入本轮提示词最前（项目上下文）
-    const sysPrefix = [exec.instruction, expertPersona(agent)].filter(Boolean).join('\n\n')
+    const sysPrefix = [exec.instruction, expertPersona(agent), permLine ? `[运行权限]: ${permLine}` : ''].filter(Boolean).join('\n\n')
     const sshSection = exec.sshConnectors.length
       ? '[项目 SSH 连接器]（已可用 onenat_ssh 工具直接操作，连接信息如下）:\n' + exec.sshConnectors.map((c) => '- ' + c.name + ' → ' + c.host + ':' + c.port).join('\n')
       : ''
@@ -1532,6 +1534,9 @@ export class TaskEngine {
       contractLines.push(`验收标准:\n${sub.acceptance.map((a, i) => `${i + 1}. ${String(a).trim()}`).filter((l) => l.length > 3).join('\n')}`)
     }
     if (contractLines.length) parts.push(`[任务合同]:\n${contractLines.join('\n')}`)
+    // 运行权限注入：任务级 permission 优先于智能体实体默认
+    const permLine = (task.permission || agent.permission || '').trim()
+    if (permLine) parts.push(`[运行权限]: ${permLine}`)
     parts.push(`[当前子任务指令]:\n${this.stripSelfMention(transformed.text, agent)}`)
     parts.push(sub.acceptance?.length
       ? '[完成要求]: 输出末尾附「验收对照」：逐条列出验收标准 → 通过情况与证据；无法满足的如实标注失败原因，不要虚报完成。只做本任务，不要转派子任务。'
@@ -2042,7 +2047,10 @@ export class TaskEngine {
     // 成员并行分发（串行时多成员 × 隧道延迟叠加，客户端 100% 后长时间无响应）
     const results: Array<{ agentId: string; agentName: string; ok: boolean; error?: string; files?: Array<{ name: string; path: string; size: number }> }> = await Promise.all(
       targetIds.map(async (agentId) => {
+        // 节点直发任务（无成员）目标为伪成员 __node__：store 无记录，用节点伪实体兜底，
+        // 否则 getAgent 返回 undefined → 整个上传被误判「节点不可用」静默丢弃（附件只留下文件名占位）
         const agent = this.store.getAgent(agentId)
+          ?? (agentId === NODE_AGENT_ID ? this.makeNodeAgent(this.taskExec(task)) : undefined)
         // 项目任务：附件必须传到会话所在的项目节点（与 ensureSession 同源）
         let target: DshTarget | undefined = (await this.resolveExecTarget(task, agentId)) || targets.get(agentId)
         if (!agent || !target) return { agentId, agentName: agent?.name || agentId, ok: false, error: '节点不可用' }
@@ -2194,8 +2202,11 @@ export class TaskEngine {
       const { targets } = await this.resolver.resolveMembers(targetIds)
       const results = await Promise.all(
         targetIds.map(async (agentId) => {
+          // 节点直发任务（无成员）目标为伪成员 __node__：store 无记录，用节点伪实体兜底，
+          // targets 解析不到时退回 resolveExecTarget（与会话创建同源）
           const agent = this.store.getAgent(agentId)
-          let target: DshTarget | undefined = targets.get(agentId)
+            ?? (agentId === NODE_AGENT_ID ? this.makeNodeAgent(this.taskExec(task)) : undefined)
+          let target: DshTarget | undefined = targets.get(agentId) || (await this.resolveExecTarget(task, agentId))
           if (!agent || !target) return { agentId, agentName: agent?.name || agentId, ok: false, error: '节点不可用' }
           const session = await this.ensureSession(taskId, agent, target)
           if (!session.ok || !session.remoteSessionId) {
