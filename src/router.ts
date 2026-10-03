@@ -2101,6 +2101,17 @@ export class WorkBuddyRouter {
       else this.sendJson(res, 200, { ok: true, data: { permission: updated.permission || '' } })
       return true
     }
+    // App「AI 控制台」模型透传（登录会话）：节点凭证由服务端持有，App 不接触节点 Key
+    if (p === '/api/console/chat' && method === 'POST') {
+      const body = await this.parseBody(req)
+      const out = await this.engine.consoleChat({
+        messages: Array.isArray(body?.messages) ? body.messages : [],
+        tools: Array.isArray(body?.tools) ? body.tools : [],
+        model: typeof body?.model === 'string' ? body.model : undefined,
+      })
+      this.sendJson(res, out.ok ? 200 : 502, out)
+      return true
+    }
     // 重命名会话（对齐 DSH web 的 session.rename 动词）
     const renameMatch = /^\/api\/tasks\/([^/]+)\/rename$/.exec(p)
     if (renameMatch && method === 'POST') {
