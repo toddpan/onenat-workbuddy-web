@@ -738,7 +738,20 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       const action = args.action || 'overview'
       if (action === 'overview') {
         const ov = await monitor.getOverview()
-        return JSON.stringify({ ...ov, events: ov.events.slice(0, 20), consoleUrl }, null, 2)
+        // MCP 单帧上限 64KB：生产环境全量 overview 可达 100KB+，这里做紧凑投影
+        // （智能体/节点/任务只留关键字段；明细用 task action 或各管理工具精确查询）
+        const compact = {
+          at: (ov as any).at,
+          kpi: (ov as any).kpi,
+          agents: (ov as any).agents?.map((a: any) => ({ name: a.name, online: a.online, status: a.status, model: a.model })) || [],
+          nodes: (ov as any).nodes?.map((n: any) => ({ name: n.name, online: n.online, runningTasks: n.runningTasks })) || [],
+          tasks: ((ov as any).tasks || []).slice(0, 30).map((t: any) => ({ id: t.id, title: t.title, status: t.status, agentName: t.agentName, updatedAt: t.updatedAt })),
+          resources: ((ov as any).resources || []).map((r: any) => ({ name: r.name || r.mappingId, kind: r.kind, online: r.online })),
+          alerts: (ov as any).alerts,
+          consoleUrl,
+          hint: '任务明细用 workbuddy_task_status {taskId}；事件流用 action:"events"；单任务对话摘要用 action:"task"',
+        }
+        return JSON.stringify(compact, null, 2)
       }
       if (action === 'events') {
         const limit = Math.min(Math.max(Number(args.limit) || 50, 1), 200)

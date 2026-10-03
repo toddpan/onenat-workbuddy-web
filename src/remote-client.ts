@@ -1264,4 +1264,37 @@ export class DshClient {
       return { ok: false, error: err?.message || 'chat/completions 失败' }
     }
   }
+
+  /**
+   * OpenAI 兼容对话（带 function-calling）：供 App「AI 控制台」透传 —— 服务端持节点凭证，
+   * App 无需知道节点 API Key。返回完整 assistant message（含 tool_calls，由调用方执行后回填续轮）。
+   */
+  public async chatWithTools(
+    target: DshTarget,
+    messages: Array<Record<string, any>>,
+    tools: Array<Record<string, any>>,
+    options?: { model?: string; timeoutMs?: number; signal?: AbortSignal; sessionId?: string },
+  ): Promise<{ ok: boolean; message?: Record<string, any>; sessionId?: string; error?: string }> {
+    try {
+      const res = await fetch(`${clean(target.baseUrl)}/chat/completions`, {
+        method: 'POST',
+        headers: this.headers(target.apiKey),
+        body: JSON.stringify({
+          messages,
+          ...(tools.length ? { tools } : {}),
+          stream: false,
+          ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
+          ...(options?.model && options.model.includes('/') ? { model: options.model } : {}),
+        }),
+        signal: options?.signal ?? AbortSignal.timeout(options?.timeoutMs ?? 300_000),
+      })
+      const json: any = await res.json().catch(() => ({}))
+      if (!res.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
+      const choice = json?.choices?.[0]
+      if (!choice?.message) return { ok: false, error: 'chat/completions 返回空消息' }
+      return { ok: true, message: choice.message, sessionId: json?.sessionId }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || 'chat/completions 失败' }
+    }
+  }
 }

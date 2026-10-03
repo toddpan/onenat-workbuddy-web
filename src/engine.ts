@@ -2003,8 +2003,35 @@ export class TaskEngine {
    * 否则同一个文件会往每个成员节点各建一个远端会话、各写一份。
    * 需要跨节点使用该文件时，消息里的 @文件 引用会按 transformFileMentionsForAgent 生成下载 URL。
    */
-  public attachmentTargetAgentIds(task: WorkTask): string[] {
-    const members = (task.memberAgentIds || []).filter((id) => Boolean(id))
+  /**
+   * App「AI 控制台」模型透传：服务端持节点凭证，App 只需登录会话。
+   * 目标节点 = 默认主智能体绑定节点（与任务派发同源）；tools 由 App 经 MCP tools/list 获取后透传。
+   */
+  public async consoleChat(input: {
+    messages: Array<Record<string, any>>
+    tools?: Array<Record<string, any>>
+    model?: string
+  }): Promise<{ ok: boolean; message?: Record<string, any>; node?: string; error?: string }> {
+    const messages = Array.isArray(input.messages) ? input.messages : []
+    if (!messages.length) return { ok: false, error: '缺少 messages' }
+    const mainId = this.defaultMemberAgentIds()[0]
+    const agent = mainId ? this.store.getAgent(mainId) : undefined
+    if (!agent) return { ok: false, error: '没有可用的主智能体（先在「子智能体」页创建）' }
+    const target = await this.resolver.resolve(agent)
+    if (!target || !target.online || !target.baseUrl) {
+      return { ok: false, error: (target as any)?.error || '主智能体节点当前不可达' }
+    }
+    const r = await this.client.chatWithTools(
+      target,
+      messages,
+      Array.isArray(input.tools) ? input.tools : [],
+      { model: input.model?.trim() || undefined, timeoutMs: 120_000 },
+    )
+    if (!r.ok) return { ok: false, error: r.error || '节点模型调用失败', node: target.baseUrl }
+    return { ok: true, message: r.message, node: target.baseUrl }
+  }
+
+  public attachmentTargetAgentIds(task: WorkTask): string[] {    const members = (task.memberAgentIds || []).filter((id) => Boolean(id))
     if (!members.length) {
       // 新模型：任务只有节点主会话（无成员）→ 附件投到主会话所在节点
       if (task.sessions?.[NODE_AGENT_ID]?.remoteSessionId) return [NODE_AGENT_ID]
