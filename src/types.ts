@@ -348,6 +348,8 @@ export interface WorkTask {
   nodeRef?: DshRef
   /** 任务级模型（provider/model）：定时任务实例配置；主会话（__node__）优先于全局调度模型 */
   model?: string
+  /** 任务级运行权限（如 danger-full-access / workspace-write / ask）：派发时注入提示词，优先于智能体实体默认 */
+  permission?: string
   /** 任务级连接器覆盖（单独任务临时加挂） */
   connectorIds?: string[]
   /** 任务级技能覆盖（单独任务临时加挂） */

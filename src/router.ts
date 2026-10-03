@@ -2086,6 +2086,21 @@ export class WorkBuddyRouter {
       else this.sendJson(res, 200, { ok: true, data: { model: updated.model || '' } })
       return true
     }
+    // 任务级运行权限（对齐任务级模型语义）：engine 派发时注入提示词「[运行权限]」，
+    // 优先于智能体实体默认 permission；空串 = 清除任务级覆盖
+    const taskPermissionMatch = /^\/api\/tasks\/([^/]+)\/permission$/.exec(p)
+    if (taskPermissionMatch && method === 'PUT') {
+      const body = await this.parseBody(req)
+      const updated = this.store.mutateTask(decodeURIComponent(taskPermissionMatch[1]), (t): WorkTask => {
+        const perm = String(body?.permission || '').trim()
+        if (perm) t.permission = perm
+        else delete t.permission
+        return t
+      })
+      if (!updated) this.sendJson(res, 404, { ok: false, error: 'Task not found' })
+      else this.sendJson(res, 200, { ok: true, data: { permission: updated.permission || '' } })
+      return true
+    }
     // 重命名会话（对齐 DSH web 的 session.rename 动词）
     const renameMatch = /^\/api\/tasks\/([^/]+)\/rename$/.exec(p)
     if (renameMatch && method === 'POST') {
