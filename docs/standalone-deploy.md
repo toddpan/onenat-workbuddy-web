@@ -26,6 +26,17 @@ bash scripts/build-standalone.sh          # 或 npm run build
 node dist/server.js --help
 ```
 
+### 一键部署（推荐）
+
+```bash
+# 本地构建 → 冒烟 → 上传差异文件 → 远端备份/替换/重启 → healthz+MCP 验证
+SSHPASS='服务器密码' scripts/deploy-standalone.sh root@<host> [--port 22] [--key ~/.ssh/id_rsa] [--skip-smoke] [--files a.js,b.js]
+# 可用 env: UNIT(默认 onenat-workbuddy) / PORT(默认 3081) / PREFIX(默认 /onenat-workbuddy) / REMOTE_DIR(默认 /opt/onenat-workbuddy/dist)
+```
+
+脚本行为：只上传 md5 有变化的 dist 文件（零漂移直接退出）；远端先备份为 `dist.bak-<ts>-<file>` 再覆盖；
+`node --check` 语法关卡 → 重启 → 自动验证 healthz 与 MCP 匿名 401（fail-closed）。
+
 `build-standalone.sh` 会：
 
 1. 定位 `tsc`（本地 `node_modules/.bin/tsc` → `$DSH_CHECKOUT` → `npx typescript@5`）；
