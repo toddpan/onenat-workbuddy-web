@@ -879,34 +879,41 @@ export class TaskEngine {
     const mentionedAgentCount = mentions?.mentionedAgentIds?.length || 0
     if (mentionedAgentCount > 0 && task) {
       const exec0 = this.taskExec(task)
-      // 工作区来源链：项目 workspace → 节点主会话 cwd → 最近路由成员会话 cwd → 成员 workDir
-      const ws =
-        exec0.workspace ||
-        task.sessions?.['__node__']?.cwd ||
-        (task.lastRoute?.agentId ? task.sessions?.[task.lastRoute.agentId]?.cwd : undefined) ||
-        (task.memberAgentIds[0] ? task.sessions?.[task.memberAgentIds[0]]?.cwd : undefined) ||
-        (task.memberAgentIds[0] ? this.store.getAgent(task.memberAgentIds[0])?.workDir : undefined) ||
-        ''
-      if (ws) {
-        // 源节点 = 发起方成员智能体绑定节点（异机访问的文件就在它的工作区里）
-        const srcAgent = task.memberAgentIds[0] ? this.store.getAgent(task.memberAgentIds[0]) : undefined
-        let nodeTarget = srcAgent ? await this.resolver.resolve(srcAgent).catch(() => undefined) : undefined
-        if (!nodeTarget?.baseUrl && exec0.dshRef) {
-          nodeTarget = await this.resolver.resolveRef(exec0.dshRef, exec0.apiKey, '__node__').catch(() => undefined)
-        }
-        if (nodeTarget?.baseUrl) {
-          const base = nodeTarget.baseUrl.replace(/\/+$/, '')
-          const auth = nodeTarget.apiKey ? ` -H "Authorization: Bearer ${nodeTarget.apiKey}"` : ''
-          extraSections.push([
-            '[项目工作区跨机访问]（消息 @ 了你 —— 如需读取发起方工作区内的任意文件，用以下远程访问方式）:',
-            `- 工作区路径: \`${ws}\`（若与你在同一台机器，可直接按该绝对路径读取文件）`,
-            `- 下载文件: curl${auth} "${base}/fs/download?path=<URL编码后的文件绝对路径>" -o <保存文件名>`,
-            `- 预览文本文件: 在下载命令的 URL 末尾追加 &inline=1`,
-            `- 浏览目录: curl${auth} "${base}/fs/list?path=<URL编码后的目录绝对路径>"`,
-            `- 重要: path 必须是【绝对路径】（= 工作区路径 + "/" + 文件名；不支持相对路径），且需 URL 编码（空格→%20 等）`,
-            `- 示例: 下载工作区根目录下的 a.txt → curl${auth} "${base}/fs/download?path=${encodeURIComponent(ws + '/a.txt')}" -o a.txt`,
-          ].join('\n'))
-        }
+      // 工作区来源与节点必须【配对】：工作区在哪台机器，URL 就指向哪台节点的文件服务
+      const nodeSess = task.sessions?.['__node__']
+      const member0 = task.memberAgentIds[0] ? this.store.getAgent(task.memberAgentIds[0]) : undefined
+      const member0Binding = task.memberAgentIds[0] ? task.sessions?.[task.memberAgentIds[0]] : undefined
+      let ws = ''
+      let base = ''
+      let nodeApiKey: string | undefined = exec0.apiKey
+      if (exec0.workspace) {
+        ws = exec0.workspace
+        const t = exec0.dshRef ? await this.resolver.resolveRef(exec0.dshRef, exec0.apiKey, '__node__').catch(() => undefined) : undefined
+        if (t?.baseUrl) { base = t.baseUrl; nodeApiKey = t.apiKey } else if (nodeSess?.baseUrl) base = nodeSess.baseUrl
+      } else if (nodeSess?.cwd) {
+        ws = nodeSess.cwd
+        const t = exec0.dshRef ? await this.resolver.resolveRef(exec0.dshRef, exec0.apiKey, '__node__').catch(() => undefined) : undefined
+        if (t?.baseUrl) { base = t.baseUrl; nodeApiKey = t.apiKey } else if (nodeSess.baseUrl) base = nodeSess.baseUrl
+      } else if (member0Binding?.cwd) {
+        ws = member0Binding.cwd
+        const m = member0 ? await this.resolver.resolve(member0).catch(() => undefined) : undefined
+        if (m?.baseUrl) { base = m.baseUrl; nodeApiKey = m.apiKey } else if (member0Binding.baseUrl) base = member0Binding.baseUrl
+      } else if (member0?.workDir) {
+        ws = member0.workDir
+        const m = await this.resolver.resolve(member0).catch(() => undefined)
+        if (m?.baseUrl) { base = m.baseUrl; nodeApiKey = m.apiKey }
+      }
+      if (ws && base) {
+        const auth = nodeApiKey ? ` -H "Authorization: Bearer ${nodeApiKey}"` : ''
+        extraSections.push([
+          '[项目工作区跨机访问]（消息 @ 了你 —— 如需读取发起方工作区内的任意文件，用以下远程访问方式）:',
+          `- 工作区路径: \`${ws}\`（若与你在同一台机器，可直接按该绝对路径读取文件）`,
+          `- 下载文件: curl${auth} "${base}/fs/download?path=<URL编码后的文件绝对路径>" -o <保存文件名>`,
+          `- 预览文本文件: 在下载命令的 URL 末尾追加 &inline=1`,
+          `- 浏览目录: curl${auth} "${base}/fs/list?path=<URL编码后的目录绝对路径>"`,
+          `- 重要: path 必须是【绝对路径】（= 工作区路径 + "/" + 文件名；不支持相对路径），且需 URL 编码（空格→%20 等）`,
+          `- 示例: 下载工作区根目录下的 a.txt → curl${auth} "${base}/fs/download?path=${encodeURIComponent(ws + '/a.txt')}" -o a.txt`,
+        ].join('\n'))
       }
     }
 
