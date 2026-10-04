@@ -899,11 +899,12 @@ export class TaskEngine {
           const auth = nodeTarget.apiKey ? ` -H "Authorization: Bearer ${nodeTarget.apiKey}"` : ''
           extraSections.push([
             '[项目工作区跨机访问]（消息 @ 了你 —— 如需读取发起方工作区内的任意文件，用以下远程访问方式）:',
-            `- 工作区路径: \`${ws}\`（若与你同机，可直接按该绝对路径读取）`,
-            `- 下载文件: curl${auth} "${base}/fs/download?path=<工作区内文件路径>" -o <保存文件名>`,
-            `- 预览文件（inline 文本直出）: curl${auth} "${base}/fs/download?path=<文件路径>&inline=1"`,
-            `- 浏览目录: curl${auth} "${base}/fs/list?path=<目录路径>"`,
-            `- 说明: path 支持工作区相对路径或绝对路径；同机时优先直接读路径，异机用 URL`,
+            `- 工作区路径: \`${ws}\`（若与你在同一台机器，可直接按该绝对路径读取文件）`,
+            `- 下载文件: curl${auth} "${base}/fs/download?path=<URL编码后的文件绝对路径>" -o <保存文件名>`,
+            `- 预览文本文件: 在下载命令的 URL 末尾追加 &inline=1`,
+            `- 浏览目录: curl${auth} "${base}/fs/list?path=<URL编码后的目录绝对路径>"`,
+            `- 重要: path 必须是【绝对路径】（= 工作区路径 + "/" + 文件名；不支持相对路径），且需 URL 编码（空格→%20 等）`,
+            `- 示例: 下载工作区根目录下的 a.txt → curl${auth} "${base}/fs/download?path=${encodeURIComponent(ws + '/a.txt')}" -o a.txt`,
           ].join('\n'))
         }
       }

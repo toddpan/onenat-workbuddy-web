@@ -69,6 +69,8 @@ async function main() {
   check('提示词含节点下载 URL（/fs/download）', p1.includes('/fs/download?path='))
   check('提示词含浏览目录 URL（/fs/list）与 inline 预览', p1.includes('/fs/list?path=') && p1.includes('inline=1'))
   check('提示词含鉴权头说明', p1.includes('Authorization: Bearer k'))
+  check('明确绝对路径要求（不支持相对路径）', p1.includes('必须是【绝对路径】'))
+  check('示例含 URL 编码后的绝对路径', p1.includes(encodeURIComponent('/tmp/ws-inject/a.txt')))
 
   console.log(failures === 0 ? '\n全部通过 ✅\n' : `\n${failures} 项失败 ❌\n`)
   try { rmSync(dataDir, { recursive: true, force: true }) } catch {}
