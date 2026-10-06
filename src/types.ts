@@ -246,6 +246,8 @@ export interface TaskSessionBinding {
   cwd?: string
   /** 主智能体最后一次对齐到会话的主调度模型（planner.model，空串=默认）；用于检测切换后重新对齐 */
   plannerModel?: string
+  /** 最后一次经 PUT /sessions/:id/permission 原生下发成功的运行权限 preset；与期望不一致时重新下发 */
+  permission?: string
   createdAt: number
 }
 

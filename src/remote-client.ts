@@ -727,6 +727,34 @@ export class DshClient {
   }
 
   /**
+   * 切换远端会话运行权限（PUT /sessions/:id/permission，body {preset}）。
+   * 远端 dsh-web-service ≥ 0.3.1 走 harness 原生 permissionPresets（等价 `/permission <preset>` 命令），
+   * 真实改变沙箱模式 + 审批策略。旧版节点返回 404/405 → supported=false，调用方降级。
+   */
+  public async setSessionPermission(
+    target: DshTarget,
+    sessionId: string,
+    preset: string,
+  ): Promise<{ ok: boolean; supported: boolean; error?: string; preset?: string; sandbox?: string; approval?: string }> {
+    try {
+      const res = await fetch(`${clean(target.baseUrl)}/sessions/${encodeURIComponent(sessionId)}/permission`, {
+        method: 'PUT',
+        headers: this.headers(target.apiKey),
+        body: JSON.stringify({ preset }),
+        signal: AbortSignal.timeout(10_000),
+      })
+      const json: any = await res.json().catch(() => ({}))
+      // 路由不存在（旧版）/ 节点无 permissionPresets 服务 → 不支持
+      if (res.status === 404 && json?.code !== 'SESSION_NOT_FOUND') return { ok: false, supported: false, error: 'remote dsh-web-service has no /permission route' }
+      if (res.status === 405 || res.status === 501 || json?.code === 'NOT_SUPPORTED') return { ok: false, supported: false, error: json?.error || `HTTP ${res.status}` }
+      if (!res.ok || !json?.ok) return { ok: false, supported: true, error: json?.error || `HTTP ${res.status}` }
+      return { ok: true, supported: true, preset: json.data?.preset, sandbox: json.data?.sandbox, approval: json.data?.approval }
+    } catch (err: any) {
+      return { ok: false, supported: true, error: err?.message || '设置运行权限失败' }
+    }
+  }
+
+  /**
    * 更新远端会话的模型（PUT /sessions/:id，body {provider?, model?, reasoningEffort?}）。
    * 空 model 表示清除覆盖、回退节点默认。
    */
