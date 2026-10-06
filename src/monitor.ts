@@ -22,7 +22,7 @@ import type { TaskEngine } from './engine.js'
 import type { ScheduleRunner } from './scheduler.js'
 import { ruleText } from './scheduler.js'
 import type { SshResourceStore } from './ssh-store.js'
-import type { Planner } from './planner.js'
+import type { Orchestrator } from './orchestrator.js'
 import { DshClient } from './remote-client.js'
 import type { PlanSubtask, ResolvedEndpoint, ScheduledTask, SubAgent, TaskEvent, WorkTask } from './types.js'
 
@@ -260,7 +260,7 @@ export class MonitorService {
     private engine: TaskEngine,
     private scheduler: ScheduleRunner | undefined,
     private sshStore: SshResourceStore,
-    private planner: Planner,
+    private planner: Orchestrator,
     dataDir: string,
     private log: (msg: string) => void = () => {},
   ) {

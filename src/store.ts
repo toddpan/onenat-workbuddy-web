@@ -261,7 +261,7 @@ export class WorkStore {
       deliveryRequirements: input.deliveryRequirements !== undefined ? (String(input.deliveryRequirements).trim() || undefined) : existing?.deliveryRequirements,
       members: (input.members as ExpertTeam['members']) || existing?.members || [],
       coordinatorPrompt: input.coordinatorPrompt !== undefined ? (String(input.coordinatorPrompt).trim() || undefined) : existing?.coordinatorPrompt,
-      enabled: input.enabled ?? existing?.enabled ?? true,
+      enabled: input.enabled ?? existing?.enabled ?? false,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     }

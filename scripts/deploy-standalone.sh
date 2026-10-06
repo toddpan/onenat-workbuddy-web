@@ -67,6 +67,8 @@ if [ -z "$CHANGED" ]; then
   echo "dist 与远端完全一致，无需部署。"
   exit 0
 fi
+# comm 输出为换行分隔；后续 tar/远端 for 循环按空白分词，统一压平为空格分隔
+CHANGED="$(echo "$CHANGED" | tr '\n' ' ')"
 echo "变更文件: $CHANGED"
 
 echo "=== 4/5 上传 + 远端备份替换 ==="

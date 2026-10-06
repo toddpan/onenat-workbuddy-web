@@ -138,6 +138,12 @@ GET  {prefix}/monitor               独立暗色全屏投屏页（登录门与�
 - **告警**：离线智能体、近 24h 失败任务、上次触发失败的定时任务
 - **趋势**：近 24 小时任务与 Token 小时快照曲线；数据落盘 `<data>/monitor/*.jsonl`（30 天保留），
   服务重启不丢；冒烟测试：`npm run smoke:monitor`（27 项断言）
+- **Token 消耗明细报表**（`src/usage.ts`，只读归因聚合，零台账）：基于逐轮 `TaskTurn.usage` +
+  任务既有 `scheduleId/projectId/memberAgentIds/creator` 字段归因，无需新增存储。API：
+  `GET /api/usage/tokens/summary?range=today|7d|30d`（总量 + bySource/byProject/byAgent/bySchedule/byTask，
+  各维度加总与 KPI 对账一致）、`GET /api/usage/tokens/records?range=&source=&projectId=&agentId=&scheduleId=&taskId=&limit=`
+  （逐轮明细，时间倒序，上限 2000）。来源口径：scheduleId→定时；creator console/tool→控制台/工具通道；
+  mode orchestrate→编排；其余→普通会话。
 
 ## 定时任务
 

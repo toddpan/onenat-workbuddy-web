@@ -7705,7 +7705,7 @@ function openTeamDrawer(team) {
       constraints: $('tm-constraints').value,
       deliveryRequirements: $('tm-delivery').value,
       coordinatorPrompt: $('tm-coord').value,
-      enabled: team ? team.enabled !== false : true,
+      enabled: team ? team.enabled !== false : false,
       members: members,
     };
     const r = await api('/teams', { method: 'POST', body: JSON.stringify(body) });
@@ -7867,19 +7867,22 @@ function openAgentDrawer(agent, copyMode) {
     '<div class="ops" style="display:flex;gap:10px;margin-top:14px"><button class="btn pri" id="ag-save">保存</button><button class="btn" id="ag-cancel">取消</button></div>';
 
   // 内置专家模板快捷区：点选预填（新建/编辑均可用，覆盖当前表单值）
-  api('/agents/expert-templates').then(r => {
+  api('/experts?domain=team').then(r => {
     const bar = $('ag-tpl-bar');
     if (!bar) return;
-    if (!r.ok || !Array.isArray(r.data) || !r.data.length) { bar.innerHTML = '<span class="hint" style="margin:0">模板不可用</span>'; return; }
-    bar.innerHTML = r.data.map(t =>
+    const list = (r.ok && r.data && Array.isArray(r.data.experts)) ? r.data.experts : [];
+    if (!list.length) { bar.innerHTML = '<span class="hint" style="margin:0">模板不可用</span>'; return; }
+    bar.innerHTML = list.map(t =>
       '<button class="mini-btn" data-tpl-id="' + esc(t.id) + '" title="' + esc(t.description) + '">' + esc((t.icon ? t.icon + ' ' : '') + t.name) + '</button>').join('');
-    bar.querySelectorAll('[data-tpl-id]').forEach(chip => chip.addEventListener('click', () => {
-      const t = r.data.find(x => x.id === chip.getAttribute('data-tpl-id'));
+    bar.querySelectorAll('[data-tpl-id]').forEach(chip => chip.addEventListener('click', async () => {
+      const t = list.find(x => x.id === chip.getAttribute('data-tpl-id'));
       if (!t) return;
+      const pr = await api('/experts/' + encodeURIComponent(t.id)).catch(() => null);
+      const p = pr && pr.ok ? pr.data : null;
       if (!$('ag-name').value.trim()) $('ag-name').value = t.name;
-      $('ag-role').value = t.role || '';
-      $('ag-sp').value = t.systemPrompt || '';
-      $('ag-ep').value = t.executionPrompt || '';
+      $('ag-role').value = (p && p.role) || '';
+      $('ag-sp').value = (p && p.systemPrompt) || '';
+      $('ag-ep').value = (p && p.executionPrompt) || '';
       toast('已预填「' + t.name + '」，可继续调整');
     }));
   }).catch(() => { const bar = $('ag-tpl-bar'); if (bar) bar.innerHTML = '<span class="hint" style="margin:0">模板加载失败</span>'; });
@@ -9900,9 +9903,15 @@ function openModal(title, bodyHtml, actions) {
 var rosterCache = null;
 async function openExpertRosterPicker() {
   if (!rosterCache) {
-    const r = await api('/experts/roster');
-    rosterCache = r.ok ? r.data : null;
-    if (!rosterCache || !rosterCache.total) { toast((r && r.error) || '专家名册不可用', true); return; }
+    const r = await api('/experts');
+    if (!r.ok || !r.data || !r.data.total) { toast((r && r.error) || '专家名册不可用', true); return; }
+    // 统一 API 返回扁平 experts，前端按分区聚合（Phase 5：旧 /experts/roster 已删除）
+    const byDiv = new Map();
+    for (const e of r.data.experts) {
+      if (!byDiv.has(e.division)) byDiv.set(e.division, { division: e.division, divisionZh: e.divisionZh || e.division, count: 0, experts: [] });
+      const dv = byDiv.get(e.division); dv.count++; dv.experts.push(e);
+    }
+    rosterCache = { total: r.data.total, divisions: [...byDiv.values()] };
   }
   const d = rosterCache;
   const st = { division: '', q: '' };
@@ -9923,20 +9932,20 @@ async function openExpertRosterPicker() {
       if (st.division && div.division !== st.division) continue;
       for (const e of div.experts) {
         if (q && !((e.name + ' ' + e.nameEn + ' ' + e.description).toLowerCase().includes(q))) continue;
-        rows.push('<div class="ros-row" data-division="' + esc(div.division) + '" data-slug="' + esc(e.slug) + '" title="' + esc(e.description) + '">' +
-          '<span>' + esc(e.emoji || '🧩') + '</span><b>' + esc(e.name) + '</b>' +
+        rows.push('<div class="ros-row" data-division="' + esc(div.division) + '" data-slug="' + esc(e.id) + '" title="' + esc(e.description) + '">' +
+          '<span>' + esc(e.icon || '🧩') + '</span><b>' + esc(e.name) + '</b>' +
           '<span class="ros-desc">' + esc(e.description) + '</span></div>');
       }
     }
     listEl.innerHTML = rows.length ? rows.join('') : '<div class="ros-empty">没有匹配的专家</div>';
     $('ros-count').textContent = '共 ' + rows.length + ' 位';
     listEl.querySelectorAll('.ros-row').forEach(row => row.addEventListener('click', async () => {
-      const r = await api('/experts/roster/detail?division=' + encodeURIComponent(row.dataset.division) + '&slug=' + encodeURIComponent(row.dataset.slug));
+      const r = await api('/experts/' + encodeURIComponent(row.dataset.slug));
       if (!r.ok) { toast(r.error || '读取专家失败', true); return; }
       const e = r.data;
       if (!$('ag-name').value.trim()) $('ag-name').value = e.name;
-      $('ag-role').value = e.name;
-      $('ag-sp').value = e.prompt || '';
+      $('ag-role').value = e.role || e.name;
+      $('ag-sp').value = e.systemPrompt || '';
       closeModal();
       toast('已预填「' + e.name + '」，可继续调整');
     }));
