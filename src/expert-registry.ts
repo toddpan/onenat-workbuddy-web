@@ -17,6 +17,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import type { SubAgent } from './types.js'
+import { UserExpertStore, type UserExpertInput } from './expert-store.js'
 
 /** 外部资产根目录环境变量（结构需与 assets/experts 一致）。 */
 const ROOT_ENV = 'WORKBUDDY_EXPERT_ROOT'
@@ -36,8 +37,8 @@ export const BUILTIN_DIVISION = 'team'
 export interface Expert {
   /** 稳定标识：roster 用原 slug；内置角色保留原 id（如 expert-reviewer） */
   id: string
-  /** 来源，便于迁移期排查与回退 */
-  source: 'roster' | 'builtin'
+  /** 来源，便于迁移期排查与回退；user = 用户自建（可编辑/删除） */
+  source: 'roster' | 'builtin' | 'user'
   /** 归属分区；内置角色用 'team' 分区 */
   division: string
   /** 分区展示名（生成期固化进数据） */
@@ -115,26 +116,81 @@ function truncate(text: string, limit: number): string {
 export class ExpertRegistry {
   private root: string
   private indexPromise?: Promise<Expert[]>
+  /** 用户自建专家层（可写）；attachUserStore 注入后与只读资产层合并 */
+  private userStore?: UserExpertStore
 
   constructor(root?: string) {
     this.root = resolveRegistryRoot(root)
   }
 
-  /** 首次访问加载 index.json，进程内缓存；文件缺失/损坏时降级为空注册表。 */
+  /** 注入用户专家存储并清空缓存（数据落 <dataDir>/user-experts.json）。 */
+  attachUserStore(store: UserExpertStore): void {
+    this.userStore = store
+    this.invalidate()
+  }
+
+  /** 用户专家变更后调用：清空进程内缓存，下次访问重新合并。 */
+  invalidate(): void {
+    this.indexPromise = undefined
+  }
+
+  /** 指定专家是否可编辑/删除（只有用户自建的可以）。 */
+  async isEditable(id: string): Promise<boolean> {
+    const e = await this.get(id)
+    return e?.source === 'user'
+  }
+
+  /** 创建用户专家（id 冲突含资产层时拒绝）。 */
+  async createExpert(input: UserExpertInput): Promise<ExpertProfile> {
+    if (!this.userStore) throw new Error('用户专家存储未初始化。')
+    if (await this.get(input.id)) throw new Error(`专家 id「${input.id}」已存在。`)
+    const saved = this.userStore.upsert(input)
+    this.invalidate()
+    return saved
+  }
+
+  /** 更新用户专家；builtin/roster 只读。 */
+  async updateExpert(id: string, patch: Partial<UserExpertInput>): Promise<ExpertProfile> {
+    if (!this.userStore) throw new Error('用户专家存储未初始化。')
+    const existing = this.userStore.get(id)
+    if (!existing) {
+      const asset = await this.get(id)
+      throw new Error(asset ? '内置/名册专家为只读，不可编辑。' : '专家不存在。')
+    }
+    const saved = this.userStore.upsert({ ...patch, id })
+    this.invalidate()
+    return saved
+  }
+
+  /** 删除用户专家；builtin/roster 不可删，不存在返回 false。 */
+  async deleteExpert(id: string): Promise<boolean> {
+    if (!this.userStore) throw new Error('用户专家存储未初始化。')
+    if (!(await this.isEditable(id))) return false
+    const ok = this.userStore.delete(id)
+    if (ok) this.invalidate()
+    return ok
+  }
+
+  /** 首次访问加载 index.json（合并用户自建专家层），进程内缓存；文件缺失/损坏时降级为空注册表。 */
   private experts(): Promise<Expert[]> {
     this.indexPromise ??= (async () => {
+      let list: Expert[] = []
       try {
         const raw = JSON.parse(await readFile(join(this.root, 'index.json'), 'utf8')) as IndexFile
-        if (!Array.isArray(raw?.experts)) return []
-        // index.json 生成期已按（分区, id）排序，且 builtin 模板保持声明顺序追加在 team 分区；
-        // 运行时仅按分区做稳定排序，不重排分区内顺序（保留 builtin 原始声明顺序）。
-        return raw.experts
-          .filter((e) => e && typeof e.id === 'string' && EXPERT_PATH_SEGMENT.test(e.id))
-          .map((e) => ({ ...e, description: truncate(e.description ?? '', LIST_DESCRIPTION_LIMIT) }))
-          .sort((a, b) => a.division.localeCompare(b.division))
+        if (Array.isArray(raw?.experts)) {
+          // index.json 生成期已按（分区, id）排序，且 builtin 模板保持声明顺序追加在 team 分区；
+          // 运行时仅按分区做稳定排序，不重排分区内顺序（保留 builtin 原始声明顺序）。
+          list = raw.experts
+            .filter((e) => e && typeof e.id === 'string' && EXPERT_PATH_SEGMENT.test(e.id))
+            .map((e) => ({ ...e, description: truncate(e.description ?? '', LIST_DESCRIPTION_LIMIT) }))
+            .sort((a, b) => a.division.localeCompare(b.division))
+        }
       } catch {
-        return []
+        list = []
       }
+      // 合并用户自建专家层（source='user'，可编辑/删除），置于列表头部便于管理页优先展示
+      const user = this.userStore?.list() ?? []
+      return [...user, ...list]
     })()
     return this.indexPromise
   }
@@ -166,9 +222,11 @@ export class ExpertRegistry {
     return (await this.experts()).find((e) => e.id === id)
   }
 
-  /** 惰性加载完整档案：读 assets/experts/profiles/<id>.json（进程内缓存）。 */
+  /** 惰性加载完整档案：用户自建优先，其次读 assets/experts/profiles/<id>.json（进程内缓存）。 */
   async getProfile(id: string): Promise<ExpertProfile> {
     if (!EXPERT_PATH_SEGMENT.test(id)) throw new Error('无效的专家标识。')
+    const user = this.userStore?.get(id)
+    if (user) return user
     const expert = await this.get(id)
     if (expert === undefined) throw new Error('注册表中不存在该专家。')
     const raw = await readFile(join(this.root, 'profiles', `${id}.json`), 'utf8').catch(() => undefined)

@@ -34,6 +34,7 @@ import { WorkBuddyRouter } from './router.js'
 import { MonitorService } from './monitor.js'
 import { XiaozhiMcpClient } from './xiaozhi-mcp.js'
 import { WorkBuddyMcpServer } from './mcp-server.js'
+import { ExpertMcpServer } from './mcp/expert-mcp.js'
 import { SshResourceStore } from './ssh-store.js'
 import { createWorkBuddyToolDefs, HTTP_TOOL_CTX, type WorkBuddyToolDef } from './tool-ops.js'
 import { AuthService, SESSION_COOKIE } from './auth.js'
@@ -258,6 +259,9 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
     log,
   })
 
+  // 专家库 MCP Server：标准 Streamable HTTP（{prefix}/api/experts/mcp），复用路由内同一份 ExpertRegistry
+  const expertMcp = new ExpertMcpServer(router.expertRegistry, log)
+
   const { port } = cfg
   const consoleUrl = `http://${cfg.host === '0.0.0.0' ? '127.0.0.1' : cfg.host}:${port}${cfg.prefix || '/'}`
   const tools = createWorkBuddyToolDefs({ store, directory, resolver, composer, engine, sshStore, consoleUrl, monitor, scheduler, planner })
@@ -450,6 +454,13 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
       // MCP 运行状态（诊断 / 冒烟）
       if (underPrefix && method === 'GET' && url.pathname === `${prefix}/api/mcp/status`) {
         sendJson(res, 200, { ok: true, mcp: { endpoint: `${consoleUrl.replace(/\/$/, '')}/mcp`, protocolVersion: '2024-11-05', tools: tools.length, ...mcpServer.getStatus() } })
+        return
+      }
+
+      // ---------- 专家库 MCP Server（Streamable HTTP；门禁与其它 /api 一致，路径在业务路由之前截获） ----------
+      const expertMcpPath = `${prefix}/api/experts/mcp`
+      if (underPrefix && (url.pathname === expertMcpPath || url.pathname === `${expertMcpPath}/`)) {
+        await expertMcp.handleRequest(req, res, method)
         return
       }
 
