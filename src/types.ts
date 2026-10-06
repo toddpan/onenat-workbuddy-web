@@ -204,6 +204,8 @@ export interface ExtractedMentions {
   mentionedAgentIds: string[]
   mentionedResourceBindings: AgentResourceBinding[]
   mentionedFiles?: ExtractedFileMention[]
+  /** @专家团 提及：本轮消息按该团队合同发起编排（消息级路由，命中后团队固化为任务语义） */
+  mentionedTeamId?: string
   cleanText: string
 }
 
@@ -316,6 +318,16 @@ export interface TaskSummary {
   subtaskSummaries: Array<{ id: string; title: string; status: string; keyPoints: string }>
   finalConclusion: string
   completedAt: number
+  /** 成员返回覆盖度（移植 dsh-agency-agents coverage）：只代表返回覆盖情况，不代表结论已通过验证 */
+  coverage?: TaskCoverage
+}
+
+/** 成员返回覆盖度：逐成员职责对照缺失归因（五段回传核对由主调度按合同执行） */
+export interface TaskCoverage {
+  status: 'complete' | 'partial' | 'failed'
+  completed: number
+  total: number
+  missing: Array<{ id: string; name: string; duty?: string; error?: string }>
 }
 
 export interface WorkTask {
@@ -352,14 +364,16 @@ export interface WorkTask {
   model?: string
   /** 任务级运行权限（如 danger-full-access / workspace-write / ask）：派发时注入提示词，优先于智能体实体默认 */
   permission?: string
-  /** 执行中的排队消息（轮次结束自动补发；「立即发送」= steer 插话到运行中回合） */
-  queue?: Array<{ text: string; at: number; turnId: string }>
+  /** 执行中的排队消息（轮次结束自动补发；「立即发送」= steer 插话到运行中回合）；teamId = 排队消息携带的专家团意图 */
+  queue?: Array<{ text: string; at: number; turnId: string; teamId?: string }>
   /** 任务级连接器覆盖（单独任务临时加挂） */
   connectorIds?: string[]
   /** 任务级技能覆盖（单独任务临时加挂） */
   skillNames?: string[]
   /** 专家团任务来源：记录创建团队，编排/派工/汇总按团队合同注入 */
   teamId?: string
+  /** 专家库动态成员（expert-<expertId> → 展示名）：编排启动时登记，供花名册/子任务/轨迹解析成员名，不落子智能体实体 */
+  expertMembers?: Array<{ id: string; name: string }>
 }
 
 export interface TaskAttachment {
@@ -524,19 +538,30 @@ export interface StorageData {
 
 // ---------- 专家团（合同式团队配置，移植 dsh-agency-agents ExpertTeam） ----------
 
-/** 专家团成员：引用已有子智能体 + 团队内的分工（对齐 dsh-agent-teams Member.role） */
+/** 专家团成员：引用已有子智能体（agentId）或专家库角色（expertId）+ 团队内的分工（对齐 dsh-agent-teams Member.role） */
 export interface ExpertTeamMember {
-  agentId: string
+  /** 子智能体成员：既有实体，在其绑定节点执行 */
+  agentId?: string
+  /** 专家库成员：编排时动态实例化在任务发起节点（主 DSH），persona 用专家档案提示词，不落持久实体 */
+  expertId?: string
   /** 职责边界一句话：进规划花名册与派工提示词「职责边界」 */
   duty: string
   /** 执行指示：角色专属工作方法与产出结构（仅团队任务派工时注入） */
   instructions?: string
 }
 
+/** 专家库动态成员在任务账本中的伪 agentId 前缀（<前缀><expertId>），与 teamMemberKey 同源 */
+export const EXPERT_AGENT_ID_PREFIX = 'expert-'
+
+/** 团队成员的稳定键：子智能体用 agentId；专家库成员用合成 pseudo id（expert-<expertId>），与编排花名册/子任务 agentId 同源 */
+export function teamMemberKey(m: Pick<ExpertTeamMember, 'agentId' | 'expertId'>): string {
+  return m.agentId ? m.agentId : `${EXPERT_AGENT_ID_PREFIX}${m.expertId}`
+}
+
 /**
  * 专家团：目标/约束/交付要求 + 成员分工的合同式配置。
  * 编排时注入 Planner 花名册与主调度规则、派工提示词与汇总核对；
- * 成员引用子智能体 id —— 删除子智能体时由 store 级联摘除。
+ * 成员引用子智能体 id 或专家库 id —— 删除子智能体时由 store 级联摘除 agentId 成员。
  */
 export interface ExpertTeam {
   id: string
@@ -548,11 +573,18 @@ export interface ExpertTeam {
   constraints?: string
   /** 共同交付要求（可空） */
   deliveryRequirements?: string
-  /** 2~8 名成员；agentId 不得重复 */
+  /** 2~8 名成员；成员键（agentId / expertId）不得重复 */
   members: ExpertTeamMember[]
   /** 主理人补充规则（注入规划与汇总提示词；空 = 仅默认协作规范） */
   coordinatorPrompt?: string
+  /** 领域主理人模板（对齐 dsh-agency-agents coordinatorTemplateId）：决定规划准备材料、验收清单与专属汇总规范 */
+  templateId?: TeamTemplateId
+  /** 内置团（随版本种子提供，只读，可复制为自定义） */
+  builtin?: boolean
   enabled: boolean
   createdAt: number
   updatedAt: number
 }
+
+/** 领域主理人模板标识（general = 通用兜底） */
+export type TeamTemplateId = 'general' | 'product' | 'technical' | 'content' | 'data' | 'research'

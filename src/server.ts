@@ -250,6 +250,8 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
   }
   const library = new SkillPluginLibrary(cfg.dataDir, store, log)
   const router = new WorkBuddyRouter(store, directory, resolver, composer, planner, engine, sshStore, scheduler, monitor, auth, xiaozhi, library)
+  // 专家团专家成员的 persona 来源：引擎与路由共用同一份 ExpertRegistry（构造顺序晚于引擎，此处回填）
+  engine.attachExperts(router.expertRegistry)
 
   // 对外 MCP Server：标准 Streamable HTTP（{prefix}/mcp），外部智能体经 MCP 进行会话管理与平台管理
   const mcpServer = new WorkBuddyMcpServer({

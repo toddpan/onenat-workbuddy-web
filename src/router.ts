@@ -29,7 +29,7 @@ import { SCHEDULE_TEMPLATES } from './schedule-templates.js'
 import { expertPersona } from './expert-registry.js'
 import { ExpertRegistry } from './expert-registry.js'
 import { UserExpertStore } from './expert-store.js'
-import { parseTeamInput } from './expert-teams.js'
+import { parseTeamInput, BUILTIN_TEAMS } from './expert-teams.js'
 import type { AuthService } from './auth.js'
 import { UsageService } from './usage.js'
 import type { XiaozhiMcpClient } from './xiaozhi-mcp.js'
@@ -1228,8 +1228,14 @@ export class WorkBuddyRouter {
     }
     if (p === '/api/teams' && method === 'POST') {
       const body = await this.parseBody(req)
-      const parsed = parseTeamInput(body, {
+      // 内置团只读：带内置 id 的保存请求拒绝（前端「复制」流程发送的是无 id 的新团）
+      if (body?.id && BUILTIN_TEAMS.some((t) => t.id === String(body.id))) {
+        this.sendJson(res, 400, { ok: false, error: '内置专家团只读，请复制为自定义团队后修改。' })
+        return true
+      }
+      const parsed = await parseTeamInput(body, {
         getAgent: (id) => this.store.getAgent(id),
+        getExpert: async (id) => await this.expertRegistry.get(id).catch(() => undefined),
         teams: this.store.getTeams(),
         currentId: body?.id ? String(body.id) : undefined,
       })
@@ -2024,13 +2030,26 @@ export class WorkBuddyRouter {
     // ---------- 提及与联想候选数据 (@ Mentions Directory) ----------
     if (p === '/api/mentions/candidates' && method === 'GET') {
       const candidates: Array<{
-        type: 'agent' | 'resource'
+        type: 'agent' | 'resource' | 'team'
         id: string
         name: string
         kind?: string
         detail?: string
         meta?: any
       }> = []
+
+      // 0. 专家团（含内置种子团）：@团队名 → 本轮消息按团队合同发起编排
+      for (const t of this.store.getTeams()) {
+        if (t.enabled === false) continue
+        candidates.push({
+          type: 'team',
+          id: t.id,
+          name: t.name,
+          kind: 'team',
+          detail: `专家团 · ${t.members.length} 名成员${t.builtin ? ' · 内置' : ''}`,
+          meta: { teamId: t.id, description: t.description, builtin: Boolean(t.builtin) },
+        })
+      }
 
       // 1. 子智能体
       const agents = this.store.getAgents()
@@ -2153,7 +2172,9 @@ export class WorkBuddyRouter {
     if (msgMatch && method === 'POST') {
       const taskId = decodeURIComponent(msgMatch[1])
       const body = await this.parseBody(req)
-      const out = await this.engine.sendUserMessage(taskId, String(body.message || ''))
+      // teamId = composer 专家团选择器显式指定的本轮团队意图（@团队名 提及在引擎内解析）
+      const teamId = String(body?.teamId || '').trim()
+      const out = await this.engine.sendUserMessage(taskId, String(body.message || ''), teamId ? { teamId } : undefined)
       this.sendJson(res, out.ok ? 202 : 400, out)
       return true
     }

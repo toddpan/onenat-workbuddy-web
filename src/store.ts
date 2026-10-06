@@ -5,7 +5,8 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
-import type { AgentResourceBinding, DshRef, ExpertTeam, Project, StorageData, SubAgent, WorkBuddySettings, WorkTask, PlanSubtask, TaskTurn, ScheduledTask } from './types.js'
+import type { AgentResourceBinding, DshRef, ExpertTeam, Project, StorageData, SubAgent, WorkBuddySettings, WorkTask, PlanSubtask, TaskTurn, ScheduledTask, TeamTemplateId } from './types.js'
+import { BUILTIN_TEAMS } from './expert-teams.js'
 
 function defaultSettings(): WorkBuddySettings {
   return {
@@ -240,16 +241,25 @@ export class WorkStore {
 
   // ---- ExpertTeams（专家团） ----
 
+  /**
+   * 全部团队 = 内置种子团（只读，随版本提供）+ 自定义团。
+   * 内置团不落库：升级自动跟随代码种子；同名自定义团被 parseTeamInput 拒绝，不会产生歧义。
+   */
   public getTeams(): ExpertTeam[] {
-    return [...this.data.teams].sort((a, b) => b.createdAt - a.createdAt)
+    const custom = [...this.data.teams].sort((a, b) => b.createdAt - a.createdAt)
+    const builtinIds = new Set(BUILTIN_TEAMS.map((t) => t.id))
+    return [...BUILTIN_TEAMS, ...custom.filter((t) => !builtinIds.has(t.id))]
   }
 
   public getTeam(id: string): ExpertTeam | undefined {
-    return this.data.teams.find((t) => t.id === id)
+    return BUILTIN_TEAMS.find((t) => t.id === id) ?? this.data.teams.find((t) => t.id === id)
   }
 
-  /** 无校验落库（校验在 router 的 parseTeamInput）；成员引用的子智能体由调用方保证存在 */
+  /** 无校验落库（校验在 router 的 parseTeamInput）；成员引用的子智能体由调用方保证存在；内置团 id 只读 */
   public upsertTeam(input: Partial<ExpertTeam>): ExpertTeam {
+    if (input.id && BUILTIN_TEAMS.some((t) => t.id === input.id)) {
+      throw new Error('内置专家团只读，请复制为自定义团队后修改。')
+    }
     const now = Date.now()
     const existing = input.id ? this.data.teams.find((t) => t.id === input.id) : undefined
     const team: ExpertTeam = {
@@ -261,6 +271,7 @@ export class WorkStore {
       deliveryRequirements: input.deliveryRequirements !== undefined ? (String(input.deliveryRequirements).trim() || undefined) : existing?.deliveryRequirements,
       members: (input.members as ExpertTeam['members']) || existing?.members || [],
       coordinatorPrompt: input.coordinatorPrompt !== undefined ? (String(input.coordinatorPrompt).trim() || undefined) : existing?.coordinatorPrompt,
+      templateId: (input.templateId as TeamTemplateId | undefined) ?? existing?.templateId,
       enabled: input.enabled ?? existing?.enabled ?? false,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
@@ -273,6 +284,7 @@ export class WorkStore {
   }
 
   public deleteTeam(id: string): boolean {
+    if (BUILTIN_TEAMS.some((t) => t.id === id)) return false
     const before = this.data.teams.length
     this.data.teams = this.data.teams.filter((t) => t.id !== id)
     // 关联任务只摘除 teamId 标记（历史任务与产出保留）
