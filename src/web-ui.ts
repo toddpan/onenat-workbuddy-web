@@ -1939,6 +1939,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <button data-v="voice" type="button" role="menuitem"><span class="ic">🎙</span><span class="lb">语音助手</span></button>
           <button data-v="schedules" type="button" role="menuitem"><span class="ic">⏰</span><span class="lb">定时任务</span></button>
           <button data-v="files" type="button" role="menuitem"><span class="ic">📁</span><span class="lb">文件管理</span></button>
+          <button data-v="experts" type="button" role="menuitem"><span class="ic">🧠</span><span class="lb">专家管理</span></button>
           <span class="nav-more-sep" aria-hidden="true"></span>
           <button data-v="settings" type="button" role="menuitem"><span class="ic">⚙️</span><span class="lb">设置</span></button>
         </div>
@@ -2282,6 +2283,16 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
     <div class="view" id="view-resources"><div class="panel">
       <div class="panel-head"><h2>资源目录</h2><span class="sub" id="res-sub"></span><span class="hspacer"></span><button class="btn" id="btn-res-refresh">↻ 强制刷新</button></div>
       <div class="card" style="padding:0"><div class="tbl-wrap"><table class="res" id="res-table"><thead><tr><th>资源</th><th>类型</th><th>公网入口（实时解析）</th><th>内网目标</th><th>技能</th></tr></thead><tbody></tbody></table></div></div>
+    </div></div>
+    <div class="view" id="view-experts"><div class="panel">
+      <div class="panel-head"><h2>专家管理</h2><span class="sub">专家库统一视图（内置/名册只读，用户自建可编辑/删除）· AI 可经 MCP（/api/experts/mcp）调用 expert.* 工具</span><span class="hspacer"></span><button class="btn pri" id="btn-new-expert">＋ 新建专家</button></div>
+      <div class="ros-bar" style="margin-bottom:12px">
+        <select id="exm-div" style="flex:0 0 auto;min-width:150px"><option value="">全部分区</option></select>
+        <input id="exm-q" placeholder="搜索名称 / 简介 / 标签" style="flex:1">
+        <span class="hint" id="exm-count" style="margin:0;flex:none"></span>
+        <button class="mini-btn" id="exm-refresh" title="重新拉取专家列表">↻ 刷新</button>
+      </div>
+      <div class="card" style="padding:0"><div class="tbl-wrap"><table class="res" id="exm-table"><thead><tr><th>专家</th><th>分区</th><th>来源</th><th>标签</th><th>简介</th><th>操作</th></tr></thead><tbody id="exm-body"></tbody></table></div></div>
     </div></div>
     <div class="view" id="view-settings"><div class="panel" style="max-width:1100px;margin:0 auto">
       <div class="panel-head"><h2>设置</h2><span class="sub">平台连接 · AI 接入</span><span class="hspacer"></span><button class="btn pri" id="btn-save-settings">保存设置</button></div>
@@ -3909,7 +3920,7 @@ async function openRunConfig(focus) {
 
 // ---------- 导航 ----------
 // 折叠进「更多」的低频页签；switchView 高亮与弹层展开都依赖这份清单
-var MORE_VIEWS = ['resources', 'library', 'plugins', 'voice', 'schedules', 'files', 'settings'];
+var MORE_VIEWS = ['resources', 'library', 'plugins', 'voice', 'schedules', 'files', 'experts', 'settings'];
 var navMore = document.getElementById('nav-more');
 var navMoreBtn = document.getElementById('nav-more-btn');
 function closeNavMore() { if (navMore) navMore.classList.remove('open'); }
@@ -3934,6 +3945,7 @@ function switchView(v) {
   if (navMoreBtn) navMoreBtn.classList.toggle('on', MORE_VIEWS.indexOf(v) >= 0);
   document.querySelectorAll('.view').forEach(x => x.classList.toggle('on', x.id === 'view-' + v));
   if (v === 'files') renderFilesView();
+  if (v === 'experts') renderExpertsAdmin();
   if (v === 'resources') renderResources();
   if (v === 'agents') renderAgents();
   if (v === 'schedules') renderSchedules();
@@ -9954,6 +9966,118 @@ async function openExpertRosterPicker() {
   $('ros-q').addEventListener('input', () => { st.q = $('ros-q').value; renderRos(); });
   renderRos();
 }
+
+// ---------- 专家管理页（CRUD：POST/PUT/DELETE /api/experts；builtin/名册只读，用户自建可编辑/删除） ----------
+var exmCache = null;
+async function exmLoad(force) {
+  if (exmCache && !force) return exmCache;
+  const r = await api('/experts');
+  if (!r.ok || !r.data) { toast((r && r.error) || '专家列表拉取失败', true); return { experts: [] }; }
+  exmCache = r.data;
+  return exmCache;
+}
+async function renderExpertsAdmin(force) {
+  const d = await exmLoad(force);
+  const experts = d.experts || [];
+  const divs = [...new Set(experts.map(e => e.division))].sort();
+  const sel = $('exm-div'); const cur = sel.value;
+  sel.innerHTML = '<option value="">全部分区</option>' + divs.map(x => '<option value="' + esc(x) + '">' + esc(x) + '</option>').join('');
+  sel.value = divs.indexOf(cur) >= 0 ? cur : '';
+  exmRender();
+}
+function exmRender() {
+  const experts = (exmCache && exmCache.experts) || [];
+  const div = $('exm-div').value; const q = $('exm-q').value.trim().toLowerCase();
+  const rows = experts.filter(e => (!div || e.division === div) && (!q || ((e.name + ' ' + (e.nameEn || '') + ' ' + e.description + ' ' + (e.tags || []).join(' ')).toLowerCase().includes(q))));
+  $('exm-count').textContent = '共 ' + rows.length + ' 位';
+  $('exm-body').innerHTML = rows.map(e => {
+    const editable = e.source === 'user';
+    const src = editable ? '<span style="color:var(--pri);font-weight:600">用户</span>' : (e.source === 'builtin' ? '内置' : '名册');
+    return '<tr>' +
+      '<td><b>' + esc(e.icon || '🧩') + ' ' + esc(e.name) + '</b><br><span class="hint" style="margin:0">' + esc(e.id) + '</span></td>' +
+      '<td>' + esc(e.divisionZh || e.division) + '</td>' +
+      '<td>' + src + '</td>' +
+      '<td>' + esc((e.tags || []).join('、')) + '</td>' +
+      '<td style="max-width:360px">' + esc(e.description) + '</td>' +
+      '<td style="white-space:nowrap">' +
+      '<button class="mini-btn" data-exm-view="' + esc(e.id) + '">查看</button> ' +
+      (editable
+        ? '<button class="mini-btn" data-exm-edit="' + esc(e.id) + '">编辑</button> <button class="mini-btn" data-exm-del="' + esc(e.id) + '">删除</button>'
+        : '<span class="hint" style="margin:0">只读</span>') +
+      '</td></tr>';
+  }).join('') || '<tr><td colspan="6" class="hint" style="text-align:center;padding:24px 0">没有匹配的专家</td></tr>';
+  document.querySelectorAll('[data-exm-view]').forEach(b => b.addEventListener('click', () => exmOpenForm(b.dataset.exmView, 'view')));
+  document.querySelectorAll('[data-exm-edit]').forEach(b => b.addEventListener('click', () => exmOpenForm(b.dataset.exmEdit, 'edit')));
+  document.querySelectorAll('[data-exm-del]').forEach(b => b.addEventListener('click', () => exmDelete(b.dataset.exmDel)));
+}
+async function exmOpenForm(id, mode) {
+  let e = { id: '', name: '', icon: '', division: 'user', tags: [], description: '', systemPrompt: '', executionPrompt: '', role: '', source: 'user' };
+  if (id) {
+    const r = await api('/experts/' + encodeURIComponent(id));
+    if (!r.ok) { toast(r.error || '读取专家失败', true); return; }
+    e = r.data;
+  }
+  const isNew = !id;
+  const ro = mode === 'view';
+  const dis = ro ? ' disabled' : '';
+  openModal(isNew ? '新建专家' : (ro ? '查看专家：' + e.name : '编辑专家：' + e.name), '', [
+    { label: '取消', act: closeModal },
+    ...(ro ? [] : [{ label: isNew ? '创建' : '保存', cls: 'pri', act: () => exmSave(isNew) }]),
+  ]);
+  $('modal-body').innerHTML =
+    '<div class="grid3">' +
+    '<div class="field"><label>标识 id（小写中划线 slug）</label><input id="exf-id" value="' + esc(e.id) + '"' + (ro || !isNew ? ' disabled' : '') + '></div>' +
+    '<div class="field"><label>展示名</label><input id="exf-name" value="' + esc(e.name) + '"' + dis + '></div>' +
+    '<div class="field"><label>图标（emoji）</label><input id="exf-icon" value="' + esc(e.icon || '') + '"' + dis + '></div>' +
+    '<div class="field"><label>分区</label><input id="exf-div" value="' + esc(e.division || 'user') + '"' + dis + '></div>' +
+    '<div class="field"><label>角色名（可选）</label><input id="exf-role" value="' + esc(e.role || '') + '"' + dis + '></div>' +
+    '<div class="field"><label>标签（逗号分隔）</label><input id="exf-tags" value="' + esc((e.tags || []).join(',')) + '"' + dis + '></div>' +
+    '</div>' +
+    '<div class="field"><label>简介</label><input id="exf-desc" value="' + esc(e.description || '') + '"' + dis + '></div>' +
+    '<div class="field"><label>职责与约束提示词 systemPrompt（必填）</label><textarea id="exf-sp" rows="6" style="width:100%;font-family:var(--mono)"' + dis + '>' + esc(e.systemPrompt || '') + '</textarea></div>' +
+    '<div class="field"><label>执行指导 executionPrompt（可选）</label><textarea id="exf-ep" rows="4" style="width:100%;font-family:var(--mono)"' + dis + '>' + esc(e.executionPrompt || '') + '</textarea></div>';
+}
+async function exmSave(isNew) {
+  const body = {
+    kind: 'expert',
+    id: $('exf-id').value.trim(),
+    name: $('exf-name').value.trim(),
+    icon: $('exf-icon').value.trim(),
+    division: $('exf-div').value.trim() || 'user',
+    role: $('exf-role').value.trim() || undefined,
+    tags: $('exf-tags').value.split(/[,，]/).map(s => s.trim()).filter(Boolean),
+    description: $('exf-desc').value.trim(),
+    systemPrompt: $('exf-sp').value,
+    executionPrompt: $('exf-ep').value,
+  };
+  if (!body.id) { toast('请填写专家标识 id', true); return; }
+  if (!body.systemPrompt.trim()) { toast('systemPrompt 不能为空', true); return; }
+  const r = isNew
+    ? await api('/experts', { method: 'POST', body: JSON.stringify(body) })
+    : await api('/experts/' + encodeURIComponent(body.id), { method: 'PUT', body: JSON.stringify(body) });
+  if (!r.ok) { toast(r.error || '保存失败', true); return; }
+  exmCache = null; rosterCache = null;
+  closeModal();
+  toast('✓ 专家「' + (r.data.name || body.id) + '」已' + (isNew ? '创建' : '保存'));
+  renderExpertsAdmin(true);
+}
+function exmDelete(id) {
+  openModal('删除专家', '<p>确认删除用户专家「' + esc(id) + '」？此操作不可撤销。</p>', [
+    { label: '取消', act: closeModal },
+    { label: '删除', cls: 'pri', act: async () => {
+      const r = await api('/experts/' + encodeURIComponent(id), { method: 'DELETE' });
+      if (!r.ok) { toast(r.error || '删除失败', true); return; }
+      exmCache = null; rosterCache = null;
+      closeModal();
+      toast('✓ 已删除 ' + id);
+      renderExpertsAdmin(true);
+    } },
+  ]);
+}
+if ($('btn-new-expert')) $('btn-new-expert').addEventListener('click', () => exmOpenForm(null, 'edit'));
+if ($('exm-refresh')) $('exm-refresh').addEventListener('click', () => renderExpertsAdmin(true));
+if ($('exm-div')) $('exm-div').addEventListener('change', exmRender);
+if ($('exm-q')) $('exm-q').addEventListener('input', exmRender);
 
 // ---------- 远端目录浏览器 ----------
 function openDirBrowser(target, onPick) {

@@ -28,6 +28,7 @@ import { normalizeRule, nextRun, ruleText } from './scheduler.js'
 import { SCHEDULE_TEMPLATES } from './schedule-templates.js'
 import { expertPersona } from './expert-registry.js'
 import { ExpertRegistry } from './expert-registry.js'
+import { UserExpertStore } from './expert-store.js'
 import { parseTeamInput } from './expert-teams.js'
 import type { AuthService } from './auth.js'
 import { UsageService } from './usage.js'
@@ -75,7 +76,15 @@ export class WorkBuddyRouter {
     private auth?: AuthService,
     private xiaozhi?: XiaozhiMcpClient,
     private library?: SkillPluginLibrary,
-  ) {}
+  ) {
+    // 用户自建专家层：数据落 <dataDir>/user-experts.json，与只读资产层合并为统一视图
+    this.registry.attachUserStore(new UserExpertStore(store.dataDir))
+  }
+
+  /** 统一专家注册表（供 MCP Server 等外部挂载点复用同一份数据与缓存）。 */
+  public get expertRegistry(): ExpertRegistry {
+    return this.registry
+  }
 
   /** 插件导出任务的回收结果缓存（taskId → 已拉取结果），保证 poll 幂等 */
   private pluginImportDone = new Map<string, { ok: boolean; imported?: any[]; failed?: Array<{ file: string; error: string }>; error?: string }>()
@@ -1077,11 +1086,98 @@ export class WorkBuddyRouter {
       this.sendJson(res, 200, { ok: true, data: profile })
       return true
     }
-    // POST /api/experts —— 由专家档案一键创建/更新子智能体：
-    // body 必带 { id, dshRef }（id = registry 专家标识），可选覆盖 name/workDir/model 等字段。
-    // 注：registry 本身是只读 JSON 资产，"upsert" 语义落在子智能体存储（store.upsertAgent）。
+    // GET /api/experts/:id/profile —— 完整提示词内容（systemPrompt/executionPrompt/locales）；
+    // 与 GET /api/experts/:id 同构（后者历史上就返回完整档案，为兼容前端预填保留），此路径为显式语义别名。
+    const expertProfileMatch = /^\/api\/experts\/([^/]+)\/profile$/.exec(p)
+    if (expertProfileMatch && method === 'GET') {
+      const id = decodeURIComponent(expertProfileMatch[1])
+      if (!(await this.registry.get(id))) {
+        this.sendJson(res, 404, { ok: false, error: '专家不存在' })
+        return true
+      }
+      try {
+        const profile = await this.registry.getProfile(id)
+        this.sendJson(res, 200, { ok: true, data: profile })
+      } catch (err: any) {
+        this.sendJson(res, 404, { ok: false, error: err?.message || '专家档案缺失' })
+      }
+      return true
+    }
+    // PUT /api/experts/:id —— 更新用户自建专家（元数据 + 提示词）；builtin/roster 只读 → 403
+    const expertUpdateMatch = /^\/api\/experts\/([^/]+)$/.exec(p)
+    if (expertUpdateMatch && method === 'PUT') {
+      const id = decodeURIComponent(expertUpdateMatch[1])
+      if (!(await this.registry.get(id))) {
+        this.sendJson(res, 404, { ok: false, error: '专家不存在' })
+        return true
+      }
+      if (!(await this.registry.isEditable(id))) {
+        this.sendJson(res, 403, { ok: false, error: '内置/名册专家为只读，仅用户创建的专家可编辑' })
+        return true
+      }
+      const body = await this.parseBody(req)
+      try {
+        const saved = await this.registry.updateExpert(id, {
+          name: body?.name,
+          nameEn: body?.nameEn,
+          icon: body?.icon,
+          division: body?.division,
+          divisionZh: body?.divisionZh,
+          description: body?.description,
+          descriptionEn: body?.descriptionEn,
+          tags: Array.isArray(body?.tags) ? body.tags.map(String) : undefined,
+          systemPrompt: typeof body?.systemPrompt === 'string' ? body.systemPrompt : undefined,
+          executionPrompt: typeof body?.executionPrompt === 'string' ? body.executionPrompt : undefined,
+          role: typeof body?.role === 'string' ? body.role : undefined,
+        })
+        this.sendJson(res, 200, { ok: true, data: saved })
+      } catch (err: any) {
+        this.sendJson(res, 400, { ok: false, error: err?.message || '更新专家失败' })
+      }
+      return true
+    }
+    // DELETE /api/experts/:id —— 删除用户自建专家；builtin/roster 只读 → 403
+    if (expertUpdateMatch && method === 'DELETE') {
+      const id = decodeURIComponent(expertUpdateMatch[1])
+      if (!(await this.registry.get(id))) {
+        this.sendJson(res, 404, { ok: false, error: '专家不存在' })
+        return true
+      }
+      if (!(await this.registry.isEditable(id))) {
+        this.sendJson(res, 403, { ok: false, error: '内置/名册专家为只读，仅用户创建的专家可删除' })
+        return true
+      }
+      const deleted = await this.registry.deleteExpert(id)
+      this.sendJson(res, deleted ? 200 : 404, deleted ? { ok: true, data: { deleted: true } } : { ok: false, error: '专家不存在' })
+      return true
+    }
+    // POST /api/experts —— 双语义分发：
+    // ① body 带 systemPrompt（或 kind==='expert'）→ 创建/更新「用户自建专家」（source=user，存 user-experts.json）；
+    // ② 其余 → 旧语义：由专家档案一键创建/更新子智能体（body 必带 { id, dshRef }，upsert 落 store.upsertAgent）。
     if (p === '/api/experts' && method === 'POST') {
       const body = await this.parseBody(req)
+      if (body?.kind === 'expert' || typeof body?.systemPrompt === 'string') {
+        try {
+          const saved = await this.registry.createExpert({
+            id: String(body.id ?? body.expertId ?? '').trim(),
+            name: body.name,
+            nameEn: body.nameEn,
+            icon: body.icon,
+            division: body.division,
+            divisionZh: body.divisionZh,
+            description: body.description,
+            descriptionEn: body.descriptionEn,
+            tags: Array.isArray(body.tags) ? body.tags.map(String) : undefined,
+            systemPrompt: String(body.systemPrompt ?? ''),
+            executionPrompt: typeof body.executionPrompt === 'string' ? body.executionPrompt : undefined,
+            role: typeof body.role === 'string' ? body.role : undefined,
+          })
+          this.sendJson(res, 200, { ok: true, data: saved })
+        } catch (err: any) {
+          this.sendJson(res, 400, { ok: false, error: err?.message || '创建专家失败' })
+        }
+        return true
+      }
       const expertId = String(body?.id ?? body?.expertId ?? '').trim()
       if (!expertId) {
         this.sendJson(res, 400, { ok: false, error: '缺少 id（专家标识）' })
