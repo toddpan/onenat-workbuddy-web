@@ -6,3 +6,4 @@ dist/
 *.log
 .v2c/
 .video_agent/
+dist-test/
