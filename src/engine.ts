@@ -16,9 +16,10 @@ import type { PromptComposer } from './prompt-composer.js'
 import { Orchestrator, buildCompletionRequirement, buildTaskContract, buildUpstreamDigests, buildUpstreamSection, sanitizeEngineInstruction, type PlanDraft } from './orchestrator.js'
 import type { OnenatDirectory } from './onenat.js'
 import type { WorkStore } from './store.js'
-import type { SubtaskLogEntry, AgentResourceBinding, DshRef, ExtractedFileMention, ExtractedMentions, PlanSubtask, Project, SubAgent, TaskEvent, TaskTurn, TurnToolCall, WorkTask } from './types.js'
+import type { SubtaskLogEntry, AgentResourceBinding, DshRef, ExtractedFileMention, ExtractedMentions, ExpertTeam, PlanSubtask, Project, ResolvedDshTarget, SubAgent, TaskEvent, TaskTurn, TurnToolCall, WorkTask } from './types.js'
+import { teamMemberKey, EXPERT_AGENT_ID_PREFIX } from './types.js'
 import type { SshResourceStore } from './ssh-store.js'
-import { expertPersona } from './expert-registry.js'
+import { expertPersona, type ExpertRegistry, type ExpertProfile } from './expert-registry.js'
 import { teamMemberContract } from './expert-teams.js'
 
 /**
@@ -91,8 +92,15 @@ export class TaskEngine {
     private composer: PromptComposer,
     private planner: Orchestrator,
     sshStore?: SshResourceStore,
+    /** 专家库注册表（专家团专家成员的 persona 来源）；构造后也可经 attachExperts 注入 */
+    private experts?: ExpertRegistry,
   ) {
     this.sshStore = sshStore}
+
+  /** 延迟注入专家库注册表（server.ts 中 router 持有同一实例，构造顺序晚于引擎） */
+  public attachExperts(registry: ExpertRegistry): void {
+    this.experts = registry
+  }
 
   /** 从用户消息中提取 @子智能体 与 @资源（支持包含空格名称的最长前缀匹配与同名多实体解析） */
   /** 从用户消息中提取 @子智能体、@资源 以及 @文件（支持 @智能体:文件路径、@[智能体:文件路径] 及独立 @文件路径） */
@@ -100,12 +108,13 @@ export class TaskEngine {
     const mentionedAgentIds: string[] = []
     const mentionedResourceBindings: AgentResourceBinding[] = []
     const mentionedFiles: ExtractedFileMention[] = []
+    let mentionedTeamId: string | undefined
     const agents = this.store.getAgents()
     const endpoints = this.directory.listEndpoints()
 
     // 1. 构建候选字典（按名称长度降序排列，优先匹配最长包含空格的完整实体名，如 "SSH Server"）
     interface DictEntry {
-      type: 'agent' | 'resource'
+      type: 'agent' | 'resource' | 'team'
       name: string
       data: any
     }
@@ -114,6 +123,11 @@ export class TaskEngine {
     for (const a of agents) {
       if (a.name) dict.push({ type: 'agent', name: a.name, data: a })
       if (a.id) dict.push({ type: 'agent', name: a.id, data: a })
+    }
+
+    // 专家团（含内置种子团）也可被 @：命中后本轮消息按该团队合同发起编排
+    for (const t of this.store.getTeams()) {
+      if (t.enabled !== false && t.name) dict.push({ type: 'team', name: t.name, data: t })
     }
 
     for (const ep of endpoints) {
@@ -220,6 +234,9 @@ export class TaskEngine {
               if (!mentionedAgentIds.includes(a.id)) {
                 mentionedAgentIds.push(a.id)
               }
+            } else if (entry.type === 'team') {
+              const tm = entry.data as { id: string }
+              if (!mentionedTeamId) mentionedTeamId = tm.id
             } else if (entry.type === 'resource') {
               const ep = entry.data
               const refKey = ep.mappingId || ep.appId
@@ -341,6 +358,7 @@ export class TaskEngine {
       mentionedAgentIds,
       mentionedResourceBindings,
       mentionedFiles: mentionedFiles.length > 0 ? mentionedFiles : undefined,
+      ...(mentionedTeamId ? { mentionedTeamId } : {}),
       cleanText: text,
     }
   }
@@ -434,20 +452,30 @@ export class TaskEngine {
     // 专家团任务：团队名册是成员账本的默认来源（显式传入的 memberAgentIds 优先，teamId 仅作合同标记保留）
     const team = input.teamId ? this.store.getTeam(input.teamId) : undefined
     if (input.teamId && !team) throw new Error(`专家团不存在: ${input.teamId}`)
-    if (team && !team.enabled) throw new Error(`专家团「${team.name}」已停用，请先在子智能体页启用`)
+    if (team && team.enabled === false) throw new Error(`专家团「${team.name}」已停用，请先在子智能体页启用`)
     let memberAgentIds = explicit.length ? [...new Set(explicit)] : []
+    let expertMembers: WorkTask['expertMembers'] = undefined
     if (team && !explicit.length) {
-      const missing = team.members
-        .map((m) => ({ m, agent: this.store.getAgent(m.agentId) }))
+      // 团队名册展开：agentId 成员校验存在，expertId 成员登记为动态成员（编排时实例化在任务节点）
+      const expanded = await this.expandTeamRoster(team)
+      const missingAgents = team.members
+        .filter((m) => m.agentId)
+        .map((m) => ({ m, agent: this.store.getAgent(m.agentId!) }))
         .filter((x) => !x.agent || x.agent.enabled === false)
-      if (missing.length) {
-        throw new Error(`专家团「${team.name}」成员不可用: ${missing.map((x) => x.agent?.name || x.m.agentId).join('、')}（不存在或已停用）`)
+      if (missingAgents.length) {
+        throw new Error(`专家团「${team.name}」成员不可用: ${missingAgents.map((x) => x.agent?.name || x.m.agentId).join('、')}（不存在或已停用）`)
       }
-      memberAgentIds = team.members.map((m) => m.agentId)
+      const missingExperts = team.members.filter((m) => m.expertId && !expanded.expertMembers.some((e) => e.id === teamMemberKey(m)))
+      if (missingExperts.length) {
+        throw new Error(`专家团「${team.name}」专家成员不可用: ${missingExperts.map((m) => m.expertId).join('、')}（专家库中不存在）`)
+      }
+      memberAgentIds = expanded.agentIds
+      expertMembers = expanded.expertMembers.length ? expanded.expertMembers : undefined
     }
     // 新模型：成员账本 = 参与过的 sub agent（@ 时自动追加），不再预填「主智能体」；
     // 无 @ 的主会话直接在任务节点上执行（processUserMessage → runChatTurn 节点直发）
-    const mode: WorkTask['mode'] = input.mode || (memberAgentIds.length > 1 ? 'orchestrate' : 'chat')
+    const totalMembers = memberAgentIds.length + (expertMembers?.length || 0)
+    const mode: WorkTask['mode'] = input.mode || (totalMembers > 1 ? 'orchestrate' : 'chat')
     const task: WorkTask = {
       id: `task-${randomUUID().slice(0, 8)}`,
       title: input.title?.trim() || (input.message ? input.message.slice(0, 30) : '新任务'),
@@ -467,6 +495,7 @@ export class TaskEngine {
       ...(input.connectorIds?.length ? { connectorIds: input.connectorIds } : {}),
       ...(input.skillNames?.length ? { skillNames: input.skillNames } : {}),
       ...(team ? { teamId: team.id } : {}),
+      ...(expertMembers?.length ? { expertMembers } : {}),
     }
     this.store.upsertTask(task)
     if (input.message?.trim()) {
@@ -512,7 +541,7 @@ export class TaskEngine {
             s.completedAt = Date.now()
           })
           const binding = task.sessions[sub.agentId]
-          const agent = this.store.getAgent(sub.agentId)
+          const agent = await this.resolveMemberAgent(task, sub.agentId)
           if (binding && agent) {
             const target = await this.resolveExecTarget(task, sub.agentId).catch(() => undefined)
             if (target?.online) await this.client.cancelSession(target, binding.remoteSessionId).catch(() => {})
@@ -577,13 +606,13 @@ export class TaskEngine {
       s.result = undefined
     })
     try {
-      const agent = this.store.getAgent(sub.agentId)
+      const agent = await this.resolveMemberAgent(task, sub.agentId)
       if (!agent) {
         this.store.mutateSubtask(taskId, subtaskId, (s) => {
           s.status = 'failed'
-          s.error = '子智能体不存在'
+          s.error = '成员不存在（子智能体已删除或专家档案缺失）'
         })
-        return { ok: false, error: '子智能体不存在' }
+        return { ok: false, error: '成员不存在' }
       }
       const target = await this.resolveExecTarget(task, sub.agentId)
       if (!target) {
@@ -610,7 +639,7 @@ export class TaskEngine {
 
   // ---------- 多轮消息入口 ----------
 
-  public async sendUserMessage(taskId: string, text: string): Promise<{ ok: boolean; turn?: TaskTurn; queued?: boolean; error?: string }> {
+  public async sendUserMessage(taskId: string, text: string, opts?: { teamId?: string }): Promise<{ ok: boolean; turn?: TaskTurn; queued?: boolean; error?: string }> {
     const task = this.store.getTask(taskId)
     if (!task) return { ok: false, error: '任务不存在' }
     if (!text.trim()) return { ok: false, error: '消息为空' }
@@ -620,7 +649,7 @@ export class TaskEngine {
       this.store.appendTurn(taskId, turn)
       this.store.mutateTask(taskId, (t) => {
         t.queue = t.queue || []
-        t.queue.push({ text: text.trim(), at: Date.now(), turnId: turn.id })
+        t.queue.push({ text: text.trim(), at: Date.now(), turnId: turn.id, ...(opts?.teamId ? { teamId: opts.teamId } : {}) })
       })
       return { ok: true, queued: true, turn }
     }
@@ -632,7 +661,7 @@ export class TaskEngine {
     })
     this.emit(taskId, { type: 'turn_start', turn })
 
-    // 提取 @ 提及的智能体与资源
+    // 提取 @ 提及的智能体与资源（@专家团 也在其中）
     const mentions = this.extractMentions(text.trim())
 
     // 若提及了当前任务之外的新智能体，自动纳入任务成员
@@ -657,7 +686,7 @@ export class TaskEngine {
     this.activeJobs.set(taskId, ctrl)
 
     // 异步执行，立即返回用户轮次（流式经 SSE 推送）
-    void this.processUserMessage(taskId, text.trim(), mentions, ctrl.signal)
+    void this.processUserMessage(taskId, text.trim(), mentions, ctrl.signal, opts)
       .catch((err) => {
         this.appendSystemTurn(taskId, `⚠️ 引擎异常: ${err?.message || err}`)
       })
@@ -679,7 +708,7 @@ export class TaskEngine {
       const turn = t.turns.find((x) => x.id === next.turnId)
       if (turn) delete turn.queued
     })
-    await this.sendUserMessage(taskId, next.text).catch(() => undefined)
+    await this.sendUserMessage(taskId, next.text, next.teamId ? { teamId: next.teamId } : undefined).catch(() => undefined)
   }
 
   /**
@@ -741,8 +770,31 @@ export class TaskEngine {
     this.taskLog(taskId, level, msg)
   }
 
-  private async processUserMessage(taskId: string, text: string, mentions: ExtractedMentions, signal: AbortSignal): Promise<void> {
-    const task = this.store.getTask(taskId)
+  private async processUserMessage(taskId: string, text: string, mentions: ExtractedMentions, signal: AbortSignal, opts?: { teamId?: string }): Promise<void> {
+    let task = this.store.getTask(taskId)
+    if (!task) return
+
+    // 消息级专家团意图（composer 选择器显式传入 / @团队名 提及）：
+    // 命中后把团队固化为任务语义（teamId/mode/成员账本），本轮起按团队合同编排；
+    // 后续无 @ 消息延续团队编排，与「创建团队任务」同构（对齐插件「一次任务只使用一个专家团」）。
+    const messageTeamId = opts?.teamId || mentions.mentionedTeamId
+    if (messageTeamId) {
+      const team = this.store.getTeam(messageTeamId)
+      if (!team || team.enabled === false) {
+        this.appendSystemTurn(taskId, `⚠️ 专家团「${team?.name || messageTeamId}」不存在或已停用，本轮按普通路由执行`)
+      } else if (team.id !== task.teamId) {
+        const expanded = await this.expandTeamRoster(team, taskId)
+        this.store.mutateTask(taskId, (t) => {
+          t.teamId = team.id
+          t.mode = 'orchestrate'
+          t.memberAgentIds = [...new Set([...t.memberAgentIds, ...expanded.agentIds])]
+          const merged = new Map([...(t.expertMembers || []).map((m) => [m.id, m] as const), ...expanded.expertMembers.map((m) => [m.id, m] as const)])
+          t.expertMembers = [...merged.values()]
+        })
+        task = this.store.getTask(taskId)
+        this.taskLog(taskId, 'info', `专家团「${team.name}」已接管本轮编排（${expanded.agentIds.length} 名子智能体成员 + ${expanded.expertMembers.length} 名专家库成员）`)
+      }
+    }
     if (!task) return
 
     // 智能调度模式判定：
@@ -759,7 +811,8 @@ export class TaskEngine {
     const singleExplicitMention = mentions.mentionedAgentIds.length === 1
     // 专家团任务：团队合同（团队名册 + 分工）是任务的主语义，无 @ 的消息也按合同走编排，
     // 不落入「无 @ = 主会话直发」——否则团队任务的目标会被单智能体消化，合同形同虚设。
-    const teamOrchestrate = Boolean(task.teamId) && task.mode === 'orchestrate' && !hasExplicitAgentMention
+    // 本轮显式携带团队意图（@团队/选择器）时，团队语义优先于 @ 智能体（对齐插件：团队提及即整体委派）。
+    const teamOrchestrate = Boolean(task.teamId) && task.mode === 'orchestrate' && (!hasExplicitAgentMention || Boolean(messageTeamId))
 
     if (!hasExplicitAgentMention && !teamOrchestrate) {
       // 新模型：无 @ = 主会话直发任务节点。项目任务=项目配置节点；非项目任务=创建时所选节点。
@@ -815,9 +868,46 @@ export class TaskEngine {
       if (nt?.online && nt.baseUrl) targets.set(aid, nt)
     }
 
+    // 专家团专家成员：动态实例化在任务发起节点（persona = 专家档案，不落持久实体）。
+    // 任务未绑定节点（如团队卡「发任务」流程）时回退规划器主智能体的节点——
+    // 纯专家团队没有自带节点的 agent 成员，无回退会因 targets 为空而整单失败。
+    const expertMembersAll = task.expertMembers || []
+    if (expertMembersAll.length) {
+      let expertNode: ResolvedDshTarget | undefined
+      if (execO.dshRef) {
+        const nt = await this.resolver.resolveRef(execO.dshRef, execO.apiKey, '__expert__').catch(() => undefined)
+        if (nt?.online && nt.baseUrl) expertNode = nt
+      }
+      if (!expertNode) {
+        // 任务未绑定节点：回退规划器主智能体的节点
+        const fallback = await this.planner.pickTarget().catch(() => ({ error: '无可用节点' }) as { error: string })
+        if (!('error' in fallback) && fallback.target?.baseUrl) {
+          expertNode = {
+            baseUrl: fallback.target.baseUrl,
+            ...(fallback.target.apiKey ? { apiKey: fallback.target.apiKey } : {}),
+            agentId: fallback.agent?.id || '__expert__',
+            resolvedAt: Date.now(),
+            online: true,
+          }
+          this.taskLog(taskId, 'info', `任务未绑定节点，专家成员回退到主调度节点（${fallback.source}）执行`)
+        }
+      }
+      for (const em of expertMembersAll) {
+        if (targets.has(em.id)) continue
+        const expertAgent = await this.resolveMemberAgent(task, em.id)
+        if (!expertAgent) {
+          this.taskLog(taskId, 'warn', `专家成员「${em.name}」档案不可用（专家资产缺失？），本轮跳过`)
+          continue
+        }
+        if (expertNode?.online && expertNode.baseUrl) targets.set(expertAgent.id, expertNode)
+        else this.taskLog(taskId, 'warn', `专家成员「${em.name}」执行节点不可达，本轮无法执行`)
+      }
+    }
+
     // @ 了恰好一个智能体：定向委派——与多 sub agent 编排同构：
     // 子任务在 sub agent 自身绑定节点执行，最终产物（汇总）回任务发起节点
-    if (singleExplicitMention && hasExplicitAgentMention) {
+    // （本轮显式携带团队意图时团队语义优先，不落入单人直派）
+    if (!messageTeamId && singleExplicitMention && hasExplicitAgentMention) {
       const onlyId = mentions.mentionedAgentIds[0]
       const onlyAgent = this.store.getAgent(onlyId)
       // 记录本轮路由：单人 @ → 定向委派
@@ -1291,9 +1381,18 @@ export class TaskEngine {
     const team = task.teamId ? this.store.getTeam(task.teamId) : undefined
     if (task.teamId && !team) this.taskLog(taskId, 'warn', `专家团 ${task.teamId} 已不存在，本次按普通编排执行`)
 
-    // 1. 花名册（资源摘要用轻量解析，不抓技能全文）
-    const rosterMembers = task.memberAgentIds
-      .map((id) => this.store.getAgent(id))
+    // 1. 花名册（资源摘要用轻量解析，不抓技能全文）：
+    //    子智能体成员 + 专家库动态成员（expert-<expertId> 伪 id，persona 在派工时按档案展开）
+    const agentById = new Map<string, SubAgent>()
+    for (const a of this.store.getAgents()) agentById.set(a.id, a)
+    for (const em of task.expertMembers || []) {
+      const expertAgent = await this.resolveMemberAgent(task, em.id)
+      if (expertAgent) agentById.set(expertAgent.id, expertAgent)
+      else this.taskLog(taskId, 'warn', `专家成员「${em.name}」档案不可用，已从规划花名册剔除`)
+    }
+    const rosterKeys = [...task.memberAgentIds, ...(task.expertMembers || []).map((m) => m.id)]
+    const rosterMembers = rosterKeys
+      .map((id) => agentById.get(id))
       .filter((a): a is SubAgent => Boolean(a) && targets.has(a!.id))
       .map((agent) => ({
         agent,
@@ -1358,7 +1457,7 @@ export class TaskEngine {
       planned = await this.planner.planTask(text, rosterMembers, targets, {
         priorityAgentIds: mentions.mentionedAgentIds,
         taskNodeTarget: planNodeTarget && planNodeTarget.online && planNodeTarget.baseUrl ? planNodeTarget : undefined,
-        ...(team ? { team } : {}),
+        ...(team ? { team, nameOf: (key: string) => this.memberNameOf(task, key) } : {}),
         onLog: (msg, level) => {
           this.taskLog(taskId, level || 'info', `[主调度] ${msg}`)
           planStage(msg)
@@ -1440,19 +1539,25 @@ export class TaskEngine {
       const nt = await this.resolver.resolveRef(execS.dshRef, execS.apiKey, 'summary').catch(() => undefined)
       if (nt?.online && nt.baseUrl) summaryNodeTarget = nt
     }
-    const summary = await this.planner.summarize(text, fresh.plan?.subtasks || [], targets, summaryNodeTarget, team ? { team } : undefined)
+    const summary = await this.planner.summarize(text, fresh.plan?.subtasks || [], targets, summaryNodeTarget, team ? { team, nameOf: (key: string) => this.memberNameOf(fresh, key) } : undefined)
     this.store.mutateTask(taskId, (t) => {
       t.summary = summary
       t.status = summary.status
     })
     this.emit(taskId, { type: 'task_status', status: summary.status })
+    // 成员覆盖度并入汇总文本（移植 dsh-agency-agents coverage 语义：返回覆盖 ≠ 验收通过）
+    const cov = summary.coverage
+    const coverageText = cov && cov.total > 0
+      ? `\n\n📋 成员覆盖度: ${cov.status === 'complete' ? '全部覆盖' : cov.status === 'partial' ? '部分覆盖' : '无有效产出'}（${cov.completed}/${cov.total}）` +
+        (cov.missing.length ? `\n${cov.missing.map((m) => `- ${m.name}${m.duty ? `（${m.duty}）` : ''}: ${m.error || '未返回'}`).join('\n')}` : '')
+      : ''
     const summaryTurn: TaskTurn = {
       id: `turn-${randomUUID().slice(0, 8)}`,
       seq: 0,
       role: 'agent',
       agentId: '__planner__',
       agentName: '🎯 总调度汇总',
-      text: summary.finalConclusion,
+      text: summary.finalConclusion + coverageText,
       subtaskIds: subtasks.map((s) => s.id),
       at: Date.now(),
     }
@@ -1524,7 +1629,8 @@ export class TaskEngine {
     const task = this.store.getTask(taskId)
     const sub = task?.plan?.subtasks.find((s) => s.id === subtaskId)
     if (!task || !sub) return
-    const agent = this.store.getAgent(sub.agentId)
+    // 成员解析：子智能体实体优先，expert-<expertId> 伪 id 解析为任务级临时专家
+    const agent = await this.resolveMemberAgent(task, sub.agentId)
     const target = targets.get(sub.agentId)
     if (!agent || !target) {
       this.store.mutateSubtask(taskId, subtaskId, (s) => {
@@ -1592,10 +1698,9 @@ export class TaskEngine {
     // 专家团合同段（移植 dsh-agency-agents executeTeam 成员提示词结构）：共同目标/约束/交付要求 +
     // 全员职责边界 + 自己的分工与执行指示 + 五段回传格式；紧跟执行者角色，先于任务合同。
     const team = task.teamId ? this.store.getTeam(task.teamId) : undefined
-    const teamMember = team?.members.find((m) => m.agentId === agent.id)
+    const teamMember = team?.members.find((m) => teamMemberKey(m) === agent.id)
     if (team && teamMember) {
-      const agentById = new Map(this.store.getAgents().map((a) => [a.id, a]))
-      parts.push(teamMemberContract(team, teamMember, agentById))
+      parts.push(teamMemberContract(team, teamMember, (key) => this.memberNameOf(task, key)))
     }
     const hasDynamicResources = (extraResources && extraResources.length > 0) || (mentions?.mentionedFiles && mentions.mentionedFiles.length > 0)
     const cachedBlock = hasDynamicResources ? null : this.blockCacheFresh(taskId, agent, 'unattended')
@@ -1845,6 +1950,80 @@ export class TaskEngine {
       createdAt: now,
       updatedAt: now,
     }
+  }
+
+  // ---------- 专家团专家成员（动态实例化，移植 dsh-agency-agents spawnTeammate 语义） ----------
+
+  /**
+   * 任务级临时专家执行者：persona = 专家档案提示词，绑定任务发起节点（主 DSH），
+   * 不落子智能体实体（用完即散，对齐插件「成员不持久化」的边界）。
+   */
+  private makeExpertAgent(task: WorkTask, profile: ExpertProfile): SubAgent {
+    const exec = this.taskExec(task)
+    return {
+      id: EXPERT_AGENT_ID_PREFIX + profile.id,
+      name: profile.name,
+      dshRef: exec.dshRef || { kind: 'direct', apiBaseUrl: '' },
+      role: profile.role?.trim() || profile.description,
+      systemPrompt: profile.systemPrompt,
+      executionPrompt: profile.executionPrompt,
+      description: profile.description,
+      resources: [],
+      skills: [],
+      enabled: true,
+      createdAt: 0,
+      updatedAt: 0,
+    }
+  }
+
+  /**
+   * 成员解析：子智能体实体优先；expert-<expertId> 伪 id 解析为任务级临时专家。
+   * 仅当该 id 已登记在 task.expertMembers 时才实例化（防止伪 id 撞名真实智能体被误解析）。
+   */
+  private async resolveMemberAgent(task: WorkTask, id: string): Promise<SubAgent | undefined> {
+    const direct = this.store.getAgent(id)
+    if (direct) return direct
+    if (!id.startsWith(EXPERT_AGENT_ID_PREFIX) || !task.expertMembers?.some((m) => m.id === id)) return undefined
+    const expertId = id.slice(EXPERT_AGENT_ID_PREFIX.length)
+    const profile = await this.experts?.getProfile(expertId).catch(() => undefined)
+    if (!profile) return undefined
+    return this.makeExpertAgent(task, profile)
+  }
+
+  /** 成员展示名（花名册/派工/汇总/前端兜底共用）：子智能体名 → 专家动态成员名 → 键本身 */
+  private memberNameOf(task: WorkTask, key: string): string {
+    return this.store.getAgent(key)?.name || task.expertMembers?.find((m) => m.id === key)?.name || key
+  }
+
+  /**
+   * 团队名册展开：agentId 成员校验存在（缺失仅告警跳过），expertId 成员经专家库解析展示名。
+   * 供 createTask（团队任务）与消息级 @团队（固化团队语义）共用。
+   */
+  private async expandTeamRoster(team: ExpertTeam, taskId?: string): Promise<{ agentIds: string[]; expertMembers: Array<{ id: string; name: string }>; issues: string[] }> {
+    const agentIds: string[] = []
+    const expertMembers: Array<{ id: string; name: string }> = []
+    const issues: string[] = []
+    for (const m of team.members) {
+      if (m.agentId) {
+        const agent = this.store.getAgent(m.agentId)
+        if (!agent || agent.enabled === false) {
+          issues.push(`成员子智能体「${agent?.name || m.agentId}」不存在或已停用`)
+          continue
+        }
+        agentIds.push(m.agentId)
+      } else if (m.expertId) {
+        const expert = await this.experts?.get(m.expertId).catch(() => undefined)
+        if (!expert) {
+          issues.push(`专家库角色「${m.expertId}」不存在（专家资产缺失？）`)
+          continue
+        }
+        expertMembers.push({ id: teamMemberKey(m), name: expert.name })
+      }
+    }
+    if (taskId) {
+      for (const issue of issues) this.taskLog(taskId, 'warn', `专家团「${team.name}」${issue}`)
+    }
+    return { agentIds, expertMembers, issues }
   }
 
   private taskExec(task: WorkTask): {
@@ -2203,7 +2382,9 @@ export class TaskEngine {
     return { ok: true, message: r.message, node: target.baseUrl }
   }
 
-  public attachmentTargetAgentIds(task: WorkTask): string[] {    const members = (task.memberAgentIds || []).filter((id) => Boolean(id))
+  public attachmentTargetAgentIds(task: WorkTask): string[] {
+    // 专家团专家成员（expert-<expertId> 伪 id）同样接收附件投递（会话建在任务节点，工作区同源）
+    const members = [...(task.memberAgentIds || []).filter((id) => Boolean(id)), ...(task.expertMembers || []).map((m) => m.id)]
     if (!members.length) {
       // 新模型：任务只有节点主会话（无成员）→ 附件投到主会话所在节点
       if (task.sessions?.[NODE_AGENT_ID]?.remoteSessionId) return [NODE_AGENT_ID]
@@ -2247,8 +2428,9 @@ export class TaskEngine {
     const results: Array<{ agentId: string; agentName: string; ok: boolean; error?: string; files?: Array<{ name: string; path: string; size: number }> }> = await Promise.all(
       targetIds.map(async (agentId) => {
         // 节点直发任务（无成员）目标为伪成员 __node__：store 无记录，用节点伪实体兜底，
-        // 否则 getAgent 返回 undefined → 整个上传被误判「节点不可用」静默丢弃（附件只留下文件名占位）
-        const agent = this.store.getAgent(agentId)
+        // 否则 getAgent 返回 undefined → 整个上传被误判「节点不可用」静默丢弃（附件只留下文件名占位）；
+        // 专家团专家成员（expert-<expertId>）经注册表动态实例化
+        const agent = await this.resolveMemberAgent(task, agentId)
           ?? (agentId === NODE_AGENT_ID ? this.makeNodeAgent(this.taskExec(task)) : undefined)
         // 项目任务：附件必须传到会话所在的项目节点（与 ensureSession 同源）
         let target: DshTarget | undefined = (await this.resolveExecTarget(task, agentId)) || targets.get(agentId)
@@ -2402,8 +2584,8 @@ export class TaskEngine {
       const results = await Promise.all(
         targetIds.map(async (agentId) => {
           // 节点直发任务（无成员）目标为伪成员 __node__：store 无记录，用节点伪实体兜底，
-          // targets 解析不到时退回 resolveExecTarget（与会话创建同源）
-          const agent = this.store.getAgent(agentId)
+          // targets 解析不到时退回 resolveExecTarget（与会话创建同源）；专家成员经注册表动态实例化
+          const agent = await this.resolveMemberAgent(task, agentId)
             ?? (agentId === NODE_AGENT_ID ? this.makeNodeAgent(this.taskExec(task)) : undefined)
           let target: DshTarget | undefined = targets.get(agentId) || (await this.resolveExecTarget(task, agentId))
           if (!agent || !target) return { agentId, agentName: agent?.name || agentId, ok: false, error: '节点不可用' }

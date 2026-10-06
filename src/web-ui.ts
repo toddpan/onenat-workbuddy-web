@@ -767,6 +767,18 @@ body.task-running .dsh-sysRow.sys-planning .markdown::after {
   border: 1px solid var(--line2); background: var(--bg2); border-radius: var(--rad); padding: 12px 16px; margin: 8px 0 20px;
 }
 .plan-card h4 { font-size: 13px; color: var(--acc); margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; }
+/* ---- 主调度 → 成员泳道（参考 dsh-agency-agents 专家团卡：主理人 + 成员职责 + 成员状态） ---- */
+.plan-member-row {
+  display: flex; align-items: center; gap: 8px; padding: 6px 4px 4px; font-size: 12.5px;
+  border-bottom: 1px solid var(--line2); margin-top: 6px;
+}
+.plan-member-row:first-of-type { margin-top: 0; }
+.plan-member-row .pm-icon { flex: none; font-size: 14px; }
+.plan-member-row .pm-name { flex: none; font-weight: 600; color: var(--tx); }
+.plan-member-row .pm-duty { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tx3); font-size: 11.5px; }
+.plan-member-row.lead { background: rgba(111,123,247,.06); border: 1px solid rgba(111,123,247,.18); border-radius: 8px; padding: 8px 10px; margin-bottom: 4px; }
+.plan-member-row.lead .pm-name { color: var(--pri); }
+.plan-card .tag.team { color: #0f766e; border-color: rgba(15,118,110,.4); background: rgba(15,118,110,.08); margin-right: 8px; }
 .plan-row {
   display: flex; align-items: center; gap: 10px; padding: 7px 4px; border-top: 1px dashed var(--line); font-size: 12.5px;
   border-radius: 6px; position: relative; transition: background .3s ease;
@@ -1426,6 +1438,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
   font-size: 10px; padding: 1px 5px; border-radius: 4px; font-family: var(--mono); border: 1px solid var(--line);
 }
 .mention-item .tag.agent { color: var(--pri); border-color: rgba(77,107,254,.4); }
+.mention-item .tag.team { color: #0f766e; border-color: rgba(15,118,110,.4); background: rgba(15,118,110,.08); font-weight: 600; }
 .mention-item .tag.resource { color: var(--warn); border-color: rgba(212,136,6,.4); }
 .mention-empty { padding: 16px; text-align: center; color: var(--tx3); font-size: 12px; }
 .db-row.is-hidden { opacity: .55; }
@@ -4347,6 +4360,7 @@ function chatColumn() {
 
 /** 将任务数据渲染到对话视图（支持高性能批量/分块装配） */
 function applyTaskToView(task, isInitialRender) {
+  state.task = task; // 当前任务完整对象（teamId/expertMembers 供编排视图解析专家成员名）
   const ce = $('chat-empty'); if (ce) ce.style.display = 'none';
   if ($('chat-title')) $('chat-title').textContent = task.title || '未命名任务';
   if ($('btn-add-member')) $('btn-add-member').style.display = '';
@@ -4579,6 +4593,17 @@ function connectStream(taskId) {
     try {
       const ev = JSON.parse(e.data);
       renderPlanCard(ev.plan, true);
+      // 消息级 @团队 刚固化团队语义时，客户端任务对象还没有 expertMembers —— 回填后重渲染专家成员名
+      const hasExpert = (ev.plan?.subtasks || []).some(s => String(s.agentId || '').startsWith('expert-'));
+      if (hasExpert && state.currentTaskId && !(state.task && state.task.expertMembers)) {
+        api('/tasks/' + state.currentTaskId).then(r => {
+          if (r.ok && r.data) {
+            state.task = r.data;
+            state.taskCache.set(r.data.id, r.data);
+            if (r.data.plan) renderPlanCard(r.data.plan, false);
+          }
+        }).catch(() => {});
+      }
     } catch {}
   });
 
@@ -5367,6 +5392,30 @@ function finalizeTurnBlocks(el, turn, taskId) {
 // ---------- 编排计划卡片 (Plan Card) ----------
 let planRowEls = {};
 
+function memberDisplayName(agentId) {
+  const a = state.agents.find(x => x.id === agentId);
+  if (a) return a.name;
+  const em = (state.task && state.task.expertMembers || []).find(m => m.id === agentId);
+  return em ? em.name : agentId;
+}
+function isExpertMemberId(agentId) {
+  return String(agentId || '').startsWith('expert-');
+}
+/** 当前任务绑定团队（含内置团）的成员元信息：key → {name, duty, isExpert}；供编排视图泳道与职责展示 */
+function teamMemberMeta() {
+  const teamId = state.task && state.task.teamId;
+  if (!teamId) return null;
+  const team = (state.teams || []).find(t => t.id === teamId);
+  if (!team) return null;
+  const meta = {};
+  (team.members || []).forEach(m => {
+    const key = m.agentId || ('expert-' + m.expertId);
+    const name = m.agentId ? (state.agents.find(a => a.id === m.agentId) || {}).name : ((state.task && state.task.expertMembers || []).find(e => e.id === key) || {}).name;
+    meta[key] = { name: name || key, duty: m.duty || '', isExpert: !m.agentId };
+  });
+  return { team, meta };
+}
+
 function createPlanCardElement(plan) {
   const card = document.createElement('div');
   card.className = 'plan-card';
@@ -5379,7 +5428,9 @@ function createPlanCardElement(plan) {
   // 判断是否有任何依赖关系（决定是否显示 DAG 依赖区）
   const hasDep = subs.some(s => s.dependsOn && s.dependsOn.length);
   const stratLabel = plan.strategy === 'dag' ? 'DAG 依赖编排' : (plan.strategy === 'sequential' ? '顺序执行' : '并行协同');
-  const headerTail =
+  const tm = teamMemberMeta();
+  const teamBadge = tm ? '<span class="tag team" style="font-weight:600">🧩 ' + esc(tm.team.name) + '</span>' : '';
+  const headerTail = teamBadge +
     '<span class="plan-strat" style="font-weight:600;color:var(--pri)">' + esc(stratLabel) + '</span>' +
     '<span style="font-size:11.5px;color:var(--tx3)">' + subs.length + ' 个子任务</span>';
 
@@ -5391,26 +5442,54 @@ function createPlanCardElement(plan) {
       '</div>';
   }
 
-  // 任务行
-  let rowsHtml = '';
+  // 主调度 → 成员泳道（参考 dsh-agency-agents 专家团卡：主理人 + 成员职责 chips + 成员状态）
+  // 泳道顺序 = 子任务出现顺序；团队成员未被分配子任务时补一条空泳道（职责覆盖缺口一目了然）
+  const lanes = [];
+  const laneByAgent = new Map();
   for (const s of subs) {
-    const agent = state.agents.find(a => a.id === s.agentId);
-    const deps = (s.dependsOn || []).map(id => titleById.get(id) || id).filter(Boolean);
-    const depTag = deps.length
-      ? '<span class="plan-dep" title="依赖于: ' + esc(deps.join('、')) + '">⛓ ' + esc(deps.join('、')) + '</span>'
-      : '';
-    const failedBtn = s.status === 'failed' ? '<button class="mini-btn" data-op="retry">重试</button>' : '';
-    // 行内依赖标注放在任务标题上方一行（若存在依赖）
-    const titleCell = depTag
-      ? '<div style="display:block;line-height:1.5"><span style="display:block;font-weight:500">' + esc(s.title) + '</span>' + depTag + '</div>'
-      : '<span style="font-weight:500">' + esc(s.title) + '</span>';
-    const rowStateCls = s.status === 'running' ? ' row-running' : (s.status === 'pending' ? ' row-pending' : '');
-    rowsHtml +=
-      '<div class="plan-row' + rowStateCls + '" data-sid="' + s.id + '" data-deps="' + esc(deps.join('|')) + '">' +
-      '<span class="st ' + s.status + '">' + s.status + '</span>' + titleCell +
-      '<span class="ag">🤖 ' + esc(agent ? agent.name : s.agentId) + '</span>' +
-      '<span class="ops"><button class="mini-btn" data-op="logs">日志</button><button class="mini-btn" data-op="chat">会话</button>' + failedBtn + '</span>' +
+    if (!laneByAgent.has(s.agentId)) laneByAgent.set(s.agentId, []);
+    laneByAgent.get(s.agentId).push(s);
+  }
+  if (tm) {
+    for (const key of Object.keys(tm.meta)) {
+      if (!laneByAgent.has(key)) laneByAgent.set(key, []);
+    }
+  }
+  let rowsHtml = '<div class="plan-member-row lead"><span class="pm-icon">🎯</span>' +
+    '<span class="pm-name">主调度（主理人）</span>' +
+    '<span class="pm-duty">拆解任务 · 派工 · 核验汇总</span></div>';
+  for (const [agentId, list] of laneByAgent) {
+    const meta = (tm && tm.meta[agentId]) || null;
+    const name = meta ? meta.name : memberDisplayName(agentId);
+    const isExpert = meta ? meta.isExpert : isExpertMemberId(agentId);
+    const icon = isExpert ? '🧩' : '🤖';
+    const dutyHtml = meta && meta.duty ? '<span class="pm-duty">' + esc(meta.duty) + '</span>' : '';
+    rowsHtml += '<div class="plan-member-row"><span class="pm-icon">' + icon + '</span>' +
+      '<span class="pm-name">' + esc(name) + '</span>' + dutyHtml +
+      (meta ? '' : '<span class="pm-duty" style="color:var(--tx3)">场外成员</span>') +
       '</div>';
+    if (!list.length) {
+      rowsHtml += '<div class="plan-row row-pending" style="opacity:.65"><span class="st skipped">n/a</span>' +
+        '<span style="color:var(--tx3)">未分配子任务（职责未覆盖或任务无需该成员）</span></div>';
+      continue;
+    }
+    for (const s of list) {
+      const deps = (s.dependsOn || []).map(id => titleById.get(id) || id).filter(Boolean);
+      const depTag = deps.length
+        ? '<span class="plan-dep" title="依赖于: ' + esc(deps.join('、')) + '">⛓ ' + esc(deps.join('、')) + '</span>'
+        : '';
+      const failedBtn = s.status === 'failed' ? '<button class="mini-btn" data-op="retry">重试</button>' : '';
+      // 行内依赖标注放在任务标题上方一行（若存在依赖）
+      const titleCell = depTag
+        ? '<div style="display:block;line-height:1.5"><span style="display:block;font-weight:500">' + esc(s.title) + '</span>' + depTag + '</div>'
+        : '<span style="font-weight:500">' + esc(s.title) + '</span>';
+      const rowStateCls = s.status === 'running' ? ' row-running' : (s.status === 'pending' ? ' row-pending' : '');
+      rowsHtml +=
+        '<div class="plan-row' + rowStateCls + '" data-sid="' + s.id + '" data-deps="' + esc(deps.join('|')) + '">' +
+        '<span class="st ' + s.status + '">' + s.status + '</span>' + titleCell +
+        '<span class="ops"><button class="mini-btn" data-op="logs">日志</button><button class="mini-btn" data-op="chat">会话</button>' + failedBtn + '</span>' +
+        '</div>';
+    }
   }
 
   const hasActive = subs.some(x => x.status === 'running' || x.status === 'pending');
@@ -6518,6 +6597,11 @@ async function refreshMentionCandidates() {
   } else {
     // 降级使用本地 state 聚合
     const list = [];
+    (state.teams || []).forEach(t => {
+      if (t.enabled !== false) {
+        list.push({ type: 'team', id: t.id, name: t.name, kind: 'team', detail: '专家团 · ' + t.members.length + ' 名成员' + (t.builtin ? ' · 内置' : '') });
+      }
+    });
     (state.agents || []).forEach(a => {
       if (a.enabled !== false) {
         list.push({
@@ -6549,15 +6633,16 @@ function initMentionPopup() {
 
   function renderMentionList() {
     if (!mentionMatched.length) {
-      listEl.innerHTML = '<div class="mention-empty">无匹配的智能体或资源</div>';
+      listEl.innerHTML = '<div class="mention-empty">无匹配的团队、智能体或资源</div>';
       return;
     }
     let html = '';
     mentionMatched.forEach((item, idx) => {
       const active = idx === mentionActiveIdx ? ' active' : '';
-      const icon = item.type === 'agent' ? '🤖' : (item.kind === 'ssh' ? '🖥️' : (item.kind === 'http' ? '🌐' : '📦'));
-      const tagClass = item.type === 'agent' ? 'agent' : 'resource';
-      const tagText = item.type === 'agent' ? '智能体' : (item.kind ? item.kind.toUpperCase() : '资源');
+      const isTeam = item.type === 'team' || item.kind === 'team';
+      const icon = isTeam ? '🧩' : (item.type === 'agent' ? '🤖' : (item.kind === 'ssh' ? '🖥️' : (item.kind === 'http' ? '🌐' : '📦')));
+      const tagClass = isTeam ? 'team' : (item.type === 'agent' ? 'agent' : 'resource');
+      const tagText = isTeam ? '专家团' : (item.type === 'agent' ? '智能体' : (item.kind ? item.kind.toUpperCase() : '资源'));
       html += '<div class="mention-item' + active + '" data-idx="' + idx + '">' +
         '<span class="icon">' + icon + '</span>' +
         '<div class="info">' +
@@ -7612,34 +7697,53 @@ async function loadTeams() {
   const r = await api('/teams');
   if (r.ok) state.teams = Array.isArray(r.data) ? r.data : [];
   renderTeams();
+  // 专家库角色名惰性补齐（内置团/专家成员 chips 显示名），加载完成后重渲染
+  exmLoad().then(() => renderTeams()).catch(() => {});
 }
 function agentNameOf(id) {
   const a = state.agents.find(x => x.id === id);
   return a ? a.name : id;
+}
+function teamMemberDisplayName(m) {
+  if (m.agentId) return agentNameOf(m.agentId);
+  const key = 'expert-' + m.expertId;
+  const em = (state.task && state.task.expertMembers || []).find(x => x.id === key);
+  if (em) return em.name;
+  const ex = (exmCache && exmCache.experts || []).find(x => x.id === m.expertId);
+  return ex ? ex.name : m.expertId;
 }
 function renderTeams() {
   const el = $('team-list');
   if (!el) return;
   el.innerHTML = '';
   if (!state.teams.length) {
-    el.innerHTML = '<div class="card"><span class="sub" style="color:var(--tx3)">还没有专家团。把已建的子智能体编成一个团：设定共同目标/约束/交付要求与每个成员的职责分工，发任务时按合同注入主调度规划、成员派工与汇总核对。</span></div>';
+    el.innerHTML = '<div class="card"><span class="sub" style="color:var(--tx3)">还没有专家团。把已建的子智能体或专家库角色编成一个团：设定共同目标/约束/交付要求与每个成员的职责分工，发任务时按合同注入主调度规划、成员派工与汇总核对。</span></div>';
     return;
   }
   for (const tm of state.teams) {
+    const isBuiltin = Boolean(tm.builtin);
     const card = document.createElement('div'); card.className = 'card';
-    const memberChips = tm.members.map(m => '<span class="tag" style="margin:2px 6px 2px 0" title="' + esc(m.duty) + '">' + esc(agentNameOf(m.agentId)) + ' · ' + esc((m.duty || '').slice(0, 16)) + '</span>').join('');
+    const memberChips = tm.members.map(m => '<span class="tag" style="margin:2px 6px 2px 0" title="' + esc(m.duty || '') + '">' +
+      (m.expertId ? '🧩 ' : '🤖 ') + esc(teamMemberDisplayName(m)) + ' · ' + esc((m.duty || '').slice(0, 16)) + '</span>').join('');
     card.innerHTML = '<div class="row1"><h3>' + esc(tm.name) + '</h3>' +
+      (isBuiltin ? '<span class="tag" style="color:#0f766e;border-color:rgba(15,118,110,.4)">内置</span>' : '') +
       (tm.enabled === false ? '<span class="tag err">停用</span>' : '<span class="tag ok">启用</span>') +
       '<span class="tag">' + tm.members.length + ' 名成员</span></div>' +
       (tm.description ? '<div class="desc">' + esc(tm.description) + '</div>' : '') +
       '<div class="desc">目标: ' + esc((tm.goal || '').slice(0, 120)) + ((tm.goal || '').length > 120 ? '…' : '') +
       (tm.deliveryRequirements ? '<br>交付要求: ' + esc(tm.deliveryRequirements.slice(0, 80)) : '') + '</div>' +
       '<div class="desc" style="margin-top:4px">' + memberChips + '</div>' +
-      '<div class="ops"><button class="btn pri" data-op="task">🚀 发任务</button><button class="btn" data-op="edit">编辑</button>' +
-      (tm.enabled === false ? '<button class="btn" data-op="toggle">启用</button>' : '<button class="btn" data-op="toggle">停用</button>') +
-      '<button class="btn danger" data-op="del">删除</button></div>';
+      '<div class="ops"><button class="btn pri" data-op="task">🚀 发任务</button>' +
+      (isBuiltin
+        ? '<button class="btn" data-op="copy">📋 复制为自定义</button>'
+        : '<button class="btn" data-op="edit">编辑</button>' +
+          (tm.enabled === false ? '<button class="btn" data-op="toggle">启用</button>' : '<button class="btn" data-op="toggle">停用</button>') +
+          '<button class="btn danger" data-op="del">删除</button>') +
+      '</div>';
     card.querySelector('[data-op=task]').addEventListener('click', async () => {
-      const r = await api('/tasks', { method: 'POST', body: JSON.stringify({ title: '🧩 ' + tm.name, teamId: tm.id }) });
+      // 带上当前节点选择：纯专家团队（内置团）没有自带节点的 agent 成员，任务无节点会无法执行
+      const nodeRef = nodeState.cur ? { kind: 'mapping', mappingId: nodeState.cur } : null;
+      const r = await api('/tasks', { method: 'POST', body: JSON.stringify({ title: '🧩 ' + tm.name, teamId: tm.id, ...(nodeRef ? { nodeRef } : {}) }) });
       if (!r.ok) { toast(r.error || '创建团队任务失败', true); return; }
       switchView('work');
       await loadTasks(); await openTask(r.data.id);
@@ -7647,14 +7751,22 @@ function renderTeams() {
       if (input) input.focus();
       toast('团队任务已创建（' + tm.members.length + ' 名成员），输入目标即按合同编排');
     });
-    card.querySelector('[data-op=edit]').addEventListener('click', () => openTeamDrawer(tm));
-    card.querySelector('[data-op=toggle]').addEventListener('click', async () => {
+    const copyBtn = card.querySelector('[data-op=copy]');
+    if (copyBtn) copyBtn.addEventListener('click', async () => {
+      await exmLoad();
+      openTeamDrawer(Object.assign({}, tm, { id: '', name: tm.name + '（副本）', builtin: false }));
+    });
+    const editBtn = card.querySelector('[data-op=edit]');
+    if (editBtn) editBtn.addEventListener('click', () => openTeamDrawer(tm));
+    const toggleBtn = card.querySelector('[data-op=toggle]');
+    if (toggleBtn) toggleBtn.addEventListener('click', async () => {
       const r = await api('/teams', { method: 'POST', body: JSON.stringify(Object.assign({}, tm, { enabled: tm.enabled === false })) });
       if (!r.ok) { toast(r.error || '保存失败', true); return; }
       await loadTeams();
       toast(tm.enabled === false ? '已启用' : '已停用');
     });
-    card.querySelector('[data-op=del]').addEventListener('click', async () => {
+    const delBtn = card.querySelector('[data-op=del]');
+    if (delBtn) delBtn.addEventListener('click', async () => {
       if (!confirm('删除专家团「' + tm.name + '」？（不影响子智能体与历史任务）')) return;
       await api('/teams/' + tm.id, { method: 'DELETE' });
       await loadTeams();
@@ -7665,47 +7777,88 @@ function renderTeams() {
 }
 $('btn-new-team').addEventListener('click', () => openTeamDrawer(null));
 function openTeamDrawer(team) {
-  const isEdit = Boolean(team);
+  const isEdit = Boolean(team && team.id);
   openDrawer(isEdit ? '编辑专家团' : '新建专家团');
   const members = (team && Array.isArray(team.members) ? JSON.parse(JSON.stringify(team.members)) : []);
-  function agentOptions(selected) {
-    return '<option value="">— 选择子智能体 —</option>' + state.agents.map(a =>
-      '<option value="' + esc(a.id) + '"' + (a.id === selected ? ' selected' : '') + '>' + esc(a.name + (a.enabled === false ? '（停用）' : '')) + '</option>').join('');
+  // 专家库角色选项（惰性加载，分区分组展示）
+  let expertList = (exmCache && exmCache.experts) || [];
+  async function ensureExperts() {
+    if (expertList.length) return;
+    const d = await exmLoad().catch(() => null);
+    expertList = (d && d.experts) || [];
+  }
+  function expertOptions(selected) {
+    const byDiv = new Map();
+    expertList.forEach(e => {
+      if (!byDiv.has(e.division)) byDiv.set(e.division, { zh: e.divisionZh || e.division, list: [] });
+      byDiv.get(e.division).list.push(e);
+    });
+    let html = '<option value="">— 选择专家库角色 —</option>';
+    [...byDiv.entries()].sort((a, b) => a[0].localeCompare(b[0])).forEach(([div, g]) => {
+      html += '<optgroup label="' + esc(g.zh) + '">' + g.list.map(e =>
+        '<option value="' + esc(e.id) + '"' + (e.id === selected ? ' selected' : '') + '>' + esc((e.icon || '🧩') + ' ' + e.name) + '</option>').join('') + '</optgroup>';
+    });
+    return html;
   }
   function renderMemberRows() {
     const box = $('tm-members');
-    box.innerHTML = members.map((m, i) =>
-      '<div class="bind-row" data-idx="' + i + '">' +
-      '<div style="display:flex;gap:8px;margin-bottom:6px"><select data-f="agentId" style="flex:1">' + agentOptions(m.agentId) + '</select>' +
+    box.innerHTML = members.map((m, i) => {
+      const isExpert = !m.agentId;
+      const srcSel =
+        '<select data-f="src" style="flex:none;width:110px">' +
+        '<option value="agent"' + (isExpert ? '' : ' selected') + '>子智能体</option>' +
+        '<option value="expert"' + (isExpert ? ' selected' : '') + '>专家库</option></select>';
+      const pickSel = isExpert
+        ? '<select data-f="expertId" style="flex:1">' + expertOptions(m.expertId) + '</select>'
+        : '<select data-f="agentId" style="flex:1">' + agentOptions(m.agentId) + '</select>';
+      return '<div class="bind-row" data-idx="' + i + '">' +
+      '<div style="display:flex;gap:8px;margin-bottom:6px">' + srcSel + pickSel +
       '<button class="mini-btn danger" data-del="' + i + '" style="flex:none">移除</button></div>' +
       '<div class="field" style="margin-bottom:6px"><label>职责分工（一句话，进规划花名册与派工职责边界）</label>' +
       '<input data-f="duty" value="' + esc(m.duty || '') + '" placeholder="如: 架构与扩展性评审"></div>' +
       '<div class="field" style="margin-bottom:0"><label>执行指示（可选：角色专属工作方法与产出结构）</label>' +
-      '<textarea data-f="instructions" style="min-height:56px" placeholder="工作方法：…&#10;产出结构：…">' + esc(m.instructions || '') + '</textarea></div></div>').join('') ||
-      '<div class="hint" style="margin:0">还没有成员。点击「＋ 添加成员」从子智能体中选取（2~8 人）。</div>';
+      '<textarea data-f="instructions" style="min-height:56px" placeholder="工作方法：…&#10;产出结构：…">' + esc(m.instructions || '') + '</textarea></div></div>';
+    }).join('') ||
+      '<div class="hint" style="margin:0">还没有成员。点击「＋ 添加成员」从子智能体或专家库角色中选取（2~8 人）。</div>';
     box.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => {
       members.splice(Number(b.getAttribute('data-del')), 1);
       renderMemberRows();
     }));
     box.querySelectorAll('.bind-row').forEach(row => {
       const i = Number(row.getAttribute('data-idx'));
-      row.querySelector('[data-f=agentId]').addEventListener('change', e => { members[i].agentId = e.target.value; });
+      row.querySelector('[data-f=src]').addEventListener('change', e => {
+        const wantExpert = e.target.value === 'expert';
+        const cur = members[i];
+        if (wantExpert && cur.agentId !== undefined) { delete cur.agentId; cur.expertId = ''; }
+        else if (!wantExpert && cur.expertId !== undefined) { delete cur.expertId; cur.agentId = ''; }
+        renderMemberRows();
+      });
+      const ag = row.querySelector('[data-f=agentId]');
+      if (ag) ag.addEventListener('change', e => { members[i].agentId = e.target.value; });
+      const ex = row.querySelector('[data-f=expertId]');
+      if (ex) ex.addEventListener('change', e => { members[i].expertId = e.target.value; });
       row.querySelector('[data-f=duty]').addEventListener('input', e => { members[i].duty = e.target.value; });
       row.querySelector('[data-f=instructions]').addEventListener('input', e => { members[i].instructions = e.target.value; });
     });
   }
+  const templateOptions = [
+    ['general', '通用协作'], ['product', '产品评审'], ['technical', '技术评审'],
+    ['content', '内容策划'], ['data', '数据分析'], ['research', '专题研究'],
+  ].map(([v, label]) => '<option value="' + v + '"' + (((team && team.templateId) || 'general') === v ? ' selected' : '') + '>' + label + '</option>').join('');
   $('drawer-body').innerHTML =
     '<div class="field"><label>团队名称</label><input id="tm-name" value="' + esc(team && team.name || '') + '" placeholder="如: 技术方案评审团"></div>' +
     '<div class="field"><label>简介（可选：适合什么场景）</label><input id="tm-desc" value="' + esc(team && team.description || '') + '"></div>' +
     '<div class="field"><label>共同目标（注入每个成员派工与主调度规划）</label><textarea id="tm-goal" placeholder="如: 从架构、安全和质量三个角度评审技术方案，定位交付风险。">' + esc(team && team.goal || '') + '</textarea></div>' +
     '<div class="field"><label>共同约束（可选）</label><textarea id="tm-constraints" style="min-height:56px" placeholder="如: 仅进行分析评审；依据不足时明确说明，不擅自修改。">' + esc(team && team.constraints || '') + '</textarea></div>' +
     '<div class="field"><label>共同交付要求（可选）</label><input id="tm-delivery" value="' + esc(team && team.deliveryRequirements || '') + '" placeholder="如: 风险与验收清单"></div>' +
-    '<div class="field"><label>团队成员（2~8 人，每人配职责分工）</label><div id="tm-members"></div>' +
+    '<div class="field"><label>主理人模板（决定规划准备材料、汇总验收清单与专属汇总规范）</label><select id="tm-template">' + templateOptions + '</select></div>' +
+    '<div class="field"><label>团队成员（2~8 人；子智能体跑各自节点，专家库角色动态实例化在任务节点）</label><div id="tm-members"></div>' +
     '<button class="mini-btn" id="tm-add" style="margin-top:6px">＋ 添加成员</button></div>' +
     '<div class="field"><label>主理人补充规则（可选：注入主调度规划与汇总，空 = 默认协作规范）</label>' +
     '<textarea id="tm-coord" style="min-height:64px" placeholder="如: 优先核对安全风险的放行条件；汇总按严重度排序。">' + esc(team && team.coordinatorPrompt || '') + '</textarea></div>' +
     '<div class="ops" style="display:flex;gap:10px;margin-top:14px"><button class="btn pri" id="tm-save">保存</button><button class="btn" id="tm-cancel">取消</button></div>';
   renderMemberRows();
+  ensureExperts().then(() => { if ($('tm-members')) renderMemberRows(); });
   $('tm-add').addEventListener('click', () => { members.push({ agentId: '', duty: '' }); renderMemberRows(); });
   $('tm-cancel').addEventListener('click', closeDrawer);
   $('tm-save').addEventListener('click', async () => {
@@ -7716,6 +7869,7 @@ function openTeamDrawer(team) {
       goal: $('tm-goal').value,
       constraints: $('tm-constraints').value,
       deliveryRequirements: $('tm-delivery').value,
+      templateId: $('tm-template').value,
       coordinatorPrompt: $('tm-coord').value,
       enabled: team ? team.enabled !== false : false,
       members: members,
