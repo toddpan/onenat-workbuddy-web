@@ -19,10 +19,11 @@ import type { SshResourceStore } from './ssh-store.js'
 import type { ScheduleRunner } from './scheduler.js'
 import { normalizeRule, nextRun, ruleText } from './scheduler.js'
 import { SCHEDULE_TEMPLATES } from './schedule-templates.js'
-import { EXPERT_TEMPLATES, expertPersona } from './expert-templates.js'
-import { ExpertRoster } from './expert-roster.js'
+import { expertPersona } from './expert-templates.js'
+import { ExpertRegistry } from './expert-registry.js'
 import { parseTeamInput } from './expert-teams.js'
 import type { AuthService } from './auth.js'
+import { UsageService } from './usage.js'
 import type { XiaozhiMcpClient } from './xiaozhi-mcp.js'
 import type { DshRef, Project, SubAgent, WorkTask, ScheduledTask } from './types.js'
 import type { MonitorService } from './monitor.js'
@@ -52,7 +53,7 @@ export class WorkBuddyRouter {
   private client = new DshClient()
   private version = formatDateVersion(readPackageVersion())
   /** 内置专家名册（The Agency persona 快照），根目录可用 WORKBUDDY_EXPERT_ROOT 覆盖 */
-  private roster = new ExpertRoster()
+  private registry = new ExpertRegistry()
 
   constructor(
     private store: WorkStore,
@@ -71,6 +72,12 @@ export class WorkBuddyRouter {
 
   /** 插件导出任务的回收结果缓存（taskId → 已拉取结果），保证 poll 幂等 */
   private pluginImportDone = new Map<string, { ok: boolean; imported?: any[]; failed?: Array<{ file: string; error: string }>; error?: string }>()
+  /** Token 消耗明细归因（只读聚合，懒初始化避免与参数属性初始化顺序耦合） */
+  private usageSvc?: UsageService
+  private get usage(): UsageService {
+    if (!this.usageSvc) this.usageSvc = new UsageService(this.store)
+    return this.usageSvc
+  }
   /** 插件导出任务的来源节点（taskId → dshRef + 展示名）：poll 回拉时按节点取 /fs，不再依赖子智能体 */
   private pluginImportRefs = new Map<string, { ref: DshRef; label: string }>()
 
@@ -809,6 +816,33 @@ export class WorkBuddyRouter {
       return true
     }
 
+    // ---------- Token 消耗明细报表（只读归因聚合） ----------
+    if (p === '/api/usage/tokens/summary' && method === 'GET') {
+      const url = new URL(req.url || '/', 'http://localhost')
+      const { from, to } = parseUsageRange(url)
+      this.sendJson(res, 200, { ok: true, data: this.usage.summary(from, to) })
+      return true
+    }
+    if (p === '/api/usage/tokens/records' && method === 'GET') {
+      const url = new URL(req.url || '/', 'http://localhost')
+      const { from, to } = parseUsageRange(url)
+      const q = url.searchParams
+      this.sendJson(res, 200, {
+        ok: true,
+        data: this.usage.records({
+          from,
+          to,
+          source: q.get('source') || undefined,
+          projectId: q.get('projectId') || undefined,
+          agentId: q.get('agentId') || undefined,
+          scheduleId: q.get('scheduleId') || undefined,
+          taskId: q.get('taskId') || undefined,
+          limit: Number(q.get('limit') || 500),
+        }),
+      })
+      return true
+    }
+
     // ---------- 资源目录 ----------
     if (p === '/api/resources' && method === 'GET') {
       try {
@@ -1017,14 +1051,23 @@ export class WorkBuddyRouter {
       this.sendJson(res, 200, { ok: true, data: this.store.getAgents() })
       return true
     }
-    // 内置专家模板清单（子智能体抽屉一键创建用）
+    // 内置专家模板清单（子智能体抽屉一键创建用；Phase 2 起数据来自 registry 的 builtin JSON 档案）
     if (p === '/api/agents/expert-templates' && method === 'GET') {
-      this.sendJson(res, 200, { ok: true, data: EXPERT_TEMPLATES })
+      this.sendJson(res, 200, { ok: true, data: await this.registry.listBuiltinTemplates() })
       return true
     }
-    // ---------- 专家名册（321 位 The Agency persona 快照，一键创建子智能体用） ----------
+    // ---------- 专家名册（321 位 The Agency persona 快照 + 7 个内置角色，一键创建子智能体用） ----------
     if (p === '/api/experts/roster' && method === 'GET') {
-      this.sendJson(res, 200, { ok: true, data: await this.roster.index() })
+      const idx = await this.registry.index()
+      // 迁移期兼容：响应结构保持旧 RosterIndex 形状（id→slug、icon→emoji），前端零改动
+      const data = {
+        ...idx,
+        divisions: idx.divisions.map((d) => ({
+          ...d,
+          experts: d.experts.map((e) => ({ ...e, slug: e.id, emoji: e.icon })),
+        })),
+      }
+      this.sendJson(res, 200, { ok: true, data })
       return true
     }
     if (p === '/api/experts/roster/detail' && method === 'GET') {
@@ -1032,8 +1075,9 @@ export class WorkBuddyRouter {
       const division = String(url.searchParams.get('division') || '')
       const slug = String(url.searchParams.get('slug') || '')
       try {
-        const out = await this.roster.getPrompt(slug, division)
-        this.sendJson(res, 200, { ok: true, data: { ...out.expert, prompt: out.prompt } })
+        const out = await this.registry.getRosterPrompt(slug, division)
+        const data = { ...out.expert, slug: out.expert.id, emoji: out.expert.icon, prompt: out.prompt }
+        this.sendJson(res, 200, { ok: true, data })
       } catch (err: any) {
         this.sendJson(res, 404, { ok: false, error: err?.message || '专家不存在' })
       }
@@ -1755,8 +1799,9 @@ export class WorkBuddyRouter {
           this.sendJson(res, 200, { ok: true, data: { done: false, status: task.status } })
           return true
         }
-        // 回拉目标：优先取发起时记录的来源节点（nodeRef 直发路径）；否则回退 agentId（旧路径）
-        const stashed = this.pluginImportRefs.get(taskId)
+        // 回拉目标：优先取发起时记录的来源节点（nodeRef 直发路径）；再回退任务自带的 nodeRef
+        //（服务重启后 pluginImportRefs 内存表会丢，任务实体上仍有）；最后回退 agentId（旧路径）
+        const stashed = this.pluginImportRefs.get(taskId) || (task.nodeRef ? { ref: task.nodeRef, label: this.nodeLabelOf(task.nodeRef) } : undefined)
         const legacyAgent = this.store.getAgent(url.searchParams.get('agentId') || '')
         if (!stashed && !legacyAgent) {
           this.sendJson(res, 200, { ok: true, data: { done: true, error: '来源节点缺失' } })
@@ -1765,7 +1810,8 @@ export class WorkBuddyRouter {
         const result = stashed
           ? await this.pullExportedPluginsByRef(taskId, stashed.ref, stashed.label)
           : await this.pullExportedPlugins(taskId, legacyAgent!)
-        this.pluginImportDone.set(taskId, result)
+        // 只缓存成功结果；失败（如路径解析为空、节点瞬时不可达）不缓存，下次 poll 可重试
+        if (result.ok) this.pluginImportDone.set(taskId, result)
         this.sendJson(res, 200, { ok: true, data: { done: true, ...result } })
         return true
       }
@@ -2086,19 +2132,26 @@ export class WorkBuddyRouter {
       else this.sendJson(res, 200, { ok: true, data: { model: updated.model || '' } })
       return true
     }
-    // 任务级运行权限（对齐任务级模型语义）：engine 派发时注入提示词「[运行权限]」，
-    // 优先于智能体实体默认 permission；空串 = 清除任务级覆盖
+    // 任务级运行权限：优先于智能体实体默认 permission（空串 = 清除覆盖，回退实体默认/全部权限）。
+    // 保存后立即经 PUT /sessions/:id/permission 原生下发到该任务所有已存在的远端会话
+    // （harness permissionPresets：真实切换沙箱模式 + 审批策略，不再靠提示词注入）
     const taskPermissionMatch = /^\/api\/tasks\/([^/]+)\/permission$/.exec(p)
     if (taskPermissionMatch && method === 'PUT') {
       const body = await this.parseBody(req)
-      const updated = this.store.mutateTask(decodeURIComponent(taskPermissionMatch[1]), (t): WorkTask => {
+      const taskId = decodeURIComponent(taskPermissionMatch[1])
+      const updated = this.store.mutateTask(taskId, (t): WorkTask => {
         const perm = String(body?.permission || '').trim()
         if (perm) t.permission = perm
         else delete t.permission
         return t
       })
-      if (!updated) this.sendJson(res, 404, { ok: false, error: 'Task not found' })
-      else this.sendJson(res, 200, { ok: true, data: { permission: updated.permission || '' } })
+      if (!updated) {
+        this.sendJson(res, 404, { ok: false, error: 'Task not found' })
+        return true
+      }
+      const applied = await this.engine.applyTaskPermission(taskId)
+        .catch((e: any) => [{ agentId: '*', ok: false, error: e?.message || String(e) }])
+      this.sendJson(res, 200, { ok: true, data: { permission: updated.permission || '', applied } })
       return true
     }
     // App「AI 控制台」模型透传（登录会话）：节点凭证由服务端持有，App 不接触节点 Key
@@ -2540,8 +2593,25 @@ export class WorkBuddyRouter {
 }
 
 /** 校验并归一 dshRef 输入 */
-export function normalizeDshRef(input: any): DshRef | { error: string } {
-  if (!input || typeof input !== 'object') return { error: '缺少 dshRef（DSH 实体引用）' }
+/** Token 报表时间范围：range=today|7d|30d 或 from/to（epoch ms），默认今日 */
+function parseUsageRange(url: URL): { from: number; to: number } {
+  const to = Number(url.searchParams.get('to') || 0) || Date.now()
+  const range = url.searchParams.get('range') || 'today'
+  let from = Number(url.searchParams.get('from') || 0)
+  if (!from) {
+    if (range === 'today') {
+      const d = new Date(to)
+      d.setHours(0, 0, 0, 0)
+      from = d.getTime()
+    } else {
+      const days = range === '30d' ? 30 : range === '7d' ? 7 : Math.max(1, Number(range.replace(/[^0-9]/g, '')) || 1)
+      from = to - days * 86_400_000
+    }
+  }
+  return { from, to }
+}
+
+export function normalizeDshRef(input: any): DshRef | { error: string } {  if (!input || typeof input !== 'object') return { error: '缺少 dshRef（DSH 实体引用）' }
   if (input.kind === 'mapping' && input.mappingId) return { kind: 'mapping', mappingId: String(input.mappingId) }
   if (input.kind === 'app' && input.appId) return { kind: 'app', appId: String(input.appId) }
   if (input.kind === 'direct' && input.apiBaseUrl) return { kind: 'direct', apiBaseUrl: String(input.apiBaseUrl) }
