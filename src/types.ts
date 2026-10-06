@@ -206,6 +206,10 @@ export interface ExtractedMentions {
   mentionedFiles?: ExtractedFileMention[]
   /** @专家团 提及：本轮消息按该团队合同发起编排（消息级路由，命中后团队固化为任务语义） */
   mentionedTeamId?: string
+  /** @专家库角色 提及（专家 id）：单个 → 定向直派（动态实例化在任务节点），多个 → 并行编排 */
+  mentionedExpertIds?: string[]
+  /** 提及了同名多个专家（已拒绝召唤，记录名字供系统提示） */
+  mentionedExpertAmbiguous?: string
   cleanText: string
 }
 

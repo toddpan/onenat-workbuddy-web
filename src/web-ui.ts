@@ -1439,6 +1439,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 }
 .mention-item .tag.agent { color: var(--pri); border-color: rgba(77,107,254,.4); }
 .mention-item .tag.team { color: #0f766e; border-color: rgba(15,118,110,.4); background: rgba(15,118,110,.08); font-weight: 600; }
+.mention-item .tag.expert { color: #7c3aed; border-color: rgba(124,58,237,.35); background: rgba(124,58,237,.08); }
 .mention-item .tag.resource { color: var(--warn); border-color: rgba(212,136,6,.4); }
 .mention-empty { padding: 16px; text-align: center; color: var(--tx3); font-size: 12px; }
 .db-row.is-hidden { opacity: .55; }
@@ -6633,16 +6634,17 @@ function initMentionPopup() {
 
   function renderMentionList() {
     if (!mentionMatched.length) {
-      listEl.innerHTML = '<div class="mention-empty">无匹配的团队、智能体或资源</div>';
+      listEl.innerHTML = '<div class="mention-empty">无匹配的团队、专家、智能体或资源</div>';
       return;
     }
     let html = '';
     mentionMatched.forEach((item, idx) => {
       const active = idx === mentionActiveIdx ? ' active' : '';
       const isTeam = item.type === 'team' || item.kind === 'team';
-      const icon = isTeam ? '🧩' : (item.type === 'agent' ? '🤖' : (item.kind === 'ssh' ? '🖥️' : (item.kind === 'http' ? '🌐' : '📦')));
-      const tagClass = isTeam ? 'team' : (item.type === 'agent' ? 'agent' : 'resource');
-      const tagText = isTeam ? '专家团' : (item.type === 'agent' ? '智能体' : (item.kind ? item.kind.toUpperCase() : '资源'));
+      const isExpert = item.type === 'expert' || item.kind === 'expert';
+      const icon = isTeam ? '🧩' : (isExpert ? ((item.meta && item.meta.icon) || '🧠') : (item.type === 'agent' ? '🤖' : (item.kind === 'ssh' ? '🖥️' : (item.kind === 'http' ? '🌐' : '📦'))));
+      const tagClass = isTeam ? 'team' : (isExpert ? 'expert' : (item.type === 'agent' ? 'agent' : 'resource'));
+      const tagText = isTeam ? '专家团' : (isExpert ? '专家' : (item.type === 'agent' ? '智能体' : (item.kind ? item.kind.toUpperCase() : '资源')));
       html += '<div class="mention-item' + active + '" data-idx="' + idx + '">' +
         '<span class="icon">' + icon + '</span>' +
         '<div class="info">' +

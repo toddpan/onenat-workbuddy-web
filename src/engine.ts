@@ -102,19 +102,20 @@ export class TaskEngine {
     this.experts = registry
   }
 
-  /** 从用户消息中提取 @子智能体 与 @资源（支持包含空格名称的最长前缀匹配与同名多实体解析） */
-  /** 从用户消息中提取 @子智能体、@资源 以及 @文件（支持 @智能体:文件路径、@[智能体:文件路径] 及独立 @文件路径） */
-  public extractMentions(text: string): ExtractedMentions {
+  /** 从用户消息中提取 @子智能体、@资源、@专家团 与 @专家库角色（支持 @智能体:文件路径、@[智能体:文件路径] 及独立 @文件路径） */
+  public async extractMentions(text: string): Promise<ExtractedMentions> {
     const mentionedAgentIds: string[] = []
     const mentionedResourceBindings: AgentResourceBinding[] = []
     const mentionedFiles: ExtractedFileMention[] = []
     let mentionedTeamId: string | undefined
+    const mentionedExpertIds: string[] = []
+    let mentionedExpertAmbiguous: string | undefined
     const agents = this.store.getAgents()
     const endpoints = this.directory.listEndpoints()
 
-    // 1. 构建候选字典（按名称长度降序排列，优先匹配最长包含空格的完整实体名，如 "SSH Server"）
+    // 1. 构建候选词典（按名称长度降序排列，优先匹配最长包含空格的完整实体名，如 "SSH Server"）
     interface DictEntry {
-      type: 'agent' | 'resource' | 'team'
+      type: 'agent' | 'resource' | 'team' | 'expert'
       name: string
       data: any
     }
@@ -128,6 +129,25 @@ export class TaskEngine {
     // 专家团（含内置种子团）也可被 @：命中后本轮消息按该团队合同发起编排
     for (const t of this.store.getTeams()) {
       if (t.enabled !== false && t.name) dict.push({ type: 'team', name: t.name, data: t })
+    }
+
+    // 专家库角色可被 @：单个 → 定向直派（动态实例化在任务节点），多个 → 并行编排。
+    // 词典含中英文名；同名多专家收进同一词条，命中时拒绝召唤（子智能体/团队同名时按词典顺序优先命中）。
+    if (this.experts) {
+      const expertList = await this.experts.search('').catch(() => [])
+      const byName = new Map<string, { name: string; experts: any[] }>()
+      for (const e of expertList) {
+        for (const nm of [e.name, e.nameEn]) {
+          const key = String(nm || '').trim().toLowerCase()
+          if (!key) continue
+          const hit = byName.get(key)
+          if (hit) hit.experts.push(e)
+          else byName.set(key, { name: String(nm).trim(), experts: [e] })
+        }
+      }
+      for (const { name, experts } of byName.values()) {
+        dict.push({ type: 'expert', name, data: experts.length === 1 ? experts[0] : experts })
+      }
     }
 
     for (const ep of endpoints) {
@@ -237,6 +257,14 @@ export class TaskEngine {
             } else if (entry.type === 'team') {
               const tm = entry.data as { id: string }
               if (!mentionedTeamId) mentionedTeamId = tm.id
+            } else if (entry.type === 'expert') {
+              const e = entry.data
+              if (Array.isArray(e)) {
+                // 同名多专家：拒绝召唤，避免召唤到错误角色
+                mentionedExpertAmbiguous = entry.name
+              } else if (!mentionedExpertIds.includes(e.id)) {
+                mentionedExpertIds.push(e.id)
+              }
             } else if (entry.type === 'resource') {
               const ep = entry.data
               const refKey = ep.mappingId || ep.appId
@@ -359,6 +387,8 @@ export class TaskEngine {
       mentionedResourceBindings,
       mentionedFiles: mentionedFiles.length > 0 ? mentionedFiles : undefined,
       ...(mentionedTeamId ? { mentionedTeamId } : {}),
+      ...(mentionedExpertIds.length ? { mentionedExpertIds } : {}),
+      ...(mentionedExpertAmbiguous ? { mentionedExpertAmbiguous } : {}),
       cleanText: text,
     }
   }
@@ -661,8 +691,8 @@ export class TaskEngine {
     })
     this.emit(taskId, { type: 'turn_start', turn })
 
-    // 提取 @ 提及的智能体与资源（@专家团 也在其中）
-    const mentions = this.extractMentions(text.trim())
+    // 提取 @ 提及的智能体与资源（@专家团 / @专家库角色 也在其中）
+    const mentions = await this.extractMentions(text.trim())
 
     // 若提及了当前任务之外的新智能体，自动纳入任务成员
     if (mentions.mentionedAgentIds.length > 0) {
@@ -680,6 +710,36 @@ export class TaskEngine {
           t.mode = 'orchestrate'
         }
       })
+    }
+
+    // @专家库角色：登记为任务动态成员（expert-<id> 伪 id，不落子智能体实体）
+    const mentionedExpertIds = mentions.mentionedExpertIds || []
+    if (mentions.mentionedExpertAmbiguous) {
+      this.appendSystemTurn(taskId, `⚠️ 专家库中存在多个同名角色「${mentions.mentionedExpertAmbiguous}」，已拒绝召唤；请改用子智能体或指定其他专家`)
+    }
+    if (mentionedExpertIds.length) {
+      const added: Array<{ id: string; name: string }> = []
+      for (const eid of mentionedExpertIds) {
+        const pseudo = EXPERT_AGENT_ID_PREFIX + eid
+        if (task.expertMembers?.some((m) => m.id === pseudo)) continue
+        const ex = await this.experts?.get(eid).catch(() => undefined)
+        if (!ex) {
+          this.appendSystemTurn(taskId, `⚠️ 专家「${eid}」不在专家库中，已忽略`)
+          continue
+        }
+        added.push({ id: pseudo, name: ex.name })
+      }
+      if (added.length) {
+        this.store.mutateTask(taskId, (t) => {
+          const merged = new Map([...(t.expertMembers || []).map((m) => [m.id, m] as const), ...added.map((m) => [m.id, m] as const)])
+          t.expertMembers = [...merged.values()]
+        })
+        this.taskLog(taskId, 'info', `@专家 ${added.map((m) => m.name).join('、')} 已加入任务（动态成员）`)
+      }
+      // @ 实体总数 ≥2（智能体 + 专家）与 @ 多个专家同样视为编排意图
+      if (mentions.mentionedAgentIds.length + mentionedExpertIds.length >= 2) {
+        this.store.mutateTask(taskId, (t) => { t.mode = 'orchestrate' })
+      }
     }
 
     const ctrl = new AbortController()
@@ -806,17 +866,20 @@ export class TaskEngine {
     // 3. 主智能体不可用时才回退到任务既有成员。
 
     const hasExplicitAgentMention = mentions.mentionedAgentIds.length > 0
+    const mentionedExpertIds = mentions.mentionedExpertIds || []
     // 本轮是否明确 @ 了“恰好一个”智能体 —— 用户只想把这件事交给那一个智能体，
     // 不应被任务已有的多成员/编排模式放大成跨多智能体流水线
     const singleExplicitMention = mentions.mentionedAgentIds.length === 1
     // 专家团任务：团队合同（团队名册 + 分工）是任务的主语义，无 @ 的消息也按合同走编排，
     // 不落入「无 @ = 主会话直发」——否则团队任务的目标会被单智能体消化，合同形同虚设。
-    // 本轮显式携带团队意图（@团队/选择器）时，团队语义优先于 @ 智能体（对齐插件：团队提及即整体委派）。
-    const teamOrchestrate = Boolean(task.teamId) && task.mode === 'orchestrate' && (!hasExplicitAgentMention || Boolean(messageTeamId))
+    // 本轮显式携带团队意图（@团队/选择器）时，团队语义优先于 @ 智能体（对齐插件：团队提及即整体委派）；
+    // @专家 / @智能体 都视为显式定向意图，不触发团队合同。
+    const teamOrchestrate = Boolean(task.teamId) && task.mode === 'orchestrate' && (!hasExplicitAgentMention && !mentionedExpertIds.length || Boolean(messageTeamId))
 
-    if (!hasExplicitAgentMention && !teamOrchestrate) {
+    if (!hasExplicitAgentMention && !mentionedExpertIds.length && !teamOrchestrate) {
       // 新模型：无 @ = 主会话直发任务节点。项目任务=项目配置节点；非项目任务=创建时所选节点。
       // 主会话不绑定任何 sub agent 身份（远端默认形态 + 项目指令），sub agent 通过 @ 在该节点上调用。
+      // （@专家库角色 视为显式定向意图，跳过本分支进入下方的直派/编排路由）
       const exec0 = this.taskExec(task)
       if (exec0.dshRef) {
         const nodeTarget = await this.resolver.resolveRef(exec0.dshRef, exec0.apiKey, NODE_AGENT_ID)
@@ -868,30 +931,11 @@ export class TaskEngine {
       if (nt?.online && nt.baseUrl) targets.set(aid, nt)
     }
 
-    // 专家团专家成员：动态实例化在任务发起节点（persona = 专家档案，不落持久实体）。
-    // 任务未绑定节点（如团队卡「发任务」流程）时回退规划器主智能体的节点——
-    // 纯专家团队没有自带节点的 agent 成员，无回退会因 targets 为空而整单失败。
+    // 专家团专家成员（含消息 @专家 登记的动态成员）：实例化在任务节点，
+    // 任务未绑定节点时回退主调度节点（resolveExpertNodeTarget）
     const expertMembersAll = task.expertMembers || []
     if (expertMembersAll.length) {
-      let expertNode: ResolvedDshTarget | undefined
-      if (execO.dshRef) {
-        const nt = await this.resolver.resolveRef(execO.dshRef, execO.apiKey, '__expert__').catch(() => undefined)
-        if (nt?.online && nt.baseUrl) expertNode = nt
-      }
-      if (!expertNode) {
-        // 任务未绑定节点：回退规划器主智能体的节点
-        const fallback = await this.planner.pickTarget().catch(() => ({ error: '无可用节点' }) as { error: string })
-        if (!('error' in fallback) && fallback.target?.baseUrl) {
-          expertNode = {
-            baseUrl: fallback.target.baseUrl,
-            ...(fallback.target.apiKey ? { apiKey: fallback.target.apiKey } : {}),
-            agentId: fallback.agent?.id || '__expert__',
-            resolvedAt: Date.now(),
-            online: true,
-          }
-          this.taskLog(taskId, 'info', `任务未绑定节点，专家成员回退到主调度节点（${fallback.source}）执行`)
-        }
-      }
+      const expertNode = await this.resolveExpertNodeTarget(task, taskId)
       for (const em of expertMembersAll) {
         if (targets.has(em.id)) continue
         const expertAgent = await this.resolveMemberAgent(task, em.id)
@@ -906,20 +950,26 @@ export class TaskEngine {
 
     // @ 了恰好一个智能体：定向委派——与多 sub agent 编排同构：
     // 子任务在 sub agent 自身绑定节点执行，最终产物（汇总）回任务发起节点
+    // @ 了恰好一个专家库角色：定向直派——动态实例化在任务节点（或主调度回退节点），
+    // persona 用专家档案，不落持久实体（对齐 dsh-agency-agents summon_expert 语义）。
     // （本轮显式携带团队意图时团队语义优先，不落入单人直派）
-    if (!messageTeamId && singleExplicitMention && hasExplicitAgentMention) {
-      const onlyId = mentions.mentionedAgentIds[0]
-      const onlyAgent = this.store.getAgent(onlyId)
-      // 记录本轮路由：单人 @ → 定向委派
+    const singleAgentMention = !messageTeamId && singleExplicitMention && hasExplicitAgentMention && !mentionedExpertIds.length
+    const singleExpertMention = !messageTeamId && !hasExplicitAgentMention && mentionedExpertIds.length === 1
+    if (singleAgentMention || singleExpertMention) {
+      const onlyId = singleAgentMention ? mentions.mentionedAgentIds[0] : EXPERT_AGENT_ID_PREFIX + mentionedExpertIds[0]
+      const onlyAgent = await this.resolveMemberAgent(task, onlyId)
+      // 记录本轮路由：单人 @ → 定向委派/直派
       this.store.mutateTask(taskId, (t) => {
         t.lastRoute = { kind: 'direct', agentId: onlyId, agentName: onlyAgent?.name || onlyId }
       })
-      // 只解析被 @ 的那一个智能体（sub agent 回自身绑定节点，不可达时回退任务节点）
-      const singleTarget = await this.resolveExecTarget(task, onlyId)
-      if (singleTarget) {
+      // 解析执行目标：子智能体回自身绑定节点（不可达时回退任务节点）；专家在任务节点/主调度回退节点
+      const singleTarget = singleAgentMention
+        ? await this.resolveExecTarget(task, onlyId)
+        : await this.resolveExpertNodeTarget(task, taskId)
+      if (singleTarget && onlyAgent) {
         await this.runDelegatedTurn(taskId, text, mentions, onlyId, singleTarget, signal)
       } else {
-        this.appendSystemTurn(taskId, `⚠️ 被 @ 的智能体「${this.store.getAgent(onlyId)?.name || onlyId}」暂不可用（项目节点与自身节点均不可达）`)
+        this.appendSystemTurn(taskId, `⚠️ 被 @ 的成员「${onlyAgent?.name || onlyId}」暂不可用（${!onlyAgent ? '成员不存在或档案缺失' : '节点不可达'}）`)
         this.store.mutateTask(taskId, (t) => { t.status = 'failed' })
         this.emit(taskId, { type: 'task_status', status: 'failed' })
       }
@@ -937,7 +987,7 @@ export class TaskEngine {
       return
     }
 
-    if (!teamOrchestrate && (task.mode === 'chat' || targets.size === 1 || (!hasExplicitAgentMention && targets.size > 1))) {
+    if (!teamOrchestrate && (task.mode === 'chat' || targets.size === 1 || (!hasExplicitAgentMention && !mentionedExpertIds.length && targets.size > 1))) {
       // 单智能体、直通模式或普通对话：走直通对话
       const targetAgentId = [...targets.keys()][0]
       this.store.mutateTask(taskId, (t) => {
@@ -1319,7 +1369,8 @@ export class TaskEngine {
     target: DshTarget,
     signal: AbortSignal,
   ): Promise<void> {
-    const agent = this.store.getAgent(agentId)
+    // 成员解析：子智能体实体优先，expert-<expertId> 伪 id 解析为任务级临时专家（@单专家直派）
+    const agent = await this.resolveMemberAgent(this.store.getTask(taskId)!, agentId)
     const sub: PlanSubtask = {
       id: `sub-${randomUUID().slice(0, 8)}`,
       title: (text.replace(/@\S+/g, '').trim() || '执行任务').slice(0, 30),
@@ -1988,6 +2039,31 @@ export class TaskEngine {
     const profile = await this.experts?.getProfile(expertId).catch(() => undefined)
     if (!profile) return undefined
     return this.makeExpertAgent(task, profile)
+  }
+
+  /**
+   * 专家动态成员的执行节点：任务发起节点优先；
+   * 任务未绑定节点（团队卡「发任务」/普通会话 @专家）时回退规划器主智能体的节点——
+   * 纯专家场景没有自带节点的 agent 成员，无回退会因 targets 为空而失败。
+   */
+  private async resolveExpertNodeTarget(task: WorkTask, taskId?: string): Promise<ResolvedDshTarget | undefined> {
+    const exec = this.taskExec(task)
+    if (exec.dshRef) {
+      const nt = await this.resolver.resolveRef(exec.dshRef, exec.apiKey, '__expert__').catch(() => undefined)
+      if (nt?.online && nt.baseUrl) return nt
+    }
+    const fallback = await this.planner.pickTarget().catch(() => ({ error: '无可用节点' }) as { error: string })
+    if (!('error' in fallback) && fallback.target?.baseUrl) {
+      if (taskId) this.taskLog(taskId, 'info', `任务未绑定节点，专家成员回退到主调度节点（${fallback.source}）执行`)
+      return {
+        baseUrl: fallback.target.baseUrl,
+        ...(fallback.target.apiKey ? { apiKey: fallback.target.apiKey } : {}),
+        agentId: fallback.agent?.id || '__expert__',
+        resolvedAt: Date.now(),
+        online: true,
+      }
+    }
+    return undefined
   }
 
   /** 成员展示名（花名册/派工/汇总/前端兜底共用）：子智能体名 → 专家动态成员名 → 键本身 */
