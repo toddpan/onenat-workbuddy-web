@@ -2,6 +2,16 @@
  * onenat-workbuddy-web - HTTP Router & API Dispatcher
  *
  * 路由表见设计文档 §9。SSE 网关: GET /api/tasks/:id/stream
+ *
+ * 专家统一 API（Phase 4 收敛，数据层 ExpertRegistry）：
+ *   GET  /api/experts        统一专家列表；支持 ?domain=<division> 按分区过滤、?skill=<关键词> 检索（可叠加）
+ *   GET  /api/experts/:id    单个专家元数据详情（404 = 不存在）
+ *   POST /api/experts        由专家档案一键创建/更新子智能体（body: { id, dshRef, name?, ... })
+ *
+ * @deprecated 迁移期双写兼容（Phase 4 保留，后续版本删除，前端请改用 /api/experts*）：
+ *   GET /api/agents/expert-templates   → 改用 GET /api/experts?domain=team
+ *   GET /api/experts/roster            → 改用 GET /api/experts
+ *   GET /api/experts/roster/detail     → 改用 GET /api/experts/:id
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -1046,17 +1056,82 @@ export class WorkBuddyRouter {
       return true
     }
 
+    // ---------- 专家（统一 API，Phase 4 收敛；数据层 ExpertRegistry） ----------
+    // GET /api/experts —— 统一专家列表；?domain= 按分区过滤、?skill= 关键词检索（name/描述/tags，大小写不敏感）
+    if (p === '/api/experts' && method === 'GET') {
+      const url = new URL(req.url || '/', 'http://localhost')
+      const domain = String(url.searchParams.get('domain') || '').trim()
+      const skill = String(url.searchParams.get('skill') || '').trim()
+      let experts = skill ? await this.registry.search(skill) : [...(await this.registry.index()).divisions.flatMap((d) => d.experts)]
+      if (domain) experts = experts.filter((e) => e.division === domain)
+      this.sendJson(res, 200, { ok: true, data: { total: experts.length, experts } })
+      return true
+    }
+    // GET /api/experts/:id —— 单个专家元数据详情
+    const expertMatch = /^\/api\/experts\/([^/]+)$/.exec(p)
+    if (expertMatch && method === 'GET') {
+      const expert = await this.registry.get(decodeURIComponent(expertMatch[1]))
+      if (!expert) {
+        this.sendJson(res, 404, { ok: false, error: '专家不存在' })
+        return true
+      }
+      this.sendJson(res, 200, { ok: true, data: expert })
+      return true
+    }
+    // POST /api/experts —— 由专家档案一键创建/更新子智能体：
+    // body 必带 { id, dshRef }（id = registry 专家标识），可选覆盖 name/workDir/model 等字段。
+    // 注：registry 本身是只读 JSON 资产，"upsert" 语义落在子智能体存储（store.upsertAgent）。
+    if (p === '/api/experts' && method === 'POST') {
+      const body = await this.parseBody(req)
+      const expertId = String(body?.id ?? body?.expertId ?? '').trim()
+      if (!expertId) {
+        this.sendJson(res, 400, { ok: false, error: '缺少 id（专家标识）' })
+        return true
+      }
+      let profile
+      try {
+        profile = await this.registry.getProfile(expertId)
+      } catch (err: any) {
+        this.sendJson(res, 404, { ok: false, error: err?.message || '专家不存在' })
+        return true
+      }
+      const fallback = body?.agentId ? this.store.getAgent(String(body.agentId)) : undefined
+      const dshRef = normalizeDshRef(body.dshRef ?? fallback?.dshRef)
+      if ('error' in dshRef) {
+        this.sendJson(res, 400, { ok: false, error: dshRef.error })
+        return true
+      }
+      const workDir = String(body?.workDir ?? '').trim()
+      if (workDir && !workDir.startsWith('/')) {
+        this.sendJson(res, 400, { ok: false, error: '工作目录必须是绝对路径（以 / 开头）' })
+        return true
+      }
+      const saved = this.store.upsertAgent({
+        ...(fallback ?? {}),
+        ...(body ?? {}),
+        id: body?.agentId || `expert-${profile.id}`,
+        name: String(body?.name ?? profile.name),
+        role: profile.role || profile.name,
+        systemPrompt: profile.systemPrompt,
+        executionPrompt: profile.executionPrompt,
+        dshRef: dshRef as DshRef,
+        workDir: workDir || undefined,
+        enabled: body?.enabled ?? true,
+      })
+      this.sendJson(res, 200, { ok: true, data: { agent: saved, expert: profile } })
+      return true
+    }
     // ---------- 子智能体 ----------
     if (p === '/api/agents' && method === 'GET') {
       this.sendJson(res, 200, { ok: true, data: this.store.getAgents() })
       return true
     }
-    // 内置专家模板清单（子智能体抽屉一键创建用；Phase 2 起数据来自 registry 的 builtin JSON 档案）
+    /** @deprecated 旧 API（双写兼容）：改用 GET /api/experts?domain=team。内置专家模板清单（子智能体抽屉一键创建用；Phase 2 起数据来自 registry 的 builtin JSON 档案） */
     if (p === '/api/agents/expert-templates' && method === 'GET') {
       this.sendJson(res, 200, { ok: true, data: await this.registry.listBuiltinTemplates() })
       return true
     }
-    // ---------- 专家名册（321 位 The Agency persona 快照 + 7 个内置角色，一键创建子智能体用） ----------
+    /** @deprecated 旧 API（双写兼容）：改用 GET /api/experts。专家名册（321 位 The Agency persona 快照 + 7 个内置角色，一键创建子智能体用） */
     if (p === '/api/experts/roster' && method === 'GET') {
       const idx = await this.registry.index()
       // 迁移期兼容：响应结构保持旧 RosterIndex 形状（id→slug、icon→emoji），前端零改动
@@ -1070,6 +1145,7 @@ export class WorkBuddyRouter {
       this.sendJson(res, 200, { ok: true, data })
       return true
     }
+    /** @deprecated 旧 API（双写兼容）：改用 GET /api/experts/:id（旧响应字段 slug/emoji/prompt 保留）。 */
     if (p === '/api/experts/roster/detail' && method === 'GET') {
       const url = new URL(req.url || '/', 'http://localhost')
       const division = String(url.searchParams.get('division') || '')
