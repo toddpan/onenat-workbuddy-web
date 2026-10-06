@@ -7,11 +7,8 @@
  *   GET  /api/experts        统一专家列表；支持 ?domain=<division> 按分区过滤、?skill=<关键词> 检索（可叠加）
  *   GET  /api/experts/:id    单个专家元数据详情（404 = 不存在）
  *   POST /api/experts        由专家档案一键创建/更新子智能体（body: { id, dshRef, name?, ... })
- *
- * @deprecated 迁移期双写兼容（Phase 4 保留，后续版本删除，前端请改用 /api/experts*）：
- *   GET /api/agents/expert-templates   → 改用 GET /api/experts?domain=team
- *   GET /api/experts/roster            → 改用 GET /api/experts
- *   GET /api/experts/roster/detail     → 改用 GET /api/experts/:id
+ * Phase 5 清理：旧双写兼容端点（/api/agents/expert-templates、/api/experts/roster*）已删除，
+ * 前端统一走 /api/experts*。
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -1067,15 +1064,17 @@ export class WorkBuddyRouter {
       this.sendJson(res, 200, { ok: true, data: { total: experts.length, experts } })
       return true
     }
-    // GET /api/experts/:id —— 单个专家元数据详情
+    // GET /api/experts/:id —— 单个专家详情（元数据 + 完整档案 systemPrompt/executionPrompt/role，
+    // Phase 5 起承载原 /api/experts/roster/detail 的预填能力）
     const expertMatch = /^\/api\/experts\/([^/]+)$/.exec(p)
     if (expertMatch && method === 'GET') {
-      const expert = await this.registry.get(decodeURIComponent(expertMatch[1]))
-      if (!expert) {
+      const id = decodeURIComponent(expertMatch[1])
+      if (!(await this.registry.get(id))) {
         this.sendJson(res, 404, { ok: false, error: '专家不存在' })
         return true
       }
-      this.sendJson(res, 200, { ok: true, data: expert })
+      const profile = await this.registry.getProfile(id)
+      this.sendJson(res, 200, { ok: true, data: profile })
       return true
     }
     // POST /api/experts —— 由专家档案一键创建/更新子智能体：
@@ -1124,39 +1123,6 @@ export class WorkBuddyRouter {
     // ---------- 子智能体 ----------
     if (p === '/api/agents' && method === 'GET') {
       this.sendJson(res, 200, { ok: true, data: this.store.getAgents() })
-      return true
-    }
-    /** @deprecated 旧 API（双写兼容）：改用 GET /api/experts?domain=team。内置专家模板清单（子智能体抽屉一键创建用；Phase 2 起数据来自 registry 的 builtin JSON 档案） */
-    if (p === '/api/agents/expert-templates' && method === 'GET') {
-      this.sendJson(res, 200, { ok: true, data: await this.registry.listBuiltinTemplates() })
-      return true
-    }
-    /** @deprecated 旧 API（双写兼容）：改用 GET /api/experts。专家名册（321 位 The Agency persona 快照 + 7 个内置角色，一键创建子智能体用） */
-    if (p === '/api/experts/roster' && method === 'GET') {
-      const idx = await this.registry.index()
-      // 迁移期兼容：响应结构保持旧 RosterIndex 形状（id→slug、icon→emoji），前端零改动
-      const data = {
-        ...idx,
-        divisions: idx.divisions.map((d) => ({
-          ...d,
-          experts: d.experts.map((e) => ({ ...e, slug: e.id, emoji: e.icon })),
-        })),
-      }
-      this.sendJson(res, 200, { ok: true, data })
-      return true
-    }
-    /** @deprecated 旧 API（双写兼容）：改用 GET /api/experts/:id（旧响应字段 slug/emoji/prompt 保留）。 */
-    if (p === '/api/experts/roster/detail' && method === 'GET') {
-      const url = new URL(req.url || '/', 'http://localhost')
-      const division = String(url.searchParams.get('division') || '')
-      const slug = String(url.searchParams.get('slug') || '')
-      try {
-        const out = await this.registry.getRosterPrompt(slug, division)
-        const data = { ...out.expert, slug: out.expert.id, emoji: out.expert.icon, prompt: out.prompt }
-        this.sendJson(res, 200, { ok: true, data })
-      } catch (err: any) {
-        this.sendJson(res, 404, { ok: false, error: err?.message || '专家不存在' })
-      }
       return true
     }
     // ---------- 专家团（合同式团队：共同目标/约束/交付要求 + 成员分工） ----------

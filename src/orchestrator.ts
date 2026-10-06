@@ -14,8 +14,8 @@
 import { DshClient, type DshTarget } from './remote-client.js'
 import type { AgentResolver } from './resolver.js'
 import type { WorkStore } from './store.js'
-import { buildCoverage, teamPlannerBrief, teamMemberIndex, teamSummarizeGuidance } from './expert-teams.js'
-import type { ExpertTeam, PlanSubtask, SubAgent, TaskSummary, TeamCoverage } from './types.js'
+import { teamPlannerBrief, teamMemberIndex, teamSummarizeGuidance } from './expert-teams.js'
+import type { ExpertTeam, PlanSubtask, SubAgent, TaskSummary } from './types.js'
 
 export interface PlannerMember {
   agent: SubAgent
@@ -452,7 +452,7 @@ export class Orchestrator {
    * 综合各子任务产出生成汇总（LLM 结论 + 静态兜底）。
    * taskNodeTarget：任务发起节点的 target——有则汇总在该节点上执行（最终产物归属发起节点）；
    * 未传时回退规划器主智能体的绑定节点。
-   * opts.team：专家团任务 —— 注入团队核对要点并产出 coverage 覆盖度报告。
+   * opts.team：专家团任务 —— 注入团队核对要点（结果汇总）。
    */
   public async summarize(
     objective: string,
@@ -467,8 +467,6 @@ export class Orchestrator {
     const failed = subtasks.filter((s) => s.status === 'failed').length
     const total = subtasks.length
     const finalStatus: TaskSummary['status'] = completed === total ? 'success' : completed > 0 ? 'partial_success' : 'failed'
-    // 覆盖度只反映成员返回情况，不代表质量验收通过（对齐 dsh-agency-agents executeTeam coverage 语义）
-    const coverage: TeamCoverage | undefined = team ? buildCoverage(subtasks, team, agentById) : undefined
 
     const subtaskSummaries = subtasks.map((s) => {
       let keyPoints = ''
@@ -522,7 +520,6 @@ export class Orchestrator {
       subtaskSummaries,
       finalConclusion,
       completedAt: Date.now(),
-      ...(coverage ? { coverage } : {}),
     }
   }
 
