@@ -316,8 +316,6 @@ export interface TaskSummary {
   subtaskSummaries: Array<{ id: string; title: string; status: string; keyPoints: string }>
   finalConclusion: string
   completedAt: number
-  /** 专家团任务的覆盖度报告（task.teamId 存在时产出） */
-  coverage?: TeamCoverage
 }
 
 export interface WorkTask {
@@ -529,7 +527,7 @@ export interface StorageData {
 /** 专家团成员：引用已有子智能体 + 团队内的分工（对齐 dsh-agent-teams Member.role） */
 export interface ExpertTeamMember {
   agentId: string
-  /** 职责边界一句话：进规划花名册与派工提示词「职责边界」，也是 coverage 缺口归因的依据 */
+  /** 职责边界一句话：进规划花名册与派工提示词「职责边界」 */
   duty: string
   /** 执行指示：角色专属工作方法与产出结构（仅团队任务派工时注入） */
   instructions?: string
@@ -557,13 +555,4 @@ export interface ExpertTeam {
   enabled: boolean
   createdAt: number
   updatedAt: number
-}
-
-/** 专家团任务的覆盖度报告（对齐 dsh-agency-agents executeTeam coverage；只反映成员返回情况，不代表质量验收） */
-export interface TeamCoverage {
-  status: 'complete' | 'partial' | 'failed'
-  completed: number
-  total: number
-  /** 未成功成员的职责缺口（skipped 计入缺口） */
-  missing: Array<{ title: string; agentId: string; agentName: string; duty?: string; error?: string }>
 }

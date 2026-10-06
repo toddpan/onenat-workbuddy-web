@@ -82,6 +82,19 @@ function scanLocale(localeDir) {
  *  Phase 2 迁移完成后 expert-templates.ts 已变成纯转发 shim，此时回退读既有生成的 builtin 资产
  *  （index.json source=builtin + profiles/expert-*.json），保证脚本继续幂等可重跑。 */
 async function extractTemplates() {
+  // Phase 5：expert-templates.ts 已删除（shim 期结束），资产缺失回退既有 builtin 资产
+  if (!existsSync(TEMPLATES_TS)) {
+    const idxPath = join(OUT_ROOT, 'index.json')
+    if (!existsSync(idxPath)) throw new Error('expert-templates.ts 不存在且 assets/experts/index.json 缺失，无法恢复 builtin 模板')
+    const idx = JSON.parse(readFileSync(idxPath, 'utf8'))
+    const out = []
+    for (const e of idx.experts.filter((x) => x.source === 'builtin')) {
+      const prof = JSON.parse(readFileSync(join(OUT_ROOT, 'profiles', `${e.id}.json`), 'utf8'))
+      out.push({ id: e.id, name: e.name, icon: e.icon, role: prof.role || e.name, description: e.description, systemPrompt: prof.systemPrompt, executionPrompt: prof.executionPrompt || '' })
+    }
+    if (out.length === 0) throw new Error('既有资产中没有 builtin 模板')
+    return out
+  }
   const src = readFileSync(TEMPLATES_TS, 'utf8')
   const start = src.indexOf('EXPERT_TEMPLATES: ExpertTemplate[] = [')
   if (start < 0) {

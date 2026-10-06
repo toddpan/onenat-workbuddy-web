@@ -6,11 +6,11 @@
  *  - workbuddy 的「主理人」由主调度（Planner）承担，不引入团长智能体 —— 与其
  *    「主会话担任主理人」同构：团队合同拆成三份注入 —— 规划（主调度规则）、
  *    派工（成员提示词的 [专家团协作] 段）、汇总（核对要点）；
- *  - 成员结果按五段式回传（结论/证据/风险/建议/交接），交叉核验由汇总阶段完成；
- *  - coverage 只反映成员返回情况，不代表质量验收通过。
+ *  - Phase 5 简化：只保留任务分发（规划/派工注入）与结果汇总（核对要点）；
+ *    五段式回传规范与 coverage 覆盖度报告已删除。
  */
 
-import type { ExpertTeam, ExpertTeamMember, PlanSubtask, SubAgent, TeamCoverage } from './types.js'
+import type { ExpertTeam, ExpertTeamMember, SubAgent } from './types.js'
 
 /** 团队配置字段长度上限（对齐 dsh-agency-agents teamInputSchema 的量级） */
 export const TEAM_LIMITS = {
@@ -24,15 +24,6 @@ export const TEAM_LIMITS = {
   instructions: 2000,
   coordinatorPrompt: 4000,
 } as const
-
-/** 成员回传规范（五段式，移植 MEMBER_HANDOFF；「主理人」改称「主调度」） */
-export const MEMBER_HANDOFF = [
-  '结论：只回答自己分工内的问题；需要决策时给出明确建议。',
-  '证据与定位：列出资料路径、段落、来源或计算方法；没有实际执行的检索和测试必须注明。',
-  '风险与条件：说明影响、触发条件、假设和可能推翻结论的证据。',
-  '建议与验收：给出可执行行动、优先级及完成标准。',
-  '交接给主调度：列出需与其他成员职责核对的具体问题、缺失资料和未覆盖内容；没有则明确说明。',
-] as const
 
 export interface TeamInputParts {
   name: string
@@ -96,7 +87,7 @@ export function parseTeamInput(
       deliveryRequirements: opt(raw?.deliveryRequirements),
       members,
       coordinatorPrompt: opt(raw?.coordinatorPrompt),
-      enabled: raw?.enabled === undefined ? true : Boolean(raw.enabled),
+      enabled: raw?.enabled === undefined ? false : Boolean(raw.enabled),
     },
   }
 }
@@ -108,7 +99,7 @@ export function teamMemberIndex(team: ExpertTeam): Map<string, ExpertTeamMember>
 
 /**
  * 派工提示词的 [专家团协作] 段（移植 executeTeam 成员 prompt 组装结构）：
- * 共同目标/约束/交付要求 + 全员职责边界 + 自己的分工与指示 + 独立并行声明 + 五段回传格式。
+ * 共同目标/约束/交付要求 + 全员职责边界 + 自己的分工与指示 + 独立并行声明。
  * 注入位置：紧跟 [执行者角色] 之后、任务合同之前。
  */
 export function teamMemberContract(team: ExpertTeam, member: ExpertTeamMember, agents: Map<string, SubAgent>): string {
@@ -122,9 +113,7 @@ export function teamMemberContract(team: ExpertTeam, member: ExpertTeamMember, a
     ...team.members.map((m) => `- ${agentName(m.agentId)}: ${m.duty}`),
     `你的分工: ${member.duty}`,
     member.instructions?.trim() ? `你的执行指示: ${member.instructions.trim()}` : '',
-    '本次为团队并行分析：不得假设已收到其他成员的结果；需要交叉核验的事项写进「交接给主调度」，不自行转派或等待队友。',
-    '回传格式:',
-    ...MEMBER_HANDOFF.map((l) => `- ${l}`),
+    '本次为团队并行分析：不得假设已收到其他成员的结果；结果汇总与交叉核验由主调度完成，不自行转派或等待队友。',
   ]
   return lines.filter(Boolean).join('\n')
 }
@@ -143,7 +132,7 @@ export function teamPlannerBrief(team: ExpertTeam, agents: Map<string, SubAgent>
     team.deliveryRequirements?.trim() ? `共同交付要求: ${team.deliveryRequirements.trim()}` : '',
     '成员分工（职责边界，花名册中的「团队职责」即来源于此）:',
     ...team.members.map((m) => `- ${agentName(m.agentId)}(id=${m.agentId}): ${m.duty}`),
-    '拆解规则: 优先让每个成员承担与其职责匹配的子任务，职责未覆盖时补齐；给每个子任务的 prompt 必须自包含并写明该成员的职责边界、共同交付要求与回传格式（结论/证据/风险/建议/交接给主调度）；跨职责交叉核验交给汇总阶段，不要安排成员互相等待队友产出。',
+    '拆解规则: 优先让每个成员承担与其职责匹配的子任务，职责未覆盖时补齐；给每个子任务的 prompt 必须自包含并写明该成员的职责边界与共同交付要求；跨职责交叉核验交给汇总阶段，不要安排成员互相等待队友产出。',
   ]
   if (team.coordinatorPrompt?.trim()) lines.push(`主理人补充规则（优先遵守）:\n${team.coordinatorPrompt.trim()}`)
   return lines.filter(Boolean).join('\n\n')
@@ -162,26 +151,4 @@ export function teamSummarizeGuidance(team: ExpertTeam, agents: Map<string, SubA
   ]
   if (team.coordinatorPrompt?.trim()) lines.push(`主理人补充规则（优先遵守）:\n${team.coordinatorPrompt.trim()}`)
   return lines.filter(Boolean).join('\n\n')
-}
-
-/** 覆盖度报告（对齐 executeTeam coverage：只反映成员返回情况，不代表质量验收通过） */
-export function buildCoverage(subtasks: PlanSubtask[], team: ExpertTeam | undefined, agents: Map<string, SubAgent>): TeamCoverage {
-  const completed = subtasks.filter((s) => s.status === 'completed').length
-  const total = subtasks.length
-  const dutyByAgent = team ? teamMemberIndex(team) : new Map<string, ExpertTeamMember>()
-  const missing = subtasks
-    .filter((s) => s.status !== 'completed')
-    .map((s) => ({
-      title: s.title,
-      agentId: s.agentId,
-      agentName: agents.get(s.agentId)?.name || s.agentId,
-      ...(dutyByAgent.get(s.agentId)?.duty ? { duty: dutyByAgent.get(s.agentId)!.duty } : {}),
-      ...(s.error ? { error: s.error } : {}),
-    }))
-  return {
-    status: completed === total ? 'complete' : completed > 0 ? 'partial' : 'failed',
-    completed,
-    total,
-    missing,
-  }
 }

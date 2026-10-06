@@ -210,37 +210,6 @@ export class ExpertRegistry {
     })
   }
 
-  /** builtin 模板清单（迁移期兼容：字段映射回 ExpertTemplate 形状，接口不变）。 */
-  async listBuiltinTemplates(): Promise<
-    { id: string; name: string; icon?: string; role: string; description: string; systemPrompt: string; executionPrompt: string }[]
-  > {
-    const experts = (await this.experts()).filter((e) => e.source === 'builtin')
-    const out: { id: string; name: string; icon?: string; role: string; description: string; systemPrompt: string; executionPrompt: string }[] = []
-    for (const e of experts) {
-      const profile = await this.getProfile(e.id)
-      out.push({
-        id: e.id,
-        name: e.name,
-        icon: e.icon || undefined,
-        role: profile.role || e.name,
-        description: e.description,
-        systemPrompt: profile.systemPrompt,
-        executionPrompt: profile.executionPrompt ?? '',
-      })
-    }
-    return out
-  }
-
-  /* ---- 迁移期兼容（Phase 2 保留，Phase 3 删除）---- */
-
-  /** @deprecated 旧路由适配：等价原 roster.getPrompt(slug, division)。 */
-  async getRosterPrompt(slug: string, division: string): Promise<{ expert: Expert; prompt: string }> {
-    if (!EXPERT_PATH_SEGMENT.test(slug)) throw new Error('无效的专家标识。')
-    const expert = (await this.experts()).find((e) => e.id === slug && e.division === division)
-    if (expert === undefined) throw new Error('名册中不存在该专家。')
-    const profile = await this.getProfile(slug)
-    return { expert, prompt: profile.systemPrompt }
-  }
 }
 
 /* ---------- 人格组装层（保留纯函数，不进数据模型；原 expert-templates.ts 职责） ---------- */
