@@ -11,7 +11,7 @@ import { OnenatDirectory as Dir } from './onenat.js'
 import type { TaskEngine } from './engine.js'
 import type { AgentResolver } from './resolver.js'
 import type { PromptComposer } from './prompt-composer.js'
-import type { Planner } from './planner.js'
+import type { Orchestrator } from './orchestrator.js'
 import type { WorkStore } from './store.js'
 import { DshClient } from './remote-client.js'
 import { SshInputError, execOnSshResource, maskSshResource, normalizeSshResource, testSshResource } from './ssh-resources.js'
@@ -19,7 +19,7 @@ import type { SshResourceStore } from './ssh-store.js'
 import type { ScheduleRunner } from './scheduler.js'
 import { normalizeRule, nextRun, ruleText } from './scheduler.js'
 import { SCHEDULE_TEMPLATES } from './schedule-templates.js'
-import { expertPersona } from './expert-templates.js'
+import { expertPersona } from './expert-registry.js'
 import { ExpertRegistry } from './expert-registry.js'
 import { parseTeamInput } from './expert-teams.js'
 import type { AuthService } from './auth.js'
@@ -60,7 +60,7 @@ export class WorkBuddyRouter {
     private directory: OnenatDirectory,
     private resolver: AgentResolver,
     private composer: PromptComposer,
-    private planner: Planner,
+    private planner: Orchestrator,
     private engine: TaskEngine,
     private sshStore: SshResourceStore,
     private scheduler?: ScheduleRunner,
