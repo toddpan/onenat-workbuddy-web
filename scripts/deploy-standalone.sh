@@ -56,16 +56,30 @@ else
 fi
 
 echo "=== 3/5 计算 dist 差异 ==="
-LOCAL_HASHES="$(cd dist && md5 -q *.js | paste -d' ' - <(/bin/ls *.js) | sort -k2)"
-REMOTE_HASHES="$(ssh_wrap "cd $REMOTE_DIR && md5sum *.js | awk '{print \$1\" \"\$2}' | sort -k2")"
-CHANGED="$(comm -23 <(echo "$LOCAL_HASHES" | awk '{print $2}') <(echo "$REMOTE_HASHES" | awk '{print $2}'))"
+# 差异计算只按文件名对齐，再比较哈希（macOS md5 -q 与 Linux md5sum 输出格式不同，勿用整行 comm）
+LOCAL_HASHES="$(cd dist && md5 -q *.js | paste -d' ' - <(/bin/ls *.js) | sort -k2,2)"
+REMOTE_HASHES="$(ssh_wrap "cd $REMOTE_DIR && md5sum *.js | awk '{print \$1\" \"\$2}' | sort -k2,2")"
+# awk 按文件名 join：远端不存在或哈希不同即视为变更
+CHANGED="$(awk 'NR==FNR{h[$2]=$1;next} h[$2]!=$1{print $2}' <(echo "$REMOTE_HASHES") <(echo "$LOCAL_HASHES"))"
 if [ -n "$FILES" ]; then
   # 显式指定文件（逗号分隔），跳过差异计算
   CHANGED="$(echo "$FILES" | tr ',' ' ')"
 fi
 if [ -z "$CHANGED" ]; then
-  echo "dist 与远端完全一致，无需部署。"
-  exit 0
+  # dist 无漂移时仍需检查附属目录（assets/experts、dist/mcp）是否漂移
+  LOCAL_ASSET_INDEX="$(md5 -q assets/experts/index.json 2>/dev/null || true)"
+  REMOTE_ASSET_INDEX="$(ssh_wrap "md5sum $REMOTE_DIR/../assets/experts/index.json 2>/dev/null | awk '{print \$1}' || true")"
+  MCP_DRIFT=0
+  if ls dist/mcp/*.js >/dev/null 2>&1; then
+    REMOTE_MCP_HASHES0="$(ssh_wrap "cd $REMOTE_DIR/mcp 2>/dev/null && md5sum *.js | awk '{print \$1}' | sort || true")"
+    [ "$(cd dist/mcp && md5 -q *.js | sort)" != "$REMOTE_MCP_HASHES0" ] && MCP_DRIFT=1
+  fi
+  if [ -z "$LOCAL_ASSET_INDEX" ] || [ "$LOCAL_ASSET_INDEX" != "$REMOTE_ASSET_INDEX" ] || [ "$MCP_DRIFT" = 1 ]; then
+    echo "dist 无漂移，但附属目录（assets/experts / dist/mcp）有差异，继续部署。"
+  else
+    echo "dist 与附属目录均与远端一致，无需部署。"
+    exit 0
+  fi
 fi
 # comm 输出为换行分隔；后续 tar/远端 for 循环按空白分词，统一压平为空格分隔
 CHANGED="$(echo "$CHANGED" | tr '\n' ' ')"
@@ -75,8 +89,36 @@ echo "=== 4/5 上传 + 远端备份替换 ==="
 TARBALL="/tmp/wb-deploy-$(date +%Y%m%d-%H%M%S).tgz"
 tar -czf "$TARBALL" -C dist $CHANGED
 scp_wrap "$TARBALL" "$TARGET:/tmp/wb-deploy.tgz"
-ssh_wrap "set -e; TS=\$(date +%Y%m%d-%H%M%S); cd $REMOTE_DIR; for f in $CHANGED; do [ -f \$f ] && cp -a \$f dist.bak-\$TS-\$f || true; done; tar -xzf /tmp/wb-deploy.tgz --exclude='._*'; for f in $CHANGED; do node --check \$f; done; systemctl restart $UNIT; sleep 2; systemctl is-active $UNIT; rm -f /tmp/wb-deploy.tgz"
-rm -f "$TARBALL"
+ssh_wrap "set -e; TS=\$(date +%Y%m%d-%H%M%S); cd $REMOTE_DIR; for f in $CHANGED; do [ -f \$f ] && cp -a \$f dist.bak-\$TS-\$f || true; done; tar -xzf /tmp/wb-deploy.tgz --exclude='._*'; for f in $CHANGED; do node --check \$f; done; rm -f /tmp/wb-deploy.tgz"
+
+# --- 附属目录同步：dist/mcp/*.js 与 assets/experts/（差异计算只覆盖 dist/*.js，需单独处理）---
+echo "=== 4.5/5 同步附属目录（dist/mcp、assets/experts）==="
+EXTRA_TARBALL="/tmp/wb-extra-$(date +%Y%m%d-%H%M%S).tgz"
+EXTRA_NEEDED=0
+if ls dist/mcp/*.js >/dev/null 2>&1; then
+  REMOTE_MCP_HASHES="$(ssh_wrap "cd $REMOTE_DIR/mcp 2>/dev/null && md5sum *.js | awk '{print \$1\" \"\$2}' | sort -k2,2 || true")"
+  LOCAL_MCP_HASHES="$(cd dist/mcp && md5 -q *.js | paste -d' ' - <(/bin/ls *.js) | sort -k2,2)"
+  MCP_CHANGED="$(awk 'NR==FNR{h[$2]=$1;next} h[$2]!=$1{print $2}' <(echo "$REMOTE_MCP_HASHES") <(echo "$LOCAL_MCP_HASHES"))"
+  if [ -n "$MCP_CHANGED" ]; then
+    EXTRA_NEEDED=1
+    tar -czf "$EXTRA_TARBALL" -C dist mcp
+    echo "dist/mcp 变更: $MCP_CHANGED"
+  fi
+fi
+LOCAL_ASSET_INDEX="$(md5 -q assets/experts/index.json 2>/dev/null || true)"
+REMOTE_ASSET_INDEX="$(ssh_wrap "md5sum $REMOTE_DIR/../assets/experts/index.json 2>/dev/null | awk '{print \$1}' || true")"
+if [ -n "$LOCAL_ASSET_INDEX" ] && [ "$LOCAL_ASSET_INDEX" != "$REMOTE_ASSET_INDEX" ]; then
+  EXTRA_NEEDED=1
+  tar -czf "$EXTRA_TARBALL" -C assets experts
+  echo "assets/experts 有变更"
+fi
+if [ "$EXTRA_NEEDED" = 1 ]; then
+  scp_wrap "$EXTRA_TARBALL" "$TARGET:/tmp/wb-extra.tgz"
+  ssh_wrap "set -e; cd $REMOTE_DIR/..; tar -xzf /tmp/wb-extra.tgz --exclude='._*'; rm -f /tmp/wb-extra.tgz"
+  NEED_RESTART=1
+fi
+rm -f "$TARBALL" "$EXTRA_TARBALL"
+ssh_wrap "systemctl restart $UNIT; sleep 2; systemctl is-active $UNIT"
 
 echo "=== 5/5 部署后验证 ==="
 HEALTH="$(ssh_wrap "curl -s http://127.0.0.1:$PORT/healthz")"
