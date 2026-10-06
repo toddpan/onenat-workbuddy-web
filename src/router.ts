@@ -2030,7 +2030,7 @@ export class WorkBuddyRouter {
     // ---------- 提及与联想候选数据 (@ Mentions Directory) ----------
     if (p === '/api/mentions/candidates' && method === 'GET') {
       const candidates: Array<{
-        type: 'agent' | 'resource' | 'team'
+        type: 'agent' | 'resource' | 'team' | 'expert'
         id: string
         name: string
         kind?: string
@@ -2092,6 +2092,23 @@ export class WorkBuddyRouter {
             detail: `SSH · ${s.username}@${s.host}:${s.port || 22} · ${s.description || '本地直连'}`,
             meta: { sshId: s.id, kind: 'ssh' },
           })
+        }
+      }
+
+      // 4. 专家库角色：@单个专家 → 定向直派（动态实例化在任务节点）；@多个专家 → 并行编排
+      {
+        const experts = await this.expertRegistry.search('').catch(() => [])
+        for (const e of experts) {
+          if (!candidates.some(c => c.type === 'expert' && c.id === e.id)) {
+            candidates.push({
+              type: 'expert',
+              id: e.id,
+              name: e.name,
+              kind: 'expert',
+              detail: `专家 · ${e.divisionZh || e.division}`,
+              meta: { expertId: e.id, description: e.description, icon: e.icon },
+            })
+          }
         }
       }
 
