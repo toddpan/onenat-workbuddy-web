@@ -9988,7 +9988,7 @@ async function renderExpertsAdmin(force) {
 function exmRender() {
   const experts = (exmCache && exmCache.experts) || [];
   const div = $('exm-div').value; const q = $('exm-q').value.trim().toLowerCase();
-  const rows = experts.filter(e => (!div || e.division === div) && (!q || ((e.name + ' ' + (e.nameEn || '') + ' ' + e.description + ' ' + (e.tags || []).join(' ')).toLowerCase().includes(q))));
+  const rows = experts.filter(e => (!div || e.division === div) && (!q || ((e.name + ' ' + (e.nameEn || '') + ' ' + (e.division || '') + ' ' + (e.divisionZh || '') + ' ' + e.description + ' ' + (e.tags || []).join(' ')).toLowerCase().includes(q))));
   $('exm-count').textContent = '共 ' + rows.length + ' 位';
   $('exm-body').innerHTML = rows.map(e => {
     const editable = e.source === 'user';
