@@ -12,7 +12,7 @@ import type { OnenatDirectory } from './onenat.js'
 import type { TaskEngine } from './engine.js'
 import type { AgentResolver } from './resolver.js'
 import type { PromptComposer } from './prompt-composer.js'
-import type { Planner } from './planner.js'
+import type { Orchestrator } from './orchestrator.js'
 import type { MonitorService } from './monitor.js'
 import type { WorkStore } from './store.js'
 import type { SshResourceStore } from './ssh-store.js'
@@ -123,7 +123,7 @@ export interface ToolOpsDeps {
   directory: OnenatDirectory
   resolver: AgentResolver
   composer: PromptComposer
-  planner: Planner
+  planner: Orchestrator
   engine: TaskEngine
   sshStore: SshResourceStore
   /** 监控服务（monitor_read 用；未装配时该工具返回错误） */

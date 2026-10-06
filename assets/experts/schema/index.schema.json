@@ -1,0 +1,71 @@
+{
+  "type": "object",
+  "required": [
+    "version",
+    "experts"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "experts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "source",
+          "division",
+          "divisionZh",
+          "name",
+          "description"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/slug"
+          },
+          "source": {
+            "enum": [
+              "roster",
+              "builtin"
+            ]
+          },
+          "division": {
+            "type": "string"
+          },
+          "divisionZh": {
+            "type": "string"
+          },
+          "icon": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "nameEn": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "descriptionEn": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "$defs": {
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    }
+  }
+}

@@ -13,12 +13,12 @@ import type { PromptResult, DshTarget } from './remote-client.js'
 import { DshClient } from './remote-client.js'
 import type { AgentResolver } from './resolver.js'
 import type { PromptComposer } from './prompt-composer.js'
-import { Planner, type PlanDraft } from './planner.js'
+import { Orchestrator, buildCompletionRequirement, buildTaskContract, buildUpstreamDigests, buildUpstreamSection, sanitizeEngineInstruction, type PlanDraft } from './orchestrator.js'
 import type { OnenatDirectory } from './onenat.js'
 import type { WorkStore } from './store.js'
 import type { SubtaskLogEntry, AgentResourceBinding, DshRef, ExtractedFileMention, ExtractedMentions, PlanSubtask, Project, SubAgent, TaskEvent, TaskTurn, TurnToolCall, WorkTask } from './types.js'
 import type { SshResourceStore } from './ssh-store.js'
-import { expertPersona } from './expert-templates.js'
+import { expertPersona } from './expert-registry.js'
 import { teamMemberContract } from './expert-teams.js'
 
 /**
@@ -26,6 +26,9 @@ import { teamMemberContract } from './expert-teams.js'
  * 直接在任务节点（项目节点/所选节点）上以远端默认形态执行。该 id 仅存在于 task.sessions。
  */
 const NODE_AGENT_ID = '__node__'
+
+/** 未配置任务级/智能体级运行权限时的默认值：全部权限（沙箱不限 + 无审批） */
+const DEFAULT_PERMISSION = 'danger-full-access'
 
 export interface CreateTaskInput {
   title?: string
@@ -70,12 +73,13 @@ export class TaskEngine {
   private blockCache = new Map<string, { block: string; at: number }>()
   private static readonly BLOCK_CACHE_TTL = 5 * 60_000
 
-  private blockCacheKey(taskId: string, agent: { id: string; updatedAt?: number }): string {
-    return `${taskId}:${agent.id}:${agent.updatedAt || 0}`
+  /** interaction 进键：同一任务内聊天直发（attended）与编排子任务（unattended）的交互守卫不同，不能共用缓存块 */
+  private blockCacheKey(taskId: string, agent: { id: string; updatedAt?: number }, interaction: 'attended' | 'unattended' = 'unattended'): string {
+    return `${taskId}:${agent.id}:${agent.updatedAt || 0}:${interaction}`
   }
 
-  private blockCacheFresh(taskId: string, agent: { id: string; updatedAt?: number }): { block: string } | null {
-    const e = this.blockCache.get(this.blockCacheKey(taskId, agent))
+  private blockCacheFresh(taskId: string, agent: { id: string; updatedAt?: number }, interaction: 'attended' | 'unattended' = 'unattended'): { block: string } | null {
+    const e = this.blockCache.get(this.blockCacheKey(taskId, agent, interaction))
     if (!e || Date.now() - e.at >= TaskEngine.BLOCK_CACHE_TTL) return null
     return { block: e.block }
   }
@@ -85,7 +89,7 @@ export class TaskEngine {
     private directory: OnenatDirectory,
     private resolver: AgentResolver,
     private composer: PromptComposer,
-    private planner: Planner,
+    private planner: Orchestrator,
     sshStore?: SshResourceStore,
   ) {
     this.sshStore = sshStore}
@@ -1042,32 +1046,38 @@ export class TaskEngine {
     this.emit(taskId, { type: 'turn_start', turn })
 
     const transformed = await this.transformFileMentionsForAgent(text, mentions, agent, task)
-    // 运行权限注入：任务级 permission 优先于智能体实体默认；随本轮提示词下发给远端执行会话
-    const permLine = (task.permission || agent.permission || '').trim()
+    // 运行权限：已在 ensureSession 经 PUT /sessions/:id/permission 原生生效；仅旧版节点才降级写进提示词
+    const permLine = this.permissionPromptLine(this.store.getTask(taskId) || task, agent)
     // 项目指令 + 专家人格（角色声明/职责约束/执行指导，见 expert-templates）+ 项目 SSH 连接器：注入本轮提示词最前（项目上下文）
-    const sysPrefix = [exec.instruction, expertPersona(agent), permLine ? `[运行权限]: ${permLine}` : ''].filter(Boolean).join('\n\n')
+    // 主会话（__node__）是远端节点本体，不是团队成员：不注入成员人格（否则会被要求"不做转派"而禁用自身的子智能体/团队能力）。
+    // 其余智能体在聊天直发路径是与用户直接对话（direct），不是被主调度派工的成员。
+    const persona = agent.id === NODE_AGENT_ID ? '' : expertPersona(agent, 'direct')
+    // 值守模式：定时任务派生的会话无人值守；用户在会话里直发为有人值守
+    const interaction: 'attended' | 'unattended' = task.scheduleId ? 'unattended' : 'attended'
+    const sysPrefix = [exec.instruction, persona, permLine].filter(Boolean).join('\n\n')
     const sshSection = exec.sshConnectors.length
       ? '[项目 SSH 连接器]（已可用 onenat_ssh 工具直接操作，连接信息如下）:\n' + exec.sshConnectors.map((c) => '- ' + c.name + ' → ' + c.host + ':' + c.port).join('\n')
       : ''
     let fullPrompt = transformed.text
     const hasDynamicResources = mentions.mentionedResourceBindings.length > 0 || (mentions.mentionedFiles && mentions.mentionedFiles.length > 0)
-    const cachedBlock = hasDynamicResources ? null : this.blockCacheFresh(taskId, agent)
+    const cachedBlock = hasDynamicResources ? null : this.blockCacheFresh(taskId, agent, interaction)
 
     if (!cachedBlock) {
       const composed = await this.composer.compose(agent, {
         resolvedAt: Date.now(),
         extraResources: [...exec.extraBindings, ...mentions.mentionedResourceBindings],
         extraSkills: exec.skills,
+        interaction,
       })
       const block = composed.block
       const extraFileSection = transformed.extraSections.join('\n\n')
       const allPrefixes = [block, extraFileSection].filter(Boolean).join('\n\n')
       const withCtx = [sysPrefix, sshSection, allPrefixes].filter(Boolean).join('\n\n')
       if (withCtx) {
-        if (!hasDynamicResources) this.blockCache.set(this.blockCacheKey(taskId, agent), { block, at: Date.now() })
+        if (!hasDynamicResources) this.blockCache.set(this.blockCacheKey(taskId, agent, interaction), { block, at: Date.now() })
         fullPrompt = `${withCtx}\n\n[当前用户消息]:\n${transformed.text}`
       } else if (!hasDynamicResources) {
-        this.blockCache.set(this.blockCacheKey(taskId, agent), { block: '', at: Date.now() })
+        this.blockCache.set(this.blockCacheKey(taskId, agent, interaction), { block: '', at: Date.now() })
       }
       for (const w of composed.warnings) this.emit(taskId, { type: 'log', level: 'warn', msg: w })
     } else {
@@ -1338,7 +1348,7 @@ export class TaskEngine {
     const strategyLabel = (s: PlanDraft['strategy']): string =>
       s === 'sequential' ? '顺序执行' : s === 'dag' ? 'DAG 依赖编排' : '并行协同'
 
-    let planned: Awaited<ReturnType<Planner['planTask']>>
+    let planned: Awaited<ReturnType<Orchestrator['planTask']>>
     try {
       // 规划在任务发起节点（主 DSH）执行 —— 节点模型下无需单独指定拆解器智能体；不可达时回退 pickTarget 链
       const execForPlan = this.taskExec(task)
@@ -1369,7 +1379,7 @@ export class TaskEngine {
       settlePlanTurn(`✅ 拆解完成 — ${strategyLabel(draft.strategy)} · ${draft.subtasks.length} 个子任务 · 耗时 ${((Date.now() - planT0) / 1000).toFixed(1)}s${thinkNote}`)
       this.taskLog(taskId, 'info', `规划完成（${planned.plan.strategy}，${planned.plan.subtasks.length} 个子任务）`)
     } else {
-      draft = Planner.fallbackPlan(text, rosterMembers)
+      draft = Orchestrator.fallbackPlan(text, rosterMembers)
       settlePlanTurn(`⚠️ LLM 规划不可用（${planned.error}），已回退静态三段拆解`)
       this.taskLog(taskId, 'warn', `规划器不可用（${planned.error}），已回退静态三段拆解`)
       if (planned.raw) {
@@ -1526,37 +1536,11 @@ export class TaskEngine {
       return
     }
 
-    // 上游产出摘要（预算截断：单项 ≤2000 字符、总预算 12000，移植 dsh-agent-teams formatDependencyOutputs）
-    const upstream: string[] = []
-    let upstreamBudget = 12000
-    for (const depId of sub.dependsOn) {
-      if (upstreamBudget <= 0) {
-        upstream.push('### 其余上游产出\n因总预算截断未纳入本提示词，需要时查看对应子任务的完整产出。')
-        break
-      }
-      const dep = task.plan?.subtasks.find((s) => s.id === depId)
-      if (dep?.result?.content) {
-        const cap = Math.min(2000, upstreamBudget)
-        const clipped = dep.result.content.slice(0, cap)
-        upstreamBudget -= clipped.length
-        const suffix = dep.result.content.length > cap ? `…[已截断，完整产出见子任务《${dep.title}》]` : ''
-        upstream.push(`### 上游子任务《${dep.title}》产出摘要\n${clipped}${suffix}`)
-      }
-    }
+    // 上游产出摘要（预算截断 + 中和伪造段头，逻辑在 orchestrator.buildUpstreamDigests）
+    const upstream = buildUpstreamDigests(task.plan?.subtasks, sub.dependsOn)
     await this.runSubtask(task, sub, agent, target, upstream, mentions.mentionedResourceBindings, signal, mentions)
   }
 
-  /**
-   * 剥离子任务指令里 @执行者自身 的路由 token：路由语义已由 plan.memberAgentIds 表达，
-   * token 残留在指令里（「让远程 DSH @某成员 采集…」）会诱导执行者再去联系「远程 DSH」——就是它自己，
-   * 实测造成经 dsh-web-service 的嵌套自派发，多绕一跳空转 7~25 分钟。
-   */
-  private stripSelfMention(text: string, agent: SubAgent): string {
-    const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const re = new RegExp(`@\\s*(?:${esc(agent.name)}|${esc(agent.id)})(?=\\s|$|[，。；,;、）)】」”])`, 'g')
-    const stripped = text.replace(re, ' ').replace(/[ \t]{2,}/g, ' ').trim()
-    return stripped || text
-  }
 
   /** 执行单个子任务（供 DAG 与单项重试共用） */
   private async runSubtask(
@@ -1614,16 +1598,17 @@ export class TaskEngine {
       parts.push(teamMemberContract(team, teamMember, agentById))
     }
     const hasDynamicResources = (extraResources && extraResources.length > 0) || (mentions?.mentionedFiles && mentions.mentionedFiles.length > 0)
-    const cachedBlock = hasDynamicResources ? null : this.blockCacheFresh(taskId, agent)
+    const cachedBlock = hasDynamicResources ? null : this.blockCacheFresh(taskId, agent, 'unattended')
 
     if (!cachedBlock) {
       const composed = await this.composer.compose(agent, {
         resolvedAt: Date.now(),
         extraResources: [...exec.extraBindings, ...extraResources],
         extraSkills: exec.skills,
+        interaction: 'unattended',
       })
       const block = composed.block
-      if (!hasDynamicResources) this.blockCache.set(this.blockCacheKey(taskId, agent), { block, at: Date.now() })
+      if (!hasDynamicResources) this.blockCache.set(this.blockCacheKey(taskId, agent, 'unattended'), { block, at: Date.now() })
       if (block) parts.push(block)
       for (const w of composed.warnings) this.emit(taskId, { type: 'log', subtaskId: sub.id, level: 'warn', msg: w })
     } else if (cachedBlock.block) {
@@ -1632,21 +1617,19 @@ export class TaskEngine {
     if (transformed.extraSections.length > 0) {
       parts.push(transformed.extraSections.join('\n\n'))
     }
-    for (const u of upstream) parts.push(u)
+    // 上游产出注入（防注入声明在 orchestrator.buildUpstreamSection）
+    const upstreamSection = buildUpstreamSection(upstream)
+    if (upstreamSection) parts.push(upstreamSection)
     // 任务合同（移植 dsh-agent-teams assignmentPrompt 契约结构）：目标 + 验收标准，执行者须逐条对照
-    const contractLines: string[] = []
-    if (sub.objective?.trim()) contractLines.push(`目标: ${sub.objective.trim()}`)
-    if (sub.acceptance?.length) {
-      contractLines.push(`验收标准:\n${sub.acceptance.map((a, i) => `${i + 1}. ${String(a).trim()}`).filter((l) => l.length > 3).join('\n')}`)
-    }
-    if (contractLines.length) parts.push(`[任务合同]:\n${contractLines.join('\n')}`)
-    // 运行权限注入：任务级 permission 优先于智能体实体默认
-    const permLine = (task.permission || agent.permission || '').trim()
-    if (permLine) parts.push(`[运行权限]: ${permLine}`)
-    parts.push(`[当前子任务指令]:\n${this.stripSelfMention(transformed.text, agent)}`)
-    parts.push(sub.acceptance?.length
-      ? '[完成要求]: 输出末尾附「验收对照」：逐条列出验收标准 → 通过情况与证据；无法满足的如实标注失败原因，不要虚报完成。只做本任务，不要转派子任务。'
-      : '[完成要求]: 输出执行结果与关键结论；不要转派子任务。')
+    const contract = buildTaskContract(sub)
+    if (contract) parts.push(contract)
+    // 运行权限：原生接口已生效则不注入；旧版节点降级为提示词声明
+    const permLine = this.permissionPromptLine(this.store.getTask(taskId) || task, agent)
+    if (permLine) parts.push(permLine)
+    // 规划器可能把用户素材原样抄进子任务指令：中和其中伪造的引擎段头与围栏（orchestrator.sanitizeEngineInstruction）
+    const instr = sanitizeEngineInstruction(transformed.text, agent)
+    parts.push(`[当前子任务指令]:\n${instr}`)
+    parts.push(buildCompletionRequirement(sub))
     const fullPrompt = parts.join('\n\n')
 
     let deltaCount = 0
@@ -1812,6 +1795,38 @@ export class TaskEngine {
     return undefined
   }
 
+  /**
+   * 任务级运行权限变更后立即下发：遍历任务已绑定的全部远端会话，经原生接口切换。
+   * 未建会话的成员无需处理——下一次 ensureSession 建会话时自动按期望权限下发。
+   */
+  public async applyTaskPermission(taskId: string): Promise<Array<{ agentId: string; ok: boolean; preset?: string; error?: string }>> {
+    const task = this.store.getTask(taskId)
+    if (!task) return []
+    const out: Array<{ agentId: string; ok: boolean; preset?: string; error?: string }> = []
+    for (const [agentId, binding] of Object.entries(task.sessions || {})) {
+      if (!binding?.remoteSessionId) continue
+      const agent = this.store.getAgent(agentId) ?? (agentId === NODE_AGENT_ID ? this.makeNodeAgent(this.taskExec(task)) : undefined)
+      if (!agent) continue
+      const target = await this.resolveExecTarget(task, agentId)
+      if (!target) { out.push({ agentId, ok: false, error: '节点不可达' }); continue }
+      const want = this.desiredPermission(task, agent)
+      const r = await this.client.setSessionPermission(target, binding.remoteSessionId, want)
+      if (r.ok) {
+        this.store.mutateTask(taskId, (t) => {
+          const b = t.sessions[agentId]
+          if (b && b.remoteSessionId === binding.remoteSessionId) b.permission = want
+        })
+        this.taskLog(taskId, 'info', `运行权限已原生切换（${agent.name}）: ${r.preset || want}` + (r.sandbox ? ` · sandbox=${r.sandbox}` : ''))
+        out.push({ agentId, ok: true, preset: r.preset || want })
+      } else {
+        // 失败/不支持：清除已下发标记，下一轮派发走提示词降级兜底
+        this.store.mutateTask(taskId, (t) => { const b = t.sessions[agentId]; if (b) delete b.permission })
+        out.push({ agentId, ok: false, error: r.error })
+      }
+    }
+    return out
+  }
+
   /** 主会话的「无身份」执行者：远端节点默认形态 + 项目指令，不注入任何 sub agent 提示词 */
   private makeNodeAgent(exec: { dshRef?: DshRef }): SubAgent {
     const ref = exec.dshRef
@@ -1929,7 +1944,10 @@ export class TaskEngine {
         this.taskLog(taskId, 'info', `工作目录变更（${agent.name}）: ${existing.cwd || '(默认)'} → ${wantedCwd || '(默认)'}，重建远端会话`)
       } else {
         const st = await this.client.getSession(target, existing.remoteSessionId)
-        if (st.ok) return { ok: true, remoteSessionId: existing.remoteSessionId, reused: true, target }
+        if (st.ok) {
+          await this.syncSessionPermission(taskId, agent, target, existing.remoteSessionId)
+          return { ok: true, remoteSessionId: existing.remoteSessionId, reused: true, target }
+        }
         // 远端会话已丢失（重启/清理），重建
         this.taskLog(taskId, 'warn', `远端会话丢失（${agent.name}），正在重建: ${existing.remoteSessionId}`)
       }
@@ -2040,7 +2058,55 @@ export class TaskEngine {
         this.taskLog(taskId, 'warn', `远端会话 cwd 与配置不一致（${agent.name}）: 期望 ${wantedCwd}，实际 ${info.cwd}`)
       }
     }
+    await this.syncSessionPermission(taskId, agent, effTarget, res.sessionId)
     return { ok: true, remoteSessionId: res.sessionId, reused: false, target: effTarget }
+  }
+
+  /** 期望运行权限：任务级 > 智能体实体 > 默认全部权限 */
+  private desiredPermission(task: WorkTask, agent: SubAgent): string {
+    return (task.permission || agent.permission || DEFAULT_PERMISSION).trim() || DEFAULT_PERMISSION
+  }
+
+  /** 节点是否不支持原生权限接口（旧版 dsh-web-service）；按 baseUrl 缓存，避免每轮重复探测 */
+  private permissionUnsupported = new Map<string, number>()
+
+  /**
+   * 运行权限原生下发：PUT /sessions/:id/permission（harness permissionPresets，真实切换沙箱+审批）。
+   * 已下发且与期望一致时跳过；节点不支持时记录并降级为提示词注入（见 permissionPromptLine）。
+   */
+  private async syncSessionPermission(taskId: string, agent: SubAgent, target: DshTarget, remoteSessionId: string): Promise<void> {
+    const task = this.store.getTask(taskId)
+    if (!task) return
+    const want = this.desiredPermission(task, agent)
+    const binding = task.sessions[agent.id]
+    if (binding?.remoteSessionId === remoteSessionId && binding.permission === want) return
+    const base = target.baseUrl.replace(/\/+$/, '')
+    const unsupportedAt = this.permissionUnsupported.get(base)
+    if (unsupportedAt && Date.now() - unsupportedAt < 10 * 60_000) return
+    const r = await this.client.setSessionPermission(target, remoteSessionId, want)
+    if (r.ok) {
+      this.permissionUnsupported.delete(base)
+      this.store.mutateTask(taskId, (t) => {
+        const b = t.sessions[agent.id]
+        if (b && b.remoteSessionId === remoteSessionId) b.permission = want
+      })
+      this.taskLog(taskId, 'info', `运行权限已原生生效（${agent.name}）: ${r.preset || want}` + (r.sandbox ? ` · sandbox=${r.sandbox}` : '') + (r.approval ? ` · approval=${r.approval}` : ''))
+    } else if (!r.supported) {
+      this.permissionUnsupported.set(base, Date.now())
+      this.taskLog(taskId, 'warn', `远端节点不支持原生运行权限接口（${agent.name}）：${r.error}；已降级为提示词声明，请升级该节点 dsh-web-service ≥ 0.3.1`)
+    } else {
+      this.taskLog(taskId, 'warn', `运行权限下发失败（${agent.name}）: ${r.error}`)
+    }
+  }
+
+  /**
+   * 仅在原生下发未生效时才把权限写进提示词（降级兜底）；原生已生效则不再注入上下文。
+   */
+  private permissionPromptLine(task: WorkTask, agent: SubAgent): string {
+    const want = this.desiredPermission(task, agent)
+    const b = task.sessions[agent.id]
+    if (b?.permission === want) return ''
+    return `[运行权限]: ${want}`
   }
 
   /** SSE 流式优先；不支持降级同步；同步超时转轮询（D5） */

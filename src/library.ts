@@ -382,7 +382,7 @@ export function buildPluginExportPrompt(): string {
     '   npm pack --pack-destination "$HOME/wb-lib-export/"',
     '   （目录不存在先 mkdir -p "$HOME/wb-lib-export"；无法定位包目录的插件跳过，并在汇报中说明原因。）',
     '3. 全部完成后执行：ls -la "$HOME/wb-lib-export/"',
-    '4. 最后汇报：每个 tgz 文件的【绝对路径】及对应插件名与版本、跳过清单。绝对路径清单是平台回收的依据，务必逐行列出。',
+    '4. 最后汇报：每个 tgz 文件的【绝对路径】及对应插件名与版本、跳过清单。绝对路径务必单独一行、原样输出（不要加粗、不要用括号/书名号包裹，也不要改写成 ~ 开头）。绝对路径清单是平台回收的依据，务必逐行列出。',
     '不要做与本任务无关的其他操作。',
   ].join('\n')
 }
@@ -390,7 +390,9 @@ export function buildPluginExportPrompt(): string {
 /** 从任务轮次文本中提取导出的 tgz 绝对路径清单 */
 export function extractExportedPaths(text: string): string[] {
   const hits = new Set<string>()
-  const re = /(?:^|[\s"'`(])((?:\/[\w.@+-]+)+\/[\w.@+-]+\.tgz)/g
+  // 不要求路径前必须是空白/引号：模型汇报常把路径包进 **加粗**、（）、【】、表格竖线等，
+  // 旧的边界约束会把整条汇报判成「未解析到路径」导致回收为空。
+  const re = /((?:\/[\w.@+-]+)+\/[\w.@+-]+\.tgz)/g
   for (const m of text.matchAll(re)) hits.add(m[1])
   return [...hits]
 }

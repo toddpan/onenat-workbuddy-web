@@ -45,13 +45,22 @@ async function waitFor(cond, label, timeoutMs = 30000) {
   throw new Error(`等待超时: ${label}`)
 }
 
-// ---------- stub DSH 节点：记录收到的提示词 ----------
+// ---------- stub DSH 节点：记录收到的提示词与原生权限调用 ----------
 const receivedPrompts = []
+const permissionCalls = []
+let stubSupportsPermission = true // false = 模拟旧版 dsh-web-service（无 /permission 路由）
 const stub = createServer((req, res) => {
   const url = req.url || ''
   let body = ''
   req.on('data', (c) => { body += c })
   req.on('end', () => {
+    if (req.method === 'PUT' && url === '/api/v1/sessions/stub-s1/permission' && stubSupportsPermission) {
+      const preset = (() => { try { return JSON.parse(body)?.preset } catch { return undefined } })()
+      permissionCalls.push(preset)
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ ok: true, data: { sessionId: 'stub-s1', preset, sandbox: preset, approval: preset === 'danger-full-access' ? 'never' : 'ask' } }))
+      return
+    }
     if (req.method === 'POST' && url === '/api/v1/sessions') {
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ ok: true, data: { sessionId: 'stub-s1' } }))
@@ -151,19 +160,46 @@ async function main() {
   check('发送消息被受理', msg1.status === 202 || msg1.status === 200, `status=${msg1.status}`)
   await waitFor(() => receivedPrompts.some((p) => p.includes('你好，报告当前权限')), '第一条派发提示词到达 stub 节点')
   const p1 = receivedPrompts.find((p) => p.includes('你好，报告当前权限'))
-  check('提示词含任务级「[运行权限]: workspace-write」', p1.includes('[运行权限]: workspace-write'))
-  check('任务级优先：不含实体默认权限行', !p1.includes('[运行权限]: danger-full-access'))
+  check('建会话后经原生接口下发任务级 workspace-write', permissionCalls[0] === 'workspace-write', `calls=${JSON.stringify(permissionCalls)}`)
+  check('原生已生效：提示词不再注入「[运行权限]」', !p1.includes('[运行权限]'))
 
-  // 3) 清除任务级 → 回落实体默认
-  await req('PUT', `${PREFIX}/api/tasks/${taskId}/permission`, { permission: '' })
+  // 3) 清除任务级 → 回落实体默认，并立即推送到已存在会话
+  await sleep(1200) // 等第一轮完全收尾
+  const clearRes = await req('PUT', `${PREFIX}/api/tasks/${taskId}/permission`, { permission: '' })
   const cleared = (await req('GET', `${PREFIX}/api/tasks/${taskId}`)).json?.data?.permission
   check('清除任务级权限（空串）', cleared === undefined || cleared === '', `got=${JSON.stringify(cleared)}`)
-  await sleep(1200) // 等第一轮完全收尾，避免消息入队到同一轮
+  check('清除后立即原生切回实体默认 danger-full-access', permissionCalls.at(-1) === 'danger-full-access'
+    && clearRes.json?.data?.applied?.[0]?.ok === true, JSON.stringify(clearRes.json?.data?.applied))
+  const before = permissionCalls.length
   const msg2 = await req('POST', `${PREFIX}/api/tasks/${taskId}/messages`, { message: '再报一次当前权限' })
   check('第二条消息被受理', msg2.status === 202 || msg2.status === 200, `status=${msg2.status}`)
   await waitFor(() => receivedPrompts.some((p) => p.includes('再报一次当前权限')), '第二条派发提示词到达 stub 节点')
   const p2 = receivedPrompts.find((p) => p.includes('再报一次当前权限'))
-  check('回落实体默认「[运行权限]: danger-full-access」', p2.includes('[运行权限]: danger-full-access'))
+  check('权限未变：复用会话不重复下发', permissionCalls.length === before, `calls=${JSON.stringify(permissionCalls)}`)
+  check('第二轮提示词同样不注入「[运行权限]」', !p2.includes('[运行权限]'))
+
+  // 5) 未配置任何权限 → 默认全部权限
+  const a2 = (await req('POST', `${PREFIX}/api/agents`, {
+    name: 'perm-e2e-default',
+    dshRef: { kind: 'direct', apiBaseUrl: `http://127.0.0.1:${STUB_PORT}/api/v1` },
+    apiKey: 'stub-key',
+  })).json?.data
+  const t2 = (await req('POST', `${PREFIX}/api/tasks`, { title: 'perm default', mode: 'chat', memberAgentIds: [a2?.id] })).json?.data?.id
+  const n0 = permissionCalls.length
+  await req('POST', `${PREFIX}/api/tasks/${t2}/messages`, { message: '默认权限验证' })
+  await waitFor(() => receivedPrompts.some((p) => p.includes('默认权限验证')), '默认权限任务派发到达')
+  check('未配置权限时默认下发 danger-full-access', permissionCalls.slice(n0).includes('danger-full-access'), `calls=${JSON.stringify(permissionCalls.slice(n0))}`)
+
+
+  // 4) 旧版节点（无 /permission 路由）→ 降级为提示词声明
+  stubSupportsPermission = false
+  await sleep(1200)
+  await req('PUT', `${PREFIX}/api/tasks/${taskId}/permission`, { permission: 'workspace-write' })
+  const msg3 = await req('POST', `${PREFIX}/api/tasks/${taskId}/messages`, { message: '旧节点降级验证' })
+  check('第三条消息被受理', msg3.status === 202 || msg3.status === 200, `status=${msg3.status}`)
+  await waitFor(() => receivedPrompts.some((p) => p.includes('旧节点降级验证')), '第三条派发提示词到达 stub 节点')
+  const p3 = receivedPrompts.find((p) => p.includes('旧节点降级验证'))
+  check('旧节点降级：提示词含「[运行权限]: workspace-write」', p3.includes('[运行权限]: workspace-write'))
 
   console.log(failures === 0 ? '\n全部通过 ✅\n' : `\n${failures} 项失败 ❌\n`)
   try { rmSync(dataDir, { recursive: true, force: true }) } catch { /* ignore */ }

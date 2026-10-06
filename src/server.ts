@@ -27,7 +27,7 @@ import { OnenatDirectory } from './onenat.js'
 import { WorkStore } from './store.js'
 import { AgentResolver } from './resolver.js'
 import { PromptComposer } from './prompt-composer.js'
-import { Planner } from './planner.js'
+import { Orchestrator } from './orchestrator.js'
 import { TaskEngine } from './engine.js'
 import { ScheduleRunner } from './scheduler.js'
 import { WorkBuddyRouter } from './router.js'
@@ -217,7 +217,7 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
 
   const resolver = new AgentResolver(store, directory)
   const composer = new PromptComposer(directory)
-  const planner = new Planner(store, resolver, { webServerPort: cfg.port || 3081 })
+  const planner = new Orchestrator(store, resolver, { webServerPort: cfg.port || 3081 })
   const engine = new TaskEngine(store, directory, resolver, composer, planner)
   // 启动自愈：重启导致中断的 running 任务标记失败（僵尸任务清理）
   const recovered = engine.recoverInterruptedTasks()
