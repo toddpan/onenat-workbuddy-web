@@ -1,6 +1,6 @@
 {
   "name": "onenat-workbuddy-web",
-  "version": "2026.9.30",
+  "version": "2026.10.7",
   "description": "OneNat WorkBuddy — 独立部署的多智能体协作 WEB 服务（基于 ONENAT 资源面 + 多 DSH 算力面：任务多轮聊天 / 子智能体 / 资源提示词注入 / LLM 编排）",
   "private": true,
   "repository": {
@@ -46,7 +46,7 @@
     "test:streaming": "node e2e-artifacts/run-streaming-tests.mjs",
     "test:streaming:e2e": "node e2e-artifacts/e2e-workbuddy-turn.mjs",
     "typecheck": "tsc -p tsconfig.server.json --noEmit",
-    "test:unit": "tsc src/orchestrator.ts src/orchestrator.test.ts --outDir dist-test --rootDir src --target ES2023 --module NodeNext --moduleResolution NodeNext --strict --skipLibCheck --esModuleInterop --types node && node --test dist-test/orchestrator.test.js",
+    "test:unit": "tsc src/orchestrator.ts src/orchestrator.test.ts src/interaction-guard.test.ts --outDir dist-test --rootDir src --target ES2023 --module NodeNext --moduleResolution NodeNext --strict --skipLibCheck --esModuleInterop --types node && node --test dist-test/orchestrator.test.js dist-test/interaction-guard.test.js",
     "smoke:xiaozhi": "node scripts/smoke-xiaozhi-mcp.mjs",
     "smoke:mcp": "node scripts/smoke-mcp-server.mjs"
   },

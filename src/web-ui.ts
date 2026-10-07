@@ -1439,6 +1439,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 }
 .mention-item .tag.agent { color: var(--pri); border-color: rgba(77,107,254,.4); }
 .mention-item .tag.team { color: #0f766e; border-color: rgba(15,118,110,.4); background: rgba(15,118,110,.08); font-weight: 600; }
+.mention-item .tag.project { color: #0369a1; border-color: rgba(3,105,161,.35); background: rgba(3,105,161,.08); font-weight: 600; }
 .mention-item .tag.expert { color: #7c3aed; border-color: rgba(124,58,237,.35); background: rgba(124,58,237,.08); }
 .mention-item .tag.resource { color: var(--warn); border-color: rgba(212,136,6,.4); }
 .mention-empty { padding: 16px; text-align: center; color: var(--tx3); font-size: 12px; }
@@ -1767,6 +1768,12 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
   padding: 12px 14px; font-family: var(--mono); font-size: 12px; line-height: 1.55;
   color: var(--tx); overflow: auto; max-height: 520px; white-space: pre-wrap; word-break: break-all;
 }
+/* Markdown 文件预览：渲染视图容器（复用 dsh-md 排版，补抽屉内边距与底色） */
+.md-file-preview {
+  background: var(--bg1, #fff); border: 1px solid var(--line); border-radius: 8px;
+  padding: 16px 18px; overflow: auto; max-height: 620px; font-size: 13.5px;
+}
+.md-file-preview pre { overflow: auto; }
 /* ---------- 监控大屏 ---------- */
 .mon-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
 .mon-status { color: var(--tx3); font-size: 12px; }
@@ -2068,7 +2075,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <!-- @ 提及自动联想浮层 -->
           <div class="mention-popup" id="mention-popup">
             <div class="mention-popup-head">
-              <span>提及智能体或资源 (@)</span>
+              <span>提及项目、智能体或资源 (@)</span>
               <span>↑↓ 选择 · Enter 插入</span>
             </div>
             <div class="mention-popup-list" id="mention-list"></div>
@@ -2084,7 +2091,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <div class="composer-hint" id="composer-hint"></div>
           <div class="chat-input">
             <div class="dsh-cscroll">
-              <textarea id="input" placeholder="给 WorkBuddy 发送消息，@ 指定智能体 / 注入资源，/ 装载技能…"></textarea>
+              <textarea id="input" placeholder="给 WorkBuddy 发送消息，@ 项目 / 智能体 / 资源，/ 装载技能…"></textarea>
             </div>
             <div class="composer-bar">
               <div class="tools">
@@ -2336,6 +2343,27 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <b style="font-size:12.5px;color:var(--tx2)">② APIKEY</b>
           <input id="set-ai-token" readonly style="font-family:var(--mono);flex:1" placeholder="未生成">
           <span style="font-size:11.5px;color:var(--tx3)">已内嵌于上方提示词，无需单独传递 · 重置后旧令牌立即失效（无需重启）</span>
+        </div>
+      </div>
+      <div class="card ai-card">
+        <h3 style="margin-bottom:12px">MCP 接入（一键复制给 AI 安装）</h3>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+          <b style="font-size:12.5px;color:var(--tx2)">① 接口地址（Streamable HTTP）</b>
+          <span style="font-size:11.5px;color:var(--tx3)">任何支持 MCP 的客户端（Claude / Cursor / Cline 等）都可接入</span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input id="set-mcp-url" readonly style="font-family:var(--mono);flex:1" placeholder="…">
+          <button class="btn" id="btn-copy-mcp-url" style="white-space:nowrap">复制接口地址</button>
+        </div>
+        <div style="font-size:11.5px;color:var(--tx3);margin-top:6px">专家库 MCP：<span id="set-mcp-expert-url" style="font-family:var(--mono)">…</span>（专家库增删改查）· 鉴权同 APIKEY（Authorization: Bearer）</div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:14px">
+          <b style="font-size:12.5px;color:var(--tx2)">② 安装提示词</b>
+          <span style="font-size:11.5px;color:var(--tx3)">复制后发给任意支持 MCP 的 AI，它把本服务注册为 MCP Server 即可调用工作台</span>
+        </div>
+        <textarea id="set-mcp-install" readonly rows="10" style="font-family:var(--mono);font-size:12px;width:100%;margin-top:6px" placeholder="生成 APIKEY 后这里会出现 MCP 安装提示词"></textarea>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+          <button class="btn pri" id="btn-copy-mcp-install" style="white-space:nowrap">复制 MCP 安装提示词</button>
+          <span style="font-size:11.5px;color:var(--tx3)">AI 会把接口地址与 APIKEY 写进自己的 MCP 配置，并调用 tools/list 验证。</span>
         </div>
       </div>
       </div>
@@ -6598,6 +6626,9 @@ async function refreshMentionCandidates() {
   } else {
     // 降级使用本地 state 聚合
     const list = [];
+    (state.projects || []).forEach(p => {
+      list.push({ type: 'project', id: p.id, name: p.name, kind: 'project', detail: '项目 · ' + (p.workspace || '未设工作目录') + (p.expertIds && p.expertIds.length ? ' · ' + p.expertIds.length + ' 名专家' : '') });
+    });
     (state.teams || []).forEach(t => {
       if (t.enabled !== false) {
         list.push({ type: 'team', id: t.id, name: t.name, kind: 'team', detail: '专家团 · ' + t.members.length + ' 名成员' + (t.builtin ? ' · 内置' : '') });
@@ -6634,7 +6665,7 @@ function initMentionPopup() {
 
   function renderMentionList() {
     if (!mentionMatched.length) {
-      listEl.innerHTML = '<div class="mention-empty">无匹配的团队、专家、智能体或资源</div>';
+      listEl.innerHTML = '<div class="mention-empty">无匹配的项目、团队、专家、智能体或资源</div>';
       return;
     }
     let html = '';
@@ -6642,9 +6673,10 @@ function initMentionPopup() {
       const active = idx === mentionActiveIdx ? ' active' : '';
       const isTeam = item.type === 'team' || item.kind === 'team';
       const isExpert = item.type === 'expert' || item.kind === 'expert';
-      const icon = isTeam ? '🧩' : (isExpert ? ((item.meta && item.meta.icon) || '🧠') : (item.type === 'agent' ? '🤖' : (item.kind === 'ssh' ? '🖥️' : (item.kind === 'http' ? '🌐' : '📦'))));
-      const tagClass = isTeam ? 'team' : (isExpert ? 'expert' : (item.type === 'agent' ? 'agent' : 'resource'));
-      const tagText = isTeam ? '专家团' : (isExpert ? '专家' : (item.type === 'agent' ? '智能体' : (item.kind ? item.kind.toUpperCase() : '资源')));
+      const isProject = item.type === 'project' || item.kind === 'project';
+      const icon = isProject ? '📁' : (isTeam ? '🧩' : (isExpert ? ((item.meta && item.meta.icon) || '🧠') : (item.type === 'agent' ? '🤖' : (item.kind === 'ssh' ? '🖥️' : (item.kind === 'http' ? '🌐' : '📦')))));
+      const tagClass = isProject ? 'project' : (isTeam ? 'team' : (isExpert ? 'expert' : (item.type === 'agent' ? 'agent' : 'resource')));
+      const tagText = isProject ? '项目' : (isTeam ? '专家团' : (isExpert ? '专家' : (item.type === 'agent' ? '智能体' : (item.kind ? item.kind.toUpperCase() : '资源'))));
       html += '<div class="mention-item' + active + '" data-idx="' + idx + '">' +
         '<span class="icon">' + icon + '</span>' +
         '<div class="info">' +
@@ -6672,7 +6704,8 @@ function initMentionPopup() {
     const text = input.value;
     const before = text.slice(0, mentionCursorStart);
     const after = text.slice(input.selectionEnd);
-    const insertText = '@' + item.name + ' ';
+    // 专家带 #id：专家库存在同名角色，服务端按 @名称#id 精确直派（无 # 回退按名）
+    const insertText = '@' + item.name + (item.type === 'expert' && item.id ? '#' + item.id : '') + ' ';
     input.value = before + insertText + after;
     const newPos = before.length + insertText.length;
     input.selectionStart = newPos;
@@ -8338,7 +8371,8 @@ function setupScheduleMention(input, popup, listEl) {
     const text = input.value;
     const before = text.slice(0, cursorStart);
     const after = text.slice(input.selectionEnd);
-    const insertText = '@' + item.name + ' ';
+    // 专家带 #id：专家库存在同名角色，服务端按 @名称#id 精确直派（无 # 回退按名）
+    const insertText = '@' + item.name + (item.type === 'expert' && item.id ? '#' + item.id : '') + ' ';
     input.value = before + insertText + after;
     const pos = before.length + insertText.length;
     input.selectionStart = input.selectionEnd = pos;
@@ -8934,6 +8968,7 @@ async function previewFile(agentId, filePath, fileName, projCtx, backFn) {
 
   const ext = (fileName.split('.').pop() || '').toLowerCase();
   const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico'].includes(ext);
+  const isMarkdown = ['md', 'markdown'].includes(ext);
   const fsQuery = projCtx
     ? 'node=' + encodeURIComponent(JSON.stringify(projCtx.node)) + '&path=' + encodeURIComponent(filePath)
     : 'agent=' + encodeURIComponent(agentId || '') + '&path=' + encodeURIComponent(filePath);
@@ -8959,9 +8994,33 @@ async function previewFile(agentId, filePath, fileName, projCtx, backFn) {
       const res = await fetch(inlineUrl);
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const text = await res.text();
-      body.innerHTML = actionsHtml +
-        '<div class="code-preview-box">' + esc(text) + '</div>' +
-        '<div style="margin-top:10px;color:var(--tx3);font-size:12px;font-family:var(--mono);word-break:break-all">' + esc(filePath) + '</div>';
+      if (isMarkdown) {
+        // Markdown 文件：默认渲染视图（GFM），可切换回源码视图
+        body.innerHTML = actionsHtml +
+          '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">' +
+          '<button class="btn md-toggle" id="fp-md-rendered" style="padding:4px 10px;font-size:12px">📄 渲染视图</button>' +
+          '<button class="btn md-toggle" id="fp-md-source" style="padding:4px 10px;font-size:12px">📝 源码视图</button>' +
+          '</div>' +
+          '<div id="fp-md-body" class="dsh-md markdown md-file-preview"></div>' +
+          '<pre id="fp-md-src" class="code-preview-box" style="display:none"></pre>' +
+          '<div style="margin-top:10px;color:var(--tx3);font-size:12px;font-family:var(--mono);word-break:break-all">' + esc(filePath) + '</div>';
+        $('fp-md-body').innerHTML = md(text);
+        $('fp-md-src').textContent = text;
+        const btnR = $('fp-md-rendered'), btnS = $('fp-md-source');
+        const setView = (rendered) => {
+          $('fp-md-body').style.display = rendered ? '' : 'none';
+          $('fp-md-src').style.display = rendered ? 'none' : '';
+          btnR.classList.toggle('pri', rendered);
+          btnS.classList.toggle('pri', !rendered);
+        };
+        btnR.addEventListener('click', () => setView(true));
+        btnS.addEventListener('click', () => setView(false));
+        setView(true);
+      } else {
+        body.innerHTML = actionsHtml +
+          '<div class="code-preview-box">' + esc(text) + '</div>' +
+          '<div style="margin-top:10px;color:var(--tx3);font-size:12px;font-family:var(--mono);word-break:break-all">' + esc(filePath) + '</div>';
+      }
     } catch (e) {
       body.innerHTML = actionsHtml +
         '<div style="padding:32px;text-align:center;color:var(--tx3)">' +
@@ -10008,6 +10067,7 @@ function renderSettings() {
   $('set-refresh').value = s.onenat.autoRefreshMs || 60000;
   $('set-ai-token').value = s.aiToken || '';
   renderAiInstall();
+  renderMcpInstall();
 }
 /** AI 安装提示词：以浏览器当前访问地址为准（反代/远程场景自动匹配），内嵌 APIKEY，发给 AI 照做即可 */
 function renderAiInstall() {
@@ -10025,6 +10085,40 @@ $('btn-copy-ai-install').addEventListener('click', () => {
   if (!$('set-ai-token').value) { toast('请先「生成 / 重置」APIKEY', true); return; }
   navigator.clipboard.writeText($('set-ai-install').value).then(() => toast('✓ 安装提示词已复制，发给 AI 即可安装'), () => toast('复制失败，请手动选择复制', true));
 });
+/** MCP 接入：接口地址 + 给 AI 的安装提示词（以浏览器当前访问地址为准，内嵌 APIKEY） */
+function renderMcpInstall() {
+  const token = $('set-ai-token').value;
+  const base = location.origin + PREFIX;
+  const tok = token || '<先生成APIKEY>';
+  const mcpUrl = base + '/mcp';
+  const expertUrl = base + '/api/experts/mcp';
+  $('set-mcp-url').value = mcpUrl;
+  $('set-mcp-expert-url').textContent = expertUrl;
+  $('set-mcp-install').value =
+    '请把「OneNat WorkBuddy 多智能体工作台」接入为你的 MCP Server 并验证可用。它提供 13 个工具：任务创建/管理/查询/答复提问、监控态势、定时任务、项目管理、文件管理、专家库等（接入后可通过 tools/list 查看全部）。\\n' +
+    '\\n【接入方法】\\n' +
+    '你当前正运行在某个支持 MCP 的宿主环境（如 Claude Desktop、Cursor、Cline、DSH 或其它框架），请自行判定并按该环境自身的 MCP 配置方式接入，不局限于任何特定客户端。\\n' +
+    '服务地址（Streamable HTTP，JSON-RPC over POST）：' + mcpUrl + '\\n' +
+    '鉴权：Authorization: Bearer ' + tok + '（也支持 X-WorkBuddy-Token 请求头或 ?token= 查询参数）。\\n' +
+    '若你的环境使用 mcpServers 形式的配置，对应条目为：\\n' +
+    '{ "mcpServers": { "onenat-workbuddy": { "url": "' + mcpUrl + '", "headers": { "Authorization": "Bearer ' + tok + '" } } } }\\n' +
+    '\\n【接入后验证】\\n' +
+    '保存并生效配置后，调用 tools/list 确认能看到 workbuddy_task_manage 等工具，即接入成功。\\n' +
+    '\\n【使用约定】\\n' +
+    '1. 发任务前先调用 project_manage list 判断需求归属的项目：能确定项目就从该项目发起并带 projectId。\\n' +
+    '2. 需求有歧义时先向用户问清，再创建任务。\\n' +
+    '3. 在 message 中用 @子智能体名 / @专家名 / @专家团名 / @资源名 派活；@ 多个即编排协作。\\n' +
+    '4. 任务创建后用 task_manage wait 或 task_status 轮询获取结果，不要重复 create。\\n' +
+    '\\n【完成汇报】\\n' +
+    '说明：你判定的宿主环境、实际写入的配置文件/配置位置、tools/list 验证结果；若失败，给出原因。';
+}
+$('btn-copy-mcp-url').addEventListener('click', () => {
+  navigator.clipboard.writeText($('set-mcp-url').value).then(() => toast('✓ MCP 接口地址已复制'), () => toast('复制失败，请手动选择复制', true));
+});
+$('btn-copy-mcp-install').addEventListener('click', () => {
+  if (!$('set-ai-token').value) { toast('请先「生成 / 重置」APIKEY', true); return; }
+  navigator.clipboard.writeText($('set-mcp-install').value).then(() => toast('✓ MCP 安装提示词已复制，发给 AI 即可接入'), () => toast('复制失败，请手动选择复制', true));
+});
 $('btn-reset-ai-token').addEventListener('click', async () => {
   if (!confirm('生成新 APIKEY？旧令牌立即失效，已安装到各智能体的 SKILL 需要更新令牌。')) return;
   const r = await api('/settings/ai-token/reset', { method: 'POST' });
@@ -10032,6 +10126,7 @@ $('btn-reset-ai-token').addEventListener('click', async () => {
     $('set-ai-token').value = r.data.token;
     state.settings = Object.assign({}, state.settings || {}, { aiToken: r.data.token });
     renderAiInstall();
+    renderMcpInstall();
     toast('✓ 新 APIKEY 已生成（无需重启）');
   } else toast(r.error || '生成失败', true);
 });

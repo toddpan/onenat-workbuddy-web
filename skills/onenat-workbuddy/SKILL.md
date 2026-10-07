@@ -19,12 +19,34 @@ description: OneNat WorkBuddy 多智能体工作台 AI 管理技能：发任务�
 
 ## 消息文本语法：@ 提及
 
+- `@项目名` → 对该项目发起任务（任务未绑定项目时自动绑定 projectId，节点/工作目录/项目指令/可@ sub agent 全自动继承）
 - `@sub agent 名` → 任务委派给它，在**其绑定节点**上远程执行（名称须与列表完全一致，最长名优先；@ 多个 = 编排）
 - `@资源名` → 资源入口与连接信息注入本次任务（如 `@136 环境-SSH Server`）
 - `@[sub agent 名:文件路径]` → 引用其工作区文件（自动生成跨节点取用指引）
 - 技能：自然语言指示即可（如「用 lark-cli 技能发消息给xxx」），也可 `/技能名` 显式加载
 
 用 @ 时 `create` 的 `memberAgentIds` 可省略；两者同给也行。
+
+## 发起任务前：先理清需求与项目，再用 @ 派对执行者
+
+子智能体一律**无人值守执行**（禁止 `ask_user_question`，提问会让远程 DSH 会话停等且不透传 UI），
+它们不会回头向用户澄清——所以**理解需求是宿主 AI 的责任，必须在 create 之前完成**：
+
+1. **先判项目归属**：拿用户请求对照 `project_manage {action:"list"}` 里的项目
+   （名称/指令/可@ sub agent/工作目录）。**能确定属于哪个项目，就从该项目发起**
+   （`create` 带 `projectId`，节点/工作目录/项目指令/可@ 专家全部自动继承）；
+   确定不了再走裸任务（`nodeRef`/`memberAgentIds`）。别在项目任务上重复传这些参数。
+2. **先理清需求，不着急动手**：create 之前主动跟用户把需求对齐——做什么、交付什么、
+   在哪个项目/环境做、验收标准是什么。有歧义（目标不明、收件人/环境无法解析、
+   多个项目都可能、多种做法）时先问清再派发；用户已说清就直接执行，不重复确认。
+3. **选对执行者**：`agent_manage {action:"list"}`（或监控 overview）看有哪些专家/子智能体，
+   按「职责 + 绑定节点 + 工作目录」匹配；项目任务优先用项目里配置的专家（`expertIds`）；
+   没有合适的先 `upsert` 建一个，别把任务派给名字相近的。
+4. **用 @ 写进 message**（推荐写法）：`message:"@136-苦力兔 检查 136 服务器磁盘占用并输出报告"`。
+   @ 谁，任务就派给谁、在其绑定节点执行；@ 多个 = 编排（主调度自动拆子任务）。
+   资源（如 SSH 环境）同样用 `@资源名` 注入，比只传 `memberAgentIds` 更直观，两种可同用。
+5. **指令自包含**：子智能体拿不到对话上下文，message 里要写全路径、参数、验收标准；
+   模糊指令会被保守执行并产生偏差。
 
 ## 环境切换：任务节点（nodeRef）
 
@@ -84,14 +106,15 @@ task_manage {action:"create", projectId:"proj-x",
 
 ```
 1. monitor_read overview                 ← 挑在线且空闲的智能体（或 agent list / upsert 新建）
-2. task_manage create                    ← 立即回执 {accepted:true, taskId}，不等执行
+2. 先理清需求与项目归属：能确定项目就从项目发起（projectId）；需求有歧义先问清，不着急动手
+3. task_manage create                    ← 立即回执 {accepted:true, taskId}，不等执行
    message:"让 @136-苦力兔 收集136 服务器的 KB 平台运行情况"     ← @ 指定执行者（推荐）
    或 memberAgentIds:["agent-x"] + message:"…"                  ← 显式成员写法
    或 projectId:"proj-x"                                        ← 项目任务（上下文全继承）
    或 nodeRef:{kind:"mapping", mappingId:"…"}                   ← 指定任务节点
-3. task_manage {action:"wait", taskId:"…", timeoutMs:300000}   ← 拿 status/summary/lastReply
+4. task_manage {action:"wait", taskId:"…", timeoutMs:300000}   ← 拿 status/summary/lastReply
    超时则改用 task_status 轮询
-4. file_manage download                  ← 需要时取产出文件
+5. file_manage download                  ← 需要时取产出文件
 ```
 
 ### 看监控 / 值守
@@ -133,12 +156,13 @@ agent_manage {action:"upsert", agent:{name:"136-执行者",
 ## 行为约定
 
 1. **一个请求只 create 一次**：相同内容重复 create 会被去重复用（`deduped:true`）；要进度用 `task_status` 或 `wait`，别把 create 当重试。
-2. 发任务前先看监控挑在线空闲的智能体；离线节点不重试。
-3. 选节点/建项目用 `resource_manage {action:"dsh"}` 拿映射 ID，别凭记忆猜 ID。
-4. 窄通道（MCP/语音）不长阻塞：create 立即回执、追问异步投递，进度用 `task_status` 轮询。
-5. 凭证敏感：APIKEY / SSH 密码不进无关输出；推荐 `self-fetch` 凭证模式。
-6. `ssh exec` 与文件删除是危险操作：先确认目标与路径。
-7. 任务执行中不能改成员或删除；对 ONENAT 只读，不改隧道映射。
+2. **先理清需求与项目再 create**：先 `project list` 判断归属，能定项目就带 `projectId` 从项目发起；需求有歧义先在宿主层向用户问清（子智能体无人值守、不会反问），不着急动手；用 @ 把专家/子智能体写进 message 派活。
+3. 发任务前先看监控挑在线空闲的智能体；离线节点不重试。
+4. 选节点/建项目用 `resource_manage {action:"dsh"}` 拿映射 ID，别凭记忆猜 ID。
+5. 窄通道（MCP/语音）不长阻塞：create 立即回执、追问异步投递，进度用 `task_status` 轮询。
+6. 凭证敏感：APIKEY / SSH 密码不进无关输出；推荐 `self-fetch` 凭证模式。
+7. `ssh exec` 与文件删除是危险操作：先确认目标与路径。
+8. 任务执行中不能改成员或删除；对 ONENAT 只读，不改隧道映射。
 
 ## 无工具宿主：wb.mjs
 

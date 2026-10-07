@@ -545,7 +545,7 @@ function resolveAssetFile(rel: string): string | null {
 
 function readJsonBody(req: http.IncomingMessage, limit = 8 * 1024 * 1024): Promise<any> {
   return new Promise((done) => {
-    let body = ''
+    const chunks: Buffer[] = []
     let size = 0
     req.on('data', (c: Buffer) => {
       size += c.length
@@ -554,10 +554,11 @@ function readJsonBody(req: http.IncomingMessage, limit = 8 * 1024 * 1024): Promi
         done({})
         return
       }
-      body += c
+      chunks.push(c)
     })
     req.on('end', () => {
       try {
+        const body = Buffer.concat(chunks).toString('utf8')
         done(body ? JSON.parse(body) : {})
       } catch {
         done({})
