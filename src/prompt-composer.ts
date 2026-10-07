@@ -37,8 +37,8 @@ export interface ComposeContext {
 /** 交互守卫：直接声明当前模式，而不是罗列规则让执行者自判 */
 export function interactionGuard(mode: 'attended' | 'unattended' = 'unattended'): string {
   return mode === 'attended'
-    ? '【交互与执行】本轮为有人值守的直接对话：目标确有歧义且影响结果时，可调用 ask_user_question 给出结构化选项请用户确认（一次问清，不要分多轮追问）；用户已答复或目标明确时直接执行，不重复确认。'
-    : '【交互与执行】本轮为无人值守执行（编排子任务/定时任务）：禁止调用 ask_user_question 等任何等待人工答复的工具。目标不明（如收件群/收件人无法解析）时取保守默认执行，并在产出中显式列出所做假设。'
+    ? '【交互与执行】本轮为有人值守的直接对话：目标确有歧义且影响结果时，可调用 ask_user_question 给出结构化选项请用户确认（一次问清，不要分多轮追问；questions 数组每一项都必须携带稳定的 id 字段，缺 id 会被远端拒绝）；用户已答复或目标明确时直接执行，不重复确认。'
+    : '【交互与执行】本轮为无人值守执行（子智能体/编排子任务/定时任务）：严格禁止调用 ask_user_question 等任何等待人工答复的工具 —— 提问会让远程 DSH 会话停下来阻塞整条任务链，且提问不会透传到用户界面。目标不明（如收件群/收件人无法解析）时取保守默认执行，并在产出中显式列出所做假设。'
 }
 
 export interface ComposeResult {

@@ -196,12 +196,13 @@ export class WorkBuddyRouter {
 
   private async parseBody(req: IncomingMessage): Promise<any> {
     return new Promise((resolve) => {
-      let body = ''
-      req.on('data', (c) => {
-        body += c
+      const chunks: Buffer[] = []
+      req.on('data', (c: Buffer) => {
+        chunks.push(c)
       })
       req.on('end', () => {
         try {
+          const body = Buffer.concat(chunks).toString('utf8')
           resolve(body ? JSON.parse(body) : {})
         } catch {
           resolve({})
@@ -297,6 +298,7 @@ export class WorkBuddyRouter {
       status: t.status,
       projectId: t.projectId || undefined,
       running: this.engine.isRunning(t.id),
+      pendingAsk: Boolean(t.pendingAsk),
       memberAgentIds: t.memberAgentIds,
       lastRoute: t.lastRoute,
       createdAt: t.createdAt,
@@ -2030,7 +2032,7 @@ export class WorkBuddyRouter {
     // ---------- 提及与联想候选数据 (@ Mentions Directory) ----------
     if (p === '/api/mentions/candidates' && method === 'GET') {
       const candidates: Array<{
-        type: 'agent' | 'resource' | 'team' | 'expert'
+        type: 'agent' | 'resource' | 'team' | 'expert' | 'project'
         id: string
         name: string
         kind?: string
@@ -2038,7 +2040,19 @@ export class WorkBuddyRouter {
         meta?: any
       }> = []
 
-      // 0. 专家团（含内置种子团）：@团队名 → 本轮消息按团队合同发起编排
+      // 0. 项目：@项目名 → 对该项目发起任务（未绑定项目的任务自动绑定，节点/工作区/项目指令/技能全继承）
+      for (const pr of this.store.getProjects()) {
+        candidates.push({
+          type: 'project',
+          id: pr.id,
+          name: pr.name,
+          kind: 'project',
+          detail: `项目 · ${pr.workspace || '未设工作目录'}${pr.expertIds.length ? ` · ${pr.expertIds.length} 名专家` : ''}`,
+          meta: { projectId: pr.id, workspace: pr.workspace, expertCount: pr.expertIds.length },
+        })
+      }
+
+      // 1. 专家团（含内置种子团）：@团队名 → 本轮消息按团队合同发起编排
       for (const t of this.store.getTeams()) {
         if (t.enabled === false) continue
         candidates.push({

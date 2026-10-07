@@ -265,16 +265,19 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
     name: 'workbuddy_task_manage',
     description:
       '管理 WorkBuddy 任务会话（每任务一个聊天窗口，多轮对话）: list / create（可带首条消息立即发起，**立即回执不等待执行**）/ send（多轮发言）/ wait（查看进度快照；HTTP 通道可同步等结果，MCP 通道不阻塞）/ delete / members / cancel。' +
+      '发起约定：① 先 project_manage list 判断归属，能确定项目就带 projectId 从项目发起（上下文全继承）；' +
+      '② 需求有歧义先向用户问清再 create——任务里的子智能体/专家一律无人值守执行，不会反问澄清；' +
+      '③ 在 message 里用 @ 派活：@子智能体名（回其绑定节点执行，@ 多个=编排）、@专家名、@专家团名（按团队合同展开成员编排）、@项目名（对项目发起任务：未绑定项目的任务自动绑定该项目，节点/工作区/项目指令全继承）、@资源名（注入连接信息）；用 @ 时 memberAgentIds 可省略。' +
       '重要：创建后不要重复 create 同一任务（重复内容 2 分钟内会被自动去重复用既有任务），要进度请用 wait 或 workbuddy_task_status 轮询',
     parameters: {
       action: { type: 'string', description: '操作: list / create / send / wait / delete / members / cancel' },
       taskId: { type: 'string', description: '任务 ID（send/wait/delete/members/cancel 用）' },
       title: { type: 'string', description: '任务标题（create 可选）' },
-      memberAgentIds: { type: 'json', description: '成员子智能体 ID 数组（create 可省略：省略即只归属主智能体；members 必填且非空）' },
-      mode: { type: 'string', description: '模式: chat（单成员直通）或 orchestrate（多成员编排），缺省按成员数推断' },
-      message: { type: 'string', description: '消息内容（create 可选首条消息；send 必填）' },
+      memberAgentIds: { type: 'json', description: '成员子智能体 ID 数组（create 可省略：推荐改在 message 里 @子智能体名/@专家团名 指派；members 必填且非空）' },
+      mode: { type: 'string', description: '模式: chat（单成员直通）或 orchestrate（多成员编排），缺省按成员数推断；@ 多个成员或 @专家团时自动编排' },
+      message: { type: 'string', description: '消息内容（create 可选首条消息；send 必填）。派活写法：@子智能体名 / @专家名 / @专家团名 / @项目名 / @资源名（名称须与列表完全一致）；指令要自包含：目标、路径参数、验收标准——执行者拿不到你们的对话上下文' },
       nodeRef: { type: 'json', description: 'create 可选，任务节点（主 DSH）: {kind:"mapping", mappingId:"<DSH 映射 ID>"}。无 @ 的主会话在该节点上执行；不传则用上次所选/默认节点' },
-      projectId: { type: 'string', description: 'create 可选，归属项目 ID（workbuddy_project_manage list 取得）。项目任务自动继承项目节点/工作区/指令/可@ sub agent，nodeRef 与 memberAgentIds 可省略' },
+      projectId: { type: 'string', description: 'create 可选，归属项目 ID（workbuddy_project_manage list 取得）。发起前先判项目归属：能定项目必带此参——项目任务自动继承项目节点/工作区/指令/可@ sub agent，nodeRef 与 memberAgentIds 可省略' },
       timeoutMs: { type: 'string', description: 'wait 最长同步等待毫秒（HTTP 通道默认 120000 上限 600000；MCP 通道默认 0=立即回执，最多 20000）' },
     },
     async execute(args, rawCtx) {
@@ -915,10 +918,12 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
   const fileManage: WorkBuddyToolDef = {
     name: 'workbuddy_file_manage',
     description:
-      '管理子智能体远端工作区文件（在其 DSH 节点上，工作目录为该智能体 workDir）: list（列目录）/ mkdir / upload（base64 内容 ≤1MB，或给 http(s) URL 由服务器拉取 ≤10MB）/ download（返回 utf8 文本或 base64，≤8MB）/ delete',
+      '管理远端工作区文件: list（列目录）/ mkdir / upload（base64 内容 ≤1MB，或给 http(s) URL 由服务器拉取 ≤10MB）/ download（返回 utf8 文本或 base64，≤8MB）/ delete。' +
+      '目标二选一：① agent=子智能体 ID → 其 DSH 节点上该智能体 workDir；② taskId=任务 ID（agent 可省略或传 __node__）→ 该任务/项目节点的主会话工作区（项目工作台则用项目 workspace）',
     parameters: {
       action: { type: 'string', description: '操作: list / mkdir / upload / download / delete' },
-      agent: { type: 'string', description: '子智能体 ID' },
+      agent: { type: 'string', description: '子智能体 ID（与 taskId 二选一；__node__ 或缺省且给了 taskId 时按任务节点解析）' },
+      taskId: { type: 'string', description: '任务 ID（操作任务/项目节点主会话工作区用；与 agent 二选一）' },
       path: { type: 'string', description: '路径（绝对路径，或相对其工作目录；list 缺省 = 工作目录；upload 缺省 = 上传到工作目录）' },
       name: { type: 'string', description: 'mkdir 的新目录名 / upload 的文件名' },
       contentBase64: { type: 'string', description: 'upload 方式一：文件内容 base64（解码后 ≤1MB）' },
@@ -928,13 +933,30 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
     async execute(args, rawCtx) {
       const ctx = ctxOf(rawCtx)
       const action = args.action || 'list'
-      const agent = store.getAgent(String(args.agent || ''))
-      if (!agent) return JSON.stringify({ ok: false, error: '子智能体不存在' })
-      const target = await resolver.resolve(agent)
+      // 目标解析优先级：① agent 命中子智能体 → 其节点 + workDir；② taskId（或 agent=__node__）→ 任务/项目节点主会话 + 项目 workspace
+      const agentId = String(args.agent || '').trim()
+      const task = String(args.taskId || '').trim() ? store.getTask(String(args.taskId).trim()) : undefined
+      if (args.taskId && String(args.taskId).trim() && !task) return JSON.stringify({ ok: false, error: `任务不存在: ${args.taskId}` })
+      const agent = agentId && agentId !== '__node__' ? store.getAgent(agentId) : undefined
+      if (agentId && agentId !== '__node__' && !agent) return JSON.stringify({ ok: false, error: '子智能体不存在' })
+      if (!agent && !task) return JSON.stringify({ ok: false, error: '缺少 agent（子智能体 ID）或 taskId（任务 ID，操作任务/项目节点工作区）：二者至少给一个' })
+      let target: Awaited<ReturnType<typeof resolver.resolve>>
+      let workDir = '.'
+      if (agent) {
+        target = await resolver.resolve(agent)
+        workDir = agent.workDir || '.'
+      } else {
+        if (!task) return JSON.stringify({ ok: false, error: '缺少 agent（子智能体 ID）或 taskId（任务 ID）' })
+        const t = await engine.resolveExecTarget(task, '__node__').catch(() => undefined)
+        if (!t || !t.online || !t.baseUrl) return JSON.stringify({ ok: false, error: t?.error || '任务节点不可达' })
+        target = t as typeof target
+        const project = task.projectId ? store.getProject(task.projectId) : undefined
+        workDir = project?.workspace || '.'
+      }
       if (!target.online || !target.baseUrl) return JSON.stringify({ ok: false, error: target.error || '节点不可达' })
-      const workDir = agent.workDir || '.'
+      const workDirRef = workDir
       if (action === 'list') {
-        const out = await client.fsList(target, String(args.path || '') || agent.workDir || undefined)
+        const out = await client.fsList(target, String(args.path || '') || workDirRef || undefined)
         return JSON.stringify(out, null, 2)
       }
       if (action === 'mkdir') {

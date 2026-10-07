@@ -58,6 +58,8 @@ export interface PromptResult {
   complete?: boolean
   /** 远端不支持 prompt-stream（旧版）⇒ 调用方降级同步 prompt */
   sseUnsupported?: boolean
+  /** 远端会话被 ask_user_question 挂起（等待答复桥解锁），错误为快速失败而非真失败 */
+  pendingAsk?: boolean
   /** 远端返回的真实 token 账本（含缓存命中），供前端展示缓存率 */
   usage?: Record<string, number>
 }
@@ -1001,6 +1003,32 @@ export class DshClient {
       return { ok: true, supported: true }
     } catch (err: any) {
       return { ok: false, error: err?.message || '提交问题答复失败' }
+    }
+  }
+
+  /**
+   * 查询会话当前挂起的 ask_user_question 问题批次。
+   * ask 挂起会让 run 悬停在工具内部：状态恒为 running、后续 prompt 经 followup 排队永不被处理 ——
+   * 调用方据此把用户回复路由到 answerQuestion 桥而不是发新 prompt（会话解挂的唯一常规通道）。
+   * 旧版节点（无 /questions 路由）返回 supported=false，调用方按「未知」处理不阻塞。
+   */
+  public async listPendingQuestions(
+    target: DshTarget,
+    sessionId: string,
+  ): Promise<{ ok: boolean; supported?: boolean; count?: number; batches?: Array<{ batchId: string; at: number; questions: Array<Record<string, any>> }>; error?: string }> {
+    try {
+      const res = await fetch(`${clean(target.baseUrl)}/sessions/${encodeURIComponent(sessionId)}/questions`, {
+        headers: this.headers(target.apiKey),
+        signal: AbortSignal.timeout(8_000),
+      })
+      const json: any = await res.json().catch(() => ({}))
+      if (res.status === 404 || res.status === 501) return { ok: false, supported: false, error: '远端无问题查询接口' }
+      if (!res.ok || !json?.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
+      const data = json.data || {}
+      const batches = Array.isArray(data.batches) ? data.batches : []
+      return { ok: true, supported: true, count: Number(data.count ?? batches.length), batches }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || '查询挂起问题失败' }
     }
   }
 

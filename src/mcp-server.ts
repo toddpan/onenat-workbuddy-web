@@ -394,7 +394,7 @@ export class WorkBuddyMcpServer {
 
 function readBody(req: http.IncomingMessage, limit = 8 * 1024 * 1024): Promise<unknown> {
   return new Promise((done, fail) => {
-    let body = ''
+    const chunks: Buffer[] = []
     let size = 0
     req.on('data', (c: Buffer) => {
       size += c.length
@@ -403,10 +403,11 @@ function readBody(req: http.IncomingMessage, limit = 8 * 1024 * 1024): Promise<u
         fail(new Error(`请求体超过 ${limit} 字节上限`))
         return
       }
-      body += c
+      chunks.push(c)
     })
     req.on('end', () => {
       try {
+        const body = Buffer.concat(chunks).toString('utf8')
         done(body ? JSON.parse(body) : {})
       } catch (err: any) {
         fail(err)

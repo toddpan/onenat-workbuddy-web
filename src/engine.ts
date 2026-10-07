@@ -110,12 +110,13 @@ export class TaskEngine {
     let mentionedTeamId: string | undefined
     const mentionedExpertIds: string[] = []
     let mentionedExpertAmbiguous: string | undefined
+    let mentionedProjectId: string | undefined
     const agents = this.store.getAgents()
     const endpoints = this.directory.listEndpoints()
 
     // 1. 构建候选词典（按名称长度降序排列，优先匹配最长包含空格的完整实体名，如 "SSH Server"）
     interface DictEntry {
-      type: 'agent' | 'resource' | 'team' | 'expert'
+      type: 'agent' | 'resource' | 'team' | 'expert' | 'project'
       name: string
       data: any
     }
@@ -131,8 +132,14 @@ export class TaskEngine {
       if (t.enabled !== false && t.name) dict.push({ type: 'team', name: t.name, data: t })
     }
 
+    // 项目也可被 @：@项目名 → 对该项目发起任务（未绑定项目的任务自动绑定，节点/工作区/项目指令/技能全继承）
+    for (const pr of this.store.getProjects()) {
+      if (pr.name) dict.push({ type: 'project', name: pr.name, data: pr })
+    }
+
     // 专家库角色可被 @：单个 → 定向直派（动态实例化在任务节点），多个 → 并行编排。
-    // 词典含中英文名；同名多专家收进同一词条，命中时拒绝召唤（子智能体/团队同名时按词典顺序优先命中）。
+    // 词典含中英文名；同名多专家收进同一词条，未带 #id 命中时拒绝召唤（@名称#id 可精确直派；
+    // 子智能体/团队同名时按词典顺序优先命中）。
     if (this.experts) {
       const expertList = await this.experts.search('').catch(() => [])
       const byName = new Map<string, { name: string; experts: any[] }>()
@@ -257,10 +264,23 @@ export class TaskEngine {
             } else if (entry.type === 'team') {
               const tm = entry.data as { id: string }
               if (!mentionedTeamId) mentionedTeamId = tm.id
+            } else if (entry.type === 'project') {
+              const pr = entry.data as { id: string }
+              if (!mentionedProjectId) mentionedProjectId = pr.id
             } else if (entry.type === 'expert') {
               const e = entry.data
-              if (Array.isArray(e)) {
-                // 同名多专家：拒绝召唤，避免召唤到错误角色
+              // @名称#id：客户端选人时携带唯一 id（专家库 roster/builtin/user 三来源存在同名），
+              // 命中词条内任一专家 id 即精确直派，不再触发同名歧义拒绝；id 不匹配时回退原语义。
+              const pool: any[] = Array.isArray(e) ? e : [e]
+              const hash = /^#([^\s@,，。!！?？;；]+)/.exec(afterName)
+              const exact = hash ? pool.find((x) => String(x?.id) === hash[1]) : undefined
+              if (exact) {
+                if (!mentionedExpertIds.includes(exact.id)) {
+                  mentionedExpertIds.push(exact.id)
+                }
+                i += hash![0].length // 额外消费「#id」
+              } else if (Array.isArray(e)) {
+                // 同名多专家且未带有效 #id：拒绝召唤，避免召唤到错误角色
                 mentionedExpertAmbiguous = entry.name
               } else if (!mentionedExpertIds.includes(e.id)) {
                 mentionedExpertIds.push(e.id)
@@ -389,6 +409,7 @@ export class TaskEngine {
       ...(mentionedTeamId ? { mentionedTeamId } : {}),
       ...(mentionedExpertIds.length ? { mentionedExpertIds } : {}),
       ...(mentionedExpertAmbiguous ? { mentionedExpertAmbiguous } : {}),
+      ...(mentionedProjectId ? { mentionedProjectId } : {}),
       cleanText: text,
     }
   }
@@ -591,7 +612,23 @@ export class TaskEngine {
         if (!tg && binding.baseUrl) {
           tg = { baseUrl: binding.baseUrl, apiKey: this.taskExec(taskAll!).apiKey, agentId: aid, online: true } as DshTarget & { online: boolean }
         }
-        if (tg) await this.client.cancelSession(tg, binding.remoteSessionId).catch(() => {})
+        if (tg && binding.remoteSessionId) await this.client.cancelSession(tg, binding.remoteSessionId).catch(() => {})
+        // 远端 cancel 实测解不开 ask_user_question 挂起批次（批次仍登记、run 仍悬停）——
+        // 停止时同步解挂：提交中止答复让挂起的 run 收尾，会话恢复可用（否则下一条消息
+        // 经 followup 排队在挂起 run 后面永不被处理，表现为「停了还是卡」）。
+        if (tg && binding.remoteSessionId) {
+          const pq = await this.client.listPendingQuestions(tg, binding.remoteSessionId).catch(() => undefined)
+          if (pq?.ok && (pq.count || 0) > 0) {
+            const answers = (pq.batches || [])
+              .flatMap((b) => b.questions || [])
+              .filter((q) => q?.id)
+              .map((q) => ({ id: String(q.id), selected: [] as string[], custom: '［用户已中止］停止当前执行：立即收尾，简要总结已完成的进展，不要继续新的动作。' }))
+            if (answers.length) {
+              const ar = await this.client.answerQuestion(tg, binding.remoteSessionId, answers).catch(() => ({ ok: false } as const))
+              if (ar.ok) this.taskLog(taskId, 'info', '挂起提问已随停止自动答复，远端会话解除挂起')
+            }
+          }
+        }
       }
 
       // 若任务当前状态是 running，置为 cancelled 并通知前端
@@ -715,7 +752,7 @@ export class TaskEngine {
     // @专家库角色：登记为任务动态成员（expert-<id> 伪 id，不落子智能体实体）
     const mentionedExpertIds = mentions.mentionedExpertIds || []
     if (mentions.mentionedExpertAmbiguous) {
-      this.appendSystemTurn(taskId, `⚠️ 专家库中存在多个同名角色「${mentions.mentionedExpertAmbiguous}」，已拒绝召唤；请改用子智能体或指定其他专家`)
+      this.appendSystemTurn(taskId, `⚠️ 专家库中存在多个同名角色「${mentions.mentionedExpertAmbiguous}」，已拒绝召唤；请改用 @名称#id 指定具体专家、使用子智能体或指定其他专家`)
     }
     if (mentionedExpertIds.length) {
       const added: Array<{ id: string; name: string }> = []
@@ -739,6 +776,24 @@ export class TaskEngine {
       // @ 实体总数 ≥2（智能体 + 专家）与 @ 多个专家同样视为编排意图
       if (mentions.mentionedAgentIds.length + mentionedExpertIds.length >= 2) {
         this.store.mutateTask(taskId, (t) => { t.mode = 'orchestrate' })
+      }
+    }
+
+    // @项目：对项目发起任务 —— 任务尚未绑定项目时自动绑定，节点/工作目录/项目指令/技能全部自动继承
+    // （与 create 带 projectId 同语义，后续无 @ 消息也在项目节点直发）；已绑定其他项目则提示并忽略，不支持中途切换
+    if (mentions.mentionedProjectId) {
+      const mentioned = this.store.getProject(mentions.mentionedProjectId)
+      if (!mentioned) {
+        this.appendSystemTurn(taskId, `⚠️ 项目「${mentions.mentionedProjectId}」不存在，已忽略该 @ 项目提及`)
+      } else if (task.projectId === mentioned.id) {
+        // 已是本项目：noop
+      } else if (task.projectId) {
+        const current = this.store.getProject(task.projectId)
+        this.appendSystemTurn(taskId, `⚠️ 任务已绑定项目「${current?.name || task.projectId}」，@项目「${mentioned.name}」已忽略（任务不支持中途切换项目）`)
+      } else {
+        this.store.mutateTask(taskId, (t) => { t.projectId = mentioned.id })
+        this.taskLog(taskId, 'info', `@项目「${mentioned.name}」：任务已绑定该项目，节点、工作目录、项目指令与技能自动继承`)
+        this.appendSystemTurn(taskId, `📁 已绑定项目「${mentioned.name}」——本轮起任务在该项目上下文执行（节点、工作目录、项目指令、可@ 专家自动继承）`)
       }
     }
 
@@ -1159,6 +1214,14 @@ export class TaskEngine {
       return
     }
 
+    // ask_user_question 挂起预检：远端 run 被提问挂起时悬停在工具内部 —— 向其发新 prompt
+    // 只会经 followup 排队在挂起 run 之后永不被处理（表现为回合静默到 SSE 超时再对账半小时）。
+    // 此时用户的自由文本消息就是答复：走 /answers 桥解锁挂起的 run 并追踪续跑，而不是发新 prompt。
+    if (session.remoteSessionId) {
+      const handled = await this.answerPendingAndResume(taskId, text, agent, target, session.remoteSessionId, signal).catch(() => false)
+      if (handled) return
+    }
+
     // 首轮消息且标题仍是默认值 → 在任务自身的远端会话内提炼标题。
     // 此前经 /chat/completions 不带 sessionId，dsh-web-service 会另起一个随机会话，
     // 远端节点因此多出「只有一条标题问答」的孤立任务；现在标题问答与任务工单共用同一会话。
@@ -1192,8 +1255,12 @@ export class TaskEngine {
     // 主会话（__node__）是远端节点本体，不是团队成员：不注入成员人格（否则会被要求"不做转派"而禁用自身的子智能体/团队能力）。
     // 其余智能体在聊天直发路径是与用户直接对话（direct），不是被主调度派工的成员。
     const persona = agent.id === NODE_AGENT_ID ? '' : expertPersona(agent, 'direct')
-    // 值守模式：定时任务派生的会话无人值守；用户在会话里直发为有人值守
-    const interaction: 'attended' | 'unattended' = task.scheduleId ? 'unattended' : 'attended'
+    // 值守模式：定时任务派生的会话无人值守；成员/子智能体会话一律无人值守 ——
+    // ask_user_question 会让远程 DSH 会话停下来等待人工答复，且子智能体深层的提问
+    // 无法透传回 WorkBuddy UI（交互卡只渲染在直发轮次），导致整条链路挂死。
+    // 只有节点主会话（用户无 @ 直发）才是与用户面对面的有人值守对话，允许提问确认。
+    const isNodeMain = agent.id === NODE_AGENT_ID && !task.scheduleId
+    const interaction: 'attended' | 'unattended' = isNodeMain ? 'attended' : 'unattended'
     const sysPrefix = [exec.instruction, persona, permLine].filter(Boolean).join('\n\n')
     const sshSection = exec.sshConnectors.length
       ? '[项目 SSH 连接器]（已可用 onenat_ssh 工具直接操作，连接信息如下）:\n' + exec.sshConnectors.map((c) => '- ' + c.name + ' → ' + c.host + ':' + c.port).join('\n')
@@ -1233,6 +1300,16 @@ export class TaskEngine {
     const toolStarts = new Map<string, number>()
     // 单调递增流式序号：客户端按此顺序交错渲染 reasoning/tool/text 块（对齐 DSH assistant-block 序列）
     let streamSeq = 0
+    // ask_user_question 挂起监视：tool_call 后轮询远端挂起批次（S1/S3）。
+    // streamCtrl 只断流（区别于任务级 signal）；attended 命中 → 快速终结回合等待答复，不再走 10min 静默 + 30min 对账黑洞。
+    const streamCtrl = new AbortController()
+    signal.addEventListener('abort', () => streamCtrl.abort(), { once: true })
+    const askWatch = { fired: false, mode: 'bridge' as 'bridge' | 'unbridged' }
+    const pushAskToolUpdate = () => {
+      const tt = this.store.getTask(taskId)?.turns.find((x) => x.id === turn.id)
+      const t = [...(tt?.tools || [])].reverse().find((x) => x.name === 'ask_user_question' || x.name === 'ask-user-question')
+      if (t) emitTool({ ...t })
+    }
     const summarize = (v: any, cap: number): string | undefined => {
       if (v === undefined || v === null) return undefined
       let s = typeof v === 'string' ? v : (() => { try { return JSON.stringify(v) } catch { return String(v) } })()
@@ -1272,6 +1349,10 @@ export class TaskEngine {
         })
         emitTool(tool)
         this.taskLog(taskId, 'tool', `工具调用: ${tool.name}${tool.args ? ' · ' + tool.args.slice(0, 120) : ''}`)
+        // ask 提问挂起监视：命中批次时 attended 快速终结等待答复 / unattended 自动保守答复解锁
+        if (isAskTool && !askWatch.fired && session.remoteSessionId) {
+          void this.watchPendingAsk(taskId, agent, target, session.remoteSessionId, turn.id, interaction, streamCtrl, askWatch, pushAskToolUpdate)
+      }
       },
       onToolResult: (info) => {
         const id = String(info.id || '')
@@ -1297,15 +1378,34 @@ export class TaskEngine {
       },
     }
 
-    let result = await this.dispatchWithFallback(target, session.remoteSessionId!, fullPrompt, streamHandlers, signal)
+    let result = await this.dispatchWithFallback(target, session.remoteSessionId!, fullPrompt, streamHandlers, streamCtrl.signal)
     // 空结果自愈：远端收到指令但零内容零工具（LLM 上游瞬时异常/流丢失）——
-    // 自动重发一次；有工具调用的回合绝不重发（避免发飞书等副作用重复执行）
-    {
+    // 自动重发一次；有工具调用的回合绝不重发（避免发飞书等副作用重复执行）；
+    // ask 挂起终结的回合也绝不重发（重发只会经 followup 排队在挂起 run 后面，制造孤儿消息）
+    if (!askWatch.fired) {
       const turnNow = this.store.getTask(taskId)!.turns.find((x) => x.id === turn.id)
       if (!signal.aborted && !(turnNow?.tools || []).length && !(streamSeq > 1)) {
         this.taskLog(taskId, 'warn', `${agent.name} 本轮无任何内容产出（远端流为空），自动重发一次`)
-        result = await this.dispatchWithFallback(target, session.remoteSessionId!, fullPrompt, streamHandlers, signal)
+        result = await this.dispatchWithFallback(target, session.remoteSessionId!, fullPrompt, streamHandlers, streamCtrl.signal)
       }
+    }
+
+    // ask 挂起终结（桥可见）：远端在等用户答复 —— 回合立即收尾（ask 工具保持 running 供答复卡/桥使用），
+    // 任务状态落 completed + pendingAsk 标记；用户回复将由 answerPendingAndResume 路由到答复桥。
+    if (askWatch.fired && !signal.aborted && askWatch.mode === 'bridge') {
+      this.finalizeWaitingAskTurn(taskId, turn.id, agent)
+      this.store.mutateTask(taskId, (t) => { t.status = 'completed' })
+      this.emit(taskId, { type: 'task_status', status: 'completed' })
+      return
+    }
+    // ask 挂起终结（桥不可见）：批次未登记进 /questions（被浏览器应答器持走/归属失败/节点过旧），
+    // 答复桥无法触达 —— 表面化问题内容并中止远端悬停回合（cancelSession 实测可解此形态），
+    // 用户下一条消息作为新指令在已空闲的会话上直接执行。
+    if (askWatch.fired && !signal.aborted && askWatch.mode === 'unbridged') {
+      await this.finalizeUnbridgedAskTurn(taskId, turn.id, agent, target, session.remoteSessionId!)
+      this.store.mutateTask(taskId, (t) => { t.status = 'completed' })
+      this.emit(taskId, { type: 'task_status', status: 'completed' })
+      return
     }
 
     this.store.updateTurn(taskId, turn.id, (tt) => {
@@ -1352,6 +1452,271 @@ export class TaskEngine {
       t.status = 'completed'
     })
     this.emit(taskId, { type: 'task_status', status: 'completed' })
+  }
+
+  // ---------- ask_user_question 挂起治理 ----------
+  // 远端 ask_user_question 会把 run 悬停在工具内部等待答复：会话状态恒 running、
+  // 后续 prompt 经 followup 排队永不被处理、远端 cancel 也解不开批次（线上实测）。
+  // 治理三板斧：派发中检测（watchPendingAsk）→ 自由文本答复桥（answerPendingAndResume）→ 停止时解挂（cancelTask）。
+
+  private static readonly ASK_WAIT_HINT = '🔔 远端助手有提问等待你答复 —— 直接在下方输入回复发送即可（自由文本将自动作为问题答复提交）；也可以点问题卡片里的选项作答'
+
+  private static readonly UNATTENDED_AUTO_ANSWER =
+    '（无人值守自动答复）无法等待人工输入：请按任务既定目标继续执行，参数取保守默认值，并在最终产出中显式列出本答复所做的假设。'
+
+  /**
+   * ask 挂起监视：ask_user_question 的 tool_call 后轮询远端挂起批次。
+   * - attended（节点主会话）：命中 → 记录 task.pendingAsk、断流快速终结回合（不再 10min 静默 + 30min 对账）；
+   * - unattended（成员/编排/定时）：命中 → 自动提交保守默认答复解锁执行链（流不中断，tool_result 照常回传）；
+   *   答复失败也要快速终结（挂起会话只会越等越死）。
+   */
+  private async watchPendingAsk(
+    taskId: string,
+    agent: SubAgent | { name: string; id: string },
+    target: DshTarget,
+    sessionId: string,
+    turnId: string,
+    interaction: 'attended' | 'unattended',
+    streamCtrl: AbortController,
+    askWatch: { fired: boolean; mode: 'bridge' | 'unbridged' },
+    onPush: () => void,
+  ): Promise<void> {
+    const windowMs = Number(process.env.WB_ASK_WATCH_WINDOW_MS || 60_000)
+    const deadline = Date.now() + windowMs
+    while (Date.now() < deadline) {
+      if (askWatch.fired || streamCtrl.signal.aborted) return
+      await new Promise((r) => setTimeout(r, 2_000))
+      if (askWatch.fired || streamCtrl.signal.aborted) return
+      const pq = await this.client.listPendingQuestions(target, sessionId).catch(() => undefined)
+      if (askWatch.fired || streamCtrl.signal.aborted) return
+      // 桥快路径：批次已登记（count>0）——attended 等待答复 / unattended 自动保守答复
+      if (pq?.ok && pq.supported && (pq.count || 0) > 0) {
+        const questions = (pq.batches || []).flatMap((b) => b.questions || [])
+        if (interaction === 'unattended') {
+          const answers = questions.filter((q) => q?.id).map((q) => ({ id: String(q.id), selected: [] as string[], custom: TaskEngine.UNATTENDED_AUTO_ANSWER }))
+          const r = answers.length
+            ? await this.client.answerQuestion(target, sessionId, answers).catch((e: any) => ({ ok: false, error: e?.message || '答复失败' }))
+            : { ok: false, error: '挂起问题缺少 id，无法桥接答复' }
+          if (r.ok) {
+            this.taskLog(taskId, 'warn', '无人值守会话出现挂起提问，已自动按保守默认答复解锁执行链')
+            return // 流继续：工具已 resolve，后续 tool_result/turn_end 照常
+          }
+          this.taskLog(taskId, 'error', `无人值守挂起提问自动答复失败: ${(r as any).error} —— 快速终结以免整链挂死`)
+        } else {
+          askWatch.fired = true
+          askWatch.mode = 'bridge'
+          this.store.mutateTask(taskId, (t) => {
+            t.pendingAsk = { agentId: agent.id, sessionId, batchId: pq.batches?.[0]?.batchId, questions, turnId, at: Date.now() }
+          })
+          this.store.updateTurn(taskId, turnId, (tt) => {
+            const t = [...(tt.tools || [])].reverse().find((x) => x.name === 'ask_user_question' || x.name === 'ask-user-question')
+            if (t && t.status === 'running') t.result = '⏳ 等待用户答复（回复即答复）'
+          })
+          onPush()
+          streamCtrl.abort()
+          return
+        }
+      }
+      // ask 工具已结束（tool_result 到达 / 正常完成）→ 无需治理
+      if (!this.askToolStillRunning(taskId, turnId)) return
+    }
+    // 窗口结束 ask 工具仍 running：远端悬停在提问上，但批次不可桥接 ——
+    // 实测形态：批次被浏览器应答器持走 / waterfall 归属失败（/questions count=0）或节点过旧（无路由）。
+    // 此时答复桥触达不了，唯一可靠杠杆是 cancelSession 中止悬停回合（公司笔记本节点实测 running→idle）。
+    if (streamCtrl.signal.aborted || !this.askToolStillRunning(taskId, turnId)) return
+    askWatch.fired = true
+    askWatch.mode = 'unbridged'
+    streamCtrl.abort()
+  }
+
+  /** ask 工具是否仍处于 running（未收到 tool_result） */
+  private askToolStillRunning(taskId: string, turnId: string): boolean {
+    const t = this.store.getTask(taskId)?.turns.find((x) => x.id === turnId)
+    const ask = [...(t?.tools || [])].reverse().find((x) => x.name === 'ask_user_question' || x.name === 'ask-user-question')
+    return ask?.status === 'running'
+  }
+
+  /** 从 ask 工具 args 提取人类可读的问题摘要（供不可桥接悬停时的系统提示） */
+  private summarizeAskQuestions(taskId: string, turnId: string): string {
+    const t = this.store.getTask(taskId)?.turns.find((x) => x.id === turnId)
+    const ask = [...(t?.tools || [])].reverse().find((x) => x.name === 'ask_user_question' || x.name === 'ask-user-question')
+    try {
+      const parsed = JSON.parse(ask?.args || '{}')
+      const qs = Array.isArray(parsed?.questions) ? parsed.questions : []
+      const lines = qs.map((q: any) => {
+        const opts = Array.isArray(q.options) ? q.options.map((o: any) => o?.label).filter(Boolean).join('/') : ''
+        return `· ${q?.header ? q.header + '：' : ''}${q?.question || q?.id || ''}${opts ? `（选项：${opts}）` : ''}`
+      })
+      return lines.join('\n').slice(0, 600)
+    } catch {
+      return (ask?.args || '').slice(0, 400)
+    }
+  }
+
+  /**
+   * 不可桥接悬停的收尾：表面化问题内容 + 中止远端悬停回合（会话转 idle），
+   * 用户下一条消息作为新指令直接执行（会话已空闲，不再排队在悬停 run 后面）。
+   */
+  private async finalizeUnbridgedAskTurn(
+    taskId: string,
+    turnId: string,
+    agent: { name: string },
+    target: DshTarget,
+    sessionId: string,
+  ): Promise<void> {
+    const questionText = this.summarizeAskQuestions(taskId, turnId)
+    this.store.updateTurn(taskId, turnId, (tt) => {
+      tt.streaming = false
+      for (const t of tt.tools || []) {
+        if (t.status !== 'running') continue
+        t.status = 'error'
+        t.result = t.name === 'ask_user_question' || t.name === 'ask-user-question'
+          ? '⚠️ 提问未接入答复桥（远端批次不可见），悬停回合已中止——请直接回复你的选择作为新指令'
+          : '⚠️ 远端回合挂起等待用户答复，本工具结果未知'
+      }
+    })
+    const finalTurn = this.store.getTask(taskId)?.turns.find((x) => x.id === turnId)
+    if (finalTurn) this.emit(taskId, { type: 'turn_end', turn: finalTurn })
+    this.appendSystemTurn(taskId,
+      `🔔 远端助手发起过提问，但该提问未接入答复桥，已中止悬停回合（会话已就绪）。\n提问内容：\n${questionText}\n—— 请把你的选择/答案直接作为新消息发送，将作为新指令继续执行。`)
+    this.taskLog(taskId, 'warn', `ask 提问不可桥接（批次不可见），已中止 ${agent.name} 的悬停回合`)
+    await this.client.cancelSession(target, sessionId).catch(() => {})
+  }
+
+  /** 挂起等待的回合收尾：streaming=false；ask 工具保持 running（答复卡/答复桥依赖），其余 running 工具落 error */
+  private finalizeWaitingAskTurn(taskId: string, turnId: string, agent: { name: string }): void {
+    this.store.updateTurn(taskId, turnId, (tt) => {
+      tt.streaming = false
+      for (const t of tt.tools || []) {
+        if (t.status !== 'running') continue
+        if (t.name === 'ask_user_question' || t.name === 'ask-user-question') {
+          if (!t.result) t.result = '⏳ 等待用户答复（回复即答复）'
+        } else {
+          t.status = 'error'
+          t.result = '⚠️ 远端回合挂起等待用户答复，本工具结果未知'
+        }
+      }
+    })
+    const finalTurn = this.store.getTask(taskId)?.turns.find((x) => x.id === turnId)
+    if (finalTurn) this.emit(taskId, { type: 'turn_end', turn: finalTurn })
+    this.appendSystemTurn(taskId, TaskEngine.ASK_WAIT_HINT)
+    this.taskLog(taskId, 'warn', `远端会话被 ask_user_question 挂起，回合已收尾等待答复（${agent.name}）`)
+  }
+
+  /**
+   * 派发前的挂起预检 + 自由文本答复桥：会话有挂起提问时，用户消息按 custom 答复提交 /answers
+   * 解锁挂起的 run，然后追踪续跑（轮询状态 + 挂起重查 + history 对账），全程不发新 prompt。
+   * 返回 true = 已按答复桥处理（调用方直接 return）；false = 无挂起/桥不可用，走常规派发。
+   */
+  private async answerPendingAndResume(
+    taskId: string,
+    text: string,
+    agent: SubAgent | { name: string; id: string },
+    target: DshTarget,
+    sessionId: string,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    const pq = await this.client.listPendingQuestions(target, sessionId).catch(() => undefined)
+    if (!pq?.ok || !pq.supported || !(pq.count || 0)) return false
+    const questions = (pq.batches || []).flatMap((b) => b.questions || [])
+    const answers = questions.filter((q) => q?.id).map((q) => ({ id: String(q.id), selected: [] as string[], custom: text }))
+    if (!answers.length) {
+      this.appendSystemTurn(taskId, '⚠️ 远端会话有挂起提问但问题缺少 id，无法桥接答复；请到 web 端问题卡片作答，或停止后重试')
+      return false
+    }
+    const r = await this.client.answerQuestion(target, sessionId, answers)
+    if (!r.ok) {
+      // 批次已消失（竞态：远端刚自行解挂/被取消）→ 回常规派发；真失败 → 明确告警后仍回常规派发（S6 兜底快速失败）
+      this.taskLog(taskId, 'warn', `答复桥提交失败（${r.error}），转常规派发`)
+      return false
+    }
+
+    // 已记录的挂起 ask 工具落 done（前端交互卡随任务刷新关闭）
+    const task0 = this.store.getTask(taskId)
+    if (task0?.pendingAsk) {
+      this.store.updateTurn(taskId, task0.pendingAsk.turnId, (tt) => {
+        const t = [...(tt.tools || [])].reverse().find((x) => (x.name === 'ask_user_question' || x.name === 'ask-user-question') && x.status === 'running')
+        if (t) {
+          t.status = 'done'
+          t.result = '✅ 已答复: ' + text.slice(0, 500)
+        }
+      })
+      this.store.mutateTask(taskId, (t) => { delete t.pendingAsk })
+    }
+    this.appendSystemTurn(taskId, `📨 已把你的消息作为答复提交给挂起的提问（${answers.length} 题），远端回合恢复执行，正在追踪续跑…`)
+    this.taskLog(taskId, 'info', `答复已提交（${agent.name} · ${answers.length} 题），追踪续跑`)
+
+    // 续跑追踪回合：远端 run 从挂起点继续，产出不再经过新 prompt —— 轮询状态直至非 running，
+    // 期间再次挂起（连环提问）按等待语义收尾；stop 可中止。
+    const turn: TaskTurn = {
+      id: `turn-${randomUUID().slice(0, 8)}`,
+      seq: 0,
+      role: 'agent',
+      agentId: agent.id,
+      agentName: agent.name,
+      text: '',
+      streaming: true,
+      at: Date.now(),
+    }
+    this.store.appendTurn(taskId, turn)
+    this.emit(taskId, { type: 'turn_start', turn })
+
+    // 追踪上限与远端 prompt 超时同窗（30min）：真实无人/有人大任务恢复后可能继续跑工具数十分钟
+    const deadline = Date.now() + 30 * 60_000
+    let pendingAgain = false
+    let ran = false
+    while (Date.now() < deadline && !signal.aborted) {
+      await new Promise((res) => setTimeout(res, 5_000))
+      if (signal.aborted) break
+      const pq2 = await this.client.listPendingQuestions(target, sessionId).catch(() => undefined)
+      if (pq2?.ok && pq2.supported && (pq2.count || 0) > 0) {
+        pendingAgain = true
+        break
+      }
+      const st = await this.client.getSession(target, sessionId).catch(() => undefined)
+      if (!st?.ok) continue
+      if (st.status && st.status !== 'running') { ran = true; break }
+      ran = true
+    }
+
+    if (signal.aborted) {
+      this.store.updateTurn(taskId, turn.id, (tt) => { tt.streaming = false })
+      const finalTurn = this.store.getTask(taskId)?.turns.find((x) => x.id === turn.id)
+      if (finalTurn) this.emit(taskId, { type: 'turn_end', turn: finalTurn })
+      this.appendSystemTurn(taskId, `⏹ 已停止 — ${agent.name} 的续跑追踪已中止（远端可能仍在执行）`)
+      this.store.mutateTask(taskId, (t) => { t.status = 'cancelled' })
+      this.emit(taskId, { type: 'task_status', status: 'cancelled' })
+      return true
+    }
+
+    if (pendingAgain) {
+      const pq3 = await this.client.listPendingQuestions(target, sessionId).catch(() => undefined)
+      const questions = (pq3?.batches || []).flatMap((b) => b.questions || [])
+      this.store.mutateTask(taskId, (t) => {
+        t.pendingAsk = { agentId: agent.id, sessionId, batchId: pq3?.batches?.[0]?.batchId, questions, turnId: turn.id, at: Date.now() }
+      })
+      this.finalizeWaitingAskTurn(taskId, turn.id, agent)
+      this.store.mutateTask(taskId, (t) => { t.status = 'completed' })
+      this.emit(taskId, { type: 'task_status', status: 'completed' })
+      return true
+    }
+
+    // 对账整轮：挂起 run 恢复后的产出在其原回合内，从 history 取最后一条助手回复
+    const reconciled = await this.client.reconcileTurn(target, sessionId, turnFragment(text), { signal }).catch(() => undefined)
+    this.taskLog(taskId, reconciled?.ok ? 'info' : 'warn',
+      `续跑对账${reconciled?.ok ? `成功（${String(reconciled.content || '').length} 字）` : `未取到内容: ${reconciled?.error || '调用异常'}`}`)
+    this.store.updateTurn(taskId, turn.id, (tt) => {
+      tt.streaming = false
+      if (reconciled?.ok && reconciled.content) tt.text = reconciled.content
+      else if (!ran) tt.text = '（远端续跑仍在执行，本轮追踪已达 30 分钟上限 —— 稍后发任意消息即可查询进度并取回结果）'
+      else tt.text = tt.text || '（远端续跑已结束，未返回新内容）'
+      if (reconciled?.usage && typeof reconciled.usage === 'object') tt.usage = { ...reconciled.usage }
+    })
+    const finalTurn = this.store.getTask(taskId)?.turns.find((x) => x.id === turn.id)
+    if (finalTurn) this.emit(taskId, { type: 'turn_end', turn: finalTurn })
+    this.store.mutateTask(taskId, (t) => { t.status = 'completed' })
+    this.emit(taskId, { type: 'task_status', status: 'completed' })
+    return true
   }
 
   // ---------- orchestrate 编排 ----------
@@ -2402,6 +2767,13 @@ export class TaskEngine {
     // 只对齐 /SSE 流/ 前缀会漏掉「零内容 + 网络错误」的形态，导致回复彻底不同步到 UI。
     const networkLike = /fetch failed|terminated|TimeoutError|aborted|socket|ECONN|EPIPE|EHOST|upstream|静默超时|网络/i
     if (!signal.aborted && (sse.content || sse.complete === false || /SSE 流|静默超时/.test(sse.error || '') || networkLike.test(sse.error || ''))) {
+      // 挂起防御：远端被 ask_user_question 挂起时会话状态恒为 running，下面的轮询只会空转满额超时
+      // （实测表现 = 静默 10min + 对账 30min 的假 running）。先查一次挂起批次，命中立即快速失败。
+      const parked = await this.client.listPendingQuestions(target, sessionId).catch(() => undefined)
+      if (parked?.ok && (parked.count || 0) > 0) {
+        handlers.onLog?.('远端会话被提问挂起（pending ask），不转入长轮询 —— 等待答复桥解锁', 'warn')
+        return { ok: false, content: sse.content, reasoning: sse.reasoning, complete: false, error: '远端会话挂起等待提问答复', pendingAsk: true }
+      }
       handlers.onLog?.('SSE 流中断/提前结束，转轮询对账整轮结果...', 'warn')
       const polled = await this.client.waitForSessionResult(target, sessionId, {
         signal,
@@ -2498,7 +2870,11 @@ export class TaskEngine {
     const task = this.store.getTask(taskId)
     if (!task) return { ok: false, error: '任务不存在' }
     if (!files.length) return { ok: false, error: '没有文件' }
-    const targetIds = this.attachmentTargetAgentIds(task)
+    // 项目任务且配置了项目工作区：附件统一落到「项目节点 + 项目工作区」（走主会话通道），
+    // 不投成员自身节点（成员 workDir 在别的机器上，投过去 [附件] 路径与会话工作区对不上，读不到）
+    const exec = this.taskExec(task)
+    const projectWs = exec.workspace?.trim() || ''
+    const targetIds = exec.dshRef && projectWs ? [NODE_AGENT_ID] : this.attachmentTargetAgentIds(task)
     const { targets } = await this.resolver.resolveMembers(targetIds)
     // 成员并行分发（串行时多成员 × 隧道延迟叠加，客户端 100% 后长时间无响应）
     const results: Array<{ agentId: string; agentName: string; ok: boolean; error?: string; files?: Array<{ name: string; path: string; size: number }> }> = await Promise.all(
@@ -2655,7 +3031,10 @@ export class TaskEngine {
         const { bytesRead } = await handle.read(buf, 0, length, offset)
         return bytesRead === length ? buf : buf.subarray(0, bytesRead)
       }
-      const targetIds = this.attachmentTargetAgentIds(task)
+      // 与 uploadAttachments 同规则：项目任务 + 项目工作区 → 统一落项目节点主会话（cwd = 项目工作区）
+      const exec = this.taskExec(task)
+      const projectWs = exec.workspace?.trim() || ''
+      const targetIds = exec.dshRef && projectWs ? [NODE_AGENT_ID] : this.attachmentTargetAgentIds(task)
       const { targets } = await this.resolver.resolveMembers(targetIds)
       const results = await Promise.all(
         targetIds.map(async (agentId) => {

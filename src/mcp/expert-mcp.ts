@@ -143,7 +143,7 @@ export class ExpertMcpServer {
     return [
       {
         name: 'expert.list',
-        description: '列出专家库（含用户自建）；可选 domain=分区过滤、skill=关键词过滤（name/描述/tags）',
+        description: '列出专家库（含用户自建）；可选 domain=分区过滤、skill=关键词过滤（name/描述/tags）。专家在 WorkBuddy 任务里直接用 @专家名（或 @专家团名，按团队合同展开成员）写进 task_manage 的 message 即可派活；发起前先判断项目归属，能定项目就带 projectId 从项目发起',
         inputSchema: {
           type: 'object',
           properties: {
@@ -274,7 +274,7 @@ export class ExpertMcpServer {
 
 function readBody(req: http.IncomingMessage, limit = 2 * 1024 * 1024): Promise<string> {
   return new Promise((done, fail) => {
-    let body = ''
+    const chunks: Buffer[] = []
     let size = 0
     req.on('data', (c: Buffer) => {
       size += c.length
@@ -283,9 +283,9 @@ function readBody(req: http.IncomingMessage, limit = 2 * 1024 * 1024): Promise<s
         fail(new Error(`请求体超过 ${limit} 字节上限`))
         return
       }
-      body += c
+      chunks.push(c)
     })
-    req.on('end', () => done(body))
+    req.on('end', () => done(Buffer.concat(chunks).toString('utf8')))
     req.on('error', () => fail(new Error('请求流中断')))
   })
 }

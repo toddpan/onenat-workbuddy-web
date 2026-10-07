@@ -210,6 +210,8 @@ export interface ExtractedMentions {
   mentionedExpertIds?: string[]
   /** 提及了同名多个专家（已拒绝召唤，记录名字供系统提示） */
   mentionedExpertAmbiguous?: string
+  /** @项目 提及（项目 id）：任务未绑定项目时视为对该项目发起任务（节点/工作区/项目指令/专家全继承） */
+  mentionedProjectId?: string
   cleanText: string
 }
 
@@ -378,6 +380,16 @@ export interface WorkTask {
   teamId?: string
   /** 专家库动态成员（expert-<expertId> → 展示名）：编排启动时登记，供花名册/子任务/轨迹解析成员名，不落子智能体实体 */
   expertMembers?: Array<{ id: string; name: string }>
+  /** 挂起的 ask_user_question 提问：远端 run 悬停在工具内部等待答复（会话状态恒 running、后续 prompt 经 followup 排队永不被处理）。
+   *  用户下一条自由文本消息将被路由到 /answers 桥作为答复解锁，而不是发新 prompt。 */
+  pendingAsk?: {
+    agentId: string
+    sessionId: string
+    batchId?: string
+    questions: Array<Record<string, any>>
+    turnId: string
+    at: number
+  }
 }
 
 export interface TaskAttachment {
