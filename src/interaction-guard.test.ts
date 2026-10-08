@@ -4,6 +4,8 @@
  * 背景：曾出现子智能体在聊天直发路径拿到 attended 守卫（允许 ask_user_question），
  * 导致远程 DSH 会话停下来等提问且提问卡无法透传回 WorkBuddy UI，整条任务链挂死。
  * 修复后的合同：只有「节点主会话且非定时任务」允许提问，其余一律 unattended。
+ * 2026-10-08 起有人值守不再下发任何交互提示（工具在远端工具列表本就可见，
+ * 提示词点名只会引导模型提问），unattended 守卫保持禁提问声明。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -16,10 +18,10 @@ function selectInteraction(agentId: string, scheduleId?: string): 'attended' | '
   return agentId === NODE_AGENT_ID && !scheduleId ? 'attended' : 'unattended'
 }
 
-test('节点主会话（用户直发、非定时）为有人值守，允许 ask_user_question', () => {
+test('节点主会话（用户直发、非定时）为有人值守，不下发任何交互提示', () => {
   const guard = interactionGuard(selectInteraction(NODE_AGENT_ID))
   assert.equal(selectInteraction(NODE_AGENT_ID), 'attended')
-  assert.match(guard, /可调用 ask_user_question/)
+  assert.equal(guard, '')
 })
 
 test('成员/子智能体一律无人值守，严格禁止 ask_user_question', () => {
