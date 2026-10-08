@@ -20,6 +20,7 @@ import type { ScheduleRunner } from './scheduler.js'
 import { normalizeRule, nextRun, ruleText } from './scheduler.js'
 import { execOnSshResource, maskSshResource, normalizeSshResource, testSshResource } from './ssh-resources.js'
 import { normalizeDshRef } from './router.js'
+import type { ExpertRegistry } from './expert-registry.js'
 
 export type ToolParamType = 'string' | 'json'
 
@@ -130,6 +131,8 @@ export interface ToolOpsDeps {
   monitor?: MonitorService
   /** 调度器（schedule_manage 的 run 手动触发用） */
   scheduler?: ScheduleRunner
+  /** 统一专家注册表（expert_manage 用；未装配时该工具返回错误） */
+  expertRegistry?: ExpertRegistry
   /** 控制台地址（回显给调用方，便于人接手查看 UI） */
   consoleUrl: string
 }
@@ -1153,5 +1156,119 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
     },
   }
 
-  return [resourceManage, agentManage, taskManage, taskStatus, taskChat, taskEvaluate, taskAskAnswer, sshResourceManage, monitorRead, scheduleManage, plannerManage, fileManage, projectManage]
+  // 14. 专家库管理（roster + builtin + 用户自建的统一注册表）
+  const expertManage: WorkBuddyToolDef = {
+    name: 'workbuddy_expert_manage',
+    description:
+      '管理 WorkBuddy 专家库（名册 + 内置 + 用户自建统一视图）: list（分页，domain/skill 过滤）/ get（完整提示词档案）/ search（元数据 + prompt 正文全文检索）/ create / update / delete（仅用户自建可写，builtin/名册只读）。' +
+      '专家的用法：task_manage create 的 message 里 @专家名 即委派（@ 多个 = 编排；@专家团名按团队合同展开成员）；' +
+      '内置/名册专家要「改」时，用 create 建一个同领域的用户专家替代（copy-on-write），id 不可与其冲突',
+    parameters: {
+      action: { type: 'string', description: '操作: list / get / search / create / update / delete' },
+      expertId: { type: 'string', description: '专家 ID（get / delete 用）' },
+      domain: { type: 'string', description: 'list 可选：按分区过滤（如 team / user）' },
+      skill: { type: 'string', description: 'list 可选：关键词过滤（name/描述/tags，大小写不敏感）' },
+      query: { type: 'string', description: 'search 必填：全文检索关键词（元数据 + prompt 正文）' },
+      limit: { type: 'string', description: 'list 可选：单页数量（默认 50，最大 200）' },
+      offset: { type: 'string', description: 'list 可选：翻页偏移（默认 0）' },
+      expert: {
+        type: 'json',
+        description:
+          'create/update 用: {id:"<小写中划线 slug>", name?, description?, icon?, division?, tags?:["..."], ' +
+          'systemPrompt:"<职责与约束提示词>", executionPrompt?, role?}（create 时 id 与 systemPrompt 必填；update 只需带 id + 要改的字段）',
+      },
+    },
+    async execute(args) {
+      const registry = deps.expertRegistry
+      if (!registry) return JSON.stringify({ ok: false, error: '专家注册表未装配' })
+      const action = args.action || 'list'
+      try {
+        if (action === 'list') {
+          const idx = await registry.index()
+          let experts = args.skill ? await registry.search(String(args.skill)) : [...idx.divisions.flatMap((d) => d.experts)]
+          if (args.domain) experts = experts.filter((e) => e.division === String(args.domain))
+          const total = experts.length
+          const limit = clamp(Number(args.limit) || 50, 1, 200)
+          const offset = Math.max(Number(args.offset) || 0, 0)
+          return JSON.stringify(
+            {
+              ok: true,
+              total,
+              offset,
+              limit,
+              divisions: idx.divisions.map((d) => ({ division: d.division, divisionZh: d.divisionZh, count: d.count })),
+              experts: experts.slice(offset, offset + limit).map((e) => ({
+                id: e.id, name: e.name, division: e.division, source: e.source, icon: e.icon, description: e.description,
+              })),
+              usage: '完整档案用 get；派活在 task_manage create 的 message 里写 @专家名；翻页用 offset',
+            },
+            null,
+            2,
+          )
+        }
+        if (action === 'get') {
+          const id = String(args.expertId || '').trim()
+          if (!id) return JSON.stringify({ ok: false, error: '缺少 expertId' }, null, 2)
+          const profile = await registry.getProfile(id)
+          return JSON.stringify({ ok: true, expert: profile }, null, 2)
+        }
+        if (action === 'search') {
+          const q = String(args.query || '').trim().toLowerCase()
+          if (!q) return JSON.stringify({ ok: false, error: 'search 需要 query 参数' }, null, 2)
+          const all = [...(await registry.index()).divisions.flatMap((d) => d.experts)]
+          const out: Array<Record<string, unknown>> = []
+          for (const e of all) {
+            if (out.length >= 50) break
+            const hay = [e.name, e.nameEn, e.description, e.descriptionEn, ...(e.tags ?? [])]
+              .filter((v): v is string => typeof v === 'string').join('\n').toLowerCase()
+            if (hay.includes(q)) { out.push({ ...e, matchedIn: 'metadata' }); continue }
+            try {
+              const p = await registry.getProfile(e.id)
+              if (`${p.systemPrompt}\n${p.executionPrompt ?? ''}`.toLowerCase().includes(q)) out.push({ ...e, matchedIn: 'prompt' })
+            } catch { /* 档案缺失的跳过 */ }
+          }
+          return JSON.stringify({ ok: true, total: out.length, experts: out, usage: 'matchedIn=prompt 的命中在正文里，完整提示词用 get' }, null, 2)
+        }
+        if (action === 'create' || action === 'update') {
+          const body = asJson(args.expert)
+          if (!body || typeof body !== 'object') return JSON.stringify({ ok: false, error: `${action} 需要 expert 参数（JSON）` }, null, 2)
+          const id = String(body.id ?? '').trim()
+          if (!id) return JSON.stringify({ ok: false, error: '缺少专家 id（小写字母/数字中划线 slug，如 my-reviewer）' }, null, 2)
+          const payload: Record<string, unknown> = { id }
+          for (const k of ['name', 'description', 'icon', 'division', 'systemPrompt', 'executionPrompt', 'role']) {
+            if (typeof body[k] === 'string') payload[k] = body[k]
+          }
+          if (Array.isArray(body.tags)) payload.tags = body.tags.map(String)
+          if (action === 'create') {
+            if (typeof body.systemPrompt !== 'string' || !body.systemPrompt.trim()) {
+              return JSON.stringify({ ok: false, error: 'create 需要 systemPrompt（职责与约束提示词）' }, null, 2)
+            }
+            const saved = await registry.createExpert(payload as any)
+            return JSON.stringify({ ok: true, message: '专家已创建（source=user，可再 update/delete）', expert: saved }, null, 2)
+          }
+          const saved = await registry.updateExpert(id, payload as any)
+          return JSON.stringify({ ok: true, message: '专家已更新', expert: saved }, null, 2)
+        }
+        if (action === 'delete') {
+          const id = String(args.expertId || '').trim()
+          if (!id) return JSON.stringify({ ok: false, error: '缺少 expertId' }, null, 2)
+          const ok = await registry.deleteExpert(id)
+          if (!ok) {
+            const exists = await registry.get(id)
+            return JSON.stringify(
+              { ok: false, error: exists ? '内置/名册专家只读，不可删除；要调整请创建同领域用户专家替代。' : '专家不存在。' },
+              null,
+              2,
+            )
+          }
+          return JSON.stringify({ ok: true, deleted: id }, null, 2)
+        }
+        return JSON.stringify({ ok: false, error: `不支持的 action: ${action}` })
+      } catch (err: any) {
+        return JSON.stringify({ ok: false, error: err?.message || String(err) }, null, 2)
+      }
+    },
+  }
+
+  return [resourceManage, agentManage, taskManage, taskStatus, taskChat, taskEvaluate, taskAskAnswer, sshResourceManage, monitorRead, scheduleManage, plannerManage, fileManage, projectManage, expertManage]
 }
