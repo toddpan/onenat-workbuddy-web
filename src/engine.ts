@@ -2599,9 +2599,11 @@ export class TaskEngine {
     // 解析出工作区时只传 workspaceId（工作区路径即工作目录）；远端无工作区体系时退回传 cwd。
     const workspaceId = wantedCwd ? await this.resolveWorkspaceId(target, wantedCwd).catch(() => undefined) : undefined
     const createPayload = {
-      agentPreset: agent.agentPreset,
+      // 模式预设优先级：任务级（聊天窗切换持久化）> 智能体实体 > 远端默认 cordis
+      agentPreset: task.agentPreset || agent.agentPreset,
       provider: targetProvider,
       model: targetModel,
+      reasoningEffort: task.reasoningEffort,
       ...(workspaceId ? { workspaceId } : wantedCwd ? { cwd: wantedCwd } : {}),
     }
     let effTarget = target
@@ -2632,7 +2634,7 @@ export class TaskEngine {
       if (!res.ok && res.error && /ensure project directory|ENOENT/i.test(res.error)) {
         this.taskLog(taskId, 'warn', `工作目录 ${wantedCwd || '(workspace)'} 无法自动创建，已回退远端默认目录重建会话`)
         cwdFellBack = true
-        const fallbackPayload = { agentPreset: agent.agentPreset, provider: targetProvider, model: targetModel }
+        const fallbackPayload = { agentPreset: task.agentPreset || agent.agentPreset, provider: targetProvider, model: targetModel, reasoningEffort: task.reasoningEffort }
         res = await this.client.createSession(effTarget, `[WorkBuddy] ${task.title}`, fallbackPayload)
       }
     }
@@ -2652,7 +2654,7 @@ export class TaskEngine {
         }
         if (!res.ok && res.error && /ensure project directory|ENOENT/i.test(res.error)) {
           cwdFellBack = true
-          const fallbackPayload = { agentPreset: agent.agentPreset, provider: targetProvider, model: targetModel }
+          const fallbackPayload = { agentPreset: task.agentPreset || agent.agentPreset, provider: targetProvider, model: targetModel, reasoningEffort: task.reasoningEffort }
           res = await this.client.createSession(effTarget, `[WorkBuddy] ${task.title}`, fallbackPayload)
         }
       }

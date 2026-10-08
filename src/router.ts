@@ -1420,6 +1420,19 @@ export class WorkBuddyRouter {
       this.sendJson(res, 200, { ok: mr.ok, error: mr.error, data: { models: mr.models || [], defaultModel: mr.defaultModel } })
       return true
     }
+    // 按节点拉模式预设候选（新建智能体尚未保存时）：node=<dshRef JSON>。与 models?node= 同语义、同排序约束
+    const nodePresetsMatch = p === '/api/agents/presets' && method === 'GET'
+    if (nodePresetsMatch) {
+      const url = new URL(req.url || '/', 'http://localhost')
+      const targetRes = await this.resolveFsTarget(url)
+      if (!targetRes.ok) {
+        this.sendJson(res, targetRes.status, { ok: false, error: targetRes.error, data: { presets: [] } })
+        return true
+      }
+      const pr = await this.client.getPresets(targetRes.target)
+      this.sendJson(res, 200, { ok: pr.ok, error: pr.error, data: { presets: pr.presets || [] } })
+      return true
+    }
     const agentMatch = /^\/api\/agents\/([^/]+)$/.exec(p)
     if (agentMatch && method === 'DELETE') {
       const id = decodeURIComponent(agentMatch[1])
@@ -2299,12 +2312,110 @@ export class WorkBuddyRouter {
         provider: typeof body?.provider === 'string' && body.provider ? body.provider : undefined,
         model: typeof body?.model === 'string' && body.model ? body.model : undefined,
         reasoningEffort: typeof body?.reasoningEffort === 'string' && body.reasoningEffort ? body.reasoningEffort : undefined,
+        agentPreset: typeof body?.agentPreset === 'string' ? body.agentPreset : undefined,
       })
       if (!r.ok) {
         this.sendJson(res, 502, { ok: false, error: r.error || '更新会话模型失败' })
         return true
       }
-      this.sendJson(res, 200, { ok: true, data: { selected: r.selected } })
+      this.sendJson(res, 200, { ok: true, data: { selected: r.selected, presetApplied: r.preset ? r.preset.applied : undefined } })
+      return true
+    }
+    // 任务执行会话的模式预设（agentPreset）：任务级持久化（task > 智能体实体 > 远端默认 cordis）
+    // + 尽力对当前远端会话即时生效（宿主不支持运行时切 preset → applied=false，仅持久化，新会话生效）
+    const sessionPresetMatch = /^\/api\/tasks\/([^/]+)\/session-preset$/.exec(p)
+    if (sessionPresetMatch && method === 'PUT') {
+      const taskId = decodeURIComponent(sessionPresetMatch[1])
+      const body = await this.parseBody(req)
+      const task = this.store.getTask(taskId)
+      if (!task) {
+        this.sendJson(res, 404, { ok: false, error: 'Task not found' })
+        return true
+      }
+      const preset = String(body?.preset || '').trim()
+      this.store.mutateTask(taskId, (t): WorkTask => {
+        if (preset) t.agentPreset = preset
+        else delete t.agentPreset
+        return t
+      })
+      // 尽力即时生效：主会话（__node__）优先，否则主智能体（与 session-model 语义一致）
+      const agentId = task.sessions?.['__node__']?.remoteSessionId ? '__node__' : this.planner.pickMainAgent()?.id || ''
+      const binding = agentId ? task.sessions?.[agentId] : undefined
+      if (!binding?.remoteSessionId) {
+        this.sendJson(res, 200, { ok: true, data: { applied: false, reason: 'no-session', saved: true } })
+        return true
+      }
+      const agent = this.store.getAgent(agentId)
+      const target = agent
+        ? await this.resolver.resolve(agent)
+        : await this.engine.resolveExecTarget(task, agentId)
+      if (!target || !target.online || !target.baseUrl) {
+        this.sendJson(res, 200, { ok: true, data: { applied: false, reason: 'node-offline', saved: true } })
+        return true
+      }
+      const r = await this.client.updateSessionModel(target, binding.remoteSessionId, { agentPreset: preset })
+      this.sendJson(res, 200, {
+        ok: true,
+        data: { applied: r.ok ? r.preset?.applied !== false : false, reason: r.ok ? r.preset?.reason : r.error, saved: true },
+      })
+      return true
+    }
+    // 回读任务执行会话当前的模型选择 + 模式预设（聊天窗回显；无会话时回任务级落点）
+    const sessionModelGetMatch = /^\/api\/tasks\/([^/]+)\/session-model$/.exec(p)
+    if (sessionModelGetMatch && method === 'GET') {
+      const taskId = decodeURIComponent(sessionModelGetMatch[1])
+      const task = this.store.getTask(taskId)
+      if (!task) {
+        this.sendJson(res, 404, { ok: false, error: 'Task not found' })
+        return true
+      }
+      const agentId = task.sessions?.['__node__']?.remoteSessionId ? '__node__' : this.planner.pickMainAgent()?.id || ''
+      const binding = agentId ? task.sessions?.[agentId] : undefined
+      if (!binding?.remoteSessionId) {
+        this.sendJson(res, 200, {
+          ok: true,
+          data: { session: null, taskModel: task.model || '', taskReasoningEffort: task.reasoningEffort || '', taskAgentPreset: task.agentPreset || '' },
+        })
+        return true
+      }
+      const agent = this.store.getAgent(agentId)
+      const target = agent
+        ? await this.resolver.resolve(agent)
+        : await this.engine.resolveExecTarget(task, agentId)
+      if (!target || !target.online || !target.baseUrl) {
+        this.sendJson(res, 200, {
+          ok: true,
+          data: { session: null, taskModel: task.model || '', taskReasoningEffort: task.reasoningEffort || '', taskAgentPreset: task.agentPreset || '' },
+        })
+        return true
+      }
+      const r = await this.client.getSessionDetail(target, binding.remoteSessionId)
+      this.sendJson(res, 200, {
+        ok: true,
+        data: {
+          session: r.ok ? r.session ?? null : null,
+          taskModel: task.model || '',
+          taskReasoningEffort: task.reasoningEffort || '',
+          taskAgentPreset: task.agentPreset || '',
+        },
+      })
+      return true
+    }
+    // 任务节点的模式预设候选（聊天窗预设切换的数据源）：与 tasks/:id/models 同语义
+    const taskPresetsMatch = /^\/api\/tasks\/([^/]+)\/presets$/.exec(p)
+    if (taskPresetsMatch && method === 'GET') {
+      const task = this.store.getTask(decodeURIComponent(taskPresetsMatch[1]))
+      if (!task) {
+        this.sendJson(res, 404, { ok: false, error: 'Task not found' })
+        return true
+      }
+      const target = await this.engine.resolveExecTarget(task, '__node__').catch(() => undefined)
+      if (!target?.online || !target?.baseUrl) {
+        this.sendJson(res, 200, { ok: false, error: (target as any)?.error || '任务节点不可达', data: { presets: [] } })
+        return true
+      }
+      const pr = await this.client.getPresets(target)
+      this.sendJson(res, 200, { ok: pr.ok, error: pr.error, data: { presets: pr.presets || [] } })
       return true
     }
     // 任务级模型（无远端会话时的模型选择落点）：engine ensureSession 的 plannerModelSetting
@@ -2316,10 +2427,14 @@ export class WorkBuddyRouter {
         const m = String(body?.model || '').trim()
         if (m) t.model = m
         else delete t.model
+        // 任务级推理强度与 model 同存同清：建会话时随 createPayload 透传
+        const eff = String(body?.reasoningEffort || '').trim()
+        if (eff) t.reasoningEffort = eff
+        else delete t.reasoningEffort
         return t
       })
       if (!updated) this.sendJson(res, 404, { ok: false, error: 'Task not found' })
-      else this.sendJson(res, 200, { ok: true, data: { model: updated.model || '' } })
+      else this.sendJson(res, 200, { ok: true, data: { model: updated.model || '', reasoningEffort: updated.reasoningEffort || '' } })
       return true
     }
     // 任务级运行权限：优先于智能体实体默认 permission（空串 = 清除覆盖，回退实体默认/全部权限）。

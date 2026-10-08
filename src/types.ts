@@ -368,6 +368,10 @@ export interface WorkTask {
   nodeRef?: DshRef
   /** 任务级模型（provider/model）：定时任务实例配置；主会话（__node__）优先于全局调度模型 */
   model?: string
+  /** 任务级推理强度（配合 model 使用；无会话时的落点，建会话时随 createPayload 透传） */
+  reasoningEffort?: string
+  /** 任务级模式预设 agentPreset（聊天窗切换的持久化落点）：建会话时优先于智能体实体默认 */
+  agentPreset?: string
   /** 任务级运行权限（如 danger-full-access / workspace-write / ask）：派发时注入提示词，优先于智能体实体默认 */
   permission?: string
   /** 执行中的排队消息（轮次结束自动补发；「立即发送」= steer 插话到运行中回合）；teamId = 排队消息携带的专家团意图 */

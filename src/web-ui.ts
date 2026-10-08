@@ -491,6 +491,24 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
 }
 .dsh-usage-pill b { font-weight: 500; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
 
+/* 排队消息（运行中补充意见）：⏳ 排队中 pill + ⚡ 立即发送按钮（对齐移动端） */
+.dsh-queued-pill {
+  display: inline-flex; align-items: center; height: 20px; padding: 0 8px;
+  border-radius: 999px; background: var(--warn-light); color: var(--warn);
+  font-size: 11px; line-height: 20px; white-space: nowrap;
+}
+.dsh-sendnow {
+  display: inline-flex; align-items: center; height: 20px; padding: 0 9px;
+  border: 1px solid rgba(77, 107, 254, .35); border-radius: 999px;
+  background: var(--pri-light); color: var(--pri);
+  font-size: 11px; font-weight: 600; line-height: 18px; white-space: nowrap; cursor: pointer;
+  transition: background-color 100ms ease;
+}
+.dsh-sendnow:hover { background: rgba(77, 107, 254, .16); }
+.dsh-sendnow:disabled { opacity: .5; cursor: default; }
+/* 带排队标记的用户轮：即便紧跟另一条用户轮（actions 默认 hover 才显示）也常驻可见 */
+.dsh-flow[data-chat-flow-kind='user'] ~ .dsh-flow[data-chat-flow-kind='user'].has-queued .dsh-actions { opacity: 1; }
+
 /* ---- 轮次活动状态（深度求索中... + 15s 后计时钟；ChatView TurnStatus 移植）---- */
 .dsh-turnStatus {
   align-self: flex-start; flex: none; display: inline-flex; align-items: center;
@@ -4372,6 +4390,7 @@ async function openTask(taskId) {
   startTaskStatsPolling();
   startTaskTodosPolling();
   ensureSkillList(); // "/" 技能候选预热（对齐 harness warm 钩子：打开会话即拉目录）
+  loadSessionModelInfo(); // 会话模型选择/推理等级/模式预设回显（失败静默）
 }
 
 /** 对话内容列（DSH ChatView .column）：所有流节点的挂载点，惰性创建 */
@@ -4548,11 +4567,7 @@ function upsertLiveTool(el, tool) {
   } else {
     // 复用现有行更新
     const blk = { el: row, kind: 'tool', upsert(t, meta) {
-      if (t.name === 'ask_user_question' || t.name === 'ask-user-question') {
-        renderAskUserCard(row, t, meta || turnMeta);
-      } else {
-        renderNormalToolRow(row, t);
-      }
+      dispatchToolBlock(row, t, meta || turnMeta);
     } };
     blk.upsert(tool, turnMeta);
   }
@@ -4568,6 +4583,11 @@ function connectStream(taskId) {
     try {
       const ev = JSON.parse(e.data);
       appendLiveTurn(taskId, ev.turn);
+      // 排队消息被补发/插话后，旧气泡上的 ⏳ 标记需按服务端权威状态收敛：
+      // 仅在页面上存在排队标记时回源对账（reconcileViewWithServer 内 syncQueuedUI）
+      if (ev.turn && ev.turn.role === 'user' && document.querySelector('.dsh-chat-column .dsh-queued-pill')) {
+        resyncCurrentTask();
+      }
     } catch {}
   });
 
@@ -4844,11 +4864,7 @@ function createBlock(kind) {
     /** 更新单个工具调用行（按 id 复用现有行，支持 ask_user_question 问答卡片） */
     upsert(t, meta) {
       el.dataset.tid = t.id;
-      if (t.name === 'ask_user_question' || t.name === 'ask-user-question') {
-        renderAskUserCard(el, t, meta);
-      } else {
-        renderNormalToolRow(el, t);
-      }
+      dispatchToolBlock(el, t, meta);
     },
   };
   return rowEl;
@@ -4884,8 +4900,21 @@ function parseAskQuestions(argsStr) {
   return null;
 }
 
+function isAskTool(t) {
+  return t.name === 'ask_user_question' || t.name === 'ask-user-question';
+}
+
+/** ask_user_question 分发：schema 校验失败的调用（status=error，如缺 questions[0].id）降级为普通工具行——
+ *  它们同样携带完整 questions 参数，若照常渲染会得到一张把报错当"答复内容"的假提问卡 */
+function dispatchToolBlock(el, t, meta) {
+  if (isAskTool(t) && t.status !== 'error') renderAskUserCard(el, t, meta);
+  else renderNormalToolRow(el, t);
+}
+
 function renderAskUserCard(el, t, turnMeta) {
-  el.className = 'blk blk-tool';
+  // 根节点必须保留 dsh-tool-root：upsertLiveTool / finalizeTurnBlocks 都按 .dsh-tool-root[data-tid] 定位复用，
+  // 覆写掉它会让每次流式更新/收敛都追加一张重复提问卡（线上"很多个确认卡"的主因）
+  el.className = 'dsh-tool-root blk blk-tool';
   el.dataset.tid = t.id;
   const questions = parseAskQuestions(t.args);
   if (!questions) {
@@ -5184,6 +5213,7 @@ function buildTurnElement(taskId, turn) {
     const bubble = flow.querySelector('.dsh-bubble');
     bubble.innerHTML = md(turn.text || '');
     wireCopyAction(flow, () => turn.text || bubble.textContent || '');
+    syncQueuedUI(flow, taskId, turn);
   } else if (roleClass === 'system') {
     // 系统行（主调度规划 / 告警）：DSH 次级灰阶行语言
     const isWarn = !turn.agentName;
@@ -5238,6 +5268,55 @@ function buildTurnElement(taskId, turn) {
   };
 
   return flow;
+}
+
+/** 排队消息 UI（对齐移动端）：turn.queued ↔ 「⏳ 排队中」pill + 「⚡ 立即发送」按钮 */
+function syncQueuedUI(flow, taskId, turn) {
+  if (!flow) return;
+  const foot = flow.querySelector('.dsh-actions-foot');
+  if (!foot) return;
+  const old = foot.querySelector('.dsh-queued-pill, .dsh-sendnow');
+  if (!turn || !turn.queued) {
+    if (old) old.remove();
+    flow.classList.remove('has-queued');
+    return;
+  }
+  if (old) return;
+  flow.classList.add('has-queued');
+  const pill = document.createElement('span');
+  pill.className = 'dsh-queued-pill';
+  pill.textContent = '⏳ 排队中 · 本轮结束后自动发送';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'dsh-sendnow';
+  btn.textContent = '⚡ 立即发送';
+  btn.title = '运行中 = steer 插话进当前回合；空闲 = 立即派发';
+  btn.addEventListener('click', () => sendQueuedTurnNow(taskId, turn.id, btn, pill));
+  const anchor = foot.querySelector('.dsh-timeStart');
+  if (anchor) { foot.insertBefore(pill, anchor); foot.insertBefore(btn, anchor); }
+  else { foot.appendChild(pill); foot.appendChild(btn); }
+}
+
+/** 排队消息「立即发送」：运行中 → steer 插话；空闲 → 立即派发（服务端 sendQueuedNow 裁决） */
+async function sendQueuedTurnNow(taskId, turnId, btn, pill) {
+  if (btn._busy) return;
+  btn._busy = true;
+  btn.disabled = true;
+  const task = state.taskCache.get(taskId);
+  const wasRunning = !!(task && (task.running || task.status === 'running'));
+  const r = await api('/tasks/' + taskId + '/queue/send', { method: 'POST', body: JSON.stringify({ turnId }) });
+  btn._busy = false;
+  btn.disabled = false;
+  if (!r.ok) { hintComposer(r.error || '立即发送失败', true); return; }
+  if (pill) pill.remove();
+  btn.remove();
+  const cached = state.taskCache.get(taskId);
+  if (cached && cached.turns) {
+    const t = cached.turns.find(x => x.id === turnId);
+    if (t) delete t.queued;
+  }
+  hintComposer(wasRunning ? '⚡ 已插话到运行中回合' : '⚡ 已立即派发');
+  loadTasksQuiet();
 }
 
 /** 脚注复制按钮：写入纯文本，1s 换 ✓（对齐 DSH MessageIconActions） */
@@ -5319,6 +5398,8 @@ function reconcileViewWithServer(taskId, task) {
       appendLiveTurn(taskId, turn);
       continue;
     }
+    // 排队标记以服务端为准（补发/插话后 turn.queued 被清除，气泡上的 ⏳ 需同步摘除）
+    syncQueuedUI(el.wrap, taskId, turn);
     const shown = norm(el.blocks ? el.blocks.textContent : '');
     const auth = norm(turn.text);
     const tail = auth.slice(-40);
@@ -5391,7 +5472,7 @@ function finalizeTurnBlocks(el, turn, taskId) {
       const row = blocks.querySelector('.dsh-tool-root[data-tid="' + t.id + '"]');
       if (!row) {
         const tb = createBlock('tool'); tb.upsert(t, turnMeta); blocks.appendChild(tb.el);
-      } else if (t.name !== 'ask_user_question' && t.name !== 'ask-user-question') {
+      } else if (!isAskTool(t) || t.status === 'error') {
         renderNormalToolRow(row, t);
       }
     }
@@ -5594,10 +5675,11 @@ function appendLogLine(ev) {
 }
 
 function setSending(on) {
-  // 运行中：发送键（上箭头圆钮）让位给停止键（方块圆钮），视觉上只有一个主动作；
-  // body.task-running 同时驱动「规划中」系统消息的等待动效
-  $('btn-send').style.display = on ? 'none' : '';
-  $('btn-send').disabled = on;
+  // 发送键常驻：空闲 = 新轮次；运行中 = 补充意见排队（本轮结束自动补发，气泡上可「⚡ 立即发送」插话）。
+  // 停止键仅运行中出现；body.task-running 同时驱动「规划中」系统消息的等待动效
+  $('btn-send').style.display = '';
+  $('btn-send').disabled = false;
+  $('btn-send').title = on ? '发送（运行中：先排队，气泡上可 ⚡ 立即发送插话）' : '发送';
   $('btn-stop').style.display = on ? 'grid' : 'none';
   document.body.classList.toggle('task-running', on);
 }
@@ -6370,7 +6452,10 @@ async function send() {
   if (!r.ok) {
     toast(r.error || '发送失败', true);
     setSending(false);
+    return;
   }
+  // 运行中的补充意见 → 服务端排队：就地提示（气泡上带 ⏳ 标记与 ⚡ 立即发送）
+  if (r.queued) hintComposer('⏳ 任务运行中，消息已排队（本轮结束后自动发送）');
 }
 
 $('btn-stop').addEventListener('click', async () => {
@@ -7230,9 +7315,27 @@ async function selectMainAgent(agentId) {
 }
 
 // ---------- 主调度模型选择（自定义弹层：原生 select 的移动端全屏弹窗字大折行且样式失控） ----------
-const modelState = { groups: {}, cur: '', loaded: false, error: '' };
-function modelBtnLabel(v) { return '⚙ ' + (v || '主调度默认模型'); }
+// curEffort/curPreset：当前执行会话的推理强度与模式预设（任务内才有意义；打开会话时回读回显）
+const modelState = { groups: {}, cur: '', loaded: false, error: '', presets: [], curEffort: '', curPreset: '', presetsLoaded: false };
 function modelBtnTitle() { return '主调度模型 + 执行会话模型（点选即生效）'; }
+function curModelEntry() {
+  if (!modelState.cur) return null;
+  for (const pv of Object.keys(modelState.groups)) {
+    const hit = (modelState.groups[pv] || []).find(m => pv + '/' + m.id === modelState.cur);
+    if (hit) return hit;
+  }
+  return null;
+}
+function effortName(id) {
+  const e = (curModelEntry()?.reasoning?.efforts || []).find(x => x.id === id);
+  return e ? (e.name || e.id) : (id || '');
+}
+function modelBtnLabel(v) {
+  let t = '⚙ ' + (v || '主调度默认模型');
+  if (modelState.curEffort) t += ' ' + effortName(modelState.curEffort);
+  if (modelState.curPreset) t += ' · ' + modelState.curPreset;
+  return t;
+}
 function renderModelPop() {
   const pop = $('model-pop');
   const cur = modelState.cur;
@@ -7253,8 +7356,31 @@ function renderModelPop() {
     if (modelState.error) html += '<div class="model-empty" style="color:var(--err);font-size:11.5px">⚠️ 模型目录获取失败: ' + esc(modelState.error) + '</div>';
     else if (!cur) html += '<div class="model-empty">暂无可选模型</div>';
   }
+  // 推理等级：仅当前选中模型配置了 efforts 才渲染（模型没配 = 不支持强度切换，整个入口不出现）
+  const efforts = (curModelEntry()?.reasoning?.efforts) || [];
+  if (state.currentTaskId && efforts.length) {
+    html += '<div class="model-group">推理等级</div>';
+    if (modelState.curEffort && !efforts.some(e => e.id === modelState.curEffort)) {
+      html += '<div class="model-item on" data-effort="' + esc(modelState.curEffort) + '"><span class="n">' + esc(modelState.curEffort + '（已保存）') + '</span><span class="ck">✓</span></div>';
+    }
+    for (const e of efforts) {
+      html += '<div class="model-item' + (e.id === modelState.curEffort ? ' on' : '') + '" data-effort="' + esc(e.id) + '" title="' + esc(e.description || '') + '"><span class="n">' + esc(e.name || e.id) + '</span><span class="ck">✓</span></div>';
+    }
+  }
+  // 模式预设：任务节点远端 /presets 候选（拉取失败或为空 = 不渲染，对旧节点完全兼容）
+  if (state.currentTaskId && modelState.presetsLoaded && modelState.presets.length) {
+    html += '<div class="model-group">模式预设</div>';
+    html += '<div class="model-item' + (!modelState.curPreset ? ' on' : '') + '" data-preset=""><span class="n">跟随实体默认</span><span class="ck">✓</span></div>';
+    for (const pr of modelState.presets) {
+      html += '<div class="model-item' + (pr.id === modelState.curPreset ? ' on' : '') + '" data-preset="' + esc(pr.id) + '" title="' + esc(pr.description || '') + '"><span class="n">' + esc(pr.name || pr.id) + '</span><span class="ck">✓</span></div>';
+    }
+  }
   pop.innerHTML = html;
-  pop.querySelectorAll('.model-item').forEach(it => it.addEventListener('click', () => selectModel(it.dataset.v)));
+  pop.querySelectorAll('.model-item').forEach(it => {
+    if (it.dataset.effort !== undefined) it.addEventListener('click', () => selectEffort(it.dataset.effort));
+    else if (it.dataset.preset !== undefined) it.addEventListener('click', () => selectPreset(it.dataset.preset));
+    else it.addEventListener('click', () => selectModel(it.dataset.v));
+  });
 }
 async function loadPlannerOptions() {
   const modelBtn = $('chat-model-btn');
@@ -7339,6 +7465,8 @@ function setModelStatus(text) {
 }
 async function selectModel(v) {
   modelState.cur = v;
+  // 切模型后原强度不再保证适用（远端 selectModel 未带 effort 会清掉），本地同步清零回默认
+  modelState.curEffort = '';
   const btn = $('chat-model-btn');
   btn.textContent = modelBtnLabel(v);
   closeModelPop();
@@ -7370,6 +7498,69 @@ async function selectModel(v) {
     setModelStatus('✓ 主调度模型已切到「' + (v || '默认') + '」');
   } else {
     toast(r.error || '保存失败', true);
+  }
+}
+/** 会话当前模型选择/模式预设回读（打开会话时调用；失败静默——弹层仍可用，只是不回显） */
+async function loadSessionModelInfo() {
+  if (!state.currentTaskId) return;
+  const r = await api('/tasks/' + state.currentTaskId + '/session-model');
+  if (!r.ok || !r.data) return;
+  const d = r.data || {};
+  const sess = d.session || null;
+  modelState.curEffort = (sess && sess.model && sess.model.reasoningEffort) || d.taskReasoningEffort || '';
+  modelState.curPreset = (sess && sess.agentPreset) || d.taskAgentPreset || '';
+  const btn = $('chat-model-btn');
+  if (btn) btn.textContent = modelBtnLabel(modelState.cur);
+  loadTaskPresets();
+}
+/** 任务节点模式预设候选（拉取失败 = 空列表，弹层不渲染预设段，对旧节点兼容） */
+async function loadTaskPresets() {
+  if (!state.currentTaskId) return;
+  const r = await api('/tasks/' + state.currentTaskId + '/presets');
+  modelState.presets = (r.ok && r.data && r.data.presets) || [];
+  modelState.presetsLoaded = true;
+  const pop = $('model-pop');
+  if (pop && pop.classList.contains('on')) renderModelPop();
+}
+/** 推理等级切换：单独传 reasoningEffort，远端与会话当前模型合并（dsh-web-service ≥ 本版） */
+async function selectEffort(id) {
+  modelState.curEffort = id;
+  const btn = $('chat-model-btn');
+  btn.textContent = modelBtnLabel(modelState.cur);
+  closeModelPop();
+  const r = await api('/tasks/' + state.currentTaskId + '/session-model', {
+    method: 'PUT',
+    body: JSON.stringify({ reasoningEffort: id }),
+  });
+  if (r.ok) {
+    const label = effortName(id) || '默认';
+    flashBtnOk(btn, '✓ 推理等级 ' + label, modelBtnLabel(modelState.cur));
+    setModelStatus('✓ 会话推理等级已切到「' + label + '」');
+  } else {
+    toast(r.error || '推理等级更新失败', true);
+  }
+}
+/** 模式预设切换：任务级持久化（新会话必生效）+ 尽力对当前会话即时生效（applied=false 时提示） */
+async function selectPreset(id) {
+  modelState.curPreset = id;
+  const btn = $('chat-model-btn');
+  btn.textContent = modelBtnLabel(modelState.cur);
+  closeModelPop();
+  const r = await api('/tasks/' + state.currentTaskId + '/session-preset', {
+    method: 'PUT',
+    body: JSON.stringify({ preset: id }),
+  });
+  const label = id || '跟随实体默认';
+  if (r.ok) {
+    if (r.data && r.data.applied) {
+      flashBtnOk(btn, '✓ 模式预设 ' + label, modelBtnLabel(modelState.cur));
+      setModelStatus('✓ 模式预设已切到「' + label + '」（当前会话即时生效）');
+    } else {
+      flashBtnOk(btn, '✓ 已保存 ' + label, modelBtnLabel(modelState.cur));
+      setModelStatus('✓ 模式预设已保存「' + label + '」· 新会话生效');
+    }
+  } else {
+    toast(r.error || '模式预设保存失败', true);
   }
 }
 loadPlannerOptions();
@@ -8056,6 +8247,9 @@ function openAgentDrawer(agent, copyMode) {
     '<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px"><button class="mini-btn" id="ag-sync" style="padding:6px 10px;flex:none;white-space:nowrap">↻ 同步远端选项</button><span class="hint" id="ag-opts-hint" style="margin:0">预设 / 提供商 / 模型可从远端 DSH 拉取后下拉选择</span></div>' +
     '<div class="grid3">' +
     '<div class="field"><label>模式预设 agentPreset</label><input id="ag-preset" value="' + esc(agent && agent.agentPreset || 'cordis') + '"></div>' +
+    '<div class="field" id="ag-effort-field" style="display:none"><label>推理强度</label><select id="ag-effort"><option value="">跟随模型默认</option>' +
+      (agent && agent.reasoningEffort ? '<option value="' + esc(agent.reasoningEffort) + '" selected>' + esc(agent.reasoningEffort) + '</option>' : '') +
+    '</select></div>' +
     '<div class="field"><label>Provider</label><input id="ag-provider" value="' + esc(agent && agent.provider || '') + '" placeholder="远端默认"></div>' +
     '<div class="field"><label>Model</label><input id="ag-model" value="' + esc(agent && agent.model || '') + '" placeholder="远端默认"></div></div>' +
     '<div class="field"><label>工作目录（绝对路径 · 对齐 DSH 工作区）</label><div style="display:flex;gap:8px"><input id="ag-workdir" value="' + esc(agent && agent.workDir || '') + '" placeholder="如 /data/panzj/workspace/demo"><button class="mini-btn" id="ag-browse" style="flex:none;padding:10px 12px" title="浏览远端目录并选择">📁 浏览</button></div>' +
@@ -8118,13 +8312,32 @@ function openAgentDrawer(agent, copyMode) {
       return '<option value=""' + (!cur ? ' selected' : '') + '>远端默认</option>' + list.map(m =>
         '<option value="' + esc(m.id) + '"' + (m.id === cur ? ' selected' : '') + '>' + esc(m.id + (m.isDefault ? '（默认）' : '') + (provider ? '' : ' · ' + m.provider)) + '</option>').join('');
     }
+    /** 推理强度下拉跟随当前选中模型：模型配置了 reasoning.efforts 才显示整行，否则隐藏（= 不支持强度切换） */
+    function applyEffortOpts() {
+      const pv = $('ag-provider').value;
+      const mid = $('ag-model').value;
+      const entry = models.find(m => m.id === mid && (!pv || m.provider === pv)) || models.find(m => m.id === mid) || null;
+      const efforts = (entry && entry.reasoning && entry.reasoning.efforts) || [];
+      const field = $('ag-effort-field');
+      if (!field) return;
+      if (!efforts.length) { field.style.display = 'none'; return; }
+      const cur = $('ag-effort').value;
+      field.style.display = '';
+      $('ag-effort').outerHTML = '<select id="ag-effort"><option value=""' + (!cur ? ' selected' : '') + '>跟随模型默认</option>' +
+        efforts.map(e => '<option value="' + esc(e.id) + '"' + (e.id === cur ? ' selected' : '') + '>' + esc(e.name || e.id) + '</option>').join('') +
+        (cur && !efforts.some(e => e.id === cur) ? '<option value="' + esc(cur) + '" selected>' + esc(cur + '（当前）') + '</option>' : '') +
+        '</select>';
+    }
     $('ag-provider').outerHTML = '<select id="ag-provider"><option value=""' + (!curProvider ? ' selected' : '') + '>远端默认</option>' + providers.map(pv => '<option value="' + esc(pv) + '"' + (pv === curProvider ? ' selected' : '') + '>' + esc(pv) + '</option>').join('') + '</select>';
     $('ag-model').outerHTML = '<select id="ag-model">' + modelOpts(curProvider, curModel) + '</select>';
+    applyEffortOpts();
     $('ag-provider').addEventListener('change', () => {
       const pv = $('ag-provider').value;
       const cur = $('ag-model').value;
       $('ag-model').outerHTML = '<select id="ag-model">' + modelOpts(pv, cur) + '</select>';
+      applyEffortOpts();
     });
+    $('ag-model').addEventListener('change', applyEffortOpts);
   }
   $('bind-add').addEventListener('click', () => {
     const div = document.createElement('div');
@@ -8251,6 +8464,11 @@ function collectAgent(existing) {
   if ($('ag-key').value.trim()) payload.apiKey = $('ag-key').value.trim();
   if ($('ag-provider').value.trim()) payload.provider = $('ag-provider').value.trim();
   if ($('ag-model').value.trim()) payload.model = $('ag-model').value.trim();
+  // 推理强度：仅当强度行可见（当前模型配置了 efforts）才随保存写入；隐藏时不触碰，保留实体原值
+  const effField = $('ag-effort-field');
+  if (effField && effField.style.display !== 'none' && $('ag-effort')) {
+    payload.reasoningEffort = $('ag-effort').value || '';
+  }
   payload.workDir = $('ag-workdir').value.trim() || '';
   if (existing && existing.id) payload.id = existing.id;
   // 复制场景（无 id 新建）必须显式携带：upsertAgent 对新实体不会从 target 兜底这些字段

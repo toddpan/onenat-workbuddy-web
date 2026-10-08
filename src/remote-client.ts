@@ -34,7 +34,11 @@ export interface RemoteModelEntry {
   name: string
   isDefault?: boolean
   description?: string
-  reasoning?: boolean
+  /** 推理强度配置（远端 /models 透传）：efforts 为空/缺失 = 该模型不支持强度切换，前端不渲染入口 */
+  reasoning?: {
+    efforts: Array<{ id: string; name: string; description?: string }>
+    defaultEffort?: string
+  }
 }
 
 export interface StreamEventHandlers {
@@ -704,11 +708,12 @@ export class DshClient {
   public async createSession(
     target: DshTarget,
     title: string,
-    options?: { agentPreset?: string; provider?: string; model?: string; cwd?: string; workspaceId?: string },
+    options?: { agentPreset?: string; provider?: string; model?: string; reasoningEffort?: string; cwd?: string; workspaceId?: string },
   ): Promise<{ ok: boolean; sessionId?: string; error?: string }> {
     const payload: Record<string, any> = { title, agentPreset: options?.agentPreset || 'cordis' }
     if (options?.provider) payload.provider = options.provider
     if (options?.model) payload.model = options.model
+    if (options?.reasoningEffort) payload.reasoningEffort = options.reasoningEffort
     if (options?.cwd) payload.cwd = options.cwd
     // 工作区对齐：DSH 节点以 workspace 组织会话，按主智能体工作目录解析出的 workspaceId 建会话，
     // 保证会话落在正确的工作区而不是节点默认工作区
@@ -757,19 +762,20 @@ export class DshClient {
   }
 
   /**
-   * 更新远端会话的模型（PUT /sessions/:id，body {provider?, model?, reasoningEffort?}）。
-   * 空 model 表示清除覆盖、回退节点默认。
+   * 更新远端会话的模型/推理强度/模式预设（PUT /sessions/:id）。
+   * 空 model 表示清除覆盖、回退节点默认；agentPreset 为尽力生效（宿主不支持时远端返回 applied:false）。
    */
   public async updateSessionModel(
     target: DshTarget,
     sessionId: string,
-    body: { provider?: string; model?: string; reasoningEffort?: string },
-  ): Promise<{ ok: boolean; error?: string; selected?: { provider: string; model: string } }> {
+    body: { provider?: string; model?: string; reasoningEffort?: string; agentPreset?: string },
+  ): Promise<{ ok: boolean; error?: string; selected?: { provider: string; model: string }; preset?: { applied: boolean; reason?: string } }> {
     try {
       const payload: Record<string, string> = {}
       if (body.provider) payload.provider = body.provider
       if (body.model) payload.model = body.model
       if (body.reasoningEffort) payload.reasoningEffort = body.reasoningEffort
+      if (body.agentPreset !== undefined) payload.agentPreset = body.agentPreset
       const res = await fetch(`${clean(target.baseUrl)}/sessions/${encodeURIComponent(sessionId)}`, {
         method: 'PUT',
         headers: this.headers(target.apiKey),
@@ -778,9 +784,33 @@ export class DshClient {
       })
       const json: any = await res.json().catch(() => ({}))
       if (!res.ok || !json?.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
-      return { ok: true, selected: json.data?.model?.selected }
+      return { ok: true, selected: json.data?.model?.selected, preset: json.data?.preset }
     } catch (err: any) {
       return { ok: false, error: err?.message || '更新会话模型失败' }
+    }
+  }
+
+  /** 读取远端会话详情（GET /sessions/:id）：当前模型选择 + 模式预设，聊天窗回显用。 */
+  public async getSessionDetail(
+    target: DshTarget,
+    sessionId: string,
+  ): Promise<{ ok: boolean; error?: string; session?: { model?: { provider: string; model: string; reasoningEffort?: string }; agentPreset?: string } }> {
+    try {
+      const res = await fetch(`${clean(target.baseUrl)}/sessions/${encodeURIComponent(sessionId)}`, {
+        headers: this.headers(target.apiKey),
+        signal: AbortSignal.timeout(10_000),
+      })
+      const json: any = await res.json().catch(() => ({}))
+      if (!res.ok || !json?.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
+      return {
+        ok: true,
+        session: {
+          model: json.data?.model,
+          agentPreset: json.data?.agentPreset,
+        },
+      }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || '读取会话失败' }
     }
   }
 
