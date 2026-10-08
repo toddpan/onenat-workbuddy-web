@@ -18,7 +18,7 @@
  */
 
 import http from 'node:http'
-import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -266,7 +266,7 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
 
   const { port } = cfg
   const consoleUrl = `http://${cfg.host === '0.0.0.0' ? '127.0.0.1' : cfg.host}:${port}${cfg.prefix || '/'}`
-  const tools = createWorkBuddyToolDefs({ store, directory, resolver, composer, engine, sshStore, consoleUrl, monitor, scheduler, planner })
+  const tools = createWorkBuddyToolDefs({ store, directory, resolver, composer, engine, sshStore, consoleUrl, monitor, scheduler, planner, expertRegistry: router.expertRegistry })
   const toolMap = new Map(tools.map((t) => [t.name, t]))
 
   const server = http.createServer(async (req, res) => {
@@ -370,6 +370,33 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
         }
         res.statusCode = 200
         res.setHeader('Content-Type', url.pathname.endsWith('.sh') ? 'text/x-shellscript; charset=utf-8' : url.pathname.endsWith('.md') ? 'text/markdown; charset=utf-8' : 'text/javascript; charset=utf-8')
+        res.end(file)
+        return
+      }
+
+      // ---------- 子技能文件（主 SKILL 按需路由的分块文档；清单 + 单文件，公开同上） ----------
+      const SUBSKILL_DIR = 'skills/onenat-workbuddy/skills'
+      if (underPrefix && method === 'GET' && url.pathname === `${prefix}/install/skills.json`) {
+        const dir = resolveAssetDir(SUBSKILL_DIR)
+        const files = dir ? readdirSync(dir).filter((f) => /^[a-z0-9-]+\.md$/.test(f)).sort() : []
+        sendJson(res, 200, { ok: true, files })
+        return
+      }
+      const subSkillBase = `${prefix}/install/skills/`
+      if (underPrefix && method === 'GET' && url.pathname.startsWith(subSkillBase)) {
+        const name = url.pathname.slice(subSkillBase.length)
+        // 文件名白名单（目录固定、仅小写中划线 slug + .md），拒绝路径穿越
+        if (!/^[a-z0-9-]+\.md$/.test(name)) {
+          sendJson(res, 404, { ok: false, error: `子技能文件不存在: ${name}` })
+          return
+        }
+        const file = resolveAssetFile(`${SUBSKILL_DIR}/${name}`)
+        if (!file) {
+          sendJson(res, 404, { ok: false, error: `子技能文件不存在: ${name}（清单见 /install/skills.json）` })
+          return
+        }
+        res.statusCode = 200
+        res.setHeader('Content-Type', 'text/markdown; charset=utf-8')
         res.end(file)
         return
       }
@@ -538,6 +565,18 @@ function resolveAssetFile(rel: string): string | null {
   for (const c of candidates) {
     try {
       if (existsSync(c)) return readFileSync(c, 'utf-8')
+    } catch { /* 尝试下一个 */ }
+  }
+  return null
+}
+
+/** 定位资产目录（与 resolveAssetFile 同样的候选顺序）；返回存在的目录路径或 null。 */
+function resolveAssetDir(rel: string): string | null {
+  const here = fileURLToPath(import.meta.url)
+  const candidates = [join(process.cwd(), rel), join(dirname(dirname(here)), rel)]
+  for (const c of candidates) {
+    try {
+      if (existsSync(c) && realpathSync(c)) return c
     } catch { /* 尝试下一个 */ }
   }
   return null

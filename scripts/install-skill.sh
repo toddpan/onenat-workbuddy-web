@@ -85,11 +85,25 @@ fi
 FIRST_WB=""
 for d in "${TARGETS[@]}"; do
   echo "▸ 安装到 $d"
-  mkdir -p "$d/onenat-workbuddy/scripts"
+  mkdir -p "$d/onenat-workbuddy/scripts" "$d/onenat-workbuddy/skills"
   curl -fsSL --max-time 30 "$BASE_URL/install/SKILL.md" -o "$d/onenat-workbuddy/SKILL.md"
   curl -fsSL --max-time 30 "$BASE_URL/install/wb.mjs" -o "$d/onenat-workbuddy/scripts/wb.mjs"
   chmod +x "$d/onenat-workbuddy/scripts/wb.mjs" 2>/dev/null || true
   [ -z "$FIRST_WB" ] && FIRST_WB="$d/onenat-workbuddy/scripts/wb.mjs"
+  # 子技能分块文档（主 SKILL 路由表按需引用；拉不到不影响主 SKILL 可用性）
+  MANIFEST="$(curl -fsSL --max-time 30 "$BASE_URL/install/skills.json")" || MANIFEST=""
+  if [ -n "$MANIFEST" ]; then
+    # 从清单 JSON 抽文件名（无需 jq）
+    for s in $(printf '%s' "$MANIFEST" | tr ',[]" ' '\n' | grep -E '^[a-z0-9-]+\.md$' || true); do
+      if curl -fsSL --max-time 30 "$BASE_URL/install/skills/$s" -o "$d/onenat-workbuddy/skills/$s"; then
+        echo "  + skills/$s"
+      else
+        echo "  ⚠️ 子技能 $s 下载失败（主 SKILL 仍可用）" >&2
+      fi
+    done
+  else
+    echo "  ⚠️ 子技能清单拉取失败，仅安装主 SKILL" >&2
+  fi
 done
 
 # ---------- 写配置（仅本机，600 权限） ----------
@@ -117,7 +131,7 @@ installed_note() {
   echo ""
   echo "✅ 安装完成（${#TARGETS[@]} 个技能目录）"
   for d in "${TARGETS[@]}"; do
-    echo "  技能: $d/onenat-workbuddy/SKILL.md"
+    echo "  技能: $d/onenat-workbuddy/SKILL.md（子技能分块文档在 skills/ 子目录，按需读取）"
   done
   echo "  脚本: ${FIRST_WB}（AI 可直接命令行调用）"
   echo "  配置: ${CFG}（600 权限；也可用环境变量 WORKBUDDY_BASE_URL / WORKBUDDY_TOKEN 覆盖）"

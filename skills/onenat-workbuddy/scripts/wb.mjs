@@ -114,6 +114,11 @@ const HELP = `WorkBuddy CLI — AI 管理 OneNat WorkBuddy（配置: ${CFG.cfgPa
            status: [--id x]               chat: --id x --sub sid|agentId [--followup m]（--agent 为 --sub 的别名）
            members: --id x --agents a,b  （--agents 必填，至少一个非空 ID）
   project  [list|get|upsert|delete] [--id x] [--json '{name,dshRef,workspace,instruction,expertIds,...}']
+  expert   [list|get|search|create|update|delete]
+           list:   [--domain d] [--skill kw] [--limit n] [--offset n]（默认 50/页，含分区概览）
+           get/delete: --id <专家ID>
+           search: --query kw（元数据 + prompt 正文）
+           create/update: --json '{id,name,systemPrompt,executionPrompt,...}'（create 必填 id+systemPrompt）
   schedule [list|get|upsert|delete|toggle|run] [--json '{...}'] [--id x]
   planner  [get|set|options] [--agent id] [--model provider/model]
   file     [list|mkdir|upload|download|delete]
@@ -260,6 +265,21 @@ async function main() {
       if (action === 'upsert') args.project = flagsJson(flags, 'json')
       if (['get', 'delete'].includes(action)) args.projectId = flags.id
       await tool('workbuddy_project_manage', args)
+      return
+    }
+    case 'expert': {
+      const action = sub || 'list'
+      const args = { action }
+      if (action === 'list') {
+        if (flags.domain) args.domain = String(flags.domain)
+        if (flags.skill) args.skill = String(flags.skill)
+        if (flags.limit) args.limit = num(flags.limit, 50)
+        if (flags.offset) args.offset = num(flags.offset, 0)
+      }
+      if (action === 'search') args.query = flags.query
+      if (action === 'create' || action === 'update') args.expert = flagsJson(flags, 'json')
+      if (action === 'get' || action === 'delete') args.expertId = flags.id
+      await tool('workbuddy_expert_manage', args)
       return
     }
     default:
