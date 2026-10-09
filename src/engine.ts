@@ -31,6 +31,12 @@ const NODE_AGENT_ID = '__node__'
 /** 未配置任务级/智能体级运行权限时的默认值：全部权限（沙箱不限 + 无审批） */
 const DEFAULT_PERMISSION = 'danger-full-access'
 
+/** 任务标题 = 用户首条消息的前 30 字（空白折叠）；空消息回落占位符。不再用 LLM 提炼标题。 */
+function titleFromMessage(message: string | undefined): string {
+  const raw = (message || '').replace(/\s+/g, ' ').trim()
+  return raw ? raw.slice(0, 30) : '新任务'
+}
+
 export interface CreateTaskInput {
   title?: string
   /** 成员智能体；nodeRef 直发主会话任务时可省略（engine 内部以 __node__ 虚拟执行者直连节点） */
@@ -529,7 +535,7 @@ export class TaskEngine {
     const mode: WorkTask['mode'] = input.mode || (totalMembers > 1 ? 'orchestrate' : 'chat')
     const task: WorkTask = {
       id: `task-${randomUUID().slice(0, 8)}`,
-      title: input.title?.trim() || (input.message ? input.message.slice(0, 30) : '新任务'),
+      title: input.title?.trim() || titleFromMessage(input.message),
       mode,
       status: 'draft',
       memberAgentIds,
@@ -912,6 +918,19 @@ export class TaskEngine {
     }
     if (!task) return
 
+    // 标题仍是占位（工单创建时无消息）→ 直接取首条用户消息前缀作标题。
+    // 放在路由判定前：不依赖远端可达；也彻底不再向远端会话下发标题提炼提示词
+    // （旧路径的内部指令问答会残留在会话历史顶部、污染任务上下文）。
+    if (this.needsAutoTitle(task)) {
+      const autoTitle = titleFromMessage(text)
+      if (autoTitle !== '新任务') {
+        this.store.mutateTask(taskId, (t) => {
+          t.title = autoTitle
+        })
+        this.emit(taskId, { type: 'task_status', status: this.store.getTask(taskId)?.status || 'running' })
+      }
+    }
+
     // 智能调度模式判定：
     // 1. 如果用户明确 @ 了子智能体，按提及的智能体定向派发（如果多个则编排，单人则直通）；
     // 2. 如果用户完全没有 @ 任何子智能体（纯提问/咨询/诊断，如“分析为什么连接不上”）：
@@ -1220,19 +1239,6 @@ export class TaskEngine {
     if (session.remoteSessionId) {
       const handled = await this.answerPendingAndResume(taskId, text, agent, target, session.remoteSessionId, signal).catch(() => false)
       if (handled) return
-    }
-
-    // 首轮消息且标题仍是默认值 → 在任务自身的远端会话内提炼标题。
-    // 此前经 /chat/completions 不带 sessionId，dsh-web-service 会另起一个随机会话，
-    // 远端节点因此多出「只有一条标题问答」的孤立任务；现在标题问答与任务工单共用同一会话。
-    if (this.needsAutoTitle(task) && session.remoteSessionId) {
-      const title = await this.planner.generateTitleInSession(target, session.remoteSessionId, text).catch(() => '')
-      if (title) {
-        this.store.mutateTask(taskId, (t) => {
-          t.title = title
-        })
-        this.emit(taskId, { type: 'task_status', status: this.store.getTask(taskId)?.status || 'running' })
-      }
     }
 
     const turn: TaskTurn = {
@@ -2239,7 +2245,8 @@ export class TaskEngine {
   private needsAutoTitle(task: WorkTask): boolean {
     const userTurns = (task.turns || []).filter((t) => t.role === 'user')
     if (userTurns.length !== 1) return false
-    return task.title.startsWith('新任务') || task.title.startsWith('未命名任务') || task.title.length <= 6
+    // 仅占位标题需要回填；显式指定的短标题（含创建时截断的短消息）是用户可见的真实输入，不覆盖
+    return task.title.startsWith('新任务') || task.title.startsWith('未命名任务')
   }
 
   /** 工作区列表缓存：baseUrl → { at, workspaces }，60s（避免每次建会话都打一发 /workspaces） */
