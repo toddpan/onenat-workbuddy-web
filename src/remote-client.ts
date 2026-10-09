@@ -1333,7 +1333,7 @@ export class DshClient {
         body: JSON.stringify({
           messages,
           stream: false,
-          // 显式带 sessionId：在既有会话内完成本轮对话（如任务标题提炼），
+          // 显式带 sessionId：在既有会话内完成本轮对话（如汇总/追问类轻量调用），
           // 否则 dsh-web-service 会新建一个随机会话 —— 远端因此多出孤立任务
           ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
           ...(options?.model && options.model.includes('/') ? { model: options.model } : {}),
