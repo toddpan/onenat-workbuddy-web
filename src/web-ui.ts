@@ -2312,8 +2312,6 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
     <div class="view" id="view-agents"><div class="panel">
       <div class="panel-head"><h2>子智能体管理</h2><span class="sub">绑定 ONENAT 上的 DSH 实体（稳定 ID，端口变化不影响）· 配置模式/模型/提示词/可用资源</span><span class="hspacer"></span><button class="btn pri" id="btn-new-agent">＋ 新建子智能体</button></div>
       <div id="agent-list"></div>
-      <div class="panel-head" style="margin-top:26px"><h2 style="font-size:15px">🧩 专家团</h2><span class="sub">合同式团队：共同目标/约束/交付要求 + 成员分工 · 团队任务按合同注入主调度规划、成员派工与汇总核对</span><span class="hspacer"></span><button class="btn" id="btn-new-team">＋ 新建专家团</button></div>
-      <div id="team-list"></div>
     </div></div>
     <div class="view" id="view-schedules"><div class="panel">
       <div class="panel-head"><h2>定时任务</h2><span class="sub">按规则定时把固定任务文本派发给一个或多个子智能体 · Host 侧调度（关闭页面不影响触发，错过的触发点不补跑）</span><span class="hspacer"></span><button class="btn pri" id="btn-new-schedule">＋ 新建定时任务</button></div>
@@ -2324,7 +2322,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
       <div class="card" style="padding:0"><div class="tbl-wrap"><table class="res" id="res-table"><thead><tr><th>资源</th><th>类型</th><th>公网入口（实时解析）</th><th>内网目标</th><th>技能</th></tr></thead><tbody></tbody></table></div></div>
     </div></div>
     <div class="view" id="view-experts"><div class="panel">
-      <div class="panel-head"><h2>专家管理</h2><span class="sub">专家库统一视图（内置/名册只读，用户自建可编辑/删除）· AI 可经 MCP（/api/experts/mcp）调用 expert.* 工具</span><span class="hspacer"></span><button class="btn pri" id="btn-new-expert">＋ 新建专家</button></div>
+      <div class="panel-head"><h2>专家管理</h2><span class="sub">专家库统一视图（内置/名册只读，用户自建可编辑/删除）· 下方可组建专家团 · AI 可经 MCP（/api/experts/mcp）调用 expert.* 工具</span><span class="hspacer"></span><button class="btn pri" id="btn-new-expert">＋ 新建专家</button></div>
       <div class="ros-bar" style="margin-bottom:12px">
         <select id="exm-div" style="flex:0 0 auto;min-width:150px"><option value="">全部分区</option></select>
         <input id="exm-q" placeholder="搜索名称 / 简介 / 标签" style="flex:1">
@@ -2332,6 +2330,8 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
         <button class="mini-btn" id="exm-refresh" title="重新拉取专家列表">↻ 刷新</button>
       </div>
       <div class="card" style="padding:0"><div class="tbl-wrap"><table class="res" id="exm-table"><thead><tr><th>专家</th><th>分区</th><th>来源</th><th>标签</th><th>简介</th><th>操作</th></tr></thead><tbody id="exm-body"></tbody></table></div></div>
+      <div class="panel-head" style="margin-top:26px"><h2 style="font-size:15px">🧩 专家团</h2><span class="sub">合同式团队：共同目标/约束/交付要求 + 成员分工 · 团队任务按合同注入主调度规划、成员派工与汇总核对</span><span class="hspacer"></span><button class="btn" id="btn-new-team">＋ 新建专家团</button></div>
+      <div id="team-list"></div>
     </div></div>
     <div class="view" id="view-settings"><div class="panel" style="max-width:1100px;margin:0 auto">
       <div class="panel-head"><h2>设置</h2><span class="sub">平台连接 · AI 接入</span><span class="hspacer"></span><button class="btn pri" id="btn-save-settings">保存设置</button></div>
