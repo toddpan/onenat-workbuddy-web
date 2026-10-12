@@ -1872,6 +1872,39 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 
 /* ---------- 项目 ---------- */
 .proj-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+
+/* ---------- DSH 节点拓扑（项目/子智能体页，对齐安卓客户端 TopologyWidgets 交互） ---------- */
+.topo-toolbar { display: flex; gap: 10px; align-items: center; margin: 0 0 14px; flex-wrap: wrap; }
+.topo-toolbar .topo-search { flex: 1; min-width: 220px; max-width: 360px; }
+.topo-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.topo-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--tx2); background: var(--bg3); border: 1px solid var(--line2); border-radius: 999px; padding: 5px 12px; cursor: pointer; user-select: none; white-space: nowrap; }
+.topo-chip:hover { border-color: var(--pri); }
+.topo-chip.on { color: var(--pri); background: var(--pri-light); border-color: rgba(77, 107, 254, .45); font-weight: 600; }
+.topo-chip .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.topo-chip .cnt { color: var(--tx3); font-size: 11px; }
+.topo-chip.on .cnt { color: var(--pri); opacity: .75; }
+.topo-card { background: var(--bg2); border: 1px solid var(--line); border-radius: var(--rad); padding: 6px 8px 0; margin-bottom: 14px; overflow: hidden; }
+.topo-card svg { display: block; width: 100%; height: auto; }
+.topo-legend { display: flex; gap: 14px; align-items: center; padding: 2px 10px 8px; font-size: 11px; color: var(--tx3); flex-wrap: wrap; }
+.topo-legend .li { display: inline-flex; align-items: center; gap: 5px; }
+.topo-legend .li i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.topo-legend .hint { margin-left: auto; }
+.topo-group { margin-bottom: 16px; }
+.topo-group-head { display: flex; align-items: center; gap: 10px; padding: 10px 8px; cursor: pointer; user-select: none; border-radius: var(--rad-sm); }
+.topo-group-head:hover { background: var(--bg3); }
+.topo-group-head .gdot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.topo-group-head h3 { font-size: 14px; margin: 0; color: var(--tx); }
+.topo-group-head .gsub { font-size: 11.5px; color: var(--tx3); }
+.topo-group-head .gsp { font-size: 11px; color: var(--pri); background: var(--pri-light); border-radius: 999px; padding: 2px 9px; font-weight: 600; white-space: nowrap; }
+.topo-group-head .gcnt { margin-left: auto; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.topo-group-head .chev { color: var(--tx3); font-size: 12px; width: 14px; }
+.topo-group-body.collapsed { display: none; }
+.agent-card .row1 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.agent-card .live-dot { width: 8px; height: 8px; border-radius: 3px; flex: none; }
+.agent-card .live-dot.busy { border-radius: 50%; background: transparent; border: 2px solid var(--pri); border-top-color: transparent; animation: topo-spin 1s linear infinite; }
+@keyframes topo-spin { to { transform: rotate(360deg); } }
+.agent-card .live-state { font-size: 11px; font-weight: 600; }
+.agent-card .activity { font-size: 11.5px; color: var(--tx2); margin: 4px 0 0 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .proj-card { border: 1px solid var(--line); border-radius: var(--rad); background: var(--bg2); padding: 14px 16px; cursor: pointer; transition: border-color .15s, transform .15s; }
 .proj-card:hover { border-color: var(--pri); transform: translateY(-1px); }
 .proj-card .pj-name { font-weight: 700; font-size: 15px; margin-bottom: 4px; }
@@ -2160,7 +2193,11 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <button class="btn" id="btn-proj-import" title="选择远程 DSH 节点，拉取其工作区列表，勾选后向节点发分析任务：智能体分析项目并推断项目名/指令/专家/连接器/技能，自动调平台接口建项目">⬇ 从远程 DSH 导入</button>
           <button class="btn pri" id="btn-proj-new">＋ 新建项目</button>
         </div>
-        <div class="proj-grid" id="proj-grid"><div class="mon-empty">加载中…</div></div>
+        <div class="topo-toolbar">
+          <input id="proj-q" class="topo-search" placeholder="搜索项目名 / 工作区路径">
+          <div class="topo-chips" id="proj-chips"></div>
+        </div>
+        <div id="proj-groups"><div class="mon-empty">加载中…</div></div>
       </div>
     </div>
     <div class="view" id="view-monitor">
@@ -2312,6 +2349,11 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
     </div></div>
     <div class="view" id="view-agents"><div class="panel">
       <div class="panel-head"><h2>子智能体管理</h2><span class="sub">绑定 ONENAT 上的 DSH 实体（稳定 ID，端口变化不影响）· 配置模式/模型/提示词/可用资源</span><span class="hspacer"></span><button class="btn pri" id="btn-new-agent">＋ 新建子智能体</button></div>
+      <div class="topo-card" id="agent-topo" style="display:none"></div>
+      <div class="topo-toolbar">
+        <input id="agent-q" class="topo-search" placeholder="搜索名称 / 模型 / 描述">
+        <div class="topo-chips" id="agent-chips"></div>
+      </div>
       <div id="agent-list"></div>
     </div></div>
     <div class="view" id="view-schedules"><div class="panel">
@@ -2436,6 +2478,13 @@ const state = {
   renderedFromIndex: 0, // 当前视图实际渲染的起始轮次下标（供断线回源补齐限定窗口）
   convView: 'chat', // 会话内视图：'chat'（对话）| 'trajectory'（轨迹）
   traj: null,       // 轨迹视图运行时状态（trajState()，惰性创建）
+  // ---------- DSH 节点拓扑（项目/子智能体页，对齐安卓客户端 TopologyWidgets） ----------
+  agentLive: {},        // agentId -> 监控快照实时态（online/busy/runningCount/currentActivity）
+  agentEnvFilter: null, // 子智能体页环境筛选（envKey；null = 全部）
+  agentQuery: '',
+  projEnvFilter: null,  // 项目页节点筛选
+  projQuery: '',
+  topoCollapsed: {},    // envKey -> 分组是否折叠
 };
 
 // ---------- DSH 对话窗口 / 轨迹窗口共享素材 ----------
@@ -3640,13 +3689,182 @@ function xzOpenForm(existing) {
 }
 
 // ---------- 项目 ----------
+// ---------- DSH 节点拓扑（对齐安卓客户端 TopologyWidgets：环境聚合 + 健康度 + 星型图筛选） ----------
+// 同一台机器在 ONENAT 上通常同时暴露 DSH/SSH 映射（同一隧道标题），按「环境」聚合还原真实拓扑：
+// ONENAT 网关 ─┬─ 环境A ─┬─ DSH 节点（项目/子智能体挂这里）
+//              │         └─ SSH / HTTP 资源
+const TOPO_KIND_COLOR = { dsh: '#4d6bfe', ssh: '#7a5af8', http: '#0e9f9f' };
+const TOPO_AGENT_COLOR = '#e8833a';
+function topoEnvKey(title) {
+  const t = String(title || '').replace(/\s+/g, '').replace(/环境$/, '').toLowerCase();
+  return t || String(title || '');
+}
+function topoResLabel(r) { return r.tunnelName || r.appName || r.note || r.mappingId || r.appId || ''; }
+function topoHealthColor(h) { return h === 'all' ? 'var(--ok)' : h === 'partial' ? 'var(--warn)' : h === 'down' ? 'var(--err)' : 'var(--tx3)'; }
+function topoHealthText(h) { return h === 'all' ? '在线' : h === 'partial' ? '部分在线' : h === 'down' ? '离线' : ''; }
+function topoEntityEnvKey(dshRef, nodeTitle) {
+  if (dshRef && dshRef.kind === 'mapping' && dshRef.mappingId) {
+    const r = (state.resources || []).find(x => x.mappingId === dshRef.mappingId);
+    if (r) return topoEnvKey(topoResLabel(r));
+  }
+  if (dshRef && dshRef.kind === 'direct' && dshRef.apiBaseUrl) return 'direct:' + dshRef.apiBaseUrl;
+  if (dshRef && dshRef.kind === 'app' && dshRef.appId) {
+    const r = (state.resources || []).find(x => x.appId === dshRef.appId);
+    if (r) return topoEnvKey(topoResLabel(r));
+  }
+  return nodeTitle ? topoEnvKey(nodeTitle) : 'unbound';
+}
+/** 环境聚合：资源按隧道标题归组，实体（项目/子智能体）按绑定节点归属；DSH 环境优先靠前 */
+function topoBuildEnvs(entityKeyFn, entities) {
+  const names = {}; const order = [];
+  (state.resources || []).slice().sort((a, b) => (a.kind === 'dsh' ? 0 : 1) - (b.kind === 'dsh' ? 0 : 1)).forEach(r => {
+    const k = topoEnvKey(topoResLabel(r));
+    if (!names[k]) { names[k] = topoResLabel(r); order.push(k); }
+  });
+  const byEntity = {};
+  (entities || []).forEach(e => {
+    const k = entityKeyFn(e);
+    if (!names[k]) {
+      names[k] = k === 'unbound' ? '未绑定节点' : (String(k).startsWith('direct:') ? '直连 ' + String(k).slice(7).replace('http://', '').replace('https://', '') : k);
+      order.push(k);
+    }
+    (byEntity[k] = byEntity[k] || []).push(e);
+  });
+  const envs = order.map(k => {
+    const resources = (state.resources || []).filter(r => topoEnvKey(topoResLabel(r)) === k);
+    const dsh = resources.filter(r => r.kind === 'dsh');
+    const onlineCount = resources.filter(r => r.online).length;
+    const health = !resources.length ? 'none' : onlineCount === resources.length ? 'all' : onlineCount === 0 ? 'down' : 'partial';
+    return { key: k, name: names[k], resources, dsh, entities: byEntity[k] || [], health, onlineCount };
+  });
+  envs.sort((a, b) => ((b.dsh.length ? 1 : 0) - (a.dsh.length ? 1 : 0)) || ((b.resources.length + b.entities.length) - (a.resources.length + a.entities.length)));
+  return envs;
+}
+function topoGatewayHost() {
+  const counts = {};
+  (state.resources || []).forEach(r => { if (r.host) counts[r.host] = (counts[r.host] || 0) + 1; });
+  let best = ''; let n = 0;
+  for (const h in counts) if (counts[h] > n) { n = counts[h]; best = h; }
+  return best || 'ONENAT';
+}
+/** 星型拓扑 SVG：中心 = ONENAT 网关，外圈 = 环境节点；连线色 = 健康度，外环按资源类型分段，角标 = 实体数；点节点筛选 */
+function topoSvgHtml(envs, selKey, badgeOf) {
+  const n = envs.length;
+  if (n < 2) return '';
+  const W = Math.min(1020, Math.max(560, n * 175));
+  const H = n <= 4 ? 320 : n > 6 ? 300 : 260;
+  const cx = W / 2, cy = H / 2;
+  const rx = Math.min(W / 2 - 105, 430), ry = H / 2 - 72;
+  // 2 节点左右排（避免与中心网关纵向重叠），其余从正上方开始顺时针
+  const startAngle = n === 2 ? 0 : -Math.PI / 2;
+  const pos = envs.map((e, i) => {
+    const a = startAngle + 2 * Math.PI * i / n;
+    return { x: cx + Math.cos(a) * rx * 1.12, y: cy + Math.sin(a) * ry };
+  });
+  const gw = topoGatewayHost();
+  let s = '<svg viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg">';
+  envs.forEach((e, i) => {
+    const dim = selKey && selKey !== e.key;
+    const col = getComputedStyle(document.documentElement).getPropertyValue(e.health === 'all' ? '--ok' : e.health === 'partial' ? '--warn' : e.health === 'down' ? '--err' : '--tx3').trim() || '#8f959e';
+    const dash = (e.health === 'down' || e.health === 'none') ? ' stroke-dasharray="7,5"' : '';
+    s += '<line x1="' + cx + '" y1="' + cy + '" x2="' + pos[i].x + '" y2="' + pos[i].y + '" stroke="' + col + '" stroke-width="' + (selKey === e.key ? 2.6 : 1.4) + '" opacity="' + (dim ? 0.16 : 0.5) + '"' + dash + '/>';
+  });
+  s += '<circle cx="' + cx + '" cy="' + cy + '" r="27" fill="#fff" stroke="var(--pri)" stroke-width="2"/>' +
+    '<text x="' + cx + '" y="' + (cy - 1) + '" text-anchor="middle" font-size="10" font-weight="700" fill="var(--pri)">ONENAT</text>' +
+    '<text x="' + cx + '" y="' + (cy + 12) + '" text-anchor="middle" font-size="8.5" fill="var(--tx3)">' + esc(String(gw).slice(0, 30)) + '</text>';
+  envs.forEach((e, i) => {
+    const p = pos[i];
+    const dim = selKey && selKey !== e.key;
+    const alpha = dim ? 0.35 : 1;
+    const rad = 16 + Math.min(e.resources.length + e.entities.length, 8);
+    const kinds = (e.resources.length ? e.resources.map(r => r.kind) : ['none']);
+    const C = 2 * Math.PI * rad;
+    const seg = C / kinds.length;
+    let segs = '';
+    kinds.forEach((kind, k) => {
+      const col = kind === 'none' ? 'var(--line2)' : (TOPO_KIND_COLOR[kind] || 'var(--tx3)');
+      segs += '<circle cx="' + p.x + '" cy="' + p.y + '" r="' + rad + '" fill="none" stroke="' + col + '" stroke-width="3" opacity="' + alpha + '"' +
+        ' stroke-dasharray="' + Math.max(seg - 5, 2) + ' ' + (C - Math.max(seg - 5, 2)) + '" stroke-dashoffset="' + (-(k * seg) + C / 4) + '"/>';
+    });
+    const badge = badgeOf(e);
+    const badgeHtml = badge ? '<circle cx="' + (p.x + rad * 0.72) + '" cy="' + (p.y - rad * 0.72) + '" r="8.5" fill="' + TOPO_AGENT_COLOR + '" opacity="' + alpha + '"/>' +
+      '<text x="' + (p.x + rad * 0.72) + '" y="' + (p.y - rad * 0.72 + 3) + '" text-anchor="middle" font-size="9" font-weight="700" fill="#fff">' + badge + '</text>' : '';
+    const label = e.name.length > 10 ? e.name.slice(0, 10) + '…' : e.name;
+    s += '<g class="topo-node" data-env="' + esc(e.key) + '" style="cursor:pointer">' +
+      '<circle cx="' + p.x + '" cy="' + p.y + '" r="' + (rad + 9) + '" fill="transparent"/>' +
+      '<circle cx="' + p.x + '" cy="' + p.y + '" r="' + rad + '" fill="#fff" opacity="' + alpha + '"/>' + segs +
+      '<circle cx="' + p.x + '" cy="' + p.y + '" r="3.5" fill="' + topoHealthColor(e.health) + '" opacity="' + alpha + '"/>' + badgeHtml +
+      '<text x="' + p.x + '" y="' + (p.y + rad + 14) + '" text-anchor="middle" font-size="10.5" ' + (selKey === e.key ? 'font-weight="700" fill="var(--pri)"' : 'fill="var(--tx2)"') + ' opacity="' + alpha + '">' + esc(label) + '</text></g>';
+  });
+  s += '</svg>';
+  return s;
+}
+function topoLegendHtml() {
+  return '<div class="topo-legend">' +
+    '<span class="li"><i style="background:' + TOPO_KIND_COLOR.dsh + '"></i>DSH</span>' +
+    '<span class="li"><i style="background:' + TOPO_KIND_COLOR.ssh + '"></i>SSH</span>' +
+    '<span class="li"><i style="background:' + TOPO_KIND_COLOR.http + '"></i>HTTP</span>' +
+    '<span class="li"><i style="background:' + TOPO_AGENT_COLOR + '"></i>实体数</span>' +
+    '<span class="li"><i style="background:var(--ok)"></i>在线</span>' +
+    '<span class="li"><i style="background:var(--warn)"></i>部分在线</span>' +
+    '<span class="li"><i style="background:var(--err)"></i>离线</span>' +
+    '<span class="hint">点拓扑节点 / 标签筛选，再点取消</span></div>';
+}
+/** 分组折叠头（健康点 + 名称 + 副标题 + 执行中药丸 + 数量 + 箭头） */
+function topoGroupHeadHtml(env, countText, busyCount, extraSub) {
+  const collapsed = !!state.topoCollapsed[env.key];
+  const sub = [];
+  if (env.dsh.length) {
+    const d = env.dsh[0];
+    sub.push('DSH :' + (d.port || '') + (d.online ? ' 在线' : ' 离线'));
+  } else if (env.resources.length) {
+    sub.push(env.resources.map(r => (r.kind || '').toUpperCase()).join('·'));
+  }
+  if (extraSub) sub.push(extraSub);
+  if (!sub.length) sub.push(topoHealthText(env.health) || '无关联资源');
+  return '<div class="topo-group-head" data-env="' + esc(env.key) + '">' +
+    '<span class="gdot" style="background:' + topoHealthColor(env.health) + '"></span>' +
+    '<h3>🖥 ' + esc(env.name) + '</h3>' +
+    '<span class="gsub">' + esc(sub.join(' · ')) + '</span>' +
+    (busyCount ? '<span class="gsp">执行中 ' + busyCount + '</span>' : '') +
+    '<span class="gcnt" style="color:' + topoHealthColor(env.health) + '">' + countText + '</span>' +
+    '<span class="chev">' + (collapsed ? '▸' : '▾') + '</span></div>';
+}
+function topoWireGroups(container, onToggle) {
+  container.querySelectorAll('.topo-group-head').forEach(head => {
+    head.addEventListener('click', () => {
+      const k = head.dataset.env;
+      state.topoCollapsed[k] = !state.topoCollapsed[k];
+      onToggle();
+    });
+  });
+}
+function topoChipsHtml(envs, total, selKey, idPrefix) {
+  return '<span class="topo-chip' + (selKey ? '' : ' on') + '" data-env="" id="' + idPrefix + '-all">全部 <span class="cnt">' + total + '</span></span>' +
+    envs.map(e => '<span class="topo-chip' + (selKey === e.key ? ' on' : '') + '" data-env="' + esc(e.key) + '" title="' + esc(e.name) + '">' +
+      '<span class="dot" style="background:' + topoHealthColor(e.health) + '"></span>' + esc(e.name) + ' <span class="cnt">' + e.entities.length + '</span></span>').join('');
+}
+// 实时态拉取（子智能体页 10s 轮询，对齐安卓 fetchAgentLive；离开页面即停）
+let agentLiveTimer = null;
+async function loadAgentLive() {
+  const r = await api('/monitor/overview');
+  if (r.ok) {
+    const live = {};
+    (r.data.agents || []).forEach(a => { live[a.id] = a; });
+    state.agentLive = live;
+    if (currentView === 'agents') renderAgents();
+  }
+}
+function startAgentLive() { if (!agentLiveTimer) { loadAgentLive(); agentLiveTimer = setInterval(loadAgentLive, 10000); } }
+function stopAgentLive() { if (agentLiveTimer) { clearInterval(agentLiveTimer); agentLiveTimer = null; } }
+
 async function loadProjects() {
   const r = await api('/projects');
   state.projects = r.ok ? (r.data || []) : [];
 }
 
 function renderProjects() {
-  const grid = $('proj-grid');
+  const groupsEl = $('proj-groups');
   if (document.getElementById('btn-proj-new') && !document.getElementById('btn-proj-new')._wired) {
     document.getElementById('btn-proj-new')._wired = true;
     document.getElementById('btn-proj-new').addEventListener('click', function () { openProjectDrawer(null); });
@@ -3655,54 +3873,90 @@ function renderProjects() {
     document.getElementById('btn-proj-import')._wired = true;
     document.getElementById('btn-proj-import').addEventListener('click', function () { openProjectImportModal(); });
   }
+  const qEl = document.getElementById('proj-q');
+  if (qEl && !qEl._wired) {
+    qEl._wired = true;
+    qEl.value = state.projQuery;
+    qEl.addEventListener('input', function () { state.projQuery = this.value.trim().toLowerCase(); renderProjects(); });
+  }
   if (!state.projects.length) {
-    grid.innerHTML = '<div class="mon-empty">还没有项目 —— 点右上角「＋ 新建项目」创建。项目把节点、工作区、指令、连接器、技能捆绑成一个可复用的工作上下文。</div>';
+    $('proj-chips').innerHTML = '';
+    groupsEl.innerHTML = '<div class="mon-empty">还没有项目 —— 点右上角「＋ 新建项目」创建。项目把节点、工作区、指令、连接器、技能捆绑成一个可复用的工作上下文。</div>';
     return;
   }
-  grid.innerHTML = state.projects.map(function (p) {
-    var taskCount = state.tasks.filter(function (t) { return t.projectId === p.id; }).length;
-    var chips = [
-      p.expertIds.length ? '可@ ' + p.expertIds.map(function (id) { var a = state.agents.find(function (x) { return x.id === id; }); return a ? a.name : id; }).join('、') : '可@ 任意子智能体',
-      p.skillNames.length ? p.skillNames.length + ' 技能' : '',
-      p.connectorIds.length ? p.connectorIds.length + ' 连接器' : ''
-    ].filter(Boolean).join(' ｜ ');
-    return '<div class="proj-card" data-proj="' + esc(p.id) + '">' +
-      '<div class="pj-name">' + esc(p.name) + '</div>' +
-      '<div class="pj-meta">🖥 ' + esc(p.nodeTitle) + (p.workspace ? ' · 📁 ' + esc(p.workspace) : '') + ' · 📋 ' + taskCount + ' 个任务</div>' +
-      (p.importedFrom ? '<div class="pj-chips" style="margin-top:6px"><span class="tag" title="自 ' + esc(p.importedFrom.sourceNode + p.importedFrom.sourcePath) + ' 导入 · 导入任务 ' + esc(p.importedFrom.taskId) + '">☁ 云端导入 · 来自 ' + esc(p.importedFrom.sourceNode) + '</span></div>' : '') +
-      (p.instructionPreview ? '<div class="pj-ins">' + esc(p.instructionPreview) + '</div>' : '') +
-      '<div class="pj-chips"><span class="tag">' + chips + '</span></div>' +
-      '<div class="ops" style="display:flex;gap:8px;margin-top:10px">' +
-      '<button class="mini-btn pj-enter">🚀 进入工作台</button>' +
-      '<button class="mini-btn pj-edit">⚙ 编辑</button>' +
-      '<button class="mini-btn pj-copy">📋 复制</button>' +
-      '<button class="mini-btn pj-del">🗑 删除</button></div>' +
-      '</div>';
+  const envs = topoBuildEnvs(p => topoEntityEnvKey(p.dshRef, p.nodeTitle), state.projects);
+  $('proj-chips').innerHTML = topoChipsHtml(envs, state.projects.length, state.projEnvFilter, 'pjchip');
+  $('proj-chips').querySelectorAll('.topo-chip').forEach(chip => {
+    chip.addEventListener('click', () => { state.projEnvFilter = chip.dataset.env || null; renderProjects(); });
+  });
+  const matched = state.projects.filter(p => {
+    if (state.projEnvFilter && topoEntityEnvKey(p.dshRef, p.nodeTitle) !== state.projEnvFilter) return false;
+    if (state.projQuery) {
+      const hay = (p.name || '') + ' ' + (p.workspace || '');
+      if (!hay.toLowerCase().includes(state.projQuery)) return false;
+    }
+    return true;
+  });
+  const shown = envs.map(e => ({ env: e, list: matched.filter(p => topoEntityEnvKey(p.dshRef, p.nodeTitle) === e.key) })).filter(g => g.list.length);
+  if (!matched.length) {
+    groupsEl.innerHTML = '<div class="mon-empty">没有匹配的项目</div>';
+    return;
+  }
+  groupsEl.innerHTML = shown.map(g => {
+    const tasksInGroup = g.list.reduce((acc, p) => acc + state.tasks.filter(t => t.projectId === p.id).length, 0);
+    const collapsed = !!state.topoCollapsed[g.env.key];
+    return '<div class="topo-group">' +
+      topoGroupHeadHtml(g.env, g.list.length + ' 项目 / ' + tasksInGroup + ' 任务', 0) +
+      '<div class="topo-group-body' + (collapsed ? ' collapsed' : '') + '"><div class="proj-grid">' +
+      g.list.map(projectCardHtml).join('') +
+      '</div></div></div>';
   }).join('');
-  grid.querySelectorAll('.proj-card').forEach(function (card) {
-    var pid = card.dataset.proj;
-    card.querySelector('.pj-enter').addEventListener('click', function () { enterProject(pid); });
-    card.querySelector('.pj-edit').addEventListener('click', function () { openProjectDrawer(pid); });
-    card.querySelector('.pj-copy').addEventListener('click', function () {
-      // 复制：preset 通道进「新建」抽屉；只复制配置（节点/工作区/指令/专家/连接器/技能），任务历史不带走
-      const src = state.projects.find(function (x) { return x.id === pid; });
-      if (!src) return;
-      openProjectDrawer(null, {
-        name: src.name + ' - 副本',
-        workspace: src.workspace || '',
-        instruction: src.instruction || '',
-        expertIds: (src.expertIds || []).slice(),
-        connectorIds: (src.connectorIds || []).slice(),
-        skillNames: (src.skillNames || []).slice(),
-        nodeRef: src.dshRef || null,
-      });
+  groupsEl.querySelectorAll('.proj-card').forEach(card => wireProjectCard(card));
+  topoWireGroups(groupsEl, renderProjects);
+}
+function projectCardHtml(p) {
+  const taskCount = state.tasks.filter(t => t.projectId === p.id).length;
+  const chips = [
+    p.expertIds.length ? '可@ ' + p.expertIds.map(id => { const a = state.agents.find(x => x.id === id); return a ? a.name : id; }).join('、') : '可@ 任意子智能体',
+    p.skillNames.length ? p.skillNames.length + ' 技能' : '',
+    p.connectorIds.length ? p.connectorIds.length + ' 连接器' : '',
+  ].filter(Boolean).join(' ｜ ');
+  return '<div class="proj-card" data-proj="' + esc(p.id) + '">' +
+    '<div class="pj-name">' + esc(p.name) + '</div>' +
+    '<div class="pj-meta">' + (p.workspace ? '📁 ' + esc(p.workspace) + ' · ' : '') + '📋 ' + taskCount + ' 个任务</div>' +
+    (p.importedFrom ? '<div class="pj-chips" style="margin-top:6px"><span class="tag" title="自 ' + esc(p.importedFrom.sourceNode + p.importedFrom.sourcePath) + ' 导入 · 导入任务 ' + esc(p.importedFrom.taskId) + '">☁ 云端导入 · 来自 ' + esc(p.importedFrom.sourceNode) + '</span></div>' : '') +
+    (p.instructionPreview ? '<div class="pj-ins">' + esc(p.instructionPreview) + '</div>' : '') +
+    '<div class="pj-chips"><span class="tag">' + chips + '</span></div>' +
+    '<div class="ops" style="display:flex;gap:8px;margin-top:10px">' +
+    '<button class="mini-btn pj-enter">🚀 进入工作台</button>' +
+    '<button class="mini-btn pj-edit">⚙ 编辑</button>' +
+    '<button class="mini-btn pj-copy">📋 复制</button>' +
+    '<button class="mini-btn pj-del">🗑 删除</button></div>' +
+    '</div>';
+}
+function wireProjectCard(card) {
+  const pid = card.dataset.proj;
+  card.querySelector('.pj-enter').addEventListener('click', function () { enterProject(pid); });
+  card.querySelector('.pj-edit').addEventListener('click', function () { openProjectDrawer(pid); });
+  card.querySelector('.pj-copy').addEventListener('click', function () {
+    // 复制：preset 通道进「新建」抽屉；只复制配置（节点/工作区/指令/专家/连接器/技能），任务历史不带走
+    const src = state.projects.find(x => x.id === pid);
+    if (!src) return;
+    openProjectDrawer(null, {
+      name: src.name + ' - 副本',
+      workspace: src.workspace || '',
+      instruction: src.instruction || '',
+      expertIds: (src.expertIds || []).slice(),
+      connectorIds: (src.connectorIds || []).slice(),
+      skillNames: (src.skillNames || []).slice(),
+      nodeRef: src.dshRef || null,
     });
-    card.querySelector('.pj-del').addEventListener('click', async function () {
-      if (!confirm('删除项目「' + (state.projects.find(function (x) { return x.id === pid; }) || {}).name + '」？项目下的任务不会被删除。')) return;
-      const r = await api('/projects/' + encodeURIComponent(pid), { method: 'DELETE' });
-      if (r.ok) { toast('✓ 项目已删除'); if (state.projectId === pid) exitProject(); loadProjects(); renderProjects(); }
-      else toast(r.error || '删除失败', true);
-    });
+  });
+  card.querySelector('.pj-del').addEventListener('click', async function () {
+    if (!confirm('删除项目「' + (state.projects.find(x => x.id === pid) || {}).name + '」？项目下的任务不会被删除。')) return;
+    const r = await api('/projects/' + encodeURIComponent(pid), { method: 'DELETE' });
+    if (r.ok) { toast('✓ 项目已删除'); if (state.projectId === pid) exitProject(); loadProjects(); renderProjects(); }
+    else toast(r.error || '删除失败', true);
   });
 }
 
@@ -4159,7 +4413,7 @@ function switchView(v) {
   if (v === 'files') renderFilesView();
   if (v === 'experts') renderExpertsAdmin();
   if (v === 'resources') renderResources();
-  if (v === 'agents') renderAgents();
+  if (v === 'agents') { renderAgents(); startAgentLive(); } else stopAgentLive();
   if (v === 'schedules') renderSchedules();
   if (v === 'settings') renderSettings();
   if (v === 'voice') voiceStart(); else voiceStop();
@@ -8002,62 +8256,135 @@ function renderResources() {
 
 // ---------- 子智能体视图 ----------
 $('btn-new-agent').addEventListener('click', () => openAgentDrawer(null));
+function agentLiveState(a) {
+  const lv = state.agentLive[a.id];
+  if (a.enabled === false) return { cls: '', color: 'var(--tx3)', text: '已停用' };
+  if (!lv) return { cls: '', color: 'var(--ok)', text: '已启用' };
+  if (lv.busy) return { cls: 'busy', color: 'var(--pri)', text: '执行中' + (lv.runningCount > 1 ? ' ' + lv.runningCount : '') };
+  if (lv.online) return { cls: '', color: 'var(--ok)', text: '在线' };
+  return { cls: '', color: 'var(--err)', text: '离线' };
+}
+
 function renderAgents() {
-  const el = $('agent-list'); el.innerHTML = '';
+  const el = $('agent-list');
+  const topoEl = $('agent-topo');
+  const chipsEl = $('agent-chips');
+  if (!el || !topoEl || !chipsEl) return;
+  const qEl = $('agent-q');
+  if (qEl && !qEl._wired) {
+    qEl._wired = true;
+    qEl.value = state.agentQuery;
+    qEl.addEventListener('input', function () { state.agentQuery = this.value.trim().toLowerCase(); renderAgents(); });
+  }
   if (!state.agents.length) {
+    topoEl.style.display = 'none';
+    chipsEl.innerHTML = '';
     el.innerHTML = '<div class="card"><span class="sub" style="color:var(--tx3)">还没有子智能体。点击「新建子智能体」—— 从资源目录中选择一个 DSH 节点（稳定 ID 绑定，端口变化不影响），配置提示词与可用连接器。</span></div>';
     return;
   }
-  for (const a of state.agents) {
-    const card = document.createElement('div'); card.className = 'card';
-    const dshDesc = describeDshRef(a);
-    const resDesc = (a.resources || []).map(r => r.alias || r.ref.mappingId || r.ref.appId).join('、') || '无';
-    const skillNames = (a.skills || []).filter(Boolean);
-    const skillDesc = skillNames.length ? skillNames.map(esc).join('、') : '无';
-    card.innerHTML = '<div class="row1"><h3>' + esc(a.name) + '</h3>' +
-      (a.role ? '<span class="tag" title="专家角色">🧑‍🔬 ' + esc(a.role) + '</span>' : '') +
-      (a.enabled === false ? '<span class="tag err">停用</span>' : '<span class="tag ok">启用</span>') +
-      '<span class="tag">' + esc(a.agentPreset || 'cordis') + '</span>' +
-      (a.model ? '<span class="tag">' + esc(a.model) + '</span>' : '') +
-      (a.workDir ? '<span class="tag" title="远端工作目录">📁 ' + esc(a.workDir) + '</span>' : '') +
-      (skillNames.length ? '<span class="tag" title="绑定技能（派发时手势加载）">🎯 ' + skillNames.length + ' 技能</span>' : '') + '</div>' +
-      '<div class="desc">DSH 实体: <span class="mono">' + esc(dshDesc) + '</span><br>绑定资源: ' + esc(resDesc) +
-      '<br>绑定技能: <span class="mono">' + (skillNames.length ? skillNames.map(s => '<span class="tag" style="margin:2px 4px 2px 0">🎯 ' + esc(s) + '</span>').join('') : '<span class="sub">无</span>') + '</span>' +
-      (a.role || a.systemPrompt ? '<br>角色: ' + esc((a.role ? a.role + ' · ' : '') + (a.systemPrompt || '').slice(0, 80)) : '') + '</div>' +
-      '<div class="ops"><button class="btn pri" data-op="enter">🚀 进入工作台</button><button class="btn" data-op="edit">编辑</button><button class="btn" data-op="copy">📋 复制</button><button class="btn" data-op="ping">Ping 探活</button><button class="btn" data-op="preview">提示词预览</button><button class="btn" data-op="skills">🎯 技能</button><button class="btn danger" data-op="del">删除</button></div>';
-    card.querySelector('[data-op=enter]').addEventListener('click', async () => {
-      // 新模型：进入工作台并把任务节点切到该智能体绑定的节点（主 DSH 跟节点走）
-      if (state.projectId) exitProject();
-      switchView('work');
-      const mid = a.dshRef && a.dshRef.kind === 'mapping' ? a.dshRef.mappingId : '';
-      if (mid && dshNodeOptions().some(function (x) { return x.mappingId === mid; })) selectNode(mid);
-      else initNodeState();
+  const envs = topoBuildEnvs(a => topoEntityEnvKey(a.dshRef, ''), state.agents);
+  // 星型拓扑图（≥2 个环境才画；角标 = 该环境子智能体数）
+  if (envs.length >= 2) {
+    topoEl.style.display = '';
+    topoEl.innerHTML = topoSvgHtml(envs, state.agentEnvFilter, e => e.entities.length ? String(e.entities.length) : '') + topoLegendHtml();
+    topoEl.querySelectorAll('.topo-node').forEach(node => {
+      node.addEventListener('click', () => {
+        const k = node.dataset.env;
+        state.agentEnvFilter = state.agentEnvFilter === k ? null : k;
+        renderAgents();
+      });
     });
-    card.querySelector('[data-op=edit]').addEventListener('click', () => openAgentDrawer(a));
-    card.querySelector('[data-op=copy]').addEventListener('click', () => {
-      // 复制：完整配置进抽屉、id 剥掉 → 保存走「新建」；只复制配置，不带任务历史与会话
-      openAgentDrawer(Object.assign({}, a, { id: undefined, name: a.name + ' - 副本' }), true);
-    });
-    card.querySelector('[data-op=skills]').addEventListener('click', () => openSkillCenter(a));
-    card.querySelector('[data-op=ping]').addEventListener('click', async () => {
-      toast('探测中…');
-      const r = await api('/agents/' + a.id + '/ping', { method: 'POST' });
-      const p = r.data && r.data.ping;
-      if (p && p.ok) toast('✓ ' + a.name + ' 在线 · ' + (p.name || '') + ' v' + (p.version || '?') + (r.data.resolved ? ' · ' + r.data.resolved.baseUrl : ''));
-      else toast('✗ ' + a.name + ' 不可达: ' + ((p && p.error) || '未知'), true);
-    });
-    card.querySelector('[data-op=preview]').addEventListener('click', async () => {
-      toast('合成提示词中…');
-      const r = await api('/agents/' + a.id + '/prompt-preview');
-      if (!r.ok) { toast(r.error, true); return; }
-      openModal('资源提示词预览（脱敏）', '<div class="pre-block">' + esc(r.data.full || '(空)') + '</div>' + (r.data.warnings && r.data.warnings.length ? '<div style="color:var(--warn);font-size:12px;margin-top:8px">⚠ ' + r.data.warnings.map(esc).join('；') + '</div>' : ''));
-    });
-    card.querySelector('[data-op=del]').addEventListener('click', async () => {
-      if (!confirm('删除子智能体「' + a.name + '」？')) return;
-      await api('/agents/' + a.id, { method: 'DELETE' }); await loadAgents(); renderAgents(); toast('已删除');
-    });
-    el.appendChild(card);
+  } else {
+    topoEl.style.display = 'none';
   }
+  chipsEl.innerHTML = topoChipsHtml(envs, state.agents.length, state.agentEnvFilter, 'agchip');
+  chipsEl.querySelectorAll('.topo-chip').forEach(chip => {
+    chip.addEventListener('click', () => { state.agentEnvFilter = chip.dataset.env || null; renderAgents(); });
+  });
+  const matched = state.agents.filter(a => {
+    if (state.agentEnvFilter && topoEntityEnvKey(a.dshRef, '') !== state.agentEnvFilter) return false;
+    if (state.agentQuery) {
+      const hay = (a.name || '') + ' ' + (a.model || '') + ' ' + (a.role || '') + ' ' + (a.systemPrompt || '');
+      if (!hay.toLowerCase().includes(state.agentQuery)) return false;
+    }
+    return true;
+  });
+  if (!matched.length) {
+    el.innerHTML = '<div class="mon-empty">没有匹配的子智能体</div>';
+    return;
+  }
+  const shown = envs.map(e => ({ env: e, list: matched.filter(a => topoEntityEnvKey(a.dshRef, '') === e.key) })).filter(g => g.list.length);
+  el.innerHTML = shown.map(g => {
+    const busy = g.list.filter(a => (state.agentLive[a.id] || {}).busy).length;
+    const collapsed = !!state.topoCollapsed[g.env.key];
+    const on = g.list.filter(a => a.enabled !== false && (state.agentLive[a.id] ? state.agentLive[a.id].online !== false : true)).length;
+    return '<div class="topo-group">' +
+      topoGroupHeadHtml(g.env, on + '/' + g.list.length + ' 在线', busy) +
+      '<div class="topo-group-body' + (collapsed ? ' collapsed' : '') + '">' +
+      g.list.map(agentCardHtml).join('') +
+      '</div></div>';
+  }).join('');
+  el.querySelectorAll('.agent-card').forEach(card => wireAgentCard(card));
+  topoWireGroups(el, renderAgents);
+}
+function agentCardHtml(a) {
+  const lv = state.agentLive[a.id];
+  const st = agentLiveState(a);
+  const dshDesc = describeDshRef(a);
+  const resDesc = (a.resources || []).map(r => r.alias || r.ref.mappingId || r.ref.appId).join('、') || '无';
+  const skillNames = (a.skills || []).filter(Boolean);
+  return '<div class="card agent-card" data-agent="' + esc(a.id) + '">' +
+    '<div class="row1"><span class="live-dot ' + st.cls + '" style="' + (st.cls ? '' : 'background:' + st.color) + '"></span>' +
+    '<h3>' + esc(a.name) + '</h3>' +
+    '<span class="live-state" style="color:' + st.color + '">' + st.text + '</span>' +
+    (a.role ? '<span class="tag" title="专家角色">🧑‍🔬 ' + esc(a.role) + '</span>' : '') +
+    (a.enabled === false ? '<span class="tag err">停用</span>' : '') +
+    '<span class="tag">' + esc(a.agentPreset || 'cordis') + '</span>' +
+    (a.model ? '<span class="tag">' + esc(a.model) + '</span>' : '') +
+    (a.workDir ? '<span class="tag" title="远端工作目录">📁 ' + esc(a.workDir) + '</span>' : '') +
+    (skillNames.length ? '<span class="tag" title="绑定技能（派发时手势加载）">🎯 ' + skillNames.length + ' 技能</span>' : '') + '</div>' +
+    (lv && lv.busy && lv.currentActivity ? '<div class="activity" title="' + esc(lv.currentActivity) + '">⏳ ' + esc(lv.currentActivity) + '</div>' : '') +
+    (lv && lv.online === false && lv.error ? '<div class="activity" style="color:var(--err)" title="' + esc(lv.error) + '">✗ ' + esc(lv.error) + '</div>' : '') +
+    '<div class="desc">DSH 实体: <span class="mono">' + esc(dshDesc) + '</span><br>绑定资源: ' + esc(resDesc) +
+    '<br>绑定技能: <span class="mono">' + (skillNames.length ? skillNames.map(s => '<span class="tag" style="margin:2px 4px 2px 0">🎯 ' + esc(s) + '</span>').join('') : '<span class="sub">无</span>') + '</span>' +
+    (a.role || a.systemPrompt ? '<br>角色: ' + esc((a.role ? a.role + ' · ' : '') + (a.systemPrompt || '').slice(0, 80)) : '') + '</div>' +
+    '<div class="ops"><button class="btn pri" data-op="enter">🚀 进入工作台</button><button class="btn" data-op="edit">编辑</button><button class="btn" data-op="copy">📋 复制</button><button class="btn" data-op="ping">Ping 探活</button><button class="btn" data-op="preview">提示词预览</button><button class="btn" data-op="skills">🎯 技能</button><button class="btn danger" data-op="del">删除</button></div>' +
+    '</div>';
+}
+function wireAgentCard(card) {
+  const a = state.agents.find(x => x.id === card.dataset.agent);
+  if (!a) return;
+  card.querySelector('[data-op=enter]').addEventListener('click', async () => {
+    // 新模型：进入工作台并把任务节点切到该智能体绑定的节点（主 DSH 跟节点走）
+    if (state.projectId) exitProject();
+    switchView('work');
+    const mid = a.dshRef && a.dshRef.kind === 'mapping' ? a.dshRef.mappingId : '';
+    if (mid && dshNodeOptions().some(x => x.mappingId === mid)) selectNode(mid);
+    else initNodeState();
+  });
+  card.querySelector('[data-op=edit]').addEventListener('click', () => openAgentDrawer(a));
+  card.querySelector('[data-op=copy]').addEventListener('click', () => {
+    // 复制：完整配置进抽屉、id 剥掉 → 保存走「新建」；只复制配置，不带任务历史与会话
+    openAgentDrawer(Object.assign({}, a, { id: undefined, name: a.name + ' - 副本' }), true);
+  });
+  card.querySelector('[data-op=skills]').addEventListener('click', () => openSkillCenter(a));
+  card.querySelector('[data-op=ping]').addEventListener('click', async () => {
+    toast('探测中…');
+    const r = await api('/agents/' + a.id + '/ping', { method: 'POST' });
+    const p = r.data && r.data.ping;
+    if (p && p.ok) toast('✓ ' + a.name + ' 在线 · ' + (p.name || '') + ' v' + (p.version || '?') + (r.data.resolved ? ' · ' + r.data.resolved.baseUrl : ''));
+    else toast('✗ ' + a.name + ' 不可达: ' + ((p && p.error) || '未知'), true);
+  });
+  card.querySelector('[data-op=preview]').addEventListener('click', async () => {
+    toast('合成提示词中…');
+    const r = await api('/agents/' + a.id + '/prompt-preview');
+    if (!r.ok) { toast(r.error, true); return; }
+    openModal('资源提示词预览（脱敏）', '<div class="pre-block">' + esc(r.data.full || '(空)') + '</div>' + (r.data.warnings && r.data.warnings.length ? '<div style="color:var(--warn);font-size:12px;margin-top:8px">⚠ ' + r.data.warnings.map(esc).join('；') + '</div>' : ''));
+  });
+  card.querySelector('[data-op=del]').addEventListener('click', async () => {
+    if (!confirm('删除子智能体「' + a.name + '」？')) return;
+    await api('/agents/' + a.id, { method: 'DELETE' }); await loadAgents(); renderAgents(); toast('已删除');
+  });
 }
 function describeDshRef(a) {
   if (!a.dshRef) return '(未绑定)';
