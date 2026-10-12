@@ -14,10 +14,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
 import { randomUUID } from 'node:crypto'
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
-import { mkdirSync, writeFileSync, readdirSync, statSync } from 'node:fs'
-import { join } from 'node:path'
 import type { OnenatDirectory } from './onenat.js'
 import { OnenatDirectory as Dir } from './onenat.js'
 import type { TaskEngine } from './engine.js'
@@ -112,7 +108,6 @@ export class WorkBuddyRouter {
     taskId: string
     at: number
   }>()
-  private execFileP = promisify(execFile)
 
   /** DSH 节点展示名（映射节点取隧道名/应用名；直连取 baseUrl） */
   private nodeLabelOf(ref: DshRef): string {
@@ -277,18 +272,6 @@ export class WorkBuddyRouter {
       importedFrom: proj.importedFrom,
       createdAt: proj.createdAt,
       updatedAt: proj.updatedAt,
-    }
-  }
-
-  private readdirSafe(dir: string): string[] {
-    return readdirSync(dir)
-  }
-
-  private statIsDir(path: string): boolean {
-    try {
-      return statSync(path).isDirectory()
-    } catch {
-      return false
     }
   }
 
@@ -816,7 +799,7 @@ export class WorkBuddyRouter {
       }
       return true
     }
-    // ---------- 项目：从远程 DSH 导入（发任务 → 节点打包上传 → 云端建项目） ----------
+    // ---------- 项目：从远程 DSH 导入（发分析任务 → 节点智能体分析项目 → 回调平台接口自动建项目） ----------
     if (p === '/api/projects/import' && method === 'POST') {
       const body = await this.parseBody(req)
       const nodeRef = body?.nodeRef && typeof body.nodeRef === 'object' && typeof body.nodeRef.kind === 'string' ? (body.nodeRef as DshRef) : undefined
@@ -834,21 +817,27 @@ export class WorkBuddyRouter {
       const importId = 'pimp-' + randomUUID().slice(0, 8)
       const token = randomUUID() + randomUUID()
       const base = this.externalBase(req, prefix)
-      const uploadUrl = `${base}/api/projects/import-upload?token=${token}`
+      const createUrl = `${base}/api/projects/import-create?token=${token}`
       const nodeLabel = this.nodeLabelOf(nodeRef)
+      // 候选清单：专家（子智能体）+ 连接器（SSH 池 / ONENAT 映射），供节点智能体按项目性质挑选（禁止编造 ID）
+      const expertCandidates = this.store.getAgents().map((a) => ({ id: a.id, name: a.name, role: a.role || '' }))
+      const connectorCandidates = [
+        ...this.sshStore.list().map((s) => ({ id: `ssh:${s.id}`, label: `${s.name}（${s.host}）` })),
+        ...this.directory.listEndpoints().filter((e) => e.kind !== 'dsh' && e.mappingId).map((e) => ({ id: `map:${e.mappingId}`, label: e.appName || e.note || e.mappingId! })),
+      ]
       let task
       try {
         task = await this.engine.createTask({
-          title: `导入项目「${name}」→ 云端（${nodeLabel}）`,
+          title: `分析并导入项目「${name}」→ 平台（${nodeLabel}）`,
           nodeRef,
-          message: buildProjectImportPrompt({ name, path: wsPath, uploadUrl }),
+          message: buildProjectImportPrompt({ name, path: wsPath, createUrl, nodeLabel, experts: expertCandidates, connectors: connectorCandidates }),
           creator: 'console',
         })
       } catch (err: any) {
         this.sendJson(res, 200, { ok: false, error: err?.message || '发起导入任务失败' })
         return true
       }
-      // 记录待入库令牌；节点上传成功后（见 import-upload）据此创建云端项目
+      // 记录待入库令牌；节点分析完成回调（见 import-create）据此创建云端项目
       for (const [k, v] of this.pendingProjectImports) {
         if (Date.now() - v.at > 2 * 60 * 60 * 1000) this.pendingProjectImports.delete(k)
       }
@@ -856,8 +845,8 @@ export class WorkBuddyRouter {
       this.sendJson(res, 200, { ok: true, data: { taskId: task.id, importId, nodeLabel } })
       return true
     }
-    // 上传端点（公开，靠一次性 token 鉴权；远端 DSH 节点无平台登录态）
-    if (p === '/api/projects/import-upload' && method === 'POST') {
+    // 项目创建端点（公开，靠一次性 token 鉴权）：节点智能体分析完远程项目后，按推断的表单内容调此接口建项目
+    if (p === '/api/projects/import-create' && method === 'POST') {
       const token = String(urlObj.searchParams.get('token') || '').trim()
       const pending = token ? this.pendingProjectImports.get(token) : undefined
       if (!pending || Date.now() - pending.at > 2 * 60 * 60 * 1000) {
@@ -865,63 +854,61 @@ export class WorkBuddyRouter {
         this.sendJson(res, 403, { ok: false, error: '导入令牌无效或已过期（2 小时有效，请在平台重新发起导入）' })
         return true
       }
-      // 原始二进制读体（curl --data-binary；上限 200MB）
-      const buf = await new Promise<Buffer>((resolve, reject) => {
-        const chunks: Buffer[] = []
-        let size = 0
-        req.on('data', (c: Buffer) => {
-          size += c.length
-          if (size > 200 * 1024 * 1024) { reject(new Error('压缩包超过 200MB 上限')); req.destroy(); return }
-          chunks.push(c)
-        })
-        req.on('end', () => resolve(Buffer.concat(chunks)))
-        req.on('error', () => reject(new Error('读取上传内容失败')))
-      }).catch(() => null as unknown as Buffer)
-      if (!buf || !buf.length) {
-        this.sendJson(res, 400, { ok: false, error: '上传内容为空（请用 curl --data-binary 上传 tar.gz 原始二进制）' })
+      const body = await this.parseBody(req).catch(() => null as any)
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        this.sendJson(res, 400, { ok: false, error: '请求体必须是 JSON 对象：{name, instruction, expertIds, connectorIds, skillNames, summary}' })
         return true
       }
-      const rootDir = this.library?.projectImportDir()
-      if (!rootDir) {
-        this.sendJson(res, 500, { ok: false, error: '平台存储目录不可写，无法入库' })
+      const name = String(body.name || '').trim() || pending.name
+      if (!name) {
+        this.sendJson(res, 400, { ok: false, error: '缺少项目名（name）' })
         return true
       }
-      const destDir = join(rootDir, pending.importId)
-      const archivePath = join(destDir, 'archive.tgz')
-      const extractDir = join(destDir, 'workspace')
-      try {
-        mkdirSync(destDir, { recursive: true })
-        writeFileSync(archivePath, buf)
-        mkdirSync(extractDir, { recursive: true })
-        try {
-          await this.execFileP('tar', ['-xzf', archivePath, '-C', extractDir], { timeout: 120_000 })
-        } catch {
-          // zip 兜底（远端可能打了 zip 但按提示词应发 tgz；解不开则整体失败）
-          await this.execFileP('tar', ['-xf', archivePath, '-C', extractDir], { timeout: 120_000 })
+      // 候选白名单过滤：节点智能体可能推断出不存在的 ID，宁缺毋滥（截断时在响应里告知）
+      const agentIds = new Set(this.store.getAgents().map((a) => a.id))
+      const expertIds = (Array.isArray(body.expertIds) ? body.expertIds : []).map(String).filter((id: string) => agentIds.has(id))
+      const validConns = new Set<string>()
+      for (const s of this.sshStore.list()) validConns.add(`ssh:${s.id}`)
+      for (const e of this.directory.listEndpoints()) {
+        if (e.mappingId) validConns.add(`map:${e.mappingId}`)
+        if (e.appId) validConns.add(`app:${e.appId}`)
+      }
+      const connectorIds = (Array.isArray(body.connectorIds) ? body.connectorIds : []).map((x: any) => String(x).trim()).filter((id: string) => validConns.has(id))
+      const skillNames: string[] = []
+      if (Array.isArray(body.skillNames)) {
+        for (const raw of body.skillNames) {
+          const s = String(raw).trim().replace(/^\//, '')
+          if (s && !skillNames.includes(s) && skillNames.length < 20) skillNames.push(s)
         }
-      } catch (err: any) {
-        this.sendJson(res, 500, { ok: false, error: '压缩包解压失败：' + (err?.message || String(err)) })
+      }
+      const instruction = String(body.instruction || '').trim().slice(0, 6000) || (String(body.summary || '').trim() ? `项目概述：${String(body.summary).trim()}` : undefined)
+      // 幂等：同节点同路径的项目已存在 → 视为重新导入，更新原项目而不是重复建卡
+      const normPath = (v: string) => v.replace(/\/+$/, '')
+      const sameRef = (a: DshRef, b: DshRef): boolean => {
+        if (a.kind !== b.kind) return false
+        if (a.kind === 'mapping' && b.kind === 'mapping') return a.mappingId === b.mappingId
+        if (a.kind === 'direct' && b.kind === 'direct') return a.apiBaseUrl === b.apiBaseUrl
+        if (a.kind === 'app' && b.kind === 'app') return a.appId === b.appId
         return true
       }
-      // 单层目录归一：解压出唯一顶层目录时，工作区指向该目录
-      let wsDir = extractDir
-      try {
-        const ents = this.readdirSafe(extractDir)
-        const visible = ents.filter((n) => !n.startsWith('.'))
-        if (visible.length === 1 && this.statIsDir(join(extractDir, visible[0]))) wsDir = join(extractDir, visible[0])
-      } catch { /* 保持 extractDir */ }
+      const existing = this.store.getProjects().find((pr) => pr.workspace && normPath(pr.workspace) === normPath(pending.path) && sameRef(pr.dshRef, pending.nodeRef))
       const project = this.store.upsertProject({
-        name: pending.name,
+        id: existing?.id,
+        name,
         dshRef: pending.nodeRef,
-        workspace: wsDir,
-        instruction: `本项目自远程 DSH 节点「${pending.nodeLabel}」的 ${pending.path} 导入（${new Date().toLocaleString('zh-CN')}）。云端快照目录：${wsDir}；导入任务：${pending.taskId}。`,
-        expertIds: [],
-        connectorIds: [],
-        skillNames: [],
-        importedFrom: { sourceNode: pending.nodeLabel, sourcePath: pending.path, taskId: pending.taskId, cloudPath: wsDir, at: Date.now() },
+        workspace: pending.path,
+        instruction,
+        expertIds,
+        connectorIds,
+        skillNames,
+        importedFrom: { sourceNode: pending.nodeLabel, sourcePath: pending.path, taskId: pending.taskId, at: Date.now() },
       })
+      const dropped = {
+        expertIds: Math.max(0, (Array.isArray(body.expertIds) ? body.expertIds.length : 0) - expertIds.length),
+        connectorIds: Math.max(0, (Array.isArray(body.connectorIds) ? body.connectorIds.length : 0) - connectorIds.length),
+      }
       this.pendingProjectImports.delete(token)
-      this.sendJson(res, 200, { ok: true, data: { projectId: project.id, name: project.name, workspace: wsDir } })
+      this.sendJson(res, 200, { ok: true, data: { projectId: project.id, name: project.name, workspace: project.workspace, updated: Boolean(existing), dropped } })
       return true
     }
     const projMatch = /^\/api\/projects\/([^/]+)$/.exec(p)

@@ -238,8 +238,8 @@ export interface Project {
   connectorIds: string[]
   /** 项目技能（以 /名 手势自动加载） */
   skillNames: string[]
-  /** 从远程 DSH 导入的溯源信息（来源节点/路径 + 导入任务 + 云端快照目录） */
-  importedFrom?: { sourceNode: string; sourcePath: string; taskId: string; cloudPath: string; at: number }
+  /** 从远程 DSH 导入的溯源信息（来源节点/路径 + 导入分析任务） */
+  importedFrom?: { sourceNode: string; sourcePath: string; taskId: string; at: number }
   createdAt: number
   updatedAt: number
 }

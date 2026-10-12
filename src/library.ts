@@ -89,17 +89,6 @@ export class SkillPluginLibrary {
     return join(this.libDir, 'plugins')
   }
 
-  /** 项目导入云端快照根目录：<dataDir>/project-imports（懒创建；失败返回 null = 云端入库不可用） */
-  public projectImportDir(): string | null {
-    const dir = join(this.libDir, '..', 'project-imports')
-    try {
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-      return dir
-    } catch {
-      return null
-    }
-  }
-
   private indexPath(): string {
     return join(this.libDir, 'index.json')
   }
@@ -408,22 +397,52 @@ export function extractExportedPaths(text: string): string[] {
   return [...hits]
 }
 
-/** 项目导入任务提示词：打包工作区 → HTTP 上传到平台 → 汇报。平台收到后自动建云端项目。
- * ⚠️ 提示词里不能出现「@ + 路径」字面量（如 curl 的 "@/tmp/x.tgz"）：服务端 extractMentions 会把
- * 独立路径样式的 @提及 兜底挂到 agents[0]，导致导入任务被定向委派到错误执行者。故用 $TARBALL 变量承载。 */
-export function buildProjectImportPrompt(opts: { name: string; path: string; uploadUrl: string }): string {
-  const { name, path, uploadUrl } = opts
+/** 项目导入任务提示词：节点智能体分析远程项目 → 推断新建项目表单各字段 → 调平台接口自动建项目。
+ * ⚠️ 提示词里不能出现「@ + 路径」字面量（如 curl 的 "@/tmp/x.json"）：服务端 extractMentions 会把
+ * 独立路径样式的 @提及 兜底挂到 agents[0]，导致导入任务被定向委派到错误执行者。故用 $PAYLOAD 变量承载。 */
+export function buildProjectImportPrompt(opts: {
+  name: string
+  path: string
+  createUrl: string
+  nodeLabel: string
+  experts: Array<{ id: string; name: string; role?: string }>
+  connectors: Array<{ id: string; label: string }>
+}): string {
+  const { name, path, createUrl, nodeLabel, experts, connectors } = opts
+  const expertList = experts.length
+    ? experts.map((e) => `  - ${e.id}｜${e.name}${e.role ? `（${e.role}）` : ''}`).join('\n')
+    : '  （平台当前没有可选专家，expertIds 留空数组）'
+  const connectorList = connectors.length
+    ? connectors.map((c) => `  - ${c.id}｜${c.label}`).join('\n')
+    : '  （平台当前没有可选连接器，connectorIds 留空数组）'
   return [
-    `【平台下发任务】把本节点工作区「${path}」的项目「${name}」导入到云端平台。请严格按步骤执行并汇报结果。`,
+    `【平台下发任务】分析本节点上的项目工作区「${path}」，推断它在 Web 平台「新建项目」表单里应填的内容，然后调用平台接口把这个项目添加到平台（来源节点：${nodeLabel}；参考名：${name}）。请严格按步骤执行并汇报。`,
     '',
-    `1. 确认目录存在：ls -la "${path}"（不存在则直接汇报失败，不要继续）。`,
-    `2. 在父目录打包为 tar.gz（排除 node_modules / .git / dist 等构建产物与缓存；目录名保持原样）：`,
-    `   TARBALL="/tmp/wb-import-${name}.tgz"; cd "$(dirname "${path}")" && tar --exclude='node_modules' --exclude='.git' --exclude='dist' -czf "$TARBALL" "$(basename "${path}")"`,
-    `   （若 tar 不支持 --exclude，请改用 tar -czf 后手动剔除，或用 find+tar 等价方式；打包后 ls -la 确认 $TARBALL 体积大于 0。）`,
-    `3. 上传到云端平台（原始二进制 POST，记录 HTTP 响应原文；$TARBALL 即第 2 步打包产物）：`,
-    `   curl -sS -X POST -H "Content-Type: application/octet-stream" --data-binary "@$TARBALL" "${uploadUrl}"`,
-    `   响应为 JSON：ok=true 表示云端已接收并建好项目；ok=false 时把 error 原文一并汇报。`,
-    '4. 汇报：上传成功/失败、压缩包体积、云端响应原文；失败时给出关键报错。',
+    '只能从下面的候选里选，禁止编造不存在的 ID：',
+    '项目专家候选（expertIds，按职责与项目性质匹配）：',
+    expertList,
+    '项目连接器候选（connectorIds，项目需要访问的外部环境/服务才选）：',
+    connectorList,
+    '',
+    `1. 确认目录存在：ls -la "${path}"（不存在则直接汇报失败，不要调用接口）。`,
+    '2. 分析项目：查看目录结构（如 ls 或 tree 两层）、README/README.md、package.json / pyproject.toml / requirements.txt / pom.xml / go.mod / Cargo.toml 等清单与关键配置、主要源码入口，搞清楚：这是什么项目、技术栈、如何构建/运行/测试、大致用途与当前状态。',
+    '3. 推断「新建项目」表单各字段：',
+    '   - name：简洁的项目名（尽量 ≤20 字，可用中文概括用途）',
+    '   - instruction：项目指令（以「# 角色」开头的 Markdown，写明项目背景、技术栈、目录结构要点、构建/运行/测试命令、注意事项，供平台后续任务注入；300~800 字）',
+    '   - expertIds：从候选里挑该项目可能依赖的专家（没有合适的就空数组）',
+    '   - connectorIds：从候选里挑项目会涉及的连接器（没有就空数组）',
+    '   - skillNames：本节点已安装技能里项目会用到的（可 ls ~/.dsh/skills 查看，取目录名；没有就空数组）',
+    '   - summary：一句话分析结论（这个项目是做什么的）',
+    '4. 把上述字段写成 JSON 文件（UTF-8、合法 JSON；用 heredoc 写文件，注意 instruction 内的引号与换行要转义）：',
+    '   PAYLOAD="/tmp/wb-import-payload.json"',
+    '   cat > "$PAYLOAD" <<\'JSON\'',
+    '   {"name":"…","instruction":"…","expertIds":[],"connectorIds":[],"skillNames":[],"summary":"…"}',
+    '   JSON',
+    '   （写完后用 python3 -m json.tool "$PAYLOAD" 校验合法，不合法就修好再继续。）',
+    '5. 调用平台接口创建项目（JSON 原文 POST，记录 HTTP 响应原文）：',
+    '   curl -sS -X POST -H "Content-Type: application/json" --data-binary "@$PAYLOAD" "' + createUrl + '"',
+    '   响应为 JSON：ok=true 表示平台已按推断的表单建好项目；ok=false 时把 error 原文一并汇报。',
+    '6. 汇报：项目分析结论（是什么项目/技术栈/怎么跑）、表单各字段的取值与理由（各一句话）、平台创建结果原文。',
     '不要修改工作区内的任何文件，不要做与本任务无关的其他操作。',
   ].join('\n')
 }

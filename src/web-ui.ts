@@ -2157,7 +2157,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <h2>📦 项目</h2>
           <span class="sub">项目 = 节点 + 工作区 + 指令 + 子智能体/连接器/技能 的组合。项目内发起的任务自动继承全部上下文。</span>
           <span class="hspacer"></span>
-          <button class="btn" id="btn-proj-import" title="选择远程 DSH 节点，拉取其工作区列表，勾选后向节点发导入任务，项目自动导入云端">⬇ 从远程 DSH 导入</button>
+          <button class="btn" id="btn-proj-import" title="选择远程 DSH 节点，拉取其工作区列表，勾选后向节点发分析任务：智能体分析项目并推断项目名/指令/专家/连接器/技能，自动调平台接口建项目">⬇ 从远程 DSH 导入</button>
           <button class="btn pri" id="btn-proj-new">＋ 新建项目</button>
         </div>
         <div class="proj-grid" id="proj-grid"><div class="mon-empty">加载中…</div></div>
@@ -3715,8 +3715,8 @@ async function openProjectImportModal() {
   const m = libModal('从远程 DSH 导入项目');
   if (!nodes.length) { m.body.innerHTML = '<div class="lib-empty">没有可用的 DSH 节点 —— 请到「资源目录」确认 ONENAT 映射已同步</div>'; return; }
   m.body.innerHTML =
-    '<div class="lib-tip">① 选择来源 <b>DSH 节点</b> → ② 拉取该节点的<b>工作区列表</b> → ③ 勾选要导入的工作区并发起导入。' +
-    '平台向该节点直发一个<b>主会话导入任务</b>：节点把工作区打包（排除 node_modules/.git/dist）上传回云端，上传完成后项目自动出现在项目列表。</div>' +
+    '<div class="lib-tip">① 选择来源 <b>DSH 节点</b> → ② 拉取该节点的<b>工作区列表</b> → ③ 勾选要导入的项目并发起。' +
+    '平台向该节点直发一个<b>主会话分析任务</b>：智能体会分析远程项目（用途/技术栈/构建方式），推断出项目名、项目指令、可能依赖的专家、涉及的连接器、需要的技能，然后调用平台接口自动按表单创建项目（项目工作目录 = 远程路径）。完成后项目自动出现在项目列表。</div>' +
     '<div class="field" style="margin-top:10px"><label>来源 DSH 节点</label><select id="pimp-node" class="cfg-sel" style="width:100%">' +
     nodes.map(function (n, i) {
       var label = n.title || n.appName || n.note || n.mappingId;
@@ -3770,8 +3770,8 @@ async function openProjectImportModal() {
       if (r.ok) { okCount++; taskIds.push(r.data.taskId); }
       else failed.push({ name: w.title, error: r.error || '发起失败' });
     }
-    var html = '<div class="lib-tip">已向节点「' + esc(nodeLabel(n)) + '」发起 ' + okCount + ' 个主会话导入任务' +
-      '（节点正在把工作区打包上传到云端，上传完成后项目自动出现在项目列表）：</div><div class="lib-check">';
+    var html = '<div class="lib-tip">已向节点「' + esc(nodeLabel(n)) + '」发起 ' + okCount + ' 个主会话分析导入任务' +
+      '（智能体正在分析远程项目并推断项目配置，完成后自动调用平台接口建项目）：</div><div class="lib-check">';
     taskIds.forEach(function (tid) { html += '<label>▸ <b>任务 ' + esc(tid) + '</b><span class="sub">打包 / 上传轨迹可在任务会话查看</span></label>'; });
     (failed || []).forEach(function (f) { html += '<label style="color:var(--err)">✕ ' + esc(f.name) + '<span class="sub">' + esc(f.error) + '</span></label>'; });
     html += '</div><div style="display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap">' +
