@@ -13,6 +13,11 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
+import { randomUUID } from 'node:crypto'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { mkdirSync, writeFileSync, readdirSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 import type { OnenatDirectory } from './onenat.js'
 import { OnenatDirectory as Dir } from './onenat.js'
 import type { TaskEngine } from './engine.js'
@@ -35,7 +40,7 @@ import { UsageService } from './usage.js'
 import type { XiaozhiMcpClient } from './xiaozhi-mcp.js'
 import type { DshRef, Project, SubAgent, WorkTask, ScheduledTask } from './types.js'
 import type { MonitorService } from './monitor.js'
-import { SkillPluginLibrary, buildSkillInstallPrompt, buildPluginInstallPrompt, buildPluginExportPrompt, extractExportedPaths } from './library.js'
+import { SkillPluginLibrary, buildSkillInstallPrompt, buildPluginInstallPrompt, buildPluginExportPrompt, buildProjectImportPrompt, extractExportedPaths } from './library.js'
 import type { LibKind } from './library.js'
 import { renderWebUi } from './web-ui.js'
 import { renderMonitorUi } from './monitor-ui.js'
@@ -96,6 +101,18 @@ export class WorkBuddyRouter {
   }
   /** 插件导出任务的来源节点（taskId → dshRef + 展示名）：poll 回拉时按节点取 /fs，不再依赖子智能体 */
   private pluginImportRefs = new Map<string, { ref: DshRef; label: string }>()
+
+  /** 项目导入上传令牌（token → 待入库信息）；2 小时未收到上传自动作废 */
+  private pendingProjectImports = new Map<string, {
+    importId: string
+    name: string
+    path: string
+    nodeRef: DshRef
+    nodeLabel: string
+    taskId: string
+    at: number
+  }>()
+  private execFileP = promisify(execFile)
 
   /** DSH 节点展示名（映射节点取隧道名/应用名；直连取 baseUrl） */
   private nodeLabelOf(ref: DshRef): string {
@@ -257,8 +274,21 @@ export class WorkBuddyRouter {
       experts: proj.expertIds.map((id) => ({ id, name: this.store.getAgent(id)?.name || id })),
       connectorIds: proj.connectorIds,
       skillNames: proj.skillNames,
+      importedFrom: proj.importedFrom,
       createdAt: proj.createdAt,
       updatedAt: proj.updatedAt,
+    }
+  }
+
+  private readdirSafe(dir: string): string[] {
+    return readdirSync(dir)
+  }
+
+  private statIsDir(path: string): boolean {
+    try {
+      return statSync(path).isDirectory()
+    } catch {
+      return false
     }
   }
 
@@ -786,6 +816,114 @@ export class WorkBuddyRouter {
       }
       return true
     }
+    // ---------- 项目：从远程 DSH 导入（发任务 → 节点打包上传 → 云端建项目） ----------
+    if (p === '/api/projects/import' && method === 'POST') {
+      const body = await this.parseBody(req)
+      const nodeRef = body?.nodeRef && typeof body.nodeRef === 'object' && typeof body.nodeRef.kind === 'string' ? (body.nodeRef as DshRef) : undefined
+      const wsPath = String(body?.workspacePath || '').trim()
+      if (!nodeRef || !wsPath) {
+        this.sendJson(res, 400, { ok: false, error: '缺少 nodeRef（来源 DSH 主节点）或 workspacePath（远端工作区路径）' })
+        return true
+      }
+      const name = String(body?.name || '').trim() || wsPath.split('/').filter(Boolean).pop() || '导入项目'
+      const target = await this.resolver.resolveRef(nodeRef, undefined, 'project-import').catch((err: any) => ({ online: false, error: err?.message || String(err) }))
+      if (!target.online) {
+        this.sendJson(res, 200, { ok: false, error: target.error || '来源节点不可达' })
+        return true
+      }
+      const importId = 'pimp-' + randomUUID().slice(0, 8)
+      const token = randomUUID() + randomUUID()
+      const base = this.externalBase(req, prefix)
+      const uploadUrl = `${base}/api/projects/import-upload?token=${token}`
+      const nodeLabel = this.nodeLabelOf(nodeRef)
+      let task
+      try {
+        task = await this.engine.createTask({
+          title: `导入项目「${name}」→ 云端（${nodeLabel}）`,
+          nodeRef,
+          message: buildProjectImportPrompt({ name, path: wsPath, uploadUrl }),
+          creator: 'console',
+        })
+      } catch (err: any) {
+        this.sendJson(res, 200, { ok: false, error: err?.message || '发起导入任务失败' })
+        return true
+      }
+      // 记录待入库令牌；节点上传成功后（见 import-upload）据此创建云端项目
+      for (const [k, v] of this.pendingProjectImports) {
+        if (Date.now() - v.at > 2 * 60 * 60 * 1000) this.pendingProjectImports.delete(k)
+      }
+      this.pendingProjectImports.set(token, { importId, name, path: wsPath, nodeRef, nodeLabel, taskId: task.id, at: Date.now() })
+      this.sendJson(res, 200, { ok: true, data: { taskId: task.id, importId, nodeLabel } })
+      return true
+    }
+    // 上传端点（公开，靠一次性 token 鉴权；远端 DSH 节点无平台登录态）
+    if (p === '/api/projects/import-upload' && method === 'POST') {
+      const token = String(urlObj.searchParams.get('token') || '').trim()
+      const pending = token ? this.pendingProjectImports.get(token) : undefined
+      if (!pending || Date.now() - pending.at > 2 * 60 * 60 * 1000) {
+        if (token) this.pendingProjectImports.delete(token)
+        this.sendJson(res, 403, { ok: false, error: '导入令牌无效或已过期（2 小时有效，请在平台重新发起导入）' })
+        return true
+      }
+      // 原始二进制读体（curl --data-binary；上限 200MB）
+      const buf = await new Promise<Buffer>((resolve, reject) => {
+        const chunks: Buffer[] = []
+        let size = 0
+        req.on('data', (c: Buffer) => {
+          size += c.length
+          if (size > 200 * 1024 * 1024) { reject(new Error('压缩包超过 200MB 上限')); req.destroy(); return }
+          chunks.push(c)
+        })
+        req.on('end', () => resolve(Buffer.concat(chunks)))
+        req.on('error', () => reject(new Error('读取上传内容失败')))
+      }).catch(() => null as unknown as Buffer)
+      if (!buf || !buf.length) {
+        this.sendJson(res, 400, { ok: false, error: '上传内容为空（请用 curl --data-binary 上传 tar.gz 原始二进制）' })
+        return true
+      }
+      const rootDir = this.library?.projectImportDir()
+      if (!rootDir) {
+        this.sendJson(res, 500, { ok: false, error: '平台存储目录不可写，无法入库' })
+        return true
+      }
+      const destDir = join(rootDir, pending.importId)
+      const archivePath = join(destDir, 'archive.tgz')
+      const extractDir = join(destDir, 'workspace')
+      try {
+        mkdirSync(destDir, { recursive: true })
+        writeFileSync(archivePath, buf)
+        mkdirSync(extractDir, { recursive: true })
+        try {
+          await this.execFileP('tar', ['-xzf', archivePath, '-C', extractDir], { timeout: 120_000 })
+        } catch {
+          // zip 兜底（远端可能打了 zip 但按提示词应发 tgz；解不开则整体失败）
+          await this.execFileP('tar', ['-xf', archivePath, '-C', extractDir], { timeout: 120_000 })
+        }
+      } catch (err: any) {
+        this.sendJson(res, 500, { ok: false, error: '压缩包解压失败：' + (err?.message || String(err)) })
+        return true
+      }
+      // 单层目录归一：解压出唯一顶层目录时，工作区指向该目录
+      let wsDir = extractDir
+      try {
+        const ents = this.readdirSafe(extractDir)
+        const visible = ents.filter((n) => !n.startsWith('.'))
+        if (visible.length === 1 && this.statIsDir(join(extractDir, visible[0]))) wsDir = join(extractDir, visible[0])
+      } catch { /* 保持 extractDir */ }
+      const project = this.store.upsertProject({
+        name: pending.name,
+        dshRef: pending.nodeRef,
+        workspace: wsDir,
+        instruction: `本项目自远程 DSH 节点「${pending.nodeLabel}」的 ${pending.path} 导入（${new Date().toLocaleString('zh-CN')}）。云端快照目录：${wsDir}；导入任务：${pending.taskId}。`,
+        expertIds: [],
+        connectorIds: [],
+        skillNames: [],
+        importedFrom: { sourceNode: pending.nodeLabel, sourcePath: pending.path, taskId: pending.taskId, cloudPath: wsDir, at: Date.now() },
+      })
+      this.pendingProjectImports.delete(token)
+      this.sendJson(res, 200, { ok: true, data: { projectId: project.id, name: project.name, workspace: wsDir } })
+      return true
+    }
     const projMatch = /^\/api\/projects\/([^/]+)$/.exec(p)
     if (projMatch) {
       const id = decodeURIComponent(projMatch[1])
@@ -926,6 +1064,30 @@ export class WorkBuddyRouter {
       const client = new DshClient()
       const r = await client.getModels({ baseUrl: ep.baseUrl, apiKey: key })
       this.sendJson(res, 200, { ok: r.ok, nodeTitle: ep.tunnelName || mappingId, models: r.models, defaultModel: r.defaultModel, error: r.error })
+      return true
+    }
+    // ---------- 按节点拉取远端工作区列表（项目「从远程 DSH 导入」的数据源） ----------
+    if (p === '/api/dsh-workspaces' && method === 'GET') {
+      const mappingId = String(urlObj.searchParams.get('node') || '').trim()
+      const ep = mappingId ? this.directory.resolveMapping(mappingId) : undefined
+      if (!mappingId || !ep) {
+        this.sendJson(res, 200, { ok: false, error: '节点不存在: ' + mappingId })
+        return true
+      }
+      if (!ep.online || !ep.baseUrl) {
+        this.sendJson(res, 200, { ok: false, error: `节点「${ep.tunnelName || mappingId}」当前离线` })
+        return true
+      }
+      const cred = await this.directory.fetchMappingCredentials(mappingId).catch(() => undefined)
+      const key = cred?.ok ? (cred.apiKey || cred.token || undefined) : undefined
+      const client = new DshClient()
+      const r = await client.listWorkspaces({ baseUrl: ep.baseUrl, apiKey: key })
+      this.sendJson(res, 200, {
+        ok: r.ok,
+        nodeTitle: ep.tunnelName || mappingId,
+        workspaces: r.workspaces,
+        error: r.error,
+      })
       return true
     }
     if (p === '/api/schedules' && method === 'GET') {

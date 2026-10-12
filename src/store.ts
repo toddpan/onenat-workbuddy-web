@@ -401,6 +401,7 @@ export class WorkStore {
       expertIds: input.expertIds ? [...new Set(input.expertIds.map(String))] : existing?.expertIds || [],
       connectorIds: input.connectorIds ? [...new Set(input.connectorIds.map(String))] : existing?.connectorIds || [],
       skillNames: input.skillNames ? [...new Set(input.skillNames.map(String))] : existing?.skillNames || [],
+      importedFrom: input.importedFrom ?? existing?.importedFrom,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     }

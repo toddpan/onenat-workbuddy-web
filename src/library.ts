@@ -89,6 +89,17 @@ export class SkillPluginLibrary {
     return join(this.libDir, 'plugins')
   }
 
+  /** 项目导入云端快照根目录：<dataDir>/project-imports（懒创建；失败返回 null = 云端入库不可用） */
+  public projectImportDir(): string | null {
+    const dir = join(this.libDir, '..', 'project-imports')
+    try {
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+      return dir
+    } catch {
+      return null
+    }
+  }
+
   private indexPath(): string {
     return join(this.libDir, 'index.json')
   }
@@ -395,4 +406,22 @@ export function extractExportedPaths(text: string): string[] {
   const re = /((?:\/[\w.@+-]+)+\/[\w.@+-]+\.tgz)/g
   for (const m of text.matchAll(re)) hits.add(m[1])
   return [...hits]
+}
+
+/** 项目导入任务提示词：打包工作区 → HTTP 上传到平台 → 汇报。平台收到后自动建云端项目。 */
+export function buildProjectImportPrompt(opts: { name: string; path: string; uploadUrl: string }): string {
+  const { name, path, uploadUrl } = opts
+  return [
+    `【平台下发任务】把本节点工作区「${path}」的项目「${name}」导入到云端平台。请严格按步骤执行并汇报结果。`,
+    '',
+    `1. 确认目录存在：ls -la "${path}"（不存在则直接汇报失败，不要继续）。`,
+    `2. 在父目录打包为 tar.gz（排除 node_modules / .git / dist 等构建产物与缓存；目录名保持原样）：`,
+    `   cd "$(dirname "${path}")" && tar --exclude='node_modules' --exclude='.git' --exclude='dist' -czf "/tmp/wb-import-${name}.tgz" "$(basename "${path}")"`,
+    `   （若 tar 不支持 --exclude，请改用 tar -czf 后手动剔除，或用 find+tar 等价方式；打包后 ls -la 确认体积大于 0。）`,
+    `3. 上传到云端平台（原始二进制 POST，记录 HTTP 响应原文）：`,
+    `   curl -sS -X POST --data-binary "@/tmp/wb-import-${name}.tgz" -H "Content-Type: application/octet-stream" "${uploadUrl}"`,
+    `   响应为 JSON：ok=true 表示云端已接收并建好项目；ok=false 时把 error 原文一并汇报。`,
+    '4. 汇报：上传成功/失败、压缩包体积、云端响应原文；失败时给出关键报错。',
+    '不要修改工作区内的任何文件，不要做与本任务无关的其他操作。',
+  ].join('\n')
 }

@@ -2157,6 +2157,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <h2>📦 项目</h2>
           <span class="sub">项目 = 节点 + 工作区 + 指令 + 子智能体/连接器/技能 的组合。项目内发起的任务自动继承全部上下文。</span>
           <span class="hspacer"></span>
+          <button class="btn" id="btn-proj-import" title="选择远程 DSH 节点，拉取其工作区列表，勾选后向节点发导入任务，项目自动导入云端">⬇ 从远程 DSH 导入</button>
           <button class="btn pri" id="btn-proj-new">＋ 新建项目</button>
         </div>
         <div class="proj-grid" id="proj-grid"><div class="mon-empty">加载中…</div></div>
@@ -3650,6 +3651,10 @@ function renderProjects() {
     document.getElementById('btn-proj-new')._wired = true;
     document.getElementById('btn-proj-new').addEventListener('click', function () { openProjectDrawer(null); });
   }
+  if (document.getElementById('btn-proj-import') && !document.getElementById('btn-proj-import')._wired) {
+    document.getElementById('btn-proj-import')._wired = true;
+    document.getElementById('btn-proj-import').addEventListener('click', function () { openProjectImportModal(); });
+  }
   if (!state.projects.length) {
     grid.innerHTML = '<div class="mon-empty">还没有项目 —— 点右上角「＋ 新建项目」创建。项目把节点、工作区、指令、连接器、技能捆绑成一个可复用的工作上下文。</div>';
     return;
@@ -3664,6 +3669,7 @@ function renderProjects() {
     return '<div class="proj-card" data-proj="' + esc(p.id) + '">' +
       '<div class="pj-name">' + esc(p.name) + '</div>' +
       '<div class="pj-meta">🖥 ' + esc(p.nodeTitle) + (p.workspace ? ' · 📁 ' + esc(p.workspace) : '') + ' · 📋 ' + taskCount + ' 个任务</div>' +
+      (p.importedFrom ? '<div class="pj-chips" style="margin-top:6px"><span class="tag" title="自 ' + esc(p.importedFrom.sourceNode + p.importedFrom.sourcePath) + ' 导入 · 导入任务 ' + esc(p.importedFrom.taskId) + '">☁ 云端导入 · 来自 ' + esc(p.importedFrom.sourceNode) + '</span></div>' : '') +
       (p.instructionPreview ? '<div class="pj-ins">' + esc(p.instructionPreview) + '</div>' : '') +
       '<div class="pj-chips"><span class="tag">' + chips + '</span></div>' +
       '<div class="ops" style="display:flex;gap:8px;margin-top:10px">' +
@@ -3702,6 +3708,152 @@ function renderProjects() {
 
 // 通用模态按钮助手（openModal 只支持静态 footer，这里手动绑定）
 // bindModalActions 已移除：openModal 原生支持自定义 footer 按钮
+
+// ---------- 项目：从远程 DSH 导入（节点拓扑 → 工作区列表 → 勾选 → 发导入任务 → 云端自动建项目） ----------
+async function openProjectImportModal() {
+  const nodes = dshNodeOptions();
+  const m = libModal('从远程 DSH 导入项目');
+  if (!nodes.length) { m.body.innerHTML = '<div class="lib-empty">没有可用的 DSH 节点 —— 请到「资源目录」确认 ONENAT 映射已同步</div>'; return; }
+  m.body.innerHTML =
+    '<div class="lib-tip">① 选择来源 <b>DSH 节点</b> → ② 拉取该节点的<b>工作区列表</b> → ③ 勾选要导入的工作区并发起导入。' +
+    '平台向该节点直发一个<b>主会话导入任务</b>：节点把工作区打包（排除 node_modules/.git/dist）上传回云端，上传完成后项目自动出现在项目列表。</div>' +
+    '<div class="field" style="margin-top:10px"><label>来源 DSH 节点</label><select id="pimp-node" class="cfg-sel" style="width:100%">' +
+    nodes.map(function (n, i) {
+      var label = n.title || n.appName || n.note || n.mappingId;
+      return '<option value="' + i + '">' + esc(label) + (n.baseUrl ? ' · ' + esc(n.baseUrl) : '') + '</option>';
+    }).join('') +
+    '</select></div>' +
+    '<div style="margin-top:8px"><button class="mini-btn" id="pimp-fetch">📂 获取工作区列表</button></div>' +
+    '<div id="pimp-list" style="margin-top:10px"></div>';
+  m.foot.style.display = 'flex';
+  m.foot.innerHTML = '<span class="lib-tip" id="pimp-msg"></span><span style="flex:1"></span><button class="mini-btn" id="pimp-go" style="display:none">🚀 发起导入任务</button>';
+
+  function curNode() { return nodes[+($('pimp-node').value || 0)]; }
+  function nodeLabel(n) { return n.title || n.appName || n.note || n.mappingId; }
+
+  $('pimp-fetch').addEventListener('click', async function () {
+    var btn = this, msg = $('pimp-msg'), list = $('pimp-list');
+    var n = curNode();
+    btn.disabled = true; msg.textContent = '拉取工作区列表中…';
+    list.innerHTML = '';
+    $('pimp-go').style.display = 'none';
+    var r = await api('/dsh-workspaces?node=' + encodeURIComponent(n.mappingId));
+    btn.disabled = false;
+    if (!r.ok || !r.workspaces || !r.workspaces.length) {
+      msg.textContent = r.error || '该节点没有可导入的工作区';
+      list.innerHTML = '<div class="lib-empty">' + esc(msg.textContent) + '</div>';
+      return;
+    }
+    msg.textContent = '节点「' + nodeLabel(n) + '」共 ' + r.workspaces.length + ' 个工作区，勾选要导入的：';
+    list.innerHTML = '<div class="lib-check" id="pimp-cbs">' + r.workspaces.map(function (w, i) {
+      var title = w.title || w.id;
+      return '<label><input type="checkbox" data-path="' + esc(w.path || '') + '" data-title="' + esc(title) + '"' + (w.path ? '' : ' disabled') + '>' +
+        '<b>' + esc(title) + '</b><span class="sub">' + esc(w.path || '（无路径，不可导入）') + '</span></label>';
+    }).join('') + '</div>';
+    $('pimp-go').style.display = '';
+  });
+
+  $('pimp-go').addEventListener('click', async function () {
+    var btn = this, msg = $('pimp-msg');
+    var n = curNode();
+    var picked = [];
+    document.querySelectorAll('#pimp-cbs input:checked').forEach(function (cb) {
+      picked.push({ path: cb.dataset.path, title: cb.dataset.title });
+    });
+    if (!picked.length) { msg.textContent = '请先勾选要导入的工作区'; return; }
+    btn.disabled = true; msg.textContent = '发起中…';
+    var okCount = 0, failed = [];
+    var taskIds = [];
+    for (var i = 0; i < picked.length; i++) {
+      var w = picked[i];
+      var r = await api('/projects/import', { method: 'POST', body: JSON.stringify({ nodeRef: { kind: 'mapping', mappingId: n.mappingId }, workspacePath: w.path, name: w.title }) });
+      if (r.ok) { okCount++; taskIds.push(r.data.taskId); }
+      else failed.push({ name: w.title, error: r.error || '发起失败' });
+    }
+    var html = '<div class="lib-tip">已向节点「' + esc(nodeLabel(n)) + '」发起 ' + okCount + ' 个主会话导入任务' +
+      '（节点正在把工作区打包上传到云端，上传完成后项目自动出现在项目列表）：</div><div class="lib-check">';
+    taskIds.forEach(function (tid) { html += '<label>▸ <b>任务 ' + esc(tid) + '</b><span class="sub">打包 / 上传轨迹可在任务会话查看</span></label>'; });
+    (failed || []).forEach(function (f) { html += '<label style="color:var(--err)">✕ ' + esc(f.name) + '<span class="sub">' + esc(f.error) + '</span></label>'; });
+    html += '</div><div style="display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap">' +
+      '<button class="mini-btn pri" id="pimp-switch">🖥 切换到工作区看任务执行</button>' +
+      '<span class="lib-tip" id="pimp-countdown"></span></div>';
+    m.body.innerHTML = html;
+    m.foot.style.display = 'flex';
+    m.foot.innerHTML = '<span class="lib-tip" id="pimp-wait">云端入库完成后，项目将带「☁ 云端导入」标记出现在项目列表</span><span style="flex:1"></span><button class="mini-btn" id="pimp-stay">留在本页</button>';
+    if (!okCount) {
+      var cdFail = document.getElementById('pimp-countdown');
+      if (cdFail) cdFail.style.display = 'none';
+      var swFail = document.getElementById('pimp-switch');
+      if (swFail) swFail.style.display = 'none';
+      m.foot.querySelector('#pimp-stay').textContent = '关闭';
+      m.foot.querySelector('#pimp-stay').addEventListener('click', function () { m.close(); });
+      return;
+    }
+    // 全局到货提醒：轮询云端项目列表，importedFrom.taskId 命中即 toast（切换走后依然生效）
+    function watchProjectImports(ids) {
+      var deadline = Date.now() + 10 * 60 * 1000;
+      var timer = setInterval(async function () {
+        var arrived = false;
+        try {
+          await loadProjects();
+          var hits = (state.projects || []).filter(function (p) { return p.importedFrom && ids.indexOf(p.importedFrom.taskId) >= 0; });
+          if (hits.length) {
+            hits.forEach(function (p) { toast('✓ 项目「' + p.name + '」已从远程 DSH 导入云端'); });
+            arrived = true;
+            renderProjects();
+          }
+        } catch (e) { /* 轮询失败下轮再试 */ }
+        if (arrived || Date.now() > deadline) clearInterval(timer);
+      }, 8000);
+    }
+    var switched = false;
+    function goWorkspace() {
+      if (switched) return;
+      switched = true;
+      watchProjectImports(taskIds);
+      m.close();
+      if (state.projectId) exitProject(); // 项目工作台只显示本项目任务，先退出避免导入任务被过滤
+      switchView('work');
+      loadTasks().then(function () { openTask(taskIds[0]); });
+    }
+    m.body.querySelector('#pimp-switch').addEventListener('click', goWorkspace);
+    m.foot.querySelector('#pimp-stay').addEventListener('click', function () {
+      // 留在本页：取消自动切换，轮询入库进度就地提示
+      switched = true;
+      watchProjectImports(taskIds);
+      var wait = document.getElementById('pimp-wait');
+      var deadline = Date.now() + 10 * 60 * 1000;
+      var timer = setInterval(async function () {
+        if (!document.body.contains(m.el)) { clearInterval(timer); return; }
+        await loadProjects();
+        var hit = (state.projects || []).some(function (p) { return p.importedFrom && taskIds.indexOf(p.importedFrom.taskId) >= 0; });
+        var w = document.getElementById('pimp-wait');
+        if (hit) {
+          clearInterval(timer);
+          renderProjects();
+          if (w) w.textContent = '✓ 云端入库完成，项目已出现在项目列表';
+          toast('✓ 项目已从远程 DSH 导入云端');
+        } else if (Date.now() > deadline) {
+          clearInterval(timer);
+          if (w) w.textContent = '仍在导入中（视项目体积可能需要几分钟），可稍后刷新项目列表查看。';
+        }
+      }, 8000);
+    });
+    // 3 秒倒计时自动切换到工作区；期间用户点 ✕/遮罩关闭则只保留到货提醒，不再抢跳
+    var left = 3;
+    var cd = document.getElementById('pimp-countdown');
+    if (cd) cd.textContent = '3 秒后自动切换到工作区…';
+    var tick = setInterval(function () {
+      if (switched) { clearInterval(tick); return; }
+      left -= 1;
+      var c = document.getElementById('pimp-countdown');
+      if (!c || !document.body.contains(m.el)) { clearInterval(tick); if (!document.body.contains(m.el)) { switched = true; watchProjectImports(taskIds); } return; }
+      if (left <= 0) { clearInterval(tick); return; }
+      c.textContent = left + ' 秒后自动切换到工作区…';
+    }, 1000);
+    setTimeout(goWorkspace, 3000);
+  });
+}
 
 async function enterProject(projectId, silent) {
   const p = state.projects.find((x) => x.id === projectId);

@@ -423,7 +423,11 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
 
       // ---------- 访问控制：控制台与业务 API 均需登录；AI 令牌可访问开放面（工具通道/监控/定时任务/规划器/文件） ----------
       const aiTokenOk = auth.validateAiToken(extractAiToken(req, url))
-      if (underPrefix && !sessionUser && !aiTokenOk) {
+      // 项目导入上传：公开但必须携带一次性 token（远端 DSH 节点无平台登录态；令牌在发起导入时下发到任务提示词）
+      const projectImportUpload = underPrefix && method === 'POST'
+        && url.pathname === `${prefix}/api/projects/import-upload`
+        && Boolean(String(url.searchParams.get('token') || '').trim())
+      if (underPrefix && !sessionUser && !aiTokenOk && !projectImportUpload) {
         const isConsoleGet = method === 'GET' && (url.pathname === prefix || url.pathname === `${prefix}/` || url.pathname === `${prefix}/console` || url.pathname === `${prefix}/monitor` || url.pathname === `${prefix}/monitor/`)
         if (!isConsoleGet) {
           sendJson(res, 401, { ok: false, error: '未登录或会话已过期', authRequired: true })
