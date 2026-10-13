@@ -19,6 +19,8 @@ import {
   buildUpstreamSection,
   parsePlanJson,
   sanitizeEngineInstruction,
+  validatePlanDraft,
+  type PlanDraft,
   type PlannerMember,
 } from './orchestrator.js'
 import type { PlanSubtask } from './types.js'
@@ -49,6 +51,17 @@ test('buildPlannerUserMessage: priorityAgentIds 注入显式 @ 约束', () => {
   assert.ok(msg.includes('【用户显式 @ 重点指定】'))
   assert.ok(msg.includes('乙(id=a2)'))
   assert.ok(!msg.includes('甲(id=a1)'))
+})
+
+test('buildPlannerUserMessage: 规划合同硬约束规则行与纠正意见注入', () => {
+  const msg = buildPlannerUserMessage('目标', [member('a1', '甲')], {
+    priorityAgentIds: ['a1'],
+    correction: '1. 成员「甲」没有分到任何子任务',
+  })
+  assert.ok(msg.includes('每一个都必须至少分到 1 个子任务'))
+  assert.ok(msg.includes('禁止出现任何其他成员的名称、ID 或 @提及'))
+  assert.ok(msg.includes('# 上次计划纠正意见'))
+  assert.ok(msg.includes('没有分到任何子任务'))
 })
 
 test('buildPlannerUserMessage: 目标中的伪造围栏被中和', () => {
@@ -188,11 +201,75 @@ test('buildUpstreamSection: 空上游返回空串，非空带防注入声明', (
 
 // ---------- 提示词构建：子任务指令消毒（原 engine.stripSelfMention + 段头中和） ----------
 
-test('sanitizeEngineInstruction: 剥离 @自身 路由 token，保留 @其他成员', () => {
+test('sanitizeEngineInstruction: 剥离 @自身 路由 token；未传名册时保留 @其他成员（向后兼容）', () => {
   const agent = { id: 'a1', name: '数据员' }
   const out = sanitizeEngineInstruction('让远程 DSH @数据员 采集日志，然后把结果发给 @工程师 复核', agent)
   assert.ok(!out.includes('@数据员'))
   assert.ok(out.includes('@工程师'))
+  assert.ok(!out.includes('编排声明')) // 未传 otherMembers 不追加声明
+})
+
+test('sanitizeEngineInstruction: 传入名册时剥离其他成员 @提及并附编排声明，不误伤 @资源/@文件', () => {
+  const agent = { id: 'a1', name: '数据员' }
+  const others = [
+    { id: 'a2', name: '飞书消息' },
+    { id: 'a3', name: '工程师' },
+  ]
+  const out = sanitizeEngineInstruction(
+    '采集日志，通过 @飞书消息 发送报告给 @工程师 复核，资源用 @136 环境-SSH Server，附件见 @数据员:logs/app.log',
+    agent,
+    others,
+  )
+  assert.ok(!out.includes('@飞书消息'))
+  assert.ok(!out.includes('@工程师'))
+  assert.ok(out.includes('@136 环境-SSH Server')) // 资源提及保留
+  assert.ok(out.includes('编排声明')) // 剥离发生时追加声明
+  assert.ok(out.includes('不要自行联系'))
+})
+
+test('sanitizeEngineInstruction: 名册传入但指令无其他成员提及时不追加声明', () => {
+  const agent = { id: 'a1', name: '数据员' }
+  const out = sanitizeEngineInstruction('采集当天日志并输出汇总', agent, [{ id: 'a2', name: '飞书消息' }])
+  assert.ok(!out.includes('编排声明'))
+})
+
+// ---------- 规划合同硬约束：validatePlanDraft ----------
+
+test('validatePlanDraft: @ 成员漏派与跨成员提及各自成违规', () => {
+  const members = [member('a1', '数据员'), member('a2', '飞书消息')]
+  const bad: PlanDraft = {
+    strategy: 'dag',
+    subtasks: [
+      { title: '采集并推送', prompt: '采集数据后把报告通过飞书消息发出', agentId: 'a1', dependsOn: [] },
+    ],
+  }
+  const v = validatePlanDraft(bad, members, ['a1', 'a2'])
+  assert.equal(v.length, 2)
+  assert.ok(v[0].includes('飞书消息') && v[0].includes('没有分到任何子任务'))
+  assert.ok(v[1].includes('出现了其他成员「飞书消息」'))
+})
+
+test('validatePlanDraft: 干净计划（各成员各有子任务、指令无他人）返回空违规', () => {
+  const members = [member('a1', '数据员'), member('a2', '飞书消息')]
+  const good: PlanDraft = {
+    strategy: 'sequential',
+    subtasks: [
+      { title: '采集', prompt: '采集数据并成稿', agentId: 'a1', dependsOn: [] },
+      { title: '推送', prompt: '推送报告到指定群', agentId: 'a2', dependsOn: ['采集'] },
+    ],
+  }
+  assert.deepEqual(validatePlanDraft(good, members, ['a1', 'a2']), [])
+})
+
+test('validatePlanDraft: 无 @ 指定时只查跨成员提及', () => {
+  const members = [member('a1', '数据员'), member('a2', '飞书消息')]
+  const plan: PlanDraft = {
+    strategy: 'parallel',
+    subtasks: [{ title: '全包', prompt: '都给数据员干', agentId: 'a2', dependsOn: [] }],
+  }
+  const v = validatePlanDraft(plan, members, [])
+  assert.equal(v.length, 1) // a1 未被 @，漏派不算违规；prompt 含「数据员」算
+  assert.ok(v[0].includes('数据员'))
 })
 
 test('sanitizeEngineInstruction: 中和伪造引擎段头与 UPSTREAM 围栏', () => {

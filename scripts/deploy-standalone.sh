@@ -82,42 +82,51 @@ if [ -z "$CHANGED" ]; then
   fi
 fi
 # comm 输出为换行分隔；后续 tar/远端 for 循环按空白分词，统一压平为空格分隔
-CHANGED="$(echo "$CHANGED" | tr '\n' ' ')"
+CHANGED="$(printf '%s' "$CHANGED" | tr '\n' ' ')"  # printf 防止空串被 echo 变成换行→空格，导致空集守卫失效
 echo "变更文件: $CHANGED"
 
 echo "=== 4/5 上传 + 远端备份替换 ==="
 TARBALL="/tmp/wb-deploy-$(date +%Y%m%d-%H%M%S).tgz"
+if [ -n "$CHANGED" ]; then
 tar -czf "$TARBALL" -C dist $CHANGED
 scp_wrap "$TARBALL" "$TARGET:/tmp/wb-deploy.tgz"
 ssh_wrap "set -e; TS=\$(date +%Y%m%d-%H%M%S); cd $REMOTE_DIR; for f in $CHANGED; do [ -f \$f ] && cp -a \$f dist.bak-\$TS-\$f || true; done; tar -xzf /tmp/wb-deploy.tgz --exclude='._*'; for f in $CHANGED; do node --check \$f; done; rm -f /tmp/wb-deploy.tgz"
+else
+echo "dist/*.js 无漂移，跳过主包上传"
+fi
 
 # --- 附属目录同步：dist/mcp/*.js 与 assets/experts/（差异计算只覆盖 dist/*.js，需单独处理）---
 echo "=== 4.5/5 同步附属目录（dist/mcp、assets/experts）==="
-EXTRA_TARBALL="/tmp/wb-extra-$(date +%Y%m%d-%H%M%S).tgz"
-EXTRA_NEEDED=0
+MCP_TARBALL=""
+ASSET_TARBALL=""
 if ls dist/mcp/*.js >/dev/null 2>&1; then
   REMOTE_MCP_HASHES="$(ssh_wrap "cd $REMOTE_DIR/mcp 2>/dev/null && md5sum *.js | awk '{print \$1\" \"\$2}' | sort -k2,2 || true")"
   LOCAL_MCP_HASHES="$(cd dist/mcp && md5 -q *.js | paste -d' ' - <(/bin/ls *.js) | sort -k2,2)"
   MCP_CHANGED="$(awk 'NR==FNR{h[$2]=$1;next} h[$2]!=$1{print $2}' <(echo "$REMOTE_MCP_HASHES") <(echo "$LOCAL_MCP_HASHES"))"
   if [ -n "$MCP_CHANGED" ]; then
-    EXTRA_NEEDED=1
-    tar -czf "$EXTRA_TARBALL" -C dist mcp
+    MCP_TARBALL="/tmp/wb-extra-mcp-$(date +%Y%m%d-%H%M%S).tgz"
+    tar -czf "$MCP_TARBALL" -C dist mcp
     echo "dist/mcp 变更: $MCP_CHANGED"
   fi
 fi
 LOCAL_ASSET_INDEX="$(md5 -q assets/experts/index.json 2>/dev/null || true)"
 REMOTE_ASSET_INDEX="$(ssh_wrap "md5sum $REMOTE_DIR/../assets/experts/index.json 2>/dev/null | awk '{print \$1}' || true")"
 if [ -n "$LOCAL_ASSET_INDEX" ] && [ "$LOCAL_ASSET_INDEX" != "$REMOTE_ASSET_INDEX" ]; then
-  EXTRA_NEEDED=1
-  tar -czf "$EXTRA_TARBALL" -C assets experts
+  ASSET_TARBALL="/tmp/wb-extra-assets-$(date +%Y%m%d-%H%M%S).tgz"
+  tar -czf "$ASSET_TARBALL" -C assets experts
   echo "assets/experts 有变更"
 fi
-if [ "$EXTRA_NEEDED" = 1 ]; then
-  scp_wrap "$EXTRA_TARBALL" "$TARGET:/tmp/wb-extra.tgz"
-  ssh_wrap "set -e; cd $REMOTE_DIR/..; tar -xzf /tmp/wb-extra.tgz --exclude='._*'; rm -f /tmp/wb-extra.tgz"
-  NEED_RESTART=1
+# dist/mcp 解包到 $REMOTE_DIR（dist/ 内）；assets/experts 解包到 $REMOTE_DIR/..（与 dist 同级）
+if [ -n "$MCP_TARBALL" ]; then
+  scp_wrap "$MCP_TARBALL" "$TARGET:/tmp/wb-extra-mcp.tgz"
+  ssh_wrap "set -e; cd $REMOTE_DIR; tar -xzf /tmp/wb-extra-mcp.tgz --exclude='._*'; rm -f /tmp/wb-extra-mcp.tgz"
 fi
-rm -f "$TARBALL" "$EXTRA_TARBALL"
+if [ -n "$ASSET_TARBALL" ]; then
+  scp_wrap "$ASSET_TARBALL" "$TARGET:/tmp/wb-extra-assets.tgz"
+  # 包根目录名是 experts/，必须解到 assets/ 下形成 assets/experts/
+  ssh_wrap "set -e; cd $REMOTE_DIR/..; mkdir -p assets; tar -xzf /tmp/wb-extra-assets.tgz -C assets --exclude='._*'; rm -f /tmp/wb-extra-assets.tgz"
+fi
+rm -f "$TARBALL" "$MCP_TARBALL" "$ASSET_TARBALL"
 ssh_wrap "systemctl restart $UNIT; sleep 2; systemctl is-active $UNIT"
 
 echo "=== 5/5 部署后验证 ==="

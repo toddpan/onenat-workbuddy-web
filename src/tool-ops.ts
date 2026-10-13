@@ -271,6 +271,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       '发起约定：① 先 project_manage list 判断归属，能确定项目就带 projectId 从项目发起（上下文全继承）；' +
       '② 需求有歧义先向用户问清再 create——任务里的子智能体/专家一律无人值守执行，不会反问澄清；' +
       '③ 在 message 里用 @ 派活：@子智能体名（回其绑定节点执行，@ 多个=编排）、@专家名、@专家团名（按团队合同展开成员编排）、@项目名（对项目发起任务：未绑定项目的任务自动绑定该项目，节点/工作区/项目指令全继承）、@资源名（注入连接信息）；用 @ 时 memberAgentIds 可省略。' +
+      '④ 你自己是某个子智能体时，create 建议带 creatorAgentId=<自己的 ID>——新任务自动继承你绑定的技能（否则创建者的技能不会注入新任务的派发提示词）;' +
       '重要：创建后不要重复 create 同一任务（重复内容 2 分钟内会被自动去重复用既有任务），要进度请用 wait 或 workbuddy_task_status 轮询',
     parameters: {
       action: { type: 'string', description: '操作: list / create / send / wait / delete / members / cancel' },
@@ -281,6 +282,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       message: { type: 'string', description: '消息内容（create 可选首条消息；send 必填）。派活写法：@子智能体名 / @专家名 / @专家团名 / @项目名 / @资源名（名称须与列表完全一致）；指令要自包含：目标、路径参数、验收标准——执行者拿不到你们的对话上下文' },
       nodeRef: { type: 'json', description: 'create 可选，任务节点（主 DSH）: {kind:"mapping", mappingId:"<DSH 映射 ID>"}。无 @ 的主会话在该节点上执行；不传则用上次所选/默认节点' },
       projectId: { type: 'string', description: 'create 可选，归属项目 ID（workbuddy_project_manage list 取得）。发起前先判项目归属：能定项目必带此参——项目任务自动继承项目节点/工作区/指令/可@ sub agent，nodeRef 与 memberAgentIds 可省略' },
+      creatorAgentId: { type: 'string', description: 'create 可选，调用方自身在 WorkBuddy 的子智能体 ID（workbuddy_agent_manage list 取得）。传入后新任务自动继承你绑定的技能（/技能名 手势注入到派发提示词），否则创建者的技能不会进入新任务的提示词' },
       timeoutMs: { type: 'string', description: 'wait 最长同步等待毫秒（HTTP 通道默认 120000 上限 600000；MCP 通道默认 0=立即回执，最多 20000）' },
     },
     async execute(args, rawCtx) {
@@ -364,6 +366,14 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
         }
 
         const nodeRef = asJson(args.nodeRef)
+        // 创建者身份：AI 通过工具通道创建任务时声明自身子智能体 ID → 继承其绑定技能（/手势注入派发提示词）。
+        // 没有这层继承，工具创建的任务若无 @ 成员会落到节点主会话（skills: []），创建者技能完全丢失。
+        const creatorAgentId = args.creatorAgentId ? String(args.creatorAgentId).trim() : ''
+        const creatorAgent = creatorAgentId ? store.getAgent(creatorAgentId) : undefined
+        if (creatorAgentId && !creatorAgent) {
+          return JSON.stringify({ ok: false, error: `创建者子智能体不存在: ${creatorAgentId}（用 workbuddy_agent_manage {action:"list"} 查看可用 ID）` }, null, 2)
+        }
+        const inheritedSkills = [...new Set(creatorAgent?.skills || [])]
         const task = await engine.createTask({
           title: args.title,
           memberAgentIds: explicit,
@@ -371,6 +381,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
           message: args.message,
           creator: 'tool',
           ...(projectId ? { projectId } : {}),
+          ...(inheritedSkills.length ? { skillNames: inheritedSkills } : {}),
           ...(nodeRef && typeof nodeRef === 'object' && nodeRef.mappingId ? { nodeRef: { kind: 'mapping', mappingId: String(nodeRef.mappingId) } } : {}),
         })
         createDedupe.set(fp, { at: Date.now(), taskId: task.id })
@@ -385,6 +396,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
           running: engine.isRunning(task.id),
           members: task.memberAgentIds,
           receipt: '任务已受理并开始执行（异步）',
+          ...(inheritedSkills.length ? { inheritedSkills, receipt: '任务已受理并开始执行（异步）；已继承创建者绑定技能: ' + inheritedSkills.join(', ') } : {}),
           nextAction: `进度用 workbuddy_task_status {taskId:"${task.id}"} 轮询，或 workbuddy_task_manage {action:"wait", taskId:"${task.id}"} 取快照；不要重复 create`,
           consoleUrl,
         }, null, 2)

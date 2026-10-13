@@ -5917,6 +5917,15 @@ function memberDisplayName(agentId) {
 function isExpertMemberId(agentId) {
   return String(agentId || '').startsWith('expert-');
 }
+/** 场外成员的 DSH 节点名：按子智能体绑定的 dshRef 反查资源目录（与拓扑页/引擎节点日志同源口径）；解析不到返回空 */
+function memberNodeLabel(agentId) {
+  const a = state.agents.find(x => x.id === agentId);
+  const ref = a && a.dshRef;
+  if (!ref) return '';
+  if (ref.kind === 'direct') return '直连 ' + String(ref.apiBaseUrl || '').replace(/^https?:\\/\\//, '').replace(/\\/$/, '');
+  const r = (state.resources || []).find(x => (ref.kind === 'mapping' && x.mappingId === ref.mappingId) || (ref.kind === 'app' && x.appId === ref.appId));
+  return r ? topoResLabel(r) : '';
+}
 /** 当前任务绑定团队（含内置团）的成员元信息：key → {name, duty, isExpert}；供编排视图泳道与职责展示 */
 function teamMemberMeta() {
   const teamId = state.task && state.task.teamId;
@@ -5980,9 +5989,10 @@ function createPlanCardElement(plan) {
     const isExpert = meta ? meta.isExpert : isExpertMemberId(agentId);
     const icon = isExpert ? '🧩' : '🤖';
     const dutyHtml = meta && meta.duty ? '<span class="pm-duty">' + esc(meta.duty) + '</span>' : '';
+    const nodeLabel = meta ? '' : memberNodeLabel(agentId);
     rowsHtml += '<div class="plan-member-row"><span class="pm-icon">' + icon + '</span>' +
       '<span class="pm-name">' + esc(name) + '</span>' + dutyHtml +
-      (meta ? '' : '<span class="pm-duty" style="color:var(--tx3)">场外成员</span>') +
+      (meta ? '' : '<span class="pm-duty" style="color:var(--tx3)">场外成员' + (nodeLabel ? ' · ' + esc(nodeLabel) : '') + '</span>') +
       '</div>';
     if (!list.length) {
       rowsHtml += '<div class="plan-row row-pending" style="opacity:.65"><span class="st skipped">n/a</span>' +
@@ -8716,13 +8726,11 @@ function openAgentDrawer(agent, copyMode) {
   const binds = (agent && agent.resources || []).map((r, i) => bindRowHtml(r, i, resOptions)).join('');
   $('drawer-body').innerHTML =
     '<div class="field"><label>名称</label><input id="ag-name" value="' + esc(agent ? agent.name : '') + '" placeholder="如: 136-执行者 / 169-质检员"></div>' +
-    '<div class="field"><label>内置专家模板（点选预填角色与提示词，可再改）</label><div id="ag-tpl-bar" style="display:flex;flex-wrap:wrap;gap:6px"><span class="hint" style="margin:0">加载中…</span></div></div>' +
     '<div class="field"><label>专家名册库（321 位专业智能体 · 点选预填人格与提示词）</label><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="mini-btn" id="ag-roster">🎓 从专家库选择…</button><span class="hint" style="margin:0">按分类浏览或搜索 The Agency 名册，选中后自动预填，可再改</span></div></div>' +
     '<div class="field"><label>DSH 实体（稳定 ID 绑定 · 端口漂移免疫）</label><select id="ag-dsh"><option value="">— 选择 ONENAT 上的 DSH 实例 —</option>' + dshOptions +
       '<option value="direct:">直连地址（手工输入）…</option></select>' +
       '<input id="ag-direct" placeholder="http://host:port/api/v1" style="display:none;margin-top:8px">' +
       '<div class="hint">列表来自资源目录中 type=http-api 且带 dsh-web-service 技能的映射。</div></div>' +
-    '<div class="field"><label>API Key（可选）</label><input id="ag-key" value="' + esc(agent && agent.apiKey || '') + '"></div>' +
     '<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px"><button class="mini-btn" id="ag-sync" style="padding:6px 10px;flex:none;white-space:nowrap">↻ 同步远端选项</button><span class="hint" id="ag-opts-hint" style="margin:0">预设 / 提供商 / 模型可从远端 DSH 拉取后下拉选择</span></div>' +
     '<div class="grid3">' +
     '<div class="field"><label>模式预设 agentPreset</label><input id="ag-preset" value="' + esc(agent && agent.agentPreset || 'cordis') + '"></div>' +
@@ -8739,27 +8747,6 @@ function openAgentDrawer(agent, copyMode) {
     '<div class="field"><label>可用资源绑定（连接方式+技能将注入该智能体的提示词）</label><div id="bind-list">' + binds + '</div>' +
     '<button class="mini-btn" id="bind-add" style="margin-top:4px">＋ 添加资源绑定</button></div>' +
     '<div class="ops" style="display:flex;gap:10px;margin-top:14px"><button class="btn pri" id="ag-save">保存</button><button class="btn" id="ag-cancel">取消</button></div>';
-
-  // 内置专家模板快捷区：点选预填（新建/编辑均可用，覆盖当前表单值）
-  api('/experts?domain=team').then(r => {
-    const bar = $('ag-tpl-bar');
-    if (!bar) return;
-    const list = (r.ok && r.data && Array.isArray(r.data.experts)) ? r.data.experts : [];
-    if (!list.length) { bar.innerHTML = '<span class="hint" style="margin:0">模板不可用</span>'; return; }
-    bar.innerHTML = list.map(t =>
-      '<button class="mini-btn" data-tpl-id="' + esc(t.id) + '" title="' + esc(t.description) + '">' + esc((t.icon ? t.icon + ' ' : '') + t.name) + '</button>').join('');
-    bar.querySelectorAll('[data-tpl-id]').forEach(chip => chip.addEventListener('click', async () => {
-      const t = list.find(x => x.id === chip.getAttribute('data-tpl-id'));
-      if (!t) return;
-      const pr = await api('/experts/' + encodeURIComponent(t.id)).catch(() => null);
-      const p = pr && pr.ok ? pr.data : null;
-      if (!$('ag-name').value.trim()) $('ag-name').value = t.name;
-      $('ag-role').value = (p && p.role) || '';
-      $('ag-sp').value = (p && p.systemPrompt) || '';
-      $('ag-ep').value = (p && p.executionPrompt) || '';
-      toast('已预填「' + t.name + '」，可继续调整');
-    }));
-  }).catch(() => { const bar = $('ag-tpl-bar'); if (bar) bar.innerHTML = '<span class="hint" style="margin:0">模板加载失败</span>'; });
 
   // 专家名册选择器：分类浏览/搜索 → 选中读取 persona 正文预填表单（新建/编辑均可用）
   $('ag-roster').addEventListener('click', () => { openExpertRosterPicker().catch(e => toast(e && e.message || '名册加载失败', true)); });
@@ -8940,7 +8927,6 @@ function collectAgent(existing) {
     executionPrompt: $('ag-ep').value.trim(),
     enabled: true,
   };
-  if ($('ag-key').value.trim()) payload.apiKey = $('ag-key').value.trim();
   if ($('ag-provider').value.trim()) payload.provider = $('ag-provider').value.trim();
   if ($('ag-model').value.trim()) payload.model = $('ag-model').value.trim();
   // 推理强度：仅当强度行可见（当前模型配置了 efforts）才随保存写入；隐藏时不触碰，保留实体原值

@@ -1742,6 +1742,16 @@ export class TaskEngine {
   ): Promise<void> {
     // 成员解析：子智能体实体优先，expert-<expertId> 伪 id 解析为任务级临时专家（@单专家直派）
     const agent = await this.resolveMemberAgent(this.store.getTask(taskId)!, agentId)
+    // 单 @ 委派护栏：整段文本（含其中对其他成员职责的描述）会交给当前成员在其绑定节点执行，
+    // 其他成员职责不会被自动分派——线上 09-24~10-07「发飞书落在采集节点」的根因即消息只 @ 了一人。
+    // 文本出现任务内其他成员的名字时在此明示，提醒消息应 @ 全部目标成员走多成员编排。
+    const otherMemberNames = this.store
+      .getAgents()
+      .filter((a) => a.id !== agentId && a.name && text.includes(a.name))
+      .map((a) => a.name)
+    if (otherMemberNames.length) {
+      this.taskLog(taskId, 'warn', `委派提示：消息中出现了其他成员「${otherMemberNames.join('、')}」（未 @ 或提及未生效）——单 @ 委派把整段文本交给「${agent?.name || agentId}」在其绑定节点执行，不会自动分派给其他成员；如需分工编排，请在消息中 @ 全部目标成员`)
+    }
     const sub: PlanSubtask = {
       id: `sub-${randomUUID().slice(0, 8)}`,
       title: (text.replace(/@\S+/g, '').trim() || '执行任务').slice(0, 30),
@@ -1755,7 +1765,7 @@ export class TaskEngine {
       t.plan = { strategy: 'parallel', createdAt: Date.now(), subtasks: [sub] }
     })
     this.emit(taskId, { type: 'plan_update', plan: this.store.getTask(taskId)!.plan! })
-    this.taskLog(taskId, 'info', `委派子任务给「${agent?.name || agentId}」（在其绑定节点执行），完成后汇总回任务发起节点`)
+    this.taskLog(taskId, 'info', `委派子任务给「${agent?.name || agentId}」（节点: ${this.nodeLabelOf(target)}），完成后汇总回任务发起节点`)
 
     await this.executeDag(taskId, mentions, new Map([[agentId, target]]), signal)
 
@@ -1899,6 +1909,8 @@ export class TaskEngine {
       const thinkNote = plannerThinkBuf ? ` · 主调度思考 ${plannerThinkBuf.length} 字` : ''
       settlePlanTurn(`✅ 拆解完成 — ${strategyLabel(draft.strategy)} · ${draft.subtasks.length} 个子任务 · 耗时 ${((Date.now() - planT0) / 1000).toFixed(1)}s${thinkNote}`)
       this.taskLog(taskId, 'info', `规划完成（${planned.plan.strategy}，${planned.plan.subtasks.length} 个子任务）`)
+      // 规划合同硬约束经纠正重试仍违规：告警明示（子任务已按实际分配执行，供人工检查成员分工）
+      for (const w of planned.warnings || []) this.taskLog(taskId, 'warn', `[主调度] ${w}`)
     } else {
       draft = Orchestrator.fallbackPlan(text, rosterMembers)
       settlePlanTurn(`⚠️ LLM 规划不可用（${planned.error}），已回退静态三段拆解`)
@@ -2088,7 +2100,7 @@ export class TaskEngine {
       s.startedAt = Date.now()
     })
     this.emit(taskId, { type: 'subtask_status', subtask: this.store.getTask(taskId)!.plan!.subtasks.find((x) => x.id === sub.id)! })
-    this.emit(taskId, { type: 'log', subtaskId: sub.id, level: 'info', msg: `开始在「${agent.name}」上执行: ${sub.title}` })
+    this.emit(taskId, { type: 'log', subtaskId: sub.id, level: 'info', msg: `开始在「${agent.name}」上执行（节点: ${this.nodeLabelOf(target)}）: ${sub.title}` })
 
     const session = await this.ensureSession(taskId, agent, target, { cwd: exec.workspace, workspace: exec.workspace })
     if (session.target) target = session.target
@@ -2154,7 +2166,19 @@ export class TaskEngine {
     const permLine = this.permissionPromptLine(this.store.getTask(taskId) || task, agent)
     if (permLine) parts.push(permLine)
     // 规划器可能把用户素材原样抄进子任务指令：中和其中伪造的引擎段头与围栏（orchestrator.sanitizeEngineInstruction）
-    const instr = sanitizeEngineInstruction(transformed.text, agent)
+    // 其他成员名册（子智能体+专家动态成员，排除被指派者）一并传入：剥离指令中对他们的 @提及并附编排声明，
+    // 防止执行者在本节点越权代办/自行联系其他成员
+    const otherMembers: Array<Pick<SubAgent, 'name' | 'id'>> = []
+    for (const mid of task.memberAgentIds) {
+      if (mid === agent.id) continue
+      const ma = this.store.getAgent(mid)
+      if (ma) otherMembers.push({ name: ma.name, id: ma.id })
+    }
+    for (const em of task.expertMembers || []) {
+      if (em.id === agent.id) continue
+      otherMembers.push({ name: em.name, id: em.id })
+    }
+    const instr = sanitizeEngineInstruction(transformed.text, agent, otherMembers)
     parts.push(`[当前子任务指令]:\n${instr}`)
     parts.push(buildCompletionRequirement(sub))
     const fullPrompt = parts.join('\n\n')
@@ -2295,6 +2319,18 @@ export class TaskEngine {
     const target = await this.resolver.resolve(main).catch(() => undefined)
     if (!target?.online) return
     await this.ensureSession(taskId, main, target).catch(() => {})
+  }
+
+  /** 目标节点的可读标识（资源目录按 baseUrl 反查环境名；查不到回退 host:端口）——子任务启动日志用 */
+  private nodeLabelOf(target: DshTarget): string {
+    const base = String(target.baseUrl || '')
+    const ep = this.directory.listEndpoints().find((e) => e.baseUrl && base.startsWith(e.baseUrl))
+    if (ep) return [ep.tunnelName, ep.note].filter(Boolean).join(' · ') || ep.mappingId
+    try {
+      return new URL(base).host
+    } catch {
+      return base || '未知节点'
+    }
   }
 
   /**

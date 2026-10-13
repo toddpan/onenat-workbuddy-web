@@ -122,13 +122,18 @@ export class WorkBuddyRouter {
     return String(ref.apiBaseUrl || '直连节点')
   }
 
+  /** 按当前 HTTP 请求头推断访问基址（浏览器地址栏视角）：反代场景优先 x-forwarded-* */
+  private requestBase(req: IncomingMessage, prefix: string): string {
+    const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() || 'http'
+    const host = String(req.headers['x-forwarded-host'] || '').split(',')[0].trim() || String(req.headers.host || 'localhost')
+    return `${proto}://${host}${prefix}`
+  }
+
   /** 生成给 DSH 用的库文件下载链接：优先用配置的公网基址，否则按请求头推断 */
   private externalBase(req: IncomingMessage, prefix: string): string {
     const configured = this.library?.publicBaseUrl()
     if (configured) return configured
-    const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() || 'http'
-    const host = String(req.headers.host || 'localhost')
-    return `${proto}://${host}${prefix}`
+    return this.requestBase(req, prefix)
   }
 
   /** 插件导出任务收尾：从任务轮次解析 tgz 绝对路径，经远端 /fs/download 拉回入库 */
@@ -816,7 +821,8 @@ export class WorkBuddyRouter {
       }
       const importId = 'pimp-' + randomUUID().slice(0, 8)
       const token = randomUUID() + randomUUID()
-      const base = this.externalBase(req, prefix)
+      // 回调地址跟随发起导入的浏览器访问地址（不使用库里配置的公网基址，避免跨站点写死）
+      const base = this.requestBase(req, prefix)
       const createUrl = `${base}/api/projects/import-create?token=${token}`
       const nodeLabel = this.nodeLabelOf(nodeRef)
       // 候选清单：专家（子智能体）+ 连接器（SSH 池 / ONENAT 映射），供节点智能体按项目性质挑选（禁止编造 ID）
@@ -2164,7 +2170,15 @@ export class WorkBuddyRouter {
       }
       const url = new URL(req.url || '/', 'http://localhost')
       const mask = url.searchParams.get('mask') === '0' ? false : true
-      const composed = await this.composer.compose(agent, { resolvedAt: Date.now(), mask })
+      // 与真实派发对齐：预览也要注入项目/任务级技能（extraSkills），否则预览看不到 [已装载技能] 全量
+      const extraSkills = [
+        ...(() => {
+          const projId = url.searchParams.get('projectId') || ''
+          return projId ? (this.store.getProject(projId)?.skillNames || []) : []
+        })(),
+        ...(url.searchParams.get('skillNames') || '').split(',').map((s) => s.trim()).filter(Boolean),
+      ]
+      const composed = await this.composer.compose(agent, { resolvedAt: Date.now(), mask, extraSkills })
       this.sendJson(res, 200, {
         ok: true,
         data: {
