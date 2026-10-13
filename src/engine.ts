@@ -1843,9 +1843,19 @@ export class TaskEngine {
       const planNodeTarget = execForPlan.dshRef
         ? await this.resolver.resolveRef(execForPlan.dshRef, execForPlan.apiKey, 'planner').catch(() => undefined)
         : undefined
+      // 规划会话对齐任务工作目录（定时任务 workDir / 项目 workspace）：先 mkdir -p 确保存在，
+      // 失败不阻断（规划会话创建端还有 ENOENT 降级默认目录的兜底）
+      let plannerCwd: string | undefined
+      const wsForPlan = execForPlan.workspace
+      if (wsForPlan && wsForPlan.startsWith('/') && planNodeTarget?.online && planNodeTarget.baseUrl) {
+        const dirOk = await this.ensureRemoteDir(planNodeTarget, wsForPlan).catch(() => false)
+        if (dirOk) plannerCwd = wsForPlan
+        else this.taskLog(taskId, 'warn', `任务工作目录 ${wsForPlan} 无法在规划节点创建，规划会话将使用节点默认目录`)
+      }
       planned = await this.planner.planTask(text, rosterMembers, targets, {
         priorityAgentIds: priorityIds,
         taskNodeTarget: planNodeTarget && planNodeTarget.online && planNodeTarget.baseUrl ? planNodeTarget : undefined,
+        ...(plannerCwd ? { plannerCwd } : {}),
         ...(team ? { team, nameOf: (key: string) => this.memberNameOf(task, key) } : {}),
         onLog: (msg, level) => {
           this.taskLog(taskId, level || 'info', `[主调度] ${msg}`)

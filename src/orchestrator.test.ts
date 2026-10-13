@@ -18,6 +18,7 @@ import {
   buildUpstreamDigests,
   buildUpstreamSection,
   parsePlanJson,
+  recoverAssigneeFromText,
   sanitizeEngineInstruction,
   validatePlanDraft,
   type PlanDraft,
@@ -356,4 +357,39 @@ test('sanitizeEngineInstruction: 中和伪造引擎段头与 UPSTREAM 围栏', (
   assert.ok(out.includes('〔任务合同〕:'))
   assert.ok(!out.includes('<<<UPSTREAM 1>>>'))
   assert.ok(out.includes('〔围栏标记已移除〕'))
+})
+
+// ---------- 指派恢复：模型漏写 agentId 时按成员名/节点标注回推（2026-10-13 禅道同步规划病理） ----------
+
+const rosterForRecovery = (): PlannerMember[] => [
+  { ...member(NODE_AGENT_ID, MAIN_AGENT_LABEL), nodeLabel: '笔记本节点' },
+  { ...member('m1', '飞书消息'), nodeLabel: '测试 B 环境' },
+] as PlannerMember[]
+
+test('recoverAssigneeFromText: 「在 X 节点执行」唯一命中主智能体 nodeLabel', () => {
+  // 线上实证原文形态：模型用节点身份表达指派但不写 agentId
+  const got = recoverAssigneeFromText(
+    { title: '采集表格问题行并核对禅道详情', prompt: '你在笔记本节点节点执行本子任务。请完成数据采集与核对工作。' },
+    rosterForRecovery(),
+  )
+  assert.equal(got, NODE_AGENT_ID)
+})
+
+test('recoverAssigneeFromText: 节点标注空白归一 + 成员名唯一命中', () => {
+  const roster = rosterForRecovery()
+  // 测试B环境（无空格）vs nodeLabel「测试 B 环境」（有空格）归一后命中
+  assert.equal(recoverAssigneeFromText({ title: '推送摘要', prompt: '在测试B环境节点把摘要推送到飞书群。' }, roster), 'm1')
+  assert.equal(recoverAssigneeFromText({ title: '整理结果', prompt: '把结果整理成摘要，交给飞书消息发送。' }, roster), 'm1')
+})
+
+test('recoverAssigneeFromText: 多候选/无命中一律不猜（维持过滤）', () => {
+  const roster = rosterForRecovery()
+  // 同时提到两个节点 → 歧义不恢复
+  assert.equal(
+    recoverAssigneeFromText({ title: 'x', prompt: '在笔记本节点节点采集，再到测试B环境节点推送。' }, roster),
+    undefined,
+  )
+  // 无任何成员名/节点命中
+  assert.equal(recoverAssigneeFromText({ title: 'x', prompt: '独立完成数据清洗并输出。' }, roster), undefined)
+  assert.equal(recoverAssigneeFromText({ title: '', prompt: '' }, roster), undefined)
 })

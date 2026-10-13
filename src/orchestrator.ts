@@ -116,6 +116,46 @@ export function sanitizeEngineInstruction(
 }
 
 /**
+ * 从子任务文本恢复指派成员（agentId 缺失/非法时的兜底回推）：模型偶发整段漏写 agentId 字段，
+ * 改在指令里用成员名/节点身份表达分工（线上 2026-10-13 禅道同步规划实证：prompt 写
+ * 「你在笔记本节点节点执行本子任务」但无 agentId → 全部子任务被过滤 → 静态兜底把整段塌给被 @ 成员）。
+ * 三层匹配，各自要求「唯一命中」才恢复（歧义一律不猜，维持过滤）：
+ *   1. 节点归属语句「在 X 节点…」：X（空白归一后）唯一对应某成员 nodeLabel；
+ *   2. 成员名唯一出现在 title+prompt；
+ *   3. 节点标注唯一出现在 title+prompt。
+ */
+export function recoverAssigneeFromText(
+  s: { title?: string; prompt?: string },
+  members: PlannerMember[],
+): string | undefined {
+  const text = `${s.title || ''}\n${s.prompt || ''}`
+  if (!text.trim() || !members.length) return undefined
+  const norm = (v: string) => v.replace(/\s+/g, '')
+  // 全文节点命中：≥2 个成员的节点标注被提及 → 指派归属无法唯一判定，不猜
+  //（「再到 测试环境B 环境节点推送」这类数据流表述没有「在」字，归属语句正则抓不到，必须先做全文歧义检查）
+  const nodeHits = [...new Set(
+    members
+      .filter((m) => m.nodeLabel && norm(m.nodeLabel).length >= 2 && norm(text).includes(norm(m.nodeLabel)))
+      .map((m) => m.agent.id),
+  )]
+  if (nodeHits.length >= 2) return undefined
+  // 节点归属语句「在 X 节点…」：全文节点命中唯一且语句中的 X 都指向该成员 → 恢复
+  const captures = [...text.matchAll(/在\s*([^，。；、\n]{2,24}?)\s*节点/g)].map((m) => norm(m[1]))
+  if (captures.length && nodeHits.length === 1) {
+    const target = members.find((m) => m.agent.id === nodeHits[0])
+    const nl = norm(target?.nodeLabel || '')
+    if (target && nl && captures.every((c) => nl.includes(c) || c.includes(nl))) return target.agent.id
+    return undefined
+  }
+  // 成员名唯一命中（伪成员靠 MAIN_AGENT_LABEL 名字同样可命中）
+  const byName = members
+    .filter((m) => m.agent.name && norm(m.agent.name).length >= 2 && norm(text).includes(norm(m.agent.name)))
+    .map((m) => m.agent.id)
+  if (byName.length === 1) return byName[0]
+  return undefined
+}
+
+/**
  * 规划产出校验（规划合同硬约束，planTask 纠正重试与 engine 告警共用）:
  *  1. 被用户 @ 的成员（priorityAgentIds）必须各分到至少 1 个子任务——允许 0 子任务时
  *     规划器可把全部工作合并给单个成员，其绑定节点会越权代跑其他成员职责
@@ -429,6 +469,8 @@ export class Orchestrator {
       priorityAgentIds?: string[]
       /** 任务发起节点（主 DSH）：规划优先在该节点执行 —— 节点模型下无需单独指定拆解器智能体 */
       taskNodeTarget?: DshTarget
+      /** 任务工作目录（定时任务 workDir / 项目 workspace）：规划会话 cwd 对齐；调用方负责先确保目录存在 */
+      plannerCwd?: string
       /** 阶段/思考日志回传（进任务日志抽屉 + SSE log 事件） */
       onLog?: (msg: string, level?: 'info' | 'warn') => void
       /** 主调度思考过程增量（实时进规划消息的思考块） */
@@ -457,10 +499,19 @@ export class Orchestrator {
       const user = buildPlannerUserMessage(objective, members, { priorityAgentIds: opts?.priorityAgentIds, team: opts?.team, ...(correction ? { correction } : {}) })
       log(`规划提示词 ${user.length} 字符 · 模型 ${plannerModel || '远端默认'}`)
       let res: { ok: boolean; content?: string; error?: string }
-      const created = await this.client.createSession(picked.target, `主调度规划 · ${new Date().toISOString().slice(11, 19)}`, plannerModel ? { model: plannerModel } : undefined)
+      // 规划会话对齐任务工作目录（定时任务 workDir / 项目 workspace）；目录在节点上不存在时降级默认目录
+      const createPayload = {
+        ...(plannerModel ? { model: plannerModel } : {}),
+        ...(opts?.plannerCwd ? { cwd: opts.plannerCwd } : {}),
+      }
+      let created = await this.client.createSession(picked.target, `主调度规划 · ${new Date().toISOString().slice(11, 19)}`, createPayload)
+      if (!created.ok && created.error && /ensure project directory|ENOENT/i.test(created.error) && opts?.plannerCwd) {
+        log(`规划工作目录 ${opts.plannerCwd} 在节点上不可用（${String(created.error).slice(0, 80)}），改用节点默认目录`, 'warn')
+        created = await this.client.createSession(picked.target, `主调度规划 · ${new Date().toISOString().slice(11, 19)}`, plannerModel ? { model: plannerModel } : undefined)
+      }
       if (created.ok && created.sessionId) {
         const sessId = created.sessionId
-        log(`规划会话已创建 ${sessId}`)
+        log(`规划会话已创建 ${sessId}${opts?.plannerCwd ? ' · 工作目录 ' + opts.plannerCwd : ''}`)
         let thinkChars = 0
         let firstThinkMs = 0
         const sse = await this.client.streamPrompt(picked.target, sessId, user, {
@@ -502,11 +553,25 @@ export class Orchestrator {
       return { ok: true as const, content: res.content }
     }
 
-    // 解析 + 合法成员过滤（0 合法子任务 = 硬失败，沿用原行为）
+    // 解析 + 合法成员过滤（0 合法子任务 = 指派恢复 → 纠正重规划 → 仍 0 才硬失败）
+    const nameOfMember = (ms: PlannerMember[], id: string): string =>
+      id === NODE_AGENT_ID ? '主智能体' : (ms.find((m) => m.agent.id === id)?.agent.name || id)
     const parseAndFilter = (content: string): { draft: PlanDraft } | { error: string; raw?: string } => {
       const parsed = parsePlanJson(content)
       if (!parsed) return { error: '规划器输出无法解析为合法 JSON', raw: content }
       const ids = new Set(members.map((m) => m.agent.id))
+      // 指派恢复：agentId 缺失/非法时按 title+prompt 中唯一命中的成员名/节点标注回推（歧义不猜）
+      const repairs: string[] = []
+      for (const s of parsed.subtasks) {
+        if (s && s.title && s.prompt && !ids.has(s.agentId)) {
+          const recovered = recoverAssigneeFromText(s, members)
+          if (recovered) {
+            s.agentId = recovered
+            repairs.push(`「${String(s.title).slice(0, 24)}」→ ${nameOfMember(members, recovered)}`)
+          }
+        }
+      }
+      if (repairs.length) log(`恢复 ${repairs.length} 个缺失/非法 agentId 的子任务指派（按指令中的成员名/节点标注唯一匹配）: ${repairs.join('；')}`, 'warn')
       const subtasks = parsed.subtasks
         .filter((s) => s && s.title && s.prompt && ids.has(s.agentId))
         .map((s) => ({ ...s, dependsOn: Array.isArray(s.dependsOn) ? s.dependsOn.filter((d) => typeof d === 'string') : [] }))
@@ -520,6 +585,22 @@ export class Orchestrator {
     let res = await attempt()
     if (!res.ok) return { error: res.error, raw: res.raw }
     let parsed = parseAndFilter(res.content)
+    // 全部子任务都不可路由（agentId 整段缺失且恢复失败）→ 一次纠正重规划点名 schema 要求，
+    // 而不是直接掉进静态兜底（兜底会把单 @ 整段塌给被 @ 成员——线上禅道同步病理）
+    if ('error' in parsed && /未产出任何合法子任务/.test(parsed.error)) {
+      const sampleIds = members.map((m) => m.agent.id).join(' / ')
+      log('规划输出没有任何可路由子任务，附加 agentId 格式纠正意见重规划一次', 'warn')
+      const retry = await attempt(
+        `上一次输出里 subtasks 全部缺少合法的 agentId 字段（或取值不在花名册中）。请重新输出同一份计划，规则：每个子任务对象必须显式携带 "agentId" 字段，值逐字取自花名册中的 id（${sampleIds}），不得省略、不得写成员名或节点名代替。`,
+      )
+      if (retry.ok) {
+        const reparsed = parseAndFilter(retry.content)
+        if (!('error' in reparsed)) parsed = reparsed
+        else log(`纠正重规划仍不可路由（${reparsed.error}）`, 'warn')
+      } else {
+        log(`纠正重规划调用失败（${retry.error}）`, 'warn')
+      }
+    }
     if ('error' in parsed) return parsed
 
     // 规划合同硬约束校验：违规 → 附加纠正意见重规划一次；仍违规 → 带告警放行（engine taskLog 明示）
