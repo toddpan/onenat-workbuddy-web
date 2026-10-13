@@ -382,6 +382,8 @@ export interface WorkTask {
   connectorIds?: string[]
   /** 任务级技能覆盖（单独任务临时加挂） */
   skillNames?: string[]
+  /** 任务级工作目录（绝对路径）：定时任务实例配置；优先于项目 workspace，主会话 cwd */
+  workDir?: string
   /** 专家团任务来源：记录创建团队，编排/派工/汇总按团队合同注入 */
   teamId?: string
   /** 专家库动态成员（expert-<expertId> → 展示名）：编排启动时登记，供花名册/子任务/轨迹解析成员名，不落子智能体实体 */
@@ -473,6 +475,10 @@ export interface ScheduledTask {
   nodeMappingId?: string
   /** 实例级模型（provider/model，可选）：留空跟随全局调度模型；无人值守任务建议固定为稳定模型 */
   model?: string
+  /** 工作目录（绝对路径，可选）：派生任务主会话的 cwd（与项目 workspace 同语义）；留空用远端默认 */
+  workDir?: string
+  /** 绑定的「已安装」技能名（kebab-case，可选）：派发时以 /名 手势注入主会话提示词，由远端宿主原生加载 */
+  skills?: string[]
   /** 固定任务文本（触发时原样派发） */
   message: string
   rule: ScheduleRule
@@ -574,6 +580,15 @@ export interface ExpertTeamMember {
 
 /** 专家库动态成员在任务账本中的伪 agentId 前缀（<前缀><expertId>），与 teamMemberKey 同源 */
 export const EXPERT_AGENT_ID_PREFIX = 'expert-'
+
+/**
+ * 任务节点主会话的伪 agentId：无 @ 的主会话与「主智能体自留子任务」都在任务节点上
+ * 以远端默认形态执行。该 id 仅存在于 task.sessions 与编排计划子任务，不落子智能体实体。
+ */
+export const NODE_AGENT_ID = '__node__'
+
+/** 主智能体（任务节点主会话）的展示名：规划花名册/汇总/计划卡共用 */
+export const MAIN_AGENT_LABEL = '主智能体（发起节点）'
 
 /** 团队成员的稳定键：子智能体用 agentId；专家库成员用合成 pseudo id（expert-<expertId>），与编排花名册/子任务 agentId 同源 */
 export function teamMemberKey(m: Pick<ExpertTeamMember, 'agentId' | 'expertId'>): string {

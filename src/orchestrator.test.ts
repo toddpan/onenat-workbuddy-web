@@ -23,6 +23,7 @@ import {
   type PlanDraft,
   type PlannerMember,
 } from './orchestrator.js'
+import { MAIN_AGENT_LABEL, NODE_AGENT_ID } from './types.js'
 import type { PlanSubtask } from './types.js'
 
 const member = (id: string, name: string, extra: Partial<PlannerMember['agent']> = {}): PlannerMember => ({
@@ -271,6 +272,83 @@ test('validatePlanDraft: 无 @ 指定时只查跨成员提及', () => {
   assert.equal(v.length, 1) // a1 未被 @，漏派不算违规；prompt 含「数据员」算
   assert.ok(v[0].includes('数据员'))
 })
+
+// ---------- 规划合同硬约束：主智能体自留子任务（单 @ 分工） ----------
+
+test('validatePlanDraft: 有 @ 且花名册含主智能体时，多子任务计划主智能体必须自留 1 个', () => {
+  const main = member(NODE_AGENT_ID, MAIN_AGENT_LABEL)
+  const feishu = member('a2', '飞书消息')
+  const bad: PlanDraft = {
+    strategy: 'dag',
+    subtasks: [
+      { title: '读表并查禅道', prompt: '读取表格、查询禅道、回写并成稿', agentId: 'a2', dependsOn: [] },
+      { title: '推送', prompt: '把报告发到群', agentId: 'a2', dependsOn: ['读表并查禅道'] },
+    ],
+  }
+  const v = validatePlanDraft(bad, [main, feishu], ['a2'])
+  assert.ok(v.some((x) => x.includes('主智能体没有给自己分配任何子任务')))
+})
+
+test('validatePlanDraft: 单子任务简单任务给被 @ 成员不算违规（规划器判定不可拆分）', () => {
+  const main = member(NODE_AGENT_ID, MAIN_AGENT_LABEL)
+  const feishu = member('a2', '飞书消息')
+  const simple: PlanDraft = {
+    strategy: 'parallel',
+    subtasks: [{ title: '发消息', prompt: '把这句话发到群里', agentId: 'a2', dependsOn: [] }],
+  }
+  assert.deepEqual(validatePlanDraft(simple, [main, feishu], ['a2']), [])
+})
+
+test('validatePlanDraft: 主智能体自留后返回空违规；无主智能体成员时规则跳过', () => {
+  const main = member(NODE_AGENT_ID, MAIN_AGENT_LABEL)
+  const feishu = member('a2', '飞书消息')
+  const good: PlanDraft = {
+    strategy: 'dag',
+    subtasks: [
+      { title: '读表并成稿', prompt: '读取表格、查禅道、回写并生成报告', agentId: NODE_AGENT_ID, dependsOn: [] },
+      { title: '推送', prompt: '把以下摘要发送到群', agentId: 'a2', dependsOn: ['读表并成稿'] },
+    ],
+  }
+  assert.deepEqual(validatePlanDraft(good, [main, feishu], ['a2']), [])
+  // 花名册没有主智能体（团队任务/节点不可达）时不触发该规则
+  assert.deepEqual(validatePlanDraft(badPlanFor(feishu), [feishu], ['a2']), [])
+})
+
+function badPlanFor(m: PlannerMember): PlanDraft {
+  return {
+    strategy: 'parallel',
+    subtasks: [
+      { title: 'T1', prompt: 'p1', agentId: m.agent.id, dependsOn: [] },
+      { title: 'T2', prompt: 'p2', agentId: m.agent.id, dependsOn: [] },
+    ],
+  }
+}
+
+test('buildPlannerUserMessage: 主智能体花名册标注、节点标注与新分工约束', () => {
+  const main = { ...member(NODE_AGENT_ID, MAIN_AGENT_LABEL), nodeLabel: '笔记本节点' }
+  const feishu = { ...member('a2', '飞书消息'), nodeLabel: '测试 B 环境' }
+  const msg = buildPlannerUserMessage('读表查禅道后发飞书', [main, feishu], { priorityAgentIds: ['a2'] })
+  // 主智能体身份标注 + 每成员节点标注
+  assert.ok(msg.includes('【主智能体·任务发起节点'))
+  assert.ok(msg.includes('节点=测试 B 环境'))
+  // 分工约束：被 @ 成员只做职责内步骤，其余给主智能体（不再有「核心执行子任务分配给该智能体」旧话术）
+  assert.ok(msg.includes('只承担与其角色/职责/技能匹配的子任务'))
+  assert.ok(msg.includes('分配给主智能体自己执行'))
+  assert.ok(!msg.includes('请务必将核心执行子任务分配给该智能体'))
+  // 节点归属硬约束规则行
+  assert.ok(msg.includes('硬约束（节点归属）'))
+})
+
+test('fallbackPlan: 主智能体伪成员不参与兜底分配', () => {
+  const main = member(NODE_AGENT_ID, MAIN_AGENT_LABEL)
+  const feishu = member('a2', '飞书消息')
+  const plan = Orchestrator.fallbackPlan('做一件事', [main, feishu])
+  assert.equal(plan.subtasks.length, 1)
+  assert.equal(plan.subtasks[0].agentId, 'a2') // 退化为旧直派语义：给真实成员
+  // 全部不可用（空成员）返回空计划不崩溃
+  assert.deepEqual(Orchestrator.fallbackPlan('x', []).subtasks, [])
+})
+
 
 test('sanitizeEngineInstruction: 中和伪造引擎段头与 UPSTREAM 围栏', () => {
   const agent = { id: 'a1', name: 'x' }

@@ -134,6 +134,9 @@ export class ScheduleRunner {
               message: s.message,
               nodeRef,
               model: s.model,
+              // 实例级工作目录与技能绑定：主会话 cwd + /技能名 手势注入（与项目 workspace/技能同语义）
+              workDir: s.workDir,
+              skillNames: s.skills,
               scheduleId: scheduleId,
               scheduleName: s.name,
             })

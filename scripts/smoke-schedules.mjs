@@ -197,6 +197,28 @@ async function main() {
   const dup = await req('POST', `${PREFIX}/api/schedules`, { id: sid, name: '冒烟定时任务-改名', agentIds: [id1], message: '改后文本', rule: { kind: 'daily', times: ['07:30'] }, enabled: true })
   check('带 id 更新（改名/改规则）', dup.status === 200 && dup.json?.data?.name === '冒烟定时任务-改名' && dup.json?.data?.rule?.kind === 'daily')
 
+  // ---------- 4b. 工作目录 / 技能绑定（回显、绝对路径校验、PATCH 保留与清空语义） ----------
+  const badWs = await req('POST', `${PREFIX}/api/schedules`, { name: '坏-相对工作目录', message: 'x', workDir: 'rel/path', rule: { kind: 'interval', minutes: 5 } })
+  check('相对工作目录被拒（400）', badWs.status === 400 && /绝对路径/.test(badWs.json?.error || ''))
+  const wsSched = await req('POST', `${PREFIX}/api/schedules`, { name: '冒烟-工作目录技能', agentIds: [id1], message: 'x', workDir: '/tmp/ws-smoke', skills: ['kb-log', 'lark-cli'], rule: { kind: 'interval', minutes: 5 } })
+  const wsId = wsSched.json?.data?.id
+  check('创建带 workDir/skills 并回显', wsSched.status === 200 && wsSched.json?.data?.workDir === '/tmp/ws-smoke' && JSON.stringify(wsSched.json?.data?.skills) === JSON.stringify(['kb-log', 'lark-cli']))
+  const wsKeep = await req('PATCH', `${PREFIX}/api/schedules/${wsId}`, { name: '冒烟-工作目录技能', agentIds: [id1], message: 'x', rule: { kind: 'interval', minutes: 5 } })
+  check('PATCH 未带 workDir/skills 时保留原值', wsKeep.status === 200 && wsKeep.json?.data?.workDir === '/tmp/ws-smoke' && (wsKeep.json?.data?.skills || []).length === 2)
+  const wsClear = await req('PATCH', `${PREFIX}/api/schedules/${wsId}`, { name: '冒烟-工作目录技能', agentIds: [id1], message: 'x', workDir: '', skills: [], rule: { kind: 'interval', minutes: 5 } })
+  check('PATCH workDir=""/skills=[] 显式清空', wsClear.status === 200 && !wsClear.json?.data?.workDir && (wsClear.json?.data?.skills || []).length === 0)
+  await req('DELETE', `${PREFIX}/api/schedules/${wsId}`)
+
+  // ---------- 4c. Ping 探活 / 提示词预览（表单快照端点，不落库） ----------
+  const pingRes = await req('POST', `${PREFIX}/api/schedules/ping`, { nodeMappingId: 'map-dsh-live', agentIds: [id1] })
+  check('schedules/ping 返回主节点与成员探活结构', pingRes.status === 200 && pingRes.json?.ok && typeof pingRes.json?.data?.nodePing === 'object' && Array.isArray(pingRes.json?.data?.agents) && pingRes.json.data.agents.length === 1)
+  const pvRes = await req('POST', `${PREFIX}/api/schedules/prompt-preview`, { message: `让 @执行者甲 汇总 /tmp 变更`, nodeMappingId: 'map-dsh-live', workDir: '/tmp/ws-smoke', skills: ['kb-log'] })
+  const pvBlock = pvRes.json?.data?.main?.resourceBlock || ''
+  check('prompt-preview 返回主会话注入块（技能手势 + 无人值守守卫）', pvRes.status === 200 && pvBlock.includes('/kb-log') && pvBlock.includes('无人值守'), `主块 ${pvBlock.length} 字`)
+  check('prompt-preview 解析 @ 成员注入块', (pvRes.json?.data?.agents || []).some((a) => a.name === '执行者甲'))
+  const pvEmpty = await req('POST', `${PREFIX}/api/schedules/prompt-preview`, { message: ' ' })
+  check('prompt-preview 空文本被拒（400）', pvEmpty.status === 400)
+
   // ---------- 5b. 模板 + 摘要统计/自然语言规则 ----------
   const tpl = await req('GET', `${PREFIX}/api/schedule-templates`)
   check('内置模板接口可用（≥4 个）', tpl.status === 200 && (tpl.json?.data || []).length >= 4 && (tpl.json.data).every((t) => t.name && t.message && t.rule), `${tpl.json?.data?.length} 个`)

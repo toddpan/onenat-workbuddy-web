@@ -5909,6 +5909,7 @@ function finalizeTurnBlocks(el, turn, taskId) {
 let planRowEls = {};
 
 function memberDisplayName(agentId) {
+  if (agentId === '__node__') return '主智能体（发起节点）';
   const a = state.agents.find(x => x.id === agentId);
   if (a) return a.name;
   const em = (state.task && state.task.expertMembers || []).find(m => m.id === agentId);
@@ -5985,14 +5986,16 @@ function createPlanCardElement(plan) {
     '<span class="pm-duty">拆解任务 · 派工 · 核验汇总</span></div>';
   for (const [agentId, list] of laneByAgent) {
     const meta = (tm && tm.meta[agentId]) || null;
-    const name = meta ? meta.name : memberDisplayName(agentId);
+    const isMain = agentId === '__node__';
+    const name = isMain ? '主智能体（发起节点）' : (meta ? meta.name : memberDisplayName(agentId));
     const isExpert = meta ? meta.isExpert : isExpertMemberId(agentId);
-    const icon = isExpert ? '🧩' : '🤖';
+    const icon = isMain ? '🧠' : (isExpert ? '🧩' : '🤖');
     const dutyHtml = meta && meta.duty ? '<span class="pm-duty">' + esc(meta.duty) + '</span>' : '';
-    const nodeLabel = meta ? '' : memberNodeLabel(agentId);
+    const nodeLabel = meta || isMain ? '' : memberNodeLabel(agentId);
     rowsHtml += '<div class="plan-member-row"><span class="pm-icon">' + icon + '</span>' +
       '<span class="pm-name">' + esc(name) + '</span>' + dutyHtml +
-      (meta ? '' : '<span class="pm-duty" style="color:var(--tx3)">场外成员' + (nodeLabel ? ' · ' + esc(nodeLabel) : '') + '</span>') +
+      (isMain ? '<span class="pm-duty" style="color:var(--tx3)">任务发起节点 · 自留子任务在此执行</span>'
+        : '<span class="pm-duty" style="color:var(--tx3)">场外成员' + (nodeLabel ? ' · ' + esc(nodeLabel) : '') + '</span>') +
       '</div>';
     if (!list.length) {
       rowsHtml += '<div class="plan-row row-pending" style="opacity:.65"><span class="st skipped">n/a</span>' +
@@ -8813,13 +8816,17 @@ function openAgentDrawer(agent, copyMode) {
   });
   $('ag-cancel').addEventListener('click', closeDrawer);
   $('ag-browse').addEventListener('click', async () => {
-    const saved = collectAgent(isEdit ? agent : null);
-    if (!saved) return;
-    toast('保存并解析远端节点…');
-    const r = await api('/agents', { method: 'POST', body: JSON.stringify(saved) });
-    if (!r.ok) { toast(r.error || '保存失败', true); return; }
-    await loadAgents(); renderAgents();
-    openDirBrowser(r.data.id, p => { const inp = $('ag-workdir'); if (inp) inp.value = p; });
+    // 与项目工作目录同一 node= 通道：直接按表单当前选中的 DSH 实体浏览，无需先保存
+    const dshVal = ($('ag-dsh') || { value: '' }).value;
+    let nref = null;
+    if (dshVal.startsWith('mapping:')) nref = { kind: 'mapping', mappingId: dshVal.slice(8) };
+    else if (dshVal === 'direct:') {
+      const url = ($('ag-direct') || { value: '' }).value.trim();
+      if (!url) { toast('请先填写直连地址', true); return; }
+      nref = { kind: 'direct', apiBaseUrl: url };
+    }
+    if (!nref) { toast('请先选择 DSH 实体', true); return; }
+    openDirBrowser({ nodeJson: JSON.stringify(nref) }, p => { const inp = $('ag-workdir'); if (inp) inp.value = p; });
   });
   $('ag-sync').addEventListener('click', async () => {
     const btn = $('ag-sync'), hint = $('ag-opts-hint');
@@ -9158,6 +9165,44 @@ function agentNamesOf(s) {
   const named = (s.agents || []);
   return ids.map(id => { const a = named.find(x => x.id === id); return a ? a.name : id; }).join('、') || '—';
 }
+// ---------- 定时任务 Ping 探活 / 提示词预览（抽屉、卡片、详情共用） ----------
+async function runSchedulePing(nodeMappingId, agentIds) {
+  const r = await api('/schedules/ping', { method: 'POST', body: JSON.stringify({ nodeMappingId: nodeMappingId || '', agentIds: agentIds || [] }) });
+  if (!r.ok) { toast(r.error || '探测失败', true); return; }
+  const d = r.data || {};
+  const pingTag = function (p) {
+    return p && p.ok
+      ? '<span class="tag ok">✓ 在线 · ' + esc(p.name || '') + (p.version ? ' v' + esc(p.version) : '') + '</span>'
+      : '<span class="tag err">✗ ' + esc((p && p.error) || '不可达') + '</span>';
+  };
+  const rows = [];
+  if (d.nodeTitle !== undefined) {
+    rows.push('<div class="run-item" style="margin-bottom:6px"><span class="mono">🖥 主节点 ' + esc(d.nodeTitle || '') + '</span>' + pingTag(d.nodePing) + '</div>');
+  }
+  for (const it of d.agents || []) {
+    rows.push('<div class="run-item" style="margin-bottom:6px"><span class="mono">🤖 ' + esc(it.name || it.id) + '</span>' + pingTag(it.ping) + '</div>');
+  }
+  openModal('Ping 探活结果', rows.join('') || '<div class="hint">未指定节点与子智能体</div>');
+}
+async function runSchedulePreview(payload) {
+  const r = await api('/schedules/prompt-preview', { method: 'POST', body: JSON.stringify(payload) });
+  if (!r.ok) { toast(r.error || '预览失败', true); return; }
+  const d = r.data || {};
+  let html = '<div class="sched-grid" style="margin-bottom:10px">' +
+    '<div class="k">执行节点</div><div>' + esc(d.nodeTitle || '（未选节点，运行时回退首个在线 DSH）') + '</div>' +
+    '<div class="k">模型</div><div>' + esc(d.model || '跟随全局调度模型') + '</div>' +
+    '<div class="k">工作目录</div><div style="font-family:var(--mono)">' + esc(d.workDir || '（远端默认）') + '</div>' +
+    '<div class="k">绑定技能</div><div>' + ((d.skills || []).length ? '<span class="mono">' + esc(d.skills.map(function (n) { return '/' + n; }).join(' ')) + '</span>' : '—') + '</div></div>' +
+    '<div class="field"><label>主会话注入块（节点直发派发时的上下文，凭证已脱敏）</label><div class="pre-block" style="max-height:220px;overflow:auto">' + esc((d.main && d.main.resourceBlock) || '(空)') + '</div></div>';
+  for (const a of d.agents || []) {
+    html += '<div class="field" style="margin-top:10px"><label>@ ' + esc(a.name) + (a.role ? ' · ' + esc(a.role) : '') + ' 注入块</label>' +
+      '<div class="pre-block" style="max-height:220px;overflow:auto">' + esc(a.resourceBlock || '(空)') + '</div>' +
+      ((a.warnings || []).length ? '<div style="color:var(--warn);font-size:12px;margin-top:6px">⚠ ' + a.warnings.map(esc).join('；') + '</div>' : '') + '</div>';
+  }
+  html += '<div class="field" style="margin-top:10px"><label>无人值守交互守卫（随派发注入）</label><div class="pre-block">' + esc(d.guard || '') + '</div></div>';
+  if (d.mentionError) html += '<div style="color:var(--warn);font-size:12px;margin-top:8px">⚠ @ 解析失败: ' + esc(d.mentionError) + '</div>';
+  openModal('定时任务派发提示词预览（脱敏）', html);
+}
 function renderSchedules() {
   const el = $('schedule-list'); el.innerHTML = '';
   // 模板区（一键创建：预填表单）
@@ -9188,6 +9233,8 @@ function renderSchedules() {
       (s.enabled ? '<span class="tag ok">▶ 启用中</span>' : '<span class="tag err">⏸ 已暂停</span>') +
       '<span class="tag">🕐 ' + esc(s.ruleText || ruleText(s.rule)) + '</span>' +
       (s.nodeTitle ? '<span class="tag">🖥 ' + esc(s.nodeTitle) + '</span>' : '') +
+      (s.workDir ? '<span class="tag" title="主会话工作目录" style="font-family:var(--mono)">📁 ' + esc(s.workDir) + '</span>' : '') +
+      (s.skills && s.skills.length ? '<span class="tag" title="绑定技能">🎯 ' + s.skills.length + ' 个技能</span>' : '') +
       (s.agents && s.agents.length ? '<span class="tag">🤖 ' + esc(agentNamesOf(s)) + '</span>' : '') +
       (s.description ? '<span class="tag">' + esc(s.description) + '</span>' : '') + '</div>' +
       '<div class="desc">任务文本: ' + esc(String(s.messagePreview || s.message || '').slice(0, 120)) +
@@ -9197,11 +9244,23 @@ function renderSchedules() {
       (successRate !== null ? ' · 派发成功率 ' + successRate + '%' : '') + '</div>' +
       '<div class="ops"><button class="btn" data-op="detail">详情</button><button class="btn" data-op="edit">编辑</button>' +
       '<button class="btn" data-op="copy">📋 复制</button>' +
+      '<button class="btn" data-op="ping">Ping 探活</button><button class="btn" data-op="preview">提示词预览</button>' +
       '<button class="btn" data-op="run">▶ 立即执行</button><button class="btn" data-op="toggle">' + (s.enabled ? '停用' : '启用') + '</button>' +
       '<button class="btn danger" data-op="del">删除</button></div>';
     card.querySelector('[data-op=detail]').addEventListener('click', () => openScheduleDetail(s.id));
     card.querySelector('[data-op=edit]').addEventListener('click', () => openScheduleDrawer(s));
     card.querySelector('[data-op=copy]').addEventListener('click', () => openScheduleDrawer(s, null, true));
+    card.querySelector('[data-op=ping]').addEventListener('click', async () => {
+      toast('探测中…');
+      await runSchedulePing(s.nodeMappingId || '', s.agentIds || []);
+    });
+    card.querySelector('[data-op=preview]').addEventListener('click', async () => {
+      toast('合成提示词中…');
+      // 列表摘要是截断的指令文本（@ 可能被截掉）→ 先拉全量再预览
+      const fr = await api('/schedules/' + s.id);
+      const full = fr.ok ? fr.data : s;
+      await runSchedulePreview({ name: full.name, message: full.message || '', nodeMappingId: full.nodeMappingId || '', model: full.model || '', workDir: full.workDir || '', skills: full.skills || [] });
+    });
     card.querySelector('[data-op=run]').addEventListener('click', async () => {
       const runBtn = card.querySelector('[data-op=run]')
       if (runBtn.disabled) return
@@ -9271,6 +9330,12 @@ async function openScheduleDrawer(s, tpl, copyMode) {
     '<div class="field"><label>执行模型（从所选 DSH 节点获取，无人值守建议固定稳定模型）</label>' +
     '<select id="sc-model" data-current="' + esc(s && s.model || '') + '"><option value="">加载节点模型中…</option></select>' +
     '<div class="hint" id="sc-model-hint">主会话与编排汇总使用该模型，不受模型按钮切换影响；留空跟随全局调度模型。</div></div>' +
+    '<div class="field"><label>工作目录（绝对路径 · 主会话 cwd，从远程 DSH 节点浏览选择）</label>' +
+    '<div style="display:flex;gap:8px"><input id="sc-workdir" style="font-family:var(--mono);flex:1" value="' + esc(s && s.workDir || '') + '" placeholder="/workspace/xxx">' +
+    '<button class="mini-btn" id="sc-browse" style="flex:none;padding:10px 12px" title="浏览远端目录并选择">📁 浏览节点目录</button></div>' +
+    '<div class="hint">派生任务的主会话在该目录中执行（文件工具根目录、附件落盘处）；留空用远端默认。</div></div>' +
+    '<div class="field"><label>技能绑定（目标节点已安装技能 · 勾选后派发以 /名 手势加载，最多 8 个）</label>' +
+    '<div id="sc-skill-box" class="pj-checks" style="max-height:150px;overflow:auto"><span class="hint">选择执行节点后自动加载…</span></div></div>' +
     '<div class="field"><label>调度（Host 本地时区 · 错过的触发点不补跑）</label>' +
     '<select id="sc-kind">' +
     '<option value="daily"' + (!s || s.rule.kind === 'daily' ? ' selected' : '') + '>每天（固定时刻，可多个）</option>' +
@@ -9292,7 +9357,7 @@ async function openScheduleDrawer(s, tpl, copyMode) {
     '</div></div>' +
     '<div class="hint">触发时自动解析 @提及：被 @ 的子智能体进入执行（@ 多个 = 协同编排），@ 的资源把入口与凭证按绑定策略注入提示词。点上方专家名快速插入 @提及，其角色提示词与执行指导将随派工注入。</div></div>' +
     '<div class="field"><label>备注（可选）</label><input id="sc-desc" value="' + esc(s && s.description || (prefill.description || '')) + '"></div>' +
-    '<div class="ops" style="display:flex;gap:10px;margin-top:14px"><button class="btn pri" id="sc-save">' + (isEdit ? '保存' : '创建定时任务') + '</button><button class="btn" id="sc-cancel">取消</button></div>';
+    '<div class="ops" style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap"><button class="btn pri" id="sc-save">' + (isEdit ? '保存' : '创建定时任务') + '</button><button class="btn" id="sc-ping">Ping 探活</button><button class="btn" id="sc-preview-btn">提示词预览</button><button class="btn" id="sc-cancel">取消</button></div>';
 
   // 专家快捷插入：列出带角色/执行提示词的子智能体，点击在光标处插入 @专家名（人格随 @ 委派链路自动注入）
   (function () {
@@ -9345,7 +9410,76 @@ async function openScheduleDrawer(s, tpl, copyMode) {
     setModelOptions(d.models || [], current)
     if (hintEl) hintEl.textContent = '模型来自节点「' + (d.nodeTitle || mappingId) + '」的可用列表；主会话与编排汇总使用该模型，留空跟随全局调度模型。'
   }
-  $('sc-node').addEventListener('change', function () { loadNodeModels($('sc-node').value, ''); })
+  // 工作目录浏览 / 技能绑定：目标节点 = 「执行节点」当前选中值（与项目工作目录同一 node= 通道，免保存直连）
+  const scheduleNodeRef = function () {
+    const mid = ($('sc-node') || { value: '' }).value;
+    return mid ? { kind: 'mapping', mappingId: mid } : null;
+  };
+  const checkedScheduleSkills = function () {
+    return Array.from(document.querySelectorAll('.sc-skill:checked')).map(function (x) { return x.value; });
+  };
+  const renderScheduleSkillChecks = function (skills, current) {
+    const box = $('sc-skill-box'); if (!box) return;
+    if (!skills.length) { box.innerHTML = '<div class="mon-empty">该节点暂无已装技能（或节点不可达 / 远端未暴露 /skills 端点）</div>'; return; }
+    box.innerHTML = skills.map(function (sk) {
+      const on = current.indexOf(sk.name) >= 0;
+      const desc = sk.description ? ' <span class="hint" style="display:inline">' + esc(String(sk.description).slice(0, 60)) + '</span>' : '';
+      return '<label style="margin:0 12px 6px 0"><input type="checkbox" class="sc-skill" value="' + esc(sk.name) + '"' + (on ? ' checked' : '') + '> <span style="font-family:var(--mono)">' + esc(sk.name) + '</span>' + desc + '</label>';
+    }).join('');
+  };
+  const loadScheduleNodeSkills = async function (mappingId, current) {
+    const box = $('sc-skill-box'); if (!box) return;
+    if (!mappingId) { box.innerHTML = '<div class="mon-empty">请先选择执行节点</div>'; return; }
+    box.innerHTML = '<span class="hint">加载节点技能中…</span>';
+    const r = await api('/library/nodes/skills?node=' + encodeURIComponent(JSON.stringify({ kind: 'mapping', mappingId: mappingId })));
+    const d = (r.ok && r.data) || {};
+    renderScheduleSkillChecks(d.skills || [], current || []);
+    if (!r.ok && r.error && (d.skills || []).length === 0) {
+      box.innerHTML = '<div class="mon-empty" style="color:var(--err)">技能清单加载失败: ' + esc(r.error) + '</div>';
+    }
+  };
+  $('sc-node').addEventListener('change', function () {
+    loadNodeModels($('sc-node').value, '');
+    loadScheduleNodeSkills($('sc-node').value, checkedScheduleSkills());
+  });
+  $('sc-browse').addEventListener('click', function () {
+    const nref = scheduleNodeRef();
+    if (!nref) { toast('请先选择执行节点', true); return; }
+    openDirBrowser({ nodeJson: JSON.stringify(nref) }, function (picked) { const inp = $('sc-workdir'); if (inp) inp.value = picked; });
+  });
+  $('sc-ping').addEventListener('click', async function () {
+    const btn = $('sc-ping');
+    if (btn.disabled) return;
+    const nref = scheduleNodeRef();
+    const agentIds = parseScheduleMentions(($('sc-message') || { value: '' }).value).agentIds;
+    if (!nref && !agentIds.length) { toast('请先选择执行节点，或在指令中 @ 子智能体', true); return; }
+    btn.disabled = true; btn.textContent = '探测中…';
+    try {
+      await runSchedulePing(nref ? nref.mappingId : '', agentIds);
+    } finally {
+      btn.disabled = false; btn.textContent = 'Ping 探活';
+    }
+  });
+  $('sc-preview-btn').addEventListener('click', async function () {
+    const btn = $('sc-preview-btn');
+    if (btn.disabled) return;
+    const message = ($('sc-message') || { value: '' }).value.trim();
+    if (!message) { toast('请先填写指令', true); return; }
+    const nref = scheduleNodeRef();
+    btn.disabled = true; btn.textContent = '合成中…';
+    try {
+      await runSchedulePreview({
+        name: ($('sc-name') || { value: '' }).value,
+        message: message,
+        nodeMappingId: nref ? nref.mappingId : '',
+        model: ($('sc-model') || { value: '' }).value,
+        workDir: ($('sc-workdir') || { value: '' }).value.trim(),
+        skills: checkedScheduleSkills(),
+      });
+    } finally {
+      btn.disabled = false; btn.textContent = '提示词预览';
+    }
+  });
 
   // 模板预填规则（仅新建且模板带规则时）
   if (!isEdit && prefill.rule) s = { rule: prefill.rule };
@@ -9420,6 +9554,7 @@ async function openScheduleDrawer(s, tpl, copyMode) {
     } catch { previewEl.textContent = ''; }
   }
   loadNodeModels($('sc-node') ? $('sc-node').value : '', s && s.model || '');
+  loadScheduleNodeSkills($('sc-node') ? $('sc-node').value : '', (s && s.skills) || []);
   renderRuleBox();
   let lastRule = (s && s.rule) || null;
   const origUpdatePreview = updatePreview;
@@ -9479,7 +9614,9 @@ function collectSchedule(existing) {
     rule = { kind: 'once', at: v ? new Date(v).getTime() : NaN };
   }
   const model = ($('sc-model') || { value: '' }).value;
-  const payload = { name, agentIds, nodeMappingId, model: model || undefined, rule, message, enabled: existing ? existing.enabled : true };
+  const workDir = ($('sc-workdir') || { value: '' }).value.trim();
+  if (workDir && !workDir.startsWith('/')) { toast('工作目录必须是绝对路径（以 / 开头）', true); return null; }
+  const payload = { name, agentIds, nodeMappingId, model: model || undefined, workDir, skills: Array.from(document.querySelectorAll('.sc-skill:checked')).map(x => x.value), rule, message, enabled: existing ? existing.enabled : true };
   const desc = $('sc-desc').value.trim();
   if (desc) payload.description = desc;
   if (existing && existing.id) payload.id = existing.id;
@@ -9519,6 +9656,8 @@ function renderScheduleDetail(s, tab, keepScroll) {
       '<div class="k">状态</div><div>' + (s.enabled ? '<span class="tag ok">启用</span>' : '<span class="tag err">停用</span>') + '</div>' +
       '<div class="k">触发规则</div><div>' + esc(s.ruleText || ruleText(s.rule)) + '</div>' +
       '<div class="k">目标子智能体</div><div>' + esc(agentNamesOf(s)) + '</div>' +
+      '<div class="k">工作目录</div><div style="font-family:var(--mono)">' + esc(s.workDir || '—') + '</div>' +
+      '<div class="k">绑定技能</div><div>' + ((s.skills || []).length ? '<span class="mono">' + esc(s.skills.map(n => '/' + n).join(' ')) + '</span>' : '—') + '</div>' +
       '<div class="k">累计触发</div><div>' + (s.totalRuns || 0) + ' 次' + (s.totalRuns ? ' · 派发成功率 ' + Math.round((s.successRuns || 0) * 100 / s.totalRuns) + '%' : '') + '</div>' +
       '<div class="k">上次触发</div><div>' + (s.lastRunAt ? fmtDateTime(s.lastRunAt) : '从未') + '</div>' +
       '<div class="k">下次触发</div><div>' + (s.enabled ? (s.nextRunAt ? fmtDateTime(s.nextRunAt) : '—') : '（已停用）') + '</div>' +
@@ -9527,9 +9666,11 @@ function renderScheduleDetail(s, tab, keepScroll) {
       '</div>' +
       '<div class="field" style="margin-top:14px"><label>任务文本（每次触发派发给每个子智能体）</label>' +
       '<div class="pre-block" style="max-height:180px;overflow:auto">' + esc(s.message || '') + '</div></div>' +
-      '<div class="ops" style="display:flex;gap:10px;margin-top:14px">' +
+      '<div class="ops" style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">' +
       '<button class="btn pri" id="sd-run">▶ 立即执行</button>' +
       '<button class="btn" id="sd-toggle">' + (s.enabled ? '停用' : '启用') + '</button>' +
+      '<button class="btn" id="sd-ping">Ping 探活</button>' +
+      '<button class="btn" id="sd-preview">提示词预览</button>' +
       '<button class="btn" id="sd-edit">编辑</button></div>';
     $('sd-run').addEventListener('click', async () => {
       toast('派发中…');
@@ -9544,6 +9685,14 @@ function renderScheduleDetail(s, tab, keepScroll) {
       toast(rr.data && rr.data.enabled ? '✓ 已启用' : '已停用');
       await loadSchedules(); renderSchedules();
       openScheduleDetail(s.id, tab);
+    });
+    $('sd-ping').addEventListener('click', async () => {
+      toast('探测中…');
+      await runSchedulePing(s.nodeMappingId || '', s.agentIds || []);
+    });
+    $('sd-preview').addEventListener('click', async () => {
+      toast('合成提示词中…');
+      await runSchedulePreview({ name: s.name, message: s.message || '', nodeMappingId: s.nodeMappingId || '', model: s.model || '', workDir: s.workDir || '', skills: s.skills || [] });
     });
     $('sd-edit').addEventListener('click', () => { closeDrawer(); openScheduleDrawer(s); });
   } else {

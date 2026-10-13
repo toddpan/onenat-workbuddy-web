@@ -19,6 +19,7 @@ import { OnenatDirectory as Dir } from './onenat.js'
 import type { TaskEngine } from './engine.js'
 import type { AgentResolver } from './resolver.js'
 import type { PromptComposer } from './prompt-composer.js'
+import { interactionGuard } from './prompt-composer.js'
 import type { Orchestrator } from './orchestrator.js'
 import type { WorkStore } from './store.js'
 import { DshClient } from './remote-client.js'
@@ -35,6 +36,7 @@ import type { AuthService } from './auth.js'
 import { UsageService } from './usage.js'
 import type { XiaozhiMcpClient } from './xiaozhi-mcp.js'
 import type { DshRef, Project, SubAgent, WorkTask, ScheduledTask } from './types.js'
+import { NODE_AGENT_ID, MAIN_AGENT_LABEL } from './types.js'
 import type { MonitorService } from './monitor.js'
 import { SkillPluginLibrary, buildSkillInstallPrompt, buildPluginInstallPrompt, buildPluginExportPrompt, buildProjectImportPrompt, extractExportedPaths } from './library.js'
 import type { LibKind } from './library.js'
@@ -348,6 +350,11 @@ export class WorkBuddyRouter {
     if (nodeMappingId && !this.directory.resolveMapping(nodeMappingId)) throw new Error(`DSH 节点不存在: ${nodeMappingId}`)
     const model = String(body?.model || '').trim()
     if (model && !model.includes('/')) throw new Error('模型格式应为 provider/model（如 zai-coding-cn/glm-5.3-flash），留空跟随全局调度模型')
+    const workDir = String(body?.workDir || '').trim()
+    if (workDir && !workDir.startsWith('/')) throw new Error('工作目录必须是绝对路径（以 / 开头）')
+    const skills = Array.isArray(body?.skills)
+      ? Array.from(new Set((body.skills as any[]).map((s) => String(s).trim()).filter(Boolean)))
+      : []
     // 新模型：无 @ 子智能体 = 主 DSH 直发（节点可为空，运行时回退首个在线 DSH）；
     // 有 agentIds 时校验归属
     const message = String(body?.message || '').trim()
@@ -365,6 +372,8 @@ export class WorkBuddyRouter {
       // 显式传入（含空串=清除）才写；未传保持原值
       ...(body && 'nodeMappingId' in body ? { nodeMappingId: nodeMappingId || '' } : {}),
       ...(body && 'model' in body ? { model: model || '' } : {}),
+      ...(body && 'workDir' in body ? { workDir } : {}),
+      ...(body && 'skills' in body ? { skills } : {}),
       message,
       rule,
       enabled,
@@ -386,6 +395,8 @@ export class WorkBuddyRouter {
       nodeMappingId: s.nodeMappingId,
       nodeTitle,
       model: s.model,
+      workDir: s.workDir || '',
+      skills: s.skills || [],
       messagePreview: s.message.slice(0, 120),
       rule: s.rule,
       ruleText: ruleText(s.rule),
@@ -1096,6 +1107,102 @@ export class WorkBuddyRouter {
       } catch (err: any) {
         this.sendJson(res, 400, { ok: false, error: err?.message || String(err) })
       }
+      return true
+    }
+    // ---------- 定时任务 Ping 探活 / 提示词预览（表单即时快照，未保存也可用） ----------
+    if (p === '/api/schedules/ping' && method === 'POST') {
+      const body = await this.parseBody(req)
+      const nodeMappingId = String(body?.nodeMappingId || '').trim()
+      const agentIds = Array.isArray(body?.agentIds) ? (body.agentIds as any[]).map(String) : []
+      try {
+        await this.directory.refresh(true)
+      } catch {
+        /* 无网时用缓存 */
+      }
+      type PingResult = { ok: boolean; name?: string; version?: string; error?: string }
+      const out: { nodeTitle?: string; nodePing?: PingResult; agents: Array<{ id: string; name: string; ping: PingResult }> } = { agents: [] }
+      if (nodeMappingId) {
+        const ep = this.directory.resolveMapping(nodeMappingId)
+        out.nodeTitle = ep?.tunnelName || nodeMappingId
+        const target = await this.resolver.resolveRef({ kind: 'mapping', mappingId: nodeMappingId }, undefined, 'schedule-node')
+        out.nodePing = target.online && target.baseUrl
+          ? await this.client.ping(target)
+          : { ok: false, error: target.error || '节点不可达' }
+      }
+      for (const aid of agentIds) {
+        const a = this.store.getAgent(aid)
+        if (!a) {
+          out.agents.push({ id: aid, name: aid, ping: { ok: false, error: '子智能体不存在' } })
+          continue
+        }
+        const { ping } = await this.resolver.resolveWithPing(a)
+        out.agents.push({ id: a.id, name: a.name, ping: ping || { ok: false, error: '解析失败' } })
+      }
+      this.sendJson(res, 200, { ok: true, data: out })
+      return true
+    }
+    if (p === '/api/schedules/prompt-preview' && method === 'POST') {
+      // 请求体 = 定时任务表单的即时快照（未保存也可预览）；不落库、不校验调度规则
+      const body = await this.parseBody(req)
+      const message = String(body?.message || '').trim()
+      if (!message) {
+        this.sendJson(res, 400, { ok: false, error: '任务文本为空，无法预览派发提示词' })
+        return true
+      }
+      const nodeMappingId = String(body?.nodeMappingId || '').trim()
+      const workDir = String(body?.workDir || '').trim()
+      const model = String(body?.model || '').trim()
+      const skills = Array.isArray(body?.skills)
+        ? Array.from(new Set((body.skills as any[]).map((s) => String(s).trim()).filter(Boolean)))
+        : []
+      try {
+        await this.directory.refresh(true)
+      } catch {
+        /* 无网时用缓存 */
+      }
+      const nodeRef: DshRef | undefined = nodeMappingId ? { kind: 'mapping', mappingId: nodeMappingId } : undefined
+      // 主会话注入块：对齐 engine.runChatTurn 真实派发（定时任务 = 无人值守 + extraSkills=实例技能）
+      const now = Date.now()
+      const nodeAgent: SubAgent = {
+        id: NODE_AGENT_ID,
+        name: MAIN_AGENT_LABEL,
+        role: '主智能体（任务发起节点主会话）',
+        dshRef: nodeRef || { kind: 'direct', apiBaseUrl: '' },
+        resources: [],
+        skills: [],
+        enabled: true,
+        createdAt: now,
+        updatedAt: now,
+      }
+      const mainComposed = await this.composer.compose(nodeAgent, { resolvedAt: now, mask: true, extraSkills: skills, interaction: 'unattended' })
+      // 被 @ 的子智能体：与真实派发同源（extractMentions），注入块含各自资源绑定 + 实例技能
+      const agentsOut: Array<{ id: string; name: string; role: string; resourceBlock: string; warnings: string[] }> = []
+      let mentionError: string | undefined
+      try {
+        const mentions = await this.engine.extractMentions(message)
+        for (const aid of mentions.mentionedAgentIds) {
+          const a = this.store.getAgent(aid)
+          if (!a) continue
+          const c = await this.composer.compose(a, { resolvedAt: now, mask: true, extraSkills: skills, interaction: 'unattended' })
+          agentsOut.push({ id: a.id, name: a.name, role: a.role || '', resourceBlock: c.block, warnings: c.warnings })
+        }
+      } catch (err: any) {
+        mentionError = err?.message || String(err)
+      }
+      this.sendJson(res, 200, {
+        ok: true,
+        data: {
+          message,
+          nodeTitle: nodeMappingId ? (this.directory.resolveMapping(nodeMappingId)?.tunnelName || nodeMappingId) : '',
+          model,
+          workDir,
+          skills,
+          guard: interactionGuard('unattended'),
+          main: { resourceBlock: mainComposed.block, warnings: mainComposed.warnings },
+          agents: agentsOut,
+          mentionError,
+        },
+      })
       return true
     }
     const schedMatch = /^\/api\/schedules\/([^/]+)$/.exec(p)
@@ -3015,10 +3122,12 @@ export class WorkBuddyRouter {
     // 会话绑定存在 task.sessions[agentId]（引擎写入），sub.remoteSessionId 仅作旧数据兜底
     const remoteSessionId = task.sessions?.[sub.agentId]?.remoteSessionId || sub.remoteSessionId
     if (!remoteSessionId) return localFallback('该子任务尚未创建远程会话，以下为本地缓存记录')
-    const agent = this.store.getAgent(sub.agentId)
-    if (!agent) return { ok: false, error: '子智能体不存在' }
-    const target = await this.resolver.resolve(agent)
-    if (!target.online) return localFallback(`远端节点当前不可达（${target.error}），以下为本地缓存记录`)
+    // 子任务执行者：子智能体实体或任务节点主会话伪成员（__node__，主智能体自留子任务）；
+    // resolveExecTarget 两者通吃（实体成员回自身绑定节点，__node__ 走任务节点）
+    const isNodeMain = sub.agentId === NODE_AGENT_ID
+    if (!isNodeMain && !this.store.getAgent(sub.agentId)) return { ok: false, error: '子智能体不存在' }
+    const target = await this.engine.resolveExecTarget(task, sub.agentId)
+    if (!target?.online) return localFallback('远端节点当前不可达，以下为本地缓存记录')
     const hist = await this.client.getHistory(target, remoteSessionId)
     if (!hist.ok) return localFallback(`远端会话记录读取失败（${hist.error}），以下为本地缓存记录`)
     // 过滤 harness 注入的上下文噪音（system-reminder / runtime-context 快照），只留业务对话
@@ -3050,10 +3159,12 @@ export class WorkBuddyRouter {
     const session = task.sessions?.[sub.agentId]
     const remoteSessionId = session?.remoteSessionId || sub.remoteSessionId
     if (!remoteSessionId) return { ok: false, error: '子任务尚未创建远程会话' }
-    const agent = this.store.getAgent(sub.agentId)
-    if (!agent) return { ok: false, error: '子智能体不存在' }
-    const target = await this.resolver.resolve(agent)
-    if (!target.online) return { ok: false, error: target.error }
+    // 执行者：子智能体实体或任务节点主会话伪成员（__node__，主智能体自留子任务）；
+    // resolveExecTarget 两者通吃（实体成员回自身绑定节点，__node__ 走任务节点）
+    const isNodeMain = sub.agentId === NODE_AGENT_ID
+    if (!isNodeMain && !this.store.getAgent(sub.agentId)) return { ok: false, error: '子智能体不存在' }
+    const target = await this.engine.resolveExecTarget(task, sub.agentId)
+    if (!target?.online) return { ok: false, error: target?.error || '节点不可达' }
     const res = await this.client.prompt(target, remoteSessionId, message, { timeoutMs: 120_000 })
     if (res.ok) return { ok: true, reply: res.content }
     return { ok: false, error: res.error }

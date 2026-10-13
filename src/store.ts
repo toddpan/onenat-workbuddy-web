@@ -316,6 +316,8 @@ export class WorkStore {
       agentIds: [...(input.agentIds ?? existing?.agentIds ?? [])],
       nodeMappingId: input.nodeMappingId !== undefined ? (input.nodeMappingId || undefined) : existing?.nodeMappingId,
       model: input.model !== undefined ? (input.model || undefined) : existing?.model,
+      workDir: input.workDir !== undefined ? (input.workDir || undefined) : existing?.workDir,
+      skills: input.skills !== undefined ? [...(input.skills || [])] : existing?.skills,
       message: String(input.message ?? existing?.message ?? ''),
       rule: (input.rule as ScheduledTask['rule']) || existing?.rule || { kind: 'daily', times: ['09:00'] },
       enabled: input.enabled ?? existing?.enabled ?? true,

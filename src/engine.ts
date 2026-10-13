@@ -17,16 +17,10 @@ import { Orchestrator, buildCompletionRequirement, buildTaskContract, buildUpstr
 import type { OnenatDirectory } from './onenat.js'
 import type { WorkStore } from './store.js'
 import type { SubtaskLogEntry, AgentResourceBinding, DshRef, ExtractedFileMention, ExtractedMentions, ExpertTeam, PlanSubtask, Project, ResolvedDshTarget, SubAgent, TaskEvent, TaskTurn, TurnToolCall, WorkTask } from './types.js'
-import { teamMemberKey, EXPERT_AGENT_ID_PREFIX } from './types.js'
+import { teamMemberKey, EXPERT_AGENT_ID_PREFIX, MAIN_AGENT_LABEL, NODE_AGENT_ID } from './types.js'
 import type { SshResourceStore } from './ssh-store.js'
 import { expertPersona, type ExpertRegistry, type ExpertProfile } from './expert-registry.js'
 import { teamMemberContract } from './expert-teams.js'
-
-/**
- * 节点主会话的伪 agentId：新模型下无 @ 的主会话不绑定任何 sub agent 身份，
- * 直接在任务节点（项目节点/所选节点）上以远端默认形态执行。该 id 仅存在于 task.sessions。
- */
-const NODE_AGENT_ID = '__node__'
 
 /** 未配置任务级/智能体级运行权限时的默认值：全部权限（沙箱不限 + 无审批） */
 const DEFAULT_PERMISSION = 'danger-full-access'
@@ -56,6 +50,8 @@ export interface CreateTaskInput {
   connectorIds?: string[]
   /** 任务级技能（/名 手势） */
   skillNames?: string[]
+  /** 任务级工作目录（绝对路径）：定时任务实例配置；主会话 cwd 优先于项目 workspace */
+  workDir?: string
   /** 任务级模型（provider/model）：定时任务实例配置；主会话（__node__）优先于全局调度模型 */
   model?: string
   /** 专家团任务：按团队合同展开成员并注入规划/派工/汇总（memberAgentIds 未显式给定时以团队名册为准） */
@@ -551,6 +547,7 @@ export class TaskEngine {
       ...(input.model ? { model: input.model } : {}),
       ...(input.connectorIds?.length ? { connectorIds: input.connectorIds } : {}),
       ...(input.skillNames?.length ? { skillNames: input.skillNames } : {}),
+      ...(input.workDir ? { workDir: input.workDir } : {}),
       ...(team ? { teamId: team.id } : {}),
       ...(expertMembers?.length ? { expertMembers } : {}),
     }
@@ -1022,31 +1019,29 @@ export class TaskEngine {
       }
     }
 
-    // @ 了恰好一个智能体：定向委派——与多 sub agent 编排同构：
-    // 子任务在 sub agent 自身绑定节点执行，最终产物（汇总）回任务发起节点
-    // @ 了恰好一个专家库角色：定向直派——动态实例化在任务节点（或主调度回退节点），
-    // persona 用专家档案，不落持久实体（对齐 dsh-agency-agents summon_expert 语义）。
-    // （本轮显式携带团队意图时团队语义优先，不落入单人直派）
+    // @ 了恰好一个智能体/专家库角色：不再整段直派（旧行为会把读表/查询/成稿等非其职责的步骤
+    // 全部塞给被 @ 成员在其节点执行，主智能体当旁观者——线上单 @ 委派病理的另一面）。
+    // 统一走主调度规划分工：被 @ 成员只承担职责内子任务（如飞书消息只做消息推送），
+    // 其余子任务由主智能体在任务发起节点自己执行，跨成员依赖经 dependsOn 注入上游产出。
     const singleAgentMention = !messageTeamId && singleExplicitMention && hasExplicitAgentMention && !mentionedExpertIds.length
     const singleExpertMention = !messageTeamId && !hasExplicitAgentMention && mentionedExpertIds.length === 1
     if (singleAgentMention || singleExpertMention) {
       const onlyId = singleAgentMention ? mentions.mentionedAgentIds[0] : EXPERT_AGENT_ID_PREFIX + mentionedExpertIds[0]
       const onlyAgent = await this.resolveMemberAgent(task, onlyId)
-      // 记录本轮路由：单人 @ → 定向委派/直派
-      this.store.mutateTask(taskId, (t) => {
-        t.lastRoute = { kind: 'direct', agentId: onlyId, agentName: onlyAgent?.name || onlyId }
-      })
-      // 解析执行目标：子智能体回自身绑定节点（不可达时回退任务节点）；专家在任务节点/主调度回退节点
-      const singleTarget = singleAgentMention
-        ? await this.resolveExecTarget(task, onlyId)
-        : await this.resolveExpertNodeTarget(task, taskId)
-      if (singleTarget && onlyAgent) {
-        await this.runDelegatedTurn(taskId, text, mentions, onlyId, singleTarget, signal)
-      } else {
-        this.appendSystemTurn(taskId, `⚠️ 被 @ 的成员「${onlyAgent?.name || onlyId}」暂不可用（${!onlyAgent ? '成员不存在或档案缺失' : '节点不可达'}）`)
+      if (!onlyAgent) {
+        this.appendSystemTurn(taskId, `⚠️ 被 @ 的成员「${onlyId}」不存在或档案缺失`)
         this.store.mutateTask(taskId, (t) => { t.status = 'failed' })
         this.emit(taskId, { type: 'task_status', status: 'failed' })
+        const fresh = this.store.getTask(taskId)!
+        this.emit(taskId, { type: 'task_end', task: fresh })
+        return
       }
+      // 本轮单 @ 定向分工：路由记录与模式升级后进编排规划（花名册聚焦主智能体 + 被 @ 成员）
+      this.store.mutateTask(taskId, (t) => {
+        t.mode = 'orchestrate'
+        t.lastRoute = { kind: 'orchestrate' }
+      })
+      await this.runOrchestrateTurn(taskId, text, mentions, targets, signal)
       const fresh = this.store.getTask(taskId)!
       this.emit(taskId, { type: 'task_end', task: fresh })
       return
@@ -1728,78 +1723,10 @@ export class TaskEngine {
   // ---------- orchestrate 编排 ----------
 
   /**
-   * 单 @ 委派的编排式执行（与多 sub agent 编排同构）：
-   * 子任务在 sub agent 自身绑定节点执行（专项产物在其节点），
-   * 最终产物（汇总）回任务发起节点。跳过规划器——@ 即委派，语义明确，省一次规划 LLM。
+   * 编排轮：LLM 规划拆解 → DAG 调度派发 → 汇总。
+   * 成员子任务在各自身上绑定节点执行（专项产物在其节点）；主智能体自留子任务在任务发起节点执行；
+   * 最终产物（汇总）回任务发起节点。单 @ 消息同样走此路径（聚焦花名册 = 主智能体 + 被 @ 成员）。
    */
-  private async runDelegatedTurn(
-    taskId: string,
-    text: string,
-    mentions: ExtractedMentions,
-    agentId: string,
-    target: DshTarget,
-    signal: AbortSignal,
-  ): Promise<void> {
-    // 成员解析：子智能体实体优先，expert-<expertId> 伪 id 解析为任务级临时专家（@单专家直派）
-    const agent = await this.resolveMemberAgent(this.store.getTask(taskId)!, agentId)
-    // 单 @ 委派护栏：整段文本（含其中对其他成员职责的描述）会交给当前成员在其绑定节点执行，
-    // 其他成员职责不会被自动分派——线上 09-24~10-07「发飞书落在采集节点」的根因即消息只 @ 了一人。
-    // 文本出现任务内其他成员的名字时在此明示，提醒消息应 @ 全部目标成员走多成员编排。
-    const otherMemberNames = this.store
-      .getAgents()
-      .filter((a) => a.id !== agentId && a.name && text.includes(a.name))
-      .map((a) => a.name)
-    if (otherMemberNames.length) {
-      this.taskLog(taskId, 'warn', `委派提示：消息中出现了其他成员「${otherMemberNames.join('、')}」（未 @ 或提及未生效）——单 @ 委派把整段文本交给「${agent?.name || agentId}」在其绑定节点执行，不会自动分派给其他成员；如需分工编排，请在消息中 @ 全部目标成员`)
-    }
-    const sub: PlanSubtask = {
-      id: `sub-${randomUUID().slice(0, 8)}`,
-      title: (text.replace(/@\S+/g, '').trim() || '执行任务').slice(0, 30),
-      prompt: text,
-      agentId,
-      dependsOn: [],
-      status: 'pending',
-      logs: [],
-    }
-    this.store.mutateTask(taskId, (t) => {
-      t.plan = { strategy: 'parallel', createdAt: Date.now(), subtasks: [sub] }
-    })
-    this.emit(taskId, { type: 'plan_update', plan: this.store.getTask(taskId)!.plan! })
-    this.taskLog(taskId, 'info', `委派子任务给「${agent?.name || agentId}」（节点: ${this.nodeLabelOf(target)}），完成后汇总回任务发起节点`)
-
-    await this.executeDag(taskId, mentions, new Map([[agentId, target]]), signal)
-
-    // 最终产物归属发起节点：汇总在任务节点上执行（节点不可达时回退规划器节点）
-    this.appendSystemTurn(taskId, '📊 子任务已完成，正在生成总结报告…')
-    const fresh = this.store.getTask(taskId)!
-    let summaryNodeTarget: DshTarget | undefined
-    const execS = this.taskExec(fresh)
-    if (execS.dshRef) {
-      const nt = await this.resolver.resolveRef(execS.dshRef, execS.apiKey, 'summary').catch(() => undefined)
-      if (nt?.online && nt.baseUrl) summaryNodeTarget = nt
-    }
-    const summary = await this.planner.summarize(text, fresh.plan?.subtasks || [], new Map([[agentId, target]]), summaryNodeTarget)
-    this.store.mutateTask(taskId, (t) => {
-      t.summary = summary
-      t.status = summary.status
-    })
-    this.emit(taskId, { type: 'task_status', status: summary.status })
-    const summaryTurn: TaskTurn = {
-      id: `turn-${randomUUID().slice(0, 8)}`,
-      seq: 0,
-      role: 'agent',
-      agentId: '__planner__',
-      agentName: '🎯 总调度汇总',
-      text: summary.finalConclusion,
-      subtaskIds: [sub.id],
-      at: Date.now(),
-    }
-    this.store.appendTurn(taskId, summaryTurn)
-    this.emit(taskId, { type: 'turn_start', turn: summaryTurn })
-    this.emit(taskId, { type: 'turn_end', turn: summaryTurn })
-    this.store.save()
-  }
-
   private async runOrchestrateTurn(
     taskId: string,
     text: string,
@@ -1814,7 +1741,9 @@ export class TaskEngine {
     if (task.teamId && !team) this.taskLog(taskId, 'warn', `专家团 ${task.teamId} 已不存在，本次按普通编排执行`)
 
     // 1. 花名册（资源摘要用轻量解析，不抓技能全文）：
-    //    子智能体成员 + 专家库动态成员（expert-<expertId> 伪 id，persona 在派工时按档案展开）
+    //    子智能体成员 + 专家库动态成员（expert-<expertId> 伪 id，persona 在派工时按档案展开）。
+    //    本轮恰好显式 @ 1 个成员（子智能体或专家）时聚焦该成员：用户意图 = 这件事交给它 + 调度方自己，
+    //    任务既有其他成员不卷入本轮分工（对齐旧单 @ 直派「不被群成员数放大」的语义）。
     const agentById = new Map<string, SubAgent>()
     for (const a of this.store.getAgents()) agentById.set(a.id, a)
     for (const em of task.expertMembers || []) {
@@ -1822,7 +1751,16 @@ export class TaskEngine {
       if (expertAgent) agentById.set(expertAgent.id, expertAgent)
       else this.taskLog(taskId, 'warn', `专家成员「${em.name}」档案不可用，已从规划花名册剔除`)
     }
-    const rosterKeys = [...task.memberAgentIds, ...(task.expertMembers || []).map((m) => m.id)]
+    const mentionedExpertCount = (mentions.mentionedExpertIds || []).length
+    const focusIds = mentions.mentionedAgentIds.length === 1 && mentionedExpertCount === 0
+      ? [mentions.mentionedAgentIds[0]]
+      : mentions.mentionedAgentIds.length === 0 && mentionedExpertCount === 1
+        ? [EXPERT_AGENT_ID_PREFIX + mentions.mentionedExpertIds![0]]
+        : undefined
+    // 规划重点约束名单：显式 @ 的成员（含单 @ 专家场景的伪 id）——校验器据此要求其至少承担 1 个子任务
+    const priorityIds = [...mentions.mentionedAgentIds, ...(focusIds && mentions.mentionedAgentIds.length === 0 ? focusIds : [])]
+    const allRosterKeys = [...task.memberAgentIds, ...(task.expertMembers || []).map((m) => m.id)]
+    const rosterKeys = focusIds ? allRosterKeys.filter((id) => focusIds.includes(id)) : allRosterKeys
     const rosterMembers = rosterKeys
       .map((id) => agentById.get(id))
       .filter((a): a is SubAgent => Boolean(a) && targets.has(a!.id))
@@ -1831,7 +1769,26 @@ export class TaskEngine {
         resourceSummary: (agent.resources || [])
           .map((r) => r.alias || r.ref.kind + ':' + (r.ref.kind === 'mapping' ? r.ref.mappingId : r.ref.appId))
           .join('、'),
+        // 节点标注：规划器据此做节点归属拆分（仅某节点可访问的资源/环境对应步骤必须分给该节点上的成员）
+        nodeLabel: this.nodeLabelOf(targets.get(agent.id)!),
       }))
+
+    // 主智能体（任务发起节点主会话）进花名册：非被 @ 成员职责的工作由它自己执行（单 @ 分工的另一半）。
+    // 团队接管轮（@团队）不加——团队合同里主调度（主理人）只拆解/核验/汇总，不执行子任务。
+    const execR = this.taskExec(task)
+    if (!mentions.mentionedTeamId && execR.dshRef) {
+      const mainTarget = await this.resolver.resolveRef(execR.dshRef, execR.apiKey, NODE_AGENT_ID).catch(() => undefined)
+      if (mainTarget?.online && mainTarget.baseUrl) {
+        targets.set(NODE_AGENT_ID, mainTarget)
+        rosterMembers.unshift({
+          agent: { ...this.makeNodeAgent(execR), name: MAIN_AGENT_LABEL },
+          resourceSummary: '任务发起节点主会话（远端默认形态，可用该节点的文件/脚本/网络等本机能力）',
+          nodeLabel: this.nodeLabelOf(mainTarget),
+        })
+      } else {
+        this.taskLog(taskId, 'warn', '任务节点不可达，主智能体不参与本轮分工（退化为仅被 @ 成员执行）')
+      }
+    }
 
     // 2. LLM 规划（失败兜底静态三段）。
     // 规划消息采用真流式生命周期：turn_start → 思考流(turn_reasoning) 与阶段日志(turn_delta) 增量推送 → 收敛后 turn_end。
@@ -1887,7 +1844,7 @@ export class TaskEngine {
         ? await this.resolver.resolveRef(execForPlan.dshRef, execForPlan.apiKey, 'planner').catch(() => undefined)
         : undefined
       planned = await this.planner.planTask(text, rosterMembers, targets, {
-        priorityAgentIds: mentions.mentionedAgentIds,
+        priorityAgentIds: priorityIds,
         taskNodeTarget: planNodeTarget && planNodeTarget.online && planNodeTarget.baseUrl ? planNodeTarget : undefined,
         ...(team ? { team, nameOf: (key: string) => this.memberNameOf(task, key) } : {}),
         onLog: (msg, level) => {
@@ -2402,6 +2359,7 @@ export class TaskEngine {
     return {
       id: NODE_AGENT_ID,
       name: nodeTitle ? `${nodeTitle} · 主会话` : '主会话',
+      role: '主智能体（任务发起节点主会话）：承担调度方自留的执行子任务，与各成员子任务经 dependsOn 协作',
       dshRef: ref || { kind: 'direct', apiBaseUrl: '' },
       resources: [],
       skills: [],
@@ -2440,6 +2398,8 @@ export class TaskEngine {
    * 仅当该 id 已登记在 task.expertMembers 时才实例化（防止伪 id 撞名真实智能体被误解析）。
    */
   private async resolveMemberAgent(task: WorkTask, id: string): Promise<SubAgent | undefined> {
+    // 任务节点主会话伪成员：主智能体自留子任务经编排派工路径执行（与无 @ 直通同身份）
+    if (id === NODE_AGENT_ID) return this.makeNodeAgent(this.taskExec(task))
     const direct = this.store.getAgent(id)
     if (direct) return direct
     if (!id.startsWith(EXPERT_AGENT_ID_PREFIX) || !task.expertMembers?.some((m) => m.id === id)) return undefined
@@ -2474,8 +2434,9 @@ export class TaskEngine {
     return undefined
   }
 
-  /** 成员展示名（花名册/派工/汇总/前端兜底共用）：子智能体名 → 专家动态成员名 → 键本身 */
+  /** 成员展示名（花名册/派工/汇总/前端兜底共用）：主智能体 → 子智能体名 → 专家动态成员名 → 键本身 */
   private memberNameOf(task: WorkTask, key: string): string {
+    if (key === NODE_AGENT_ID) return MAIN_AGENT_LABEL
     return this.store.getAgent(key)?.name || task.expertMembers?.find((m) => m.id === key)?.name || key
   }
 
@@ -2539,7 +2500,8 @@ export class TaskEngine {
       project,
       dshRef,
       apiKey: project?.apiKey,
-      workspace: project?.workspace,
+      // 任务级工作目录（定时任务实例配置）显式指定时优先于项目 workspace
+      workspace: task.workDir || project?.workspace,
       instruction: project?.instruction,
       extraBindings,
       sshConnectors,
