@@ -52,9 +52,22 @@ const SLOW_CALL_WARN_MS = 30_000
 export interface WorkBuddyMcpDeps {
   serverName: string
   serverVersion: string
+  /** 服务路径前缀（如 /workbuddy；推导「调用方视角」的访问基址用） */
+  prefix?: string
   /** 工具通道定义（每次 tools/list 动态读取，与 HTTP / 小智通道保持同步） */
   getTools(): WorkBuddyToolDef[]
   log(msg: string): void
+}
+
+/**
+ * 按当前 HTTP 请求头推导「调用方视角」的访问基址（与 router.requestBase 同约定）：
+ * 反代场景优先 x-forwarded-proto / x-forwarded-host，回退 Host 头。
+ * 用于工具回传调用方可直接访问的绝对端点（如大文件分片上传）。
+ */
+export function requestPublicBase(req: http.IncomingMessage, prefix: string): string {
+  const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() || 'http'
+  const host = String(req.headers['x-forwarded-host'] || '').split(',')[0].trim() || String(req.headers.host || '').trim()
+  return `${proto}://${host}${prefix || ''}`
 }
 
 export interface McpServerStats {
@@ -146,11 +159,12 @@ export class WorkBuddyMcpServer {
     }
 
     const sessionId = String(req.headers['mcp-session-id'] || '') || undefined
+    const requestBase = requestPublicBase(req, this.deps.prefix || '')
     const responses: JsonRpcMessage[] = []
     let sawNotification = false
     let needsInitHandshake = false
     for (const item of items) {
-      const r = await this.dispatch(item, sessionId)
+      const r = await this.dispatch(item, sessionId, requestBase)
       if (r === undefined) sawNotification = true
       else {
         responses.push(r)
@@ -181,7 +195,7 @@ export class WorkBuddyMcpServer {
   }
 
   /** 单条 JSON-RPC 分发；通知（无 id）返回 undefined */
-  private async dispatch(msg: JsonRpcMessage, sessionId: string | undefined): Promise<JsonRpcMessage | undefined> {
+  private async dispatch(msg: JsonRpcMessage, sessionId: string | undefined, requestBase?: string): Promise<JsonRpcMessage | undefined> {
     const id = msg?.id
     const rpcMethod = String(msg?.method || '')
     const isResponse = rpcMethod === '' && (msg?.result !== undefined || msg?.error !== undefined)
@@ -245,7 +259,7 @@ export class WorkBuddyMcpServer {
         return reply({ tools })
       }
 
-      if (rpcMethod === 'tools/call') return await this.handleToolCall(msg, sessionId || 'anonymous')
+      if (rpcMethod === 'tools/call') return await this.handleToolCall(msg, sessionId || 'anonymous', requestBase)
       return fail(-32601, `Method not found: ${rpcMethod}`)
     } catch (err: any) {
       if (isNotification) return undefined
@@ -254,7 +268,7 @@ export class WorkBuddyMcpServer {
   }
 
   /** tools/call：幂等回放 → 进程内执行 → 单帧上限兜底 → 记账（与小智客户端同构） */
-  private async handleToolCall(msg: JsonRpcMessage, sessionId: string): Promise<JsonRpcMessage> {
+  private async handleToolCall(msg: JsonRpcMessage, sessionId: string, requestBase?: string): Promise<JsonRpcMessage> {
     const id = msg?.id
     const name = String(msg?.params?.name || '')
     const args = (msg?.params?.arguments || {}) as Record<string, any>
@@ -282,7 +296,7 @@ export class WorkBuddyMcpServer {
       text = JSON.stringify({ ok: false, error: `工具不存在: ${name}`, available: this.deps.getTools().map((t) => t.name) })
       isError = true
     } else {
-      const ctx: ToolCallContext = { channel: 'mcp', callerId: `mcp:${sessionId}`, rpcId: (id ?? null) as any, maxBlockMs: MCP_SERVER_MAX_BLOCK_MS }
+      const ctx: ToolCallContext = { channel: 'mcp', callerId: `mcp:${sessionId}`, rpcId: (id ?? null) as any, maxBlockMs: MCP_SERVER_MAX_BLOCK_MS, ...(requestBase ? { requestBase } : {}) }
       try {
         text = await def.execute(args, ctx)
       } catch (err: any) {

@@ -129,14 +129,18 @@ async function main() {
     method: 'PUT', headers: { Cookie: COOKIE, 'Content-Type': 'application/octet-stream' }, body: Buffer.from('hello'),
   })
   check('resumable chunk', putRes.ok, `status=${putRes.status}`)
+  // complete：异步受理 → 轮询任务附件确认后台中继落盘
   const done = await req('POST', `${PREFIX}/api/tasks/${taskId}/attachments/resumable/${uploadId}/complete`, {})
-  const results = done.json?.data?.results || []
-  check('complete 返回非空 results（原 bug 为空）', results.length > 0, JSON.stringify(done.json || {}).slice(0, 160))
-  check('上传结果 ok=true', results[0]?.ok === true, `error=${results[0]?.error || ''}`)
-  check('返回文件路径', Boolean(results[0]?.files?.[0]?.path), JSON.stringify(results[0]?.files || []))
+  check('complete 异步受理（原 bug 为空 results/无受理回执）', done.json?.ok === true && done.json?.data?.accepted === true && done.json?.data?.relaying === true, JSON.stringify(done.json || {}).slice(0, 160))
+  let atts = []
+  for (let i = 0; i < 40 && !atts.length; i++) {
+    await new Promise(r => setTimeout(r, 500))
+    const d = await req('GET', `${PREFIX}/api/tasks/${taskId}`)
+    atts = d.json?.data?.attachments || []
+  }
+  check('后台中继落盘（任务附件登记 = 1，原 bug 为空）', atts.length === 1, JSON.stringify(atts).slice(0, 160))
+  check('返回文件路径', Boolean(atts[0]?.path), JSON.stringify(atts[0] || {}))
   check('stub 节点确实收到文件上传请求', sawFileUpload)
-  const detail2 = await req('GET', `${PREFIX}/api/tasks/${taskId}`)
-  check('任务附件登记 = 1', (detail2.json?.data?.attachments || []).length === 1)
 
   console.log(failures === 0 ? '\n全部通过 ✅\n' : `\n${failures} 项失败 ❌\n`)
   try { rmSync(dataDir, { recursive: true, force: true }) } catch {}

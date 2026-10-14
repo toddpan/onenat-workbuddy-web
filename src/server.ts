@@ -33,7 +33,7 @@ import { ScheduleRunner } from './scheduler.js'
 import { WorkBuddyRouter } from './router.js'
 import { MonitorService } from './monitor.js'
 import { XiaozhiMcpClient } from './xiaozhi-mcp.js'
-import { WorkBuddyMcpServer } from './mcp-server.js'
+import { WorkBuddyMcpServer, requestPublicBase } from './mcp-server.js'
 import { ExpertMcpServer } from './mcp/expert-mcp.js'
 import { SshResourceStore } from './ssh-store.js'
 import { createWorkBuddyToolDefs, HTTP_TOOL_CTX, type WorkBuddyToolDef } from './tool-ops.js'
@@ -257,6 +257,7 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
   const mcpServer = new WorkBuddyMcpServer({
     serverName: 'onenat-workbuddy',
     serverVersion: pkgVersion(),
+    prefix: cfg.prefix || '',
     getTools: () => tools,
     log,
   })
@@ -469,8 +470,9 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
         }
         const args = method === 'GET' ? Object.fromEntries(url.searchParams.entries()) : await readJsonBody(req)
         try {
-          // HTTP 工具通道：调用方（AI 技能 / wb.mjs / 三方系统）可承受长阻塞，按既有语义放行
-          const raw = await def.execute(args || {}, HTTP_TOOL_CTX)
+          // HTTP 工具通道：调用方（AI 技能 / wb.mjs / 三方系统）可承受长阻塞，按既有语义放行；
+          // requestBase 按本次请求头推导（反代优先 x-forwarded-*），工具回传的绝对端点对调用方可达
+          const raw = await def.execute(args || {}, { ...HTTP_TOOL_CTX, requestBase: requestPublicBase(req, cfg.prefix || '') })
           sendJson(res, 200, { ok: true, tool: name, result: tryParse(raw) })
         } catch (err: any) {
           sendJson(res, 500, { ok: false, tool: name, error: err?.message || String(err) })
@@ -552,8 +554,10 @@ function isAiTokenAllowedPath(pathname: string, prefix: string): boolean {
   if (p.startsWith('/api/agents/fs/')) return true
   if (p === '/api/resources' || p.startsWith('/api/resources/')) return true
   if (p === '/api/dsh-models') return true
-  // 任务级文件面：下载成员工作区文件 / 附件上传 / 任务清单与统计（读）；messages 为多轮追问
+  // 任务级文件面：下载成员工作区文件 / 附件上传（含分片断点续传，最大 2GB）/ 任务清单与统计（读）；messages 为多轮追问
   if (/^\/api\/tasks\/[^/]+\/(files\/download|attachments|todos|stats|messages)$/.test(p)) return true
+  // 附件分片断点续传三段：init / 分片 PUT+进度 GET / complete（AI 通道大文件走这条，一次性 body 上限只到 8MB/片）
+  if (/^\/api\/tasks\/[^/]+\/attachments\/resumable(\/init|\/[^/]+(\/complete)?)?$/.test(p)) return true
   // 任务只读面（状态/详情/流）：AI 令牌跟踪自己派发的任务用
   if (/^\/api\/tasks\/[^/]+$/.test(p)) return true
   if (p === '/api/tasks') return true

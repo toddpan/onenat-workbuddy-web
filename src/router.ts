@@ -2826,7 +2826,13 @@ export class WorkBuddyRouter {
       const uploadId = decodeURIComponent(resumChunkMatch[2])
       if (method === 'GET') {
         const st = await this.engine.resumableStatus(taskId, uploadId)
-        this.sendJson(res, st.ok ? 200 : 404, { ok: st.ok, data: st.ok ? { name: st.name, size: st.size, received: st.received } : undefined, error: st.error })
+        // relaying 态回 200 便于轮询方按 state 判定（complete 已异步受理，中继在服务端后台执行）
+        const httpOk = st.ok || st.state === 'relaying'
+        this.sendJson(res, httpOk ? 200 : 404, {
+          ok: st.ok,
+          data: httpOk ? { name: st.name, size: st.size, received: st.received, state: st.state, error: st.error || undefined, code: st.code } : undefined,
+          error: st.error,
+        })
         return true
       }
       const url = new URL(req.url || '/', 'http://localhost')
@@ -2846,7 +2852,7 @@ export class WorkBuddyRouter {
       const uploadId = decodeURIComponent(resumDoneMatch[2])
       try {
         const result = await this.engine.resumableComplete(taskId, uploadId)
-        if (!result.ok) this.sendJson(res, 409, { ok: false, error: result.error })
+        if (!result.ok) this.sendJson(res, 409, { ok: false, error: result.error, code: result.code })
         else this.sendJson(res, 200, { ok: true, data: result })
       } catch (err: any) {
         this.sendJson(res, 500, { ok: false, error: err?.message || String(err) })

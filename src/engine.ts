@@ -7,7 +7,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { mkdir, writeFile, appendFile, stat, readFile, readdir, rm } from 'node:fs/promises'
+import { mkdir, writeFile, appendFile, stat, readFile, readdir, rm, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { PromptResult, DshTarget } from './remote-client.js'
 import { DshClient } from './remote-client.js'
@@ -2939,11 +2939,11 @@ export class TaskEngine {
 
   // ---------- 分片断点续传上传（浏览器 → 本服务暂存 → complete 时分片中继到成员节点） ----------
 
-  private uploadStagePaths(uploadId: string): { dir: string; part: string; meta: string } | undefined {
+  private uploadStagePaths(uploadId: string): { dir: string; part: string; meta: string; relaying: string } | undefined {
     const id = String(uploadId || '').replace(/[^A-Za-z0-9._-]/g, '')
     if (!id || id.length > 120) return undefined
     const dir = join(this.store.dataDir, 'uploads')
-    return { dir, part: join(dir, id + '.part'), meta: join(dir, id + '.json') }
+    return { dir, part: join(dir, id + '.part'), meta: join(dir, id + '.json'), relaying: join(dir, id + '.relaying') }
   }
 
   private async stageReceived(part: string): Promise<number> {
@@ -2987,19 +2987,41 @@ export class TaskEngine {
     }
   }
 
-  /** 查询接收进度（断点恢复点；received 以 .part 实际字节数为权威） */
+  /** 查询接收进度（断点恢复点；received 以 .part 实际字节数为权威）。state：receiving 接收中 / failed 中继失败可重试 / relaying 后台中继中 / gone 已完成或不存在 */
   public async resumableStatus(
     taskId: string,
     uploadId: string,
-  ): Promise<{ ok: boolean; name?: string; size?: number; received?: number; error?: string }> {
+  ): Promise<{ ok: boolean; name?: string; size?: number; received?: number; state?: 'receiving' | 'failed' | 'relaying' | 'gone'; code?: string; error?: string }> {
     const paths = this.uploadStagePaths(uploadId)
-    if (!paths) return { ok: false, error: '非法 uploadId' }
+    if (!paths) return { ok: false, state: 'gone', error: '非法 uploadId' }
     try {
       const meta = JSON.parse(await readFile(paths.meta, 'utf-8'))
       if (meta.taskId !== taskId) return { ok: false, error: '上传会话不属于该任务' }
-      return { ok: true, name: meta.name, size: meta.size, received: await this.stageReceived(paths.part) }
+      const failed = Boolean(meta.lastRelayError)
+      return {
+        ok: true,
+        state: failed ? 'failed' : 'receiving',
+        error: meta.lastRelayError,
+        name: meta.name,
+        size: meta.size,
+        received: await this.stageReceived(paths.part),
+      }
     } catch {
-      return { ok: false, error: '上传会话不存在或已完成/清理' }
+      // meta 已被 complete 认领（改名 .relaying）→ 后台中继进行中，明确告知而非「不存在」
+      try {
+        const r = JSON.parse(await readFile(paths.relaying, 'utf-8'))
+        if (r.taskId !== taskId) return { ok: false, error: '上传会话不属于该任务' }
+        return {
+          ok: false,
+          state: 'relaying',
+          code: 'RELAYING',
+          name: r.name,
+          size: r.size,
+          received: await this.stageReceived(paths.part),
+          error: '该上传已在 complete 中继中（异步受理后后台执行），请勿重复提交；可用任务附件列表确认进度',
+        }
+      } catch { /* 非中继态 */ }
+      return { ok: false, state: 'gone', error: '上传会话不存在或已完成/清理' }
     }
   }
 
@@ -3025,22 +3047,57 @@ export class TaskEngine {
     }
   }
 
-  /** 完成并向本次实际目标节点（attachmentTargetAgentIds）分片中继（并行；单个失败保留暂存可重试） */
+  /**
+   * 完成上传：原子认领暂存（meta → .relaying）后立即受理返回，分片中继转后台执行（异步）。
+   * 大文件中继经隧道可达数分钟，同步等会让所有 HTTP 跳数掐断调用方连接（2026-10-14 实测）；
+   * 落盘结果通过任务附件列表 / resumableStatus 轮询确认，失败时 meta 复原（记 lastRelayError）可重试 complete。
+   */
   public async resumableComplete(taskId: string, uploadId: string): Promise<{
     ok: boolean
+    accepted?: boolean
+    relaying?: boolean
+    taskId?: string
+    uploadId?: string
+    name?: string
+    size?: number
     error?: string
-    results?: Array<{ agentId: string; agentName: string; ok: boolean; error?: string; files?: Array<{ name: string; path: string; size: number }> }>
+    code?: string
   }> {
     const paths = this.uploadStagePaths(uploadId)
     if (!paths) return { ok: false, error: '非法 uploadId' }
     const st = await this.resumableStatus(taskId, uploadId)
-    if (!st.ok) return { ok: false, error: st.error }
+    if (!st.ok) return { ok: false, code: st.code, error: st.error }
     const size = st.size || 0
     const received = st.received || 0
     if (size > 0 && received !== size) return { ok: false, error: `文件未传完：已接收 ${received}/${size} 字节` }
+    if (!this.store.getTask(taskId)) return { ok: false, error: '任务不存在' }
+    // 原子认领：meta → .relaying。并发/重试 complete 在此挡下，杜绝双份文件（2026-10-14 实测）
+    try {
+      await rename(paths.meta, paths.relaying)
+    } catch {
+      return { ok: false, code: 'RELAYING', error: '该上传已在 complete 中继中，请勿重复提交；可用任务附件列表确认进度' }
+    }
+    const meta = JSON.parse(await readFile(paths.relaying, 'utf-8'))
+    void this.relayStagedUpload(taskId, uploadId, meta, received).catch((err: any) => {
+      this.taskLog(taskId, 'error', `附件中继异常（${meta.name}）: ${err?.message || err}`)
+    })
+    return { ok: true, accepted: true, relaying: true, taskId, uploadId, name: meta.name, size: received }
+  }
+
+  /** 后台中继：暂存分片分发到实际目标节点工作区；成功清理暂存并登记附件，失败复原 meta（记 lastRelayError，可重试 complete） */
+  private async relayStagedUpload(
+    taskId: string,
+    uploadId: string,
+    meta: { name: string; size: number; mimeType?: string; taskId?: string },
+    received: number,
+  ): Promise<void> {
+    const paths = this.uploadStagePaths(uploadId)
+    if (!paths) return
     const task = this.store.getTask(taskId)
-    if (!task) return { ok: false, error: '任务不存在' }
-    const meta = JSON.parse(await readFile(paths.meta, 'utf-8'))
+    if (!task) {
+      await this.releaseRelayClaim(paths, meta, '任务不存在')
+      return
+    }
     const handle = await import('node:fs/promises').then((m) => m.open(paths.part, 'r'))
     try {
       const readSlice = async (offset: number, length: number) => {
@@ -3105,15 +3162,28 @@ export class TaskEngine {
           return { agentId, agentName: agent.name, ok: true, files: saved.map((f) => ({ name: f.name, path: f.path, size: f.size })) }
         }),
       )
-      // 全部成员成功才清理暂存；部分失败保留（24h 后由 resumableInit 兜底清理，可重试 complete）
+      // 全部成员成功才清理暂存；部分失败把认领锁还原为 meta（记 lastRelayError），可重试 complete；残留 24h 后由 resumableInit 兜底清理
       if (results.every((r) => r.ok)) {
         await rm(paths.part, { force: true })
-        await rm(paths.meta, { force: true })
+        await rm(paths.relaying, { force: true })
+      } else {
+        await this.releaseRelayClaim(paths, meta, results.find((r) => !r.ok)?.error || '中继失败')
       }
-      return { ok: true, results }
     } finally {
       await handle.close().catch(() => {})
     }
+  }
+
+  /** 失败复原：把认领锁还原为 meta.json（附 lastRelayError 供 status 上报），允许重试 complete */
+  private async releaseRelayClaim(
+    paths: { meta: string; relaying: string },
+    meta: Record<string, unknown>,
+    error: string,
+  ): Promise<void> {
+    try {
+      await writeFile(paths.meta, JSON.stringify({ ...meta, lastRelayError: error }))
+      await rm(paths.relaying, { force: true })
+    } catch { /* 尽力而为：残留由 24h 兜底清理 */ }
   }
 
   /** 解析下载请求 → 远端流。返回 Response 供 router 转发。 */

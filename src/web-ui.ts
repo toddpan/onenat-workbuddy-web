@@ -7040,13 +7040,38 @@ function uploadAttachments(files) {
         renderRow(r);
       }
 
-      // 完成（服务端在此阶段向成员节点分片中继）
+      // 完成：complete 为异步受理（立即返回），中继在服务端后台执行 → 轮询状态/任务附件确认落盘
       r.pct = 100; renderRow(r);
       const done = await fetchJson('/tasks/' + taskId + '/attachments/resumable/' + encodeURIComponent(uploadId) + '/complete', { method: 'POST' });
       if (!(done.status < 300 && done.json?.ok)) throw new Error(done.json?.error || 'complete HTTP ' + done.status);
-      const okResults = ((done.json.data || {}).results || []).filter(rr => rr.ok);
-      r.dest = okResults.flatMap(rr => (rr.files || []).map(x => x.path))[0];
-      r.memberCount = okResults.length;
+      if (!done.json.data?.relaying) {
+        // 兼容旧版同步响应（直接带 results）
+        const okResults = ((done.json.data || {}).results || []).filter(rr => rr.ok);
+        r.dest = okResults.flatMap(rr => (rr.files || []).map(x => x.path))[0];
+        r.memberCount = okResults.length;
+      } else {
+        // 轮询：state=relaying 继续等；state=failed 报错（可重试 complete）；会话消失 → 任务附件里找落盘结果
+        const stUrl = '/tasks/' + taskId + '/attachments/resumable/' + encodeURIComponent(uploadId);
+        const detUrl = '/tasks/' + taskId;
+        let relayErr = null, dest = null;
+        for (let i = 0; i < 120 && !dest && !relayErr; i++) {
+          await new Promise(rs => setTimeout(rs, 3000));
+          let st = null;
+          try { st = await fetchJson(stUrl); } catch (e) {}
+          const d = st.json?.data || {};
+          if (d.state === 'failed') { relayErr = d.error || '中继失败'; break; }
+          if (st.status === 404 || d.state === 'gone') {
+            try {
+              const det = await fetchJson(detUrl);
+              const att = ((det.json?.data || {}).attachments || []).find(a => a.name === f.name && (!f.size || a.size === f.size));
+              if (att) dest = att.path;
+            } catch (e) {}
+            if (!dest && i > 8) { relayErr = '中继已完成但任务附件中未找到 ' + f.name; break; }
+          }
+        }
+        if (relayErr) throw new Error('附件分发失败: ' + relayErr);
+        r.dest = dest || f.name; r.memberCount = 1;
+      }
       r.status = 'done'; r.pct = 100; renderRow(r);
       try { localStorage.removeItem(key); } catch (e) {}
       appendAttachmentLine('[附件' + (r.memberCount > 1 ? '·' + r.memberCount + '成员' : '') + '] ' + (r.dest || f.name) + ' (' + fmtSize(f.size) + ')');

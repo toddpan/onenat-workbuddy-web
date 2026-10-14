@@ -46,6 +46,12 @@ export interface ToolCallContext {
   rpcId?: string | number | null
   /** 本通道单次调用允许阻塞的最长时间（毫秒）；0 = 不允许阻塞 */
   maxBlockMs: number
+  /**
+   * 本次请求的访问基址（scheme://host[/prefix]，反代场景按 x-forwarded-* 推导）。
+   * 工具需要回传「调用方可直接访问」的绝对端点时优先用它（如大文件分片上传）——
+   * consoleUrl 是服务端自视角，反代/公网入口下对调用方不可达。
+   */
+  requestBase?: string
 }
 
 /** 默认上下文：HTTP 工具通道（AI 技能）按老行为可长阻塞 */
@@ -272,6 +278,8 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       '② 需求有歧义先向用户问清再 create——任务里的子智能体/专家一律无人值守执行，不会反问澄清；' +
       '③ 在 message 里用 @ 派活：@子智能体名（回其绑定节点执行，@ 多个=编排）、@专家名、@专家团名（按团队合同展开成员编排）、@项目名（对项目发起任务：未绑定项目的任务自动绑定该项目，节点/工作区/项目指令全继承）、@资源名（注入连接信息）；用 @ 时 memberAgentIds 可省略。' +
       '④ 你自己是某个子智能体时，create 建议带 creatorAgentId=<自己的 ID>——新任务自动继承你绑定的技能（否则创建者的技能不会注入新任务的派发提示词）;' +
+      '⑤ 要带大文件（日志 ≤2GB）必须三步走，防止任务先于文件开跑：① create **不带 message**（任务保持 draft 不执行，拿到 taskId）→ ② workbuddy_file_manage {action:"upload_resumable_init", taskId, name, size} 按返回端点分片直传、POST complete 落盘工作区 → ③ 本工具 {action:"send", taskId, message:"引用附件路径的指令"} 开始分析；' +
+      '⚠ create 带 message 会立即开始执行——附件还没上传任务就已开跑，执行者拿不到文件；不要在 message 里写「文件随后上传」，必须先传完再 send；' +
       '重要：创建后不要重复 create 同一任务（重复内容 2 分钟内会被自动去重复用既有任务），要进度请用 wait 或 workbuddy_task_status 轮询',
     parameters: {
       action: { type: 'string', description: '操作: list / create / send / wait / delete / members / cancel' },
@@ -386,6 +394,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
         })
         createDedupe.set(fp, { at: Date.now(), taskId: task.id })
         // ② 立即回执：执行是异步的（流式进度走 SSE / 轮询），这里绝不等待首轮跑完
+        const withMessage = Boolean(String(args.message || '').trim())
         return JSON.stringify({
           ok: true,
           accepted: true,
@@ -395,9 +404,16 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
           status: task.status,
           running: engine.isRunning(task.id),
           members: task.memberAgentIds,
-          receipt: '任务已受理并开始执行（异步）',
-          ...(inheritedSkills.length ? { inheritedSkills, receipt: '任务已受理并开始执行（异步）；已继承创建者绑定技能: ' + inheritedSkills.join(', ') } : {}),
-          nextAction: `进度用 workbuddy_task_status {taskId:"${task.id}"} 轮询，或 workbuddy_task_manage {action:"wait", taskId:"${task.id}"} 取快照；不要重复 create`,
+          ...(withMessage
+            ? {
+                receipt: '任务已受理并开始执行（异步）' + (inheritedSkills.length ? '；已继承创建者绑定技能: ' + inheritedSkills.join(', ') : ''),
+                nextAction: `进度用 workbuddy_task_status {taskId:"${task.id}"} 轮询，或 workbuddy_task_manage {action:"wait", taskId:"${task.id}"} 取快照；不要重复 create`,
+              }
+            : {
+                receipt: '任务已创建（draft 草稿态，尚未开始执行）——正适合先传附件再启动',
+                nextAction: `带附件流程：workbuddy_file_manage {action:"upload_resumable_init", taskId:"${task.id}", name:"<文件名>", size:<字节数>} → 按返回端点 PUT 分片 → POST complete 落盘工作区 → 本工具 {action:"send", taskId:"${task.id}", message:"引用附件路径的分析指令"} 开始执行；无附件可直接 send`,
+              }),
+          ...(inheritedSkills.length ? { inheritedSkills } : {}),
           consoleUrl,
         }, null, 2)
       }
@@ -933,14 +949,18 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
   const fileManage: WorkBuddyToolDef = {
     name: 'workbuddy_file_manage',
     description:
-      '管理远端工作区文件: list（列目录）/ mkdir / upload（base64 内容 ≤1MB，或给 http(s) URL 由服务器拉取 ≤10MB）/ download（返回 utf8 文本或 base64，≤8MB）/ delete。' +
-      '目标二选一：① agent=子智能体 ID → 其 DSH 节点上该智能体 workDir；② taskId=任务 ID（agent 可省略或传 __node__）→ 该任务/项目节点的主会话工作区（项目工作台则用项目 workspace）',
+      '管理远端工作区文件: list（列目录）/ mkdir / upload（base64 内容 ≤1MB，或给 http(s) URL 由服务器拉取 ≤10MB）/ download（返回 utf8 文本或 base64，≤8MB）/ delete / upload_resumable_init + upload_resumable_status（大文件分片直传，最大 2GB：先对已建任务 init 拿 uploadId 与分片端点，再直发 HTTP 端点 PUT 分片、POST complete）。' +
+      '目标二选一：① agent=子智能体 ID → 其 DSH 节点上该智能体 workDir；② taskId=任务 ID（agent 可省略或传 __node__）→ 该任务/项目节点的主会话工作区（项目工作台则用项目 workspace）。' +
+      '大文件场景（日志等）标准顺序：① task_manage create **不带 message**（任务 draft 不执行）→ ② upload_resumable_init 拿端点，调用方带 AI 令牌直发 HTTP：PUT 分片 → POST complete 落盘 → ③ task_manage {action:"send"} 引用 files[].path 才开始执行。JSON-RPC 装不下 2GB，分片与 complete 必须直发 HTTP（支持断点续传）',
     parameters: {
-      action: { type: 'string', description: '操作: list / mkdir / upload / download / delete' },
+      action: { type: 'string', description: '操作: list / mkdir / upload / download / delete / upload_resumable_init / upload_resumable_status' },
       agent: { type: 'string', description: '子智能体 ID（与 taskId 二选一；__node__ 或缺省且给了 taskId 时按任务节点解析）' },
-      taskId: { type: 'string', description: '任务 ID（操作任务/项目节点主会话工作区用；与 agent 二选一）' },
+      taskId: { type: 'string', description: '任务 ID（操作任务/项目节点主会话工作区用；与 agent 二选一；upload_resumable_* 必填，任务需已创建）' },
       path: { type: 'string', description: '路径（绝对路径，或相对其工作目录；list 缺省 = 工作目录；upload 缺省 = 上传到工作目录）' },
-      name: { type: 'string', description: 'mkdir 的新目录名 / upload 的文件名' },
+      name: { type: 'string', description: 'mkdir 的新目录名 / upload 的文件名（upload_resumable_init 用：落盘文件名）' },
+      size: { type: 'string', description: 'upload_resumable_init 用：文件字节大小（最大 2GB）' },
+      mimeType: { type: 'string', description: 'upload_resumable_init 可选：MIME 类型' },
+      uploadId: { type: 'string', description: 'upload_resumable_status 用：init 返回的上传会话 ID' },
       contentBase64: { type: 'string', description: 'upload 方式一：文件内容 base64（解码后 ≤1MB）' },
       url: { type: 'string', description: 'upload 方式二：http(s) 文件地址，由服务器拉取（≤10MB）' },
       encoding: { type: 'string', description: 'download 返回编码：auto（默认，文本 utf8 / 二进制 base64）或 base64' },
@@ -948,6 +968,54 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
     async execute(args, rawCtx) {
       const ctx = ctxOf(rawCtx)
       const action = args.action || 'list'
+      // 大文件分片直传（≤2GB）：不需要解析节点/工作区目标 —— 任务存在即可 init；
+      // 真正的分片 PUT 与 complete 走 HTTP 二进制端点（JSON-RPC 单帧装不下 2GB，complete 中继耗时也不该占住 MCP 会话）
+      if (action === 'upload_resumable_init' || action === 'upload_resumable_status') {
+        const tid = String(args.taskId || '').trim()
+        if (!tid) return JSON.stringify({ ok: false, error: '缺少 taskId（先用 workbuddy_task_manage {action:"create"} 建任务，再往该任务上传）' })
+        const task0 = store.getTask(tid)
+        if (!task0) return JSON.stringify({ ok: false, error: `任务不存在: ${tid}（用 workbuddy_task_manage {action:"list"} 查看可用任务）` })
+        if (action === 'upload_resumable_init') {
+          const size = Number(args.size)
+          if (!Number.isFinite(size) || size <= 0) return JSON.stringify({ ok: false, error: '缺少或非法 size（文件字节大小）' })
+          const out = await engine.resumableInit(tid, String(args.name || ''), size, args.mimeType ? String(args.mimeType) : undefined)
+          if (!out.ok) return JSON.stringify(out, null, 2)
+          // 端点基址跟随调用方：反代/公网入口下 consoleUrl（服务端自视角）对调用方不可达，
+          // 优先用通道层按本次请求头推导的 requestBase，无请求上下文的通道（小智等）回退 consoleUrl
+          const base = String(ctx.requestBase || consoleUrl).replace(/\/$/, '')
+          // 任务状态回显 + 非 draft 警示：AI 常犯「create 带 message 已开跑才想起传附件」——
+          // 执行者此刻已开始工作，附件传完也读不到；正确流程是 draft → 传附件 → send 启动
+          const taskStatus = task0.status
+          const notDraftHint = taskStatus !== 'draft'
+            ? { warning: `任务当前状态 ${taskStatus}（已在执行或已结束，大概率是 create 带了 message）——本次上传执行者很可能读不到。推荐流程：create 不带 message（draft）→ 传附件 → task_manage send 引用路径启动` }
+            : {}
+          const enc = encodeURIComponent
+          const uploadId = String(out.uploadId || '')
+          const ep = (tail: string) => `${base}/api/tasks/${enc(tid)}/attachments/resumable/${enc(uploadId)}${tail}`
+          return JSON.stringify({
+            ok: true,
+            taskId: tid,
+            taskStatus,
+            ...notDraftHint,
+            uploadId,
+            name: String(args.name || ''),
+            size,
+            received: out.received || 0,
+            chunkBytes: 8 * 1024 * 1024,
+            endpoints: {
+              chunk: { method: 'PUT', url: `${ep('')}?offset=<已传字节数>`, body: '原始分片字节（≤8MB/片，按顺序追加；offset 必须等于服务端已接收字节数，409 时先 GET status 对账）' },
+              status: { method: 'GET', url: ep(''), desc: '查询服务端已接收字节数（断点续传对账用）' },
+              complete: { method: 'POST', url: `${ep('')}/complete`, desc: '完成上传（异步受理，立即返回 accepted/relaying）：中继转服务端后台执行，落盘结果轮询任务附件列表（GET /api/tasks/<taskId>）或本 status 端点确认；重复提交返回 RELAYING' },
+            },
+            auth: '与本次工具调用相同的 AI 令牌：Authorization: Bearer <AI令牌>（也支持 X-WorkBuddy-Token 头或 ?token= 查询参数）',
+            example: `curl -X PUT -H "Authorization: Bearer <AI令牌>" --data-binary @chunk.bin "${ep('')}?offset=0"`,
+            notes: 'complete 为异步受理（立即返回 accepted/relaying，中继在服务端后台执行）：确认落盘用 GET /api/tasks/<taskId> 的 attachments（name/size 匹配）或 status 端点轮询；失败时 status 返回 state=failed+error，可直接重试 complete。任务仍是 draft 未执行——确认附件落盘后用 workbuddy_task_manage {action:"send", taskId, message:"…<路径>…"} 才开始分析。旧版节点无分片端点时自动降级 multipart（≤100MB），2GB 文件要求节点支持 /files/resumable 协议',
+            consoleUrl,
+          }, null, 2)
+        }
+        const out = await engine.resumableStatus(tid, String(args.uploadId || ''))
+        return JSON.stringify(out, null, 2)
+      }
       // 目标解析优先级：① agent 命中子智能体 → 其节点 + workDir；② taskId（或 agent=__node__）→ 任务/项目节点主会话 + 项目 workspace
       const agentId = String(args.agent || '').trim()
       const task = String(args.taskId || '').trim() ? store.getTask(String(args.taskId).trim()) : undefined
