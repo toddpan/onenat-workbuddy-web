@@ -1381,5 +1381,15 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
     },
   }
 
-  return [resourceManage, agentManage, taskManage, taskStatus, taskChat, taskEvaluate, taskAskAnswer, sshResourceManage, monitorRead, scheduleManage, plannerManage, fileManage, projectManage, expertManage]
+  // consoleUrl 回显统一跟随调用方：服务端自视角（127.0.0.1:3081）在反代/公网入口下对调用方不可达，
+  // 通道层带 requestBase 时把响应里的 consoleUrl 字符串整体替换为调用方基址（小智等无请求上下文通道保持原样）
+  const defs: WorkBuddyToolDef[] = [resourceManage, agentManage, taskManage, taskStatus, taskChat, taskEvaluate, taskAskAnswer, sshResourceManage, monitorRead, scheduleManage, plannerManage, fileManage, projectManage, expertManage]
+  return defs.map((def) => ({
+    ...def,
+    execute: async (args: Record<string, any>, ctx?: ToolCallContext) => {
+      const out = await def.execute(args, ctx)
+      const pub = String(ctx?.requestBase || '').replace(/\/+$/, '')
+      return pub && consoleUrl && out.includes(consoleUrl) ? String(out).split(consoleUrl).join(pub) : out
+    },
+  }))
 }
