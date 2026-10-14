@@ -411,6 +411,10 @@ export interface TaskAttachment {
   agentName: string
   remoteSessionId: string
   uploadedAt: number
+  /** 附件所在节点的 API 基址（P2P 直传/跨节点下载定位用；中继时代为空） */
+  nodeBaseUrl?: string
+  /** 上传来源：direct = 客户端直传节点（P2P）；缺省 = 服务端中继/小文件直发 */
+  source?: 'direct' | 'relay'
 }
 
 // ---------- 定时任务 ----------

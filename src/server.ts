@@ -554,10 +554,10 @@ function isAiTokenAllowedPath(pathname: string, prefix: string): boolean {
   if (p.startsWith('/api/agents/fs/')) return true
   if (p === '/api/resources' || p.startsWith('/api/resources/')) return true
   if (p === '/api/dsh-models') return true
-  // 任务级文件面：下载成员工作区文件 / 附件上传（含分片断点续传，最大 2GB）/ 任务清单与统计（读）；messages 为多轮追问
+  // 任务级文件面：下载成员工作区文件 / 附件上传（最大 2GB）/ 任务清单与统计（读）；messages 为多轮追问
   if (/^\/api\/tasks\/[^/]+\/(files\/download|attachments|todos|stats|messages)$/.test(p)) return true
-  // 附件分片断点续传三段：init / 分片 PUT+进度 GET / complete（AI 通道大文件走这条，一次性 body 上限只到 8MB/片）
-  if (/^\/api\/tasks\/[^/]+\/attachments\/resumable(\/init|\/[^/]+(\/complete)?)?$/.test(p)) return true
+  // 附件 P2P 直传控制面：init 下发节点直连配方（地址+密钥，文件字节不经本服务），register 登记落盘结果
+  if (/^\/api\/tasks\/[^/]+\/attachments\/direct\/(init|register)$/.test(p)) return true
   // 任务只读面（状态/详情/流）：AI 令牌跟踪自己派发的任务用
   if (/^\/api\/tasks\/[^/]+$/.test(p)) return true
   if (p === '/api/tasks') return true

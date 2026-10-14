@@ -2927,6 +2927,8 @@ export class TaskEngine {
               agentId,
               agentName: agent.name,
               remoteSessionId: session.remoteSessionId!,
+              nodeBaseUrl: target.baseUrl.replace(/\/+$/, ''),
+              source: 'relay',
               uploadedAt: Date.now(),
             })
           }
@@ -2937,253 +2939,137 @@ export class TaskEngine {
     return { ok: true, results }
   }
 
-  // ---------- 分片断点续传上传（浏览器 → 本服务暂存 → complete 时分片中继到成员节点） ----------
+  // ---------- 附件 P2P 直传（控制面）：下发 DSH 节点直连配方，客户端直传节点，跨节点经「下载 URL + 密钥」互访 ----------
 
-  private uploadStagePaths(uploadId: string): { dir: string; part: string; meta: string; relaying: string } | undefined {
-    const id = String(uploadId || '').replace(/[^A-Za-z0-9._-]/g, '')
-    if (!id || id.length > 120) return undefined
-    const dir = join(this.store.dataDir, 'uploads')
-    return { dir, part: join(dir, id + '.part'), meta: join(dir, id + '.json'), relaying: join(dir, id + '.relaying') }
-  }
+  /**
+   * 直传登记簿：init 下发的 uploadId → 目标与待登记信息（客户端在节点侧 complete 后凭此登记附件）。
+   * 只存节点地址/会话，不存节点密钥（密钥仅在 init 响应中下发一次）；30 分钟 TTL。
+   */
+  private directPending = new Map<string, {
+    taskId: string; name: string; size: number; mimeType?: string
+    agentId: string; agentName: string
+    nodeBaseUrl: string; nodeSessionId: string
+    createdAt: number
+  }>()
+  private static readonly DIRECT_PENDING_TTL_MS = 30 * 60_000
 
-  private async stageReceived(part: string): Promise<number> {
-    try {
-      return (await stat(part)).size
-    } catch {
-      return 0
+  private pruneDirectPending(): void {
+    const now = Date.now()
+    for (const [k, v] of this.directPending) {
+      if (now - v.createdAt > TaskEngine.DIRECT_PENDING_TTL_MS) this.directPending.delete(k)
     }
   }
 
-  /** 初始化分片上传（顺手清理 24h 前的残留暂存） */
-  public async resumableInit(
+  /** 跨节点下载 URL：DSH 下载接口只认 Authorization: Bearer 头（不支持 query 密钥），URL 与密钥必须成对交付 */
+  public buildNodeDownloadUrl(nodeBaseUrl: string, nodeSessionId: string, path: string): string {
+    const base = nodeBaseUrl.replace(/\/+$/, '')
+    return path.startsWith('/')
+      ? `${base}/fs/download?path=${encodeURIComponent(path)}`
+      : `${base}/sessions/${encodeURIComponent(nodeSessionId)}/files/download?path=${encodeURIComponent(path)}`
+  }
+
+  /**
+   * 直传初始化（P2P 控制面）：解析附件实际目标节点（项目工作区任务 = 项目节点主会话，否则第一个成员/主会话节点），
+   * 确保远端会话后下发「节点 API 地址 + 密钥 + 会话 + 分片端点模板」。WEB 与 MCP 调用方据此直连节点上传，
+   * 本服务不经手文件字节；客户端在节点侧 complete 拿到落盘 path 后调 directUploadRegister 登记附件。
+   */
+  public async directUploadInit(
     taskId: string,
     name: string,
     size: number,
     mimeType?: string,
-  ): Promise<{ ok: boolean; uploadId?: string; received?: number; error?: string }> {
-    if (!this.store.getTask(taskId)) return { ok: false, error: '任务不存在' }
-    const safeName = String(name || '').split(/[\\/]/).pop() || `upload-${Date.now()}`
+  ): Promise<{
+    ok: boolean
+    uploadId?: string
+    taskId?: string
+    name?: string
+    size?: number
+    target?: { agentId: string; agentName: string; baseUrl: string; apiKey: string; sessionId: string }
+    error?: string
+  }> {
+    this.pruneDirectPending()
+    const task = this.store.getTask(taskId)
+    if (!task) return { ok: false, error: '任务不存在' }
     const safeSize = Math.max(0, Math.floor(Number(size) || 0))
+    if (safeSize <= 0) return { ok: false, error: '缺少或非法 size（文件字节大小）' }
     if (safeSize > 2 * 1024 * 1024 * 1024) return { ok: false, error: '文件超过 2GB 上限' }
-    const uploadId = `up-${randomUUID().replace(/-/g, '').slice(0, 20)}`
-    const paths = this.uploadStagePaths(uploadId)!
-    try {
-      await mkdir(paths.dir, { recursive: true })
-      // 残留清理（best-effort）
-      try {
-        const old = await readdir(paths.dir)
-        for (const f of old) {
-          const fp = join(paths.dir, f)
-          try {
-            if (Date.now() - (await stat(fp)).mtimeMs > 24 * 3600_000) await rm(fp, { force: true })
-          } catch { /* 单文件失败忽略 */ }
-        }
-      } catch { /* 目录不存在等 */ }
-      await writeFile(paths.part, Buffer.alloc(0))
-      await writeFile(paths.meta, JSON.stringify({ taskId, name: safeName, size: safeSize, mimeType: mimeType || undefined, createdAt: Date.now() }))
-      return { ok: true, uploadId, received: 0 }
-    } catch (err: any) {
-      return { ok: false, error: err?.message || String(err) }
-    }
-  }
-
-  /** 查询接收进度（断点恢复点；received 以 .part 实际字节数为权威）。state：receiving 接收中 / failed 中继失败可重试 / relaying 后台中继中 / gone 已完成或不存在 */
-  public async resumableStatus(
-    taskId: string,
-    uploadId: string,
-  ): Promise<{ ok: boolean; name?: string; size?: number; received?: number; state?: 'receiving' | 'failed' | 'relaying' | 'gone'; code?: string; error?: string }> {
-    const paths = this.uploadStagePaths(uploadId)
-    if (!paths) return { ok: false, state: 'gone', error: '非法 uploadId' }
-    try {
-      const meta = JSON.parse(await readFile(paths.meta, 'utf-8'))
-      if (meta.taskId !== taskId) return { ok: false, error: '上传会话不属于该任务' }
-      const failed = Boolean(meta.lastRelayError)
-      return {
-        ok: true,
-        state: failed ? 'failed' : 'receiving',
-        error: meta.lastRelayError,
-        name: meta.name,
-        size: meta.size,
-        received: await this.stageReceived(paths.part),
-      }
-    } catch {
-      // meta 已被 complete 认领（改名 .relaying）→ 后台中继进行中，明确告知而非「不存在」
-      try {
-        const r = JSON.parse(await readFile(paths.relaying, 'utf-8'))
-        if (r.taskId !== taskId) return { ok: false, error: '上传会话不属于该任务' }
-        return {
-          ok: false,
-          state: 'relaying',
-          code: 'RELAYING',
-          name: r.name,
-          size: r.size,
-          received: await this.stageReceived(paths.part),
-          error: '该上传已在 complete 中继中（异步受理后后台执行），请勿重复提交；可用任务附件列表确认进度',
-        }
-      } catch { /* 非中继态 */ }
-      return { ok: false, state: 'gone', error: '上传会话不存在或已完成/清理' }
-    }
-  }
-
-  /** 追加分片（offset 不匹配时返回 OFFSET_MISMATCH + 服务端实际接收量） */
-  public async resumableAppend(
-    taskId: string,
-    uploadId: string,
-    chunk: Buffer,
-    offset: number,
-  ): Promise<{ ok: boolean; received?: number; code?: string; error?: string }> {
-    const paths = this.uploadStagePaths(uploadId)
-    if (!paths) return { ok: false, error: '非法 uploadId' }
-    if (chunk.length === 0) return { ok: false, error: '分片内容为空' }
-    const st = await this.resumableStatus(taskId, uploadId)
-    if (!st.ok) return { ok: false, error: st.error }
-    const received = st.received || 0
-    if (offset !== received) return { ok: false, code: 'OFFSET_MISMATCH', received, error: `offset 不匹配：服务端已接收 ${received} 字节` }
-    try {
-      await appendFile(paths.part, chunk)
-      return { ok: true, received: received + chunk.length }
-    } catch (err: any) {
-      return { ok: false, error: err?.message || String(err) }
+    const safeName = String(name || '').split(/[\\/]/).pop() || `upload-${Date.now()}`
+    // 主节点选择：项目工作区任务统一落项目节点主会话；无成员任务 = 节点直发/主会话语义，落任务节点
+    // （即便 draft 尚无 __node__ 会话，ensureSession 也会在该节点建会话）；多成员任务取第一个成员，其余走跨节点下载
+    const exec = this.taskExec(task)
+    const projectWs = exec.workspace?.trim() || ''
+    const memberCount = (task.memberAgentIds || []).filter(Boolean).length + (task.expertMembers || []).length
+    const targetIds = memberCount === 0 || (exec.dshRef && projectWs) ? [NODE_AGENT_ID] : this.attachmentTargetAgentIds(task)
+    const agentId = targetIds[0]
+    if (!agentId) return { ok: false, error: '任务没有可接收附件的成员' }
+    const agent = await this.resolveMemberAgent(task, agentId)
+      ?? (agentId === NODE_AGENT_ID ? this.makeNodeAgent(exec) : undefined)
+    let target: DshTarget | undefined = await this.resolveExecTarget(task, agentId)
+    if (!agent || !target) return { ok: false, error: '节点不可用' }
+    const session = await this.ensureSession(taskId, agent, target)
+    if (!session.ok || !session.remoteSessionId) return { ok: false, error: session.error || '会话创建失败' }
+    if (session.target) target = session.target
+    const baseUrl = target.baseUrl.replace(/\/+$/, '')
+    const sessionId = session.remoteSessionId
+    const uploadId = `dup-${randomUUID().replace(/-/g, '').slice(0, 20)}`
+    this.directPending.set(uploadId, {
+      taskId, name: safeName, size: safeSize, mimeType: mimeType || undefined,
+      agentId, agentName: agent.name, nodeBaseUrl: baseUrl, nodeSessionId: sessionId,
+      createdAt: Date.now(),
+    })
+    return {
+      ok: true,
+      uploadId,
+      taskId,
+      name: safeName,
+      size: safeSize,
+      target: { agentId, agentName: agent.name, baseUrl, apiKey: target.apiKey || '', sessionId },
     }
   }
 
   /**
-   * 完成上传：原子认领暂存（meta → .relaying）后立即受理返回，分片中继转后台执行（异步）。
-   * 大文件中继经隧道可达数分钟，同步等会让所有 HTTP 跳数掐断调用方连接（2026-10-14 实测）；
-   * 落盘结果通过任务附件列表 / resumableStatus 轮询确认，失败时 meta 复原（记 lastRelayError）可重试 complete。
+   * 直传登记：客户端在节点侧 complete 拿到落盘 path 后调用，把附件（含节点定位与跨节点下载 URL）记入任务。
+   * 登记后 uploadId 一次性作废；同任务同名附件不去重（调用方可用节点侧实际返回名）。
    */
-  public async resumableComplete(taskId: string, uploadId: string): Promise<{
-    ok: boolean
-    accepted?: boolean
-    relaying?: boolean
-    taskId?: string
-    uploadId?: string
-    name?: string
-    size?: number
-    error?: string
-    code?: string
-  }> {
-    const paths = this.uploadStagePaths(uploadId)
-    if (!paths) return { ok: false, error: '非法 uploadId' }
-    const st = await this.resumableStatus(taskId, uploadId)
-    if (!st.ok) return { ok: false, code: st.code, error: st.error }
-    const size = st.size || 0
-    const received = st.received || 0
-    if (size > 0 && received !== size) return { ok: false, error: `文件未传完：已接收 ${received}/${size} 字节` }
-    if (!this.store.getTask(taskId)) return { ok: false, error: '任务不存在' }
-    // 原子认领：meta → .relaying。并发/重试 complete 在此挡下，杜绝双份文件（2026-10-14 实测）
-    try {
-      await rename(paths.meta, paths.relaying)
-    } catch {
-      return { ok: false, code: 'RELAYING', error: '该上传已在 complete 中继中，请勿重复提交；可用任务附件列表确认进度' }
-    }
-    const meta = JSON.parse(await readFile(paths.relaying, 'utf-8'))
-    void this.relayStagedUpload(taskId, uploadId, meta, received).catch((err: any) => {
-      this.taskLog(taskId, 'error', `附件中继异常（${meta.name}）: ${err?.message || err}`)
-    })
-    return { ok: true, accepted: true, relaying: true, taskId, uploadId, name: meta.name, size: received }
-  }
-
-  /** 后台中继：暂存分片分发到实际目标节点工作区；成功清理暂存并登记附件，失败复原 meta（记 lastRelayError，可重试 complete） */
-  private async relayStagedUpload(
+  public async directUploadRegister(
     taskId: string,
     uploadId: string,
-    meta: { name: string; size: number; mimeType?: string; taskId?: string },
-    received: number,
-  ): Promise<void> {
-    const paths = this.uploadStagePaths(uploadId)
-    if (!paths) return
-    const task = this.store.getTask(taskId)
-    if (!task) {
-      await this.releaseRelayClaim(paths, meta, '任务不存在')
-      return
+    path: string,
+    size?: number,
+    mimeType?: string,
+  ): Promise<{
+    ok: boolean
+    attachment?: { name: string; path: string; size: number; mimeType?: string; agentId: string; agentName: string; downloadUrl: string }
+    error?: string
+  }> {
+    this.pruneDirectPending()
+    const pending = this.directPending.get(uploadId)
+    if (!pending || pending.taskId !== taskId) return { ok: false, error: '直传会话不存在或已登记过（init 后 30 分钟内有效）' }
+    const safePath = String(path || '').trim()
+    if (!safePath) return { ok: false, error: '缺少 path（节点侧 complete 返回的落盘路径）' }
+    const attSize = Math.max(0, Math.floor(Number(size) || pending.size || 0))
+    const downloadUrl = this.buildNodeDownloadUrl(pending.nodeBaseUrl, pending.nodeSessionId, safePath)
+    this.directPending.delete(uploadId)
+    this.store.mutateTask(taskId, (t) => {
+      t.attachments = t.attachments || []
+      t.attachments.push({
+        name: pending.name,
+        path: safePath,
+        size: attSize,
+        mimeType: mimeType || pending.mimeType,
+        agentId: pending.agentId,
+        agentName: pending.agentName,
+        remoteSessionId: pending.nodeSessionId,
+        nodeBaseUrl: pending.nodeBaseUrl,
+        uploadedAt: Date.now(),
+        source: 'direct',
+      })
+    })
+    this.taskLog(taskId, 'info', `附件直传落盘（${pending.agentName}）: ${safePath}；跨节点下载 URL: ${downloadUrl}`)
+    return {
+      ok: true,
+      attachment: { name: pending.name, path: safePath, size: attSize, mimeType: mimeType || pending.mimeType, agentId: pending.agentId, agentName: pending.agentName, downloadUrl },
     }
-    const handle = await import('node:fs/promises').then((m) => m.open(paths.part, 'r'))
-    try {
-      const readSlice = async (offset: number, length: number) => {
-        const buf = Buffer.alloc(length)
-        const { bytesRead } = await handle.read(buf, 0, length, offset)
-        return bytesRead === length ? buf : buf.subarray(0, bytesRead)
-      }
-      // 与 uploadAttachments 同规则：项目任务 + 项目工作区 → 统一落项目节点主会话（cwd = 项目工作区）
-      const exec = this.taskExec(task)
-      const projectWs = exec.workspace?.trim() || ''
-      const targetIds = exec.dshRef && projectWs ? [NODE_AGENT_ID] : this.attachmentTargetAgentIds(task)
-      const { targets } = await this.resolver.resolveMembers(targetIds)
-      const results = await Promise.all(
-        targetIds.map(async (agentId) => {
-          // 节点直发任务（无成员）目标为伪成员 __node__：store 无记录，用节点伪实体兜底，
-          // targets 解析不到时退回 resolveExecTarget（与会话创建同源）；专家成员经注册表动态实例化
-          const agent = await this.resolveMemberAgent(task, agentId)
-            ?? (agentId === NODE_AGENT_ID ? this.makeNodeAgent(this.taskExec(task)) : undefined)
-          let target: DshTarget | undefined = targets.get(agentId) || (await this.resolveExecTarget(task, agentId))
-          if (!agent || !target) return { agentId, agentName: agent?.name || agentId, ok: false, error: '节点不可用' }
-          const session = await this.ensureSession(taskId, agent, target)
-          if (!session.ok || !session.remoteSessionId) {
-            return { agentId, agentName: agent.name, ok: false, error: session.error || '会话创建失败' }
-          }
-          if (session.target) target = session.target
-          const up = await this.client.uploadFileResumable(
-            target,
-            session.remoteSessionId,
-            { filename: meta.name, mimeType: meta.mimeType, size: received },
-            readSlice,
-            { chunkSize: 4 * 1024 * 1024 },
-          ).catch((e: any) => ({ ok: false as const, error: e?.message || String(e) }))
-          // 旧版节点无 resumable 端点 → 降级走原 multipart（≤100MB，与旧接口上限一致）
-          let result = up
-          if (!up.ok && /Endpoint not found|HTTP 404|404/.test(up.error || '')) {
-            if (received <= 100 * 1024 * 1024) {
-              const data = await readSlice(0, received)
-              result = await this.client.uploadFiles(target, session.remoteSessionId, [{ filename: meta.name, mimeType: meta.mimeType, data }])
-            }
-          }
-          if (!result.ok) {
-            this.taskLog(taskId, 'error', `附件分片中继失败（${agent.name}）: ${result.error}`)
-            return { agentId, agentName: agent.name, ok: false, error: result.error }
-          }
-          const saved = result.files || []
-          this.taskLog(taskId, 'info', `附件已上传（${agent.name}）: ${saved.map((f) => f.path).join(', ')}`)
-          this.store.mutateTask(taskId, (t) => {
-            t.attachments = t.attachments || []
-            for (const f of saved) {
-              t.attachments.push({
-                name: f.name,
-                path: f.path,
-                size: f.size,
-                mimeType: f.mimeType,
-                agentId,
-                agentName: agent.name,
-                remoteSessionId: session.remoteSessionId!,
-                uploadedAt: Date.now(),
-              })
-            }
-          })
-          return { agentId, agentName: agent.name, ok: true, files: saved.map((f) => ({ name: f.name, path: f.path, size: f.size })) }
-        }),
-      )
-      // 全部成员成功才清理暂存；部分失败把认领锁还原为 meta（记 lastRelayError），可重试 complete；残留 24h 后由 resumableInit 兜底清理
-      if (results.every((r) => r.ok)) {
-        await rm(paths.part, { force: true })
-        await rm(paths.relaying, { force: true })
-      } else {
-        await this.releaseRelayClaim(paths, meta, results.find((r) => !r.ok)?.error || '中继失败')
-      }
-    } finally {
-      await handle.close().catch(() => {})
-    }
-  }
-
-  /** 失败复原：把认领锁还原为 meta.json（附 lastRelayError 供 status 上报），允许重试 complete */
-  private async releaseRelayClaim(
-    paths: { meta: string; relaying: string },
-    meta: Record<string, unknown>,
-    error: string,
-  ): Promise<void> {
-    try {
-      await writeFile(paths.meta, JSON.stringify({ ...meta, lastRelayError: error }))
-      await rm(paths.relaying, { force: true })
-    } catch { /* 尽力而为：残留由 24h 兜底清理 */ }
   }
 
   /** 解析下载请求 → 远端流。返回 Response 供 router 转发。 */

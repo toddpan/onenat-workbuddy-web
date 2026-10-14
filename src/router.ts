@@ -2811,52 +2811,28 @@ export class WorkBuddyRouter {
       }
       return true
     }
-    // 分片断点续传上传（init / status+chunk / complete）
-    const resumInitMatch = /^\/api\/tasks\/([^/]+)\/attachments\/resumable\/init$/.exec(p)
-    if (resumInitMatch && method === 'POST') {
-      const taskId = decodeURIComponent(resumInitMatch[1])
+    // 附件 P2P 直传（控制面）：init 下发 DSH 节点直连配方（地址+密钥+会话+分片端点模板），
+    // 客户端直传节点并在节点侧 complete，register 凭落盘路径登记附件（含跨节点下载 URL）
+    const directInitMatch = /^\/api\/tasks\/([^/]+)\/attachments\/direct\/init$/.exec(p)
+    if (directInitMatch && method === 'POST') {
+      const taskId = decodeURIComponent(directInitMatch[1])
       const body = await this.parseBody(req)
-      const result = await this.engine.resumableInit(taskId, String(body?.name || ''), Number(body?.size) || 0, body?.mimeType ? String(body.mimeType) : undefined)
-      this.sendJson(res, result.ok ? 200 : 400, { ok: result.ok, data: result.ok ? { uploadId: result.uploadId, received: result.received } : undefined, error: result.error })
+      const result = await this.engine.directUploadInit(taskId, String(body?.name || ''), Number(body?.size) || 0, body?.mimeType ? String(body.mimeType) : undefined)
+      this.sendJson(res, result.ok ? 200 : 400, { ok: result.ok, data: result.ok ? result : undefined, error: result.error })
       return true
     }
-    const resumChunkMatch = /^\/api\/tasks\/([^/]+)\/attachments\/resumable\/([^/]+)$/.exec(p)
-    if (resumChunkMatch && (method === 'GET' || method === 'PUT')) {
-      const taskId = decodeURIComponent(resumChunkMatch[1])
-      const uploadId = decodeURIComponent(resumChunkMatch[2])
-      if (method === 'GET') {
-        const st = await this.engine.resumableStatus(taskId, uploadId)
-        // relaying 态回 200 便于轮询方按 state 判定（complete 已异步受理，中继在服务端后台执行）
-        const httpOk = st.ok || st.state === 'relaying'
-        this.sendJson(res, httpOk ? 200 : 404, {
-          ok: st.ok,
-          data: httpOk ? { name: st.name, size: st.size, received: st.received, state: st.state, error: st.error || undefined, code: st.code } : undefined,
-          error: st.error,
-        })
-        return true
-      }
-      const url = new URL(req.url || '/', 'http://localhost')
-      const offset = Number(url.searchParams.get('offset'))
-      const raw = await readRawBuffer(req, 8 * 1024 * 1024)
-      const result = await this.engine.resumableAppend(taskId, uploadId, raw, offset)
-      if (result.ok) {
-        this.sendJson(res, 200, { ok: true, data: { received: result.received } })
-      } else {
-        this.sendJson(res, result.code === 'OFFSET_MISMATCH' ? 409 : 400, { ok: false, error: result.error, data: { received: result.received } })
-      }
-      return true
-    }
-    const resumDoneMatch = /^\/api\/tasks\/([^/]+)\/attachments\/resumable\/([^/]+)\/complete$/.exec(p)
-    if (resumDoneMatch && method === 'POST') {
-      const taskId = decodeURIComponent(resumDoneMatch[1])
-      const uploadId = decodeURIComponent(resumDoneMatch[2])
-      try {
-        const result = await this.engine.resumableComplete(taskId, uploadId)
-        if (!result.ok) this.sendJson(res, 409, { ok: false, error: result.error, code: result.code })
-        else this.sendJson(res, 200, { ok: true, data: result })
-      } catch (err: any) {
-        this.sendJson(res, 500, { ok: false, error: err?.message || String(err) })
-      }
+    const directRegMatch = /^\/api\/tasks\/([^/]+)\/attachments\/direct\/register$/.exec(p)
+    if (directRegMatch && method === 'POST') {
+      const taskId = decodeURIComponent(directRegMatch[1])
+      const body = await this.parseBody(req)
+      const result = await this.engine.directUploadRegister(
+        taskId,
+        String(body?.uploadId || ''),
+        String(body?.path || ''),
+        Number(body?.size) || 0,
+        body?.mimeType ? String(body.mimeType) : undefined,
+      )
+      this.sendJson(res, result.ok ? 200 : 400, { ok: result.ok, data: result.ok ? result : undefined, error: result.error })
       return true
     }
     // 会话工作区文件下载（代理成员远端 DSH，支持 AI 回复中的绝对/相对路径）

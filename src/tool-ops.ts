@@ -278,7 +278,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       '② 需求有歧义先向用户问清再 create——任务里的子智能体/专家一律无人值守执行，不会反问澄清；' +
       '③ 在 message 里用 @ 派活：@子智能体名（回其绑定节点执行，@ 多个=编排）、@专家名、@专家团名（按团队合同展开成员编排）、@项目名（对项目发起任务：未绑定项目的任务自动绑定该项目，节点/工作区/项目指令全继承）、@资源名（注入连接信息）；用 @ 时 memberAgentIds 可省略。' +
       '④ 你自己是某个子智能体时，create 建议带 creatorAgentId=<自己的 ID>——新任务自动继承你绑定的技能（否则创建者的技能不会注入新任务的派发提示词）;' +
-      '⑤ 要带大文件（日志 ≤2GB）必须三步走，防止任务先于文件开跑：① create **不带 message**（任务保持 draft 不执行，拿到 taskId）→ ② workbuddy_file_manage {action:"upload_resumable_init", taskId, name, size} 按返回端点分片直传、POST complete 落盘工作区 → ③ 本工具 {action:"send", taskId, message:"引用附件路径的指令"} 开始分析；' +
+      '⑤ 要带大文件（日志 ≤2GB）必须四步走，防止任务先于文件开跑：① create **不带 message**（任务保持 draft 不执行，拿到 taskId）→ ② workbuddy_file_manage {action:"upload_resumable_init", taskId, name, size} 按返回的节点直连配方直连 DSH 上传（POST init → PUT 分片 → POST complete 得落盘路径）→ ③ file_manage {action:"upload_register", taskId, uploadId, path} 登记附件 → ④ 本工具 {action:"send", taskId, message:"引用附件路径的指令"} 开始分析；' +
       '⚠ create 带 message 会立即开始执行——附件还没上传任务就已开跑，执行者拿不到文件；不要在 message 里写「文件随后上传」，必须先传完再 send；' +
       '重要：创建后不要重复 create 同一任务（重复内容 2 分钟内会被自动去重复用既有任务），要进度请用 wait 或 workbuddy_task_status 轮询',
     parameters: {
@@ -390,7 +390,11 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
           creator: 'tool',
           ...(projectId ? { projectId } : {}),
           ...(inheritedSkills.length ? { skillNames: inheritedSkills } : {}),
-          ...(nodeRef && typeof nodeRef === 'object' && nodeRef.mappingId ? { nodeRef: { kind: 'mapping', mappingId: String(nodeRef.mappingId) } } : {}),
+          ...(nodeRef && typeof nodeRef === 'object' && nodeRef.mappingId
+            ? { nodeRef: { kind: 'mapping', mappingId: String(nodeRef.mappingId) } }
+            : (nodeRef && typeof nodeRef === 'object' && nodeRef.apiBaseUrl
+              ? { nodeRef: { kind: 'direct', apiBaseUrl: String(nodeRef.apiBaseUrl) } }
+              : {})),
         })
         createDedupe.set(fp, { at: Date.now(), taskId: task.id })
         // ② 立即回执：执行是异步的（流式进度走 SSE / 轮询），这里绝不等待首轮跑完
@@ -411,7 +415,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
               }
             : {
                 receipt: '任务已创建（draft 草稿态，尚未开始执行）——正适合先传附件再启动',
-                nextAction: `带附件流程：workbuddy_file_manage {action:"upload_resumable_init", taskId:"${task.id}", name:"<文件名>", size:<字节数>} → 按返回端点 PUT 分片 → POST complete 落盘工作区 → 本工具 {action:"send", taskId:"${task.id}", message:"引用附件路径的分析指令"} 开始执行；无附件可直接 send`,
+                nextAction: `带附件流程：workbuddy_file_manage {action:"upload_resumable_init", taskId:"${task.id}", name:"<文件名>", size:<字节数>} → 按节点直连配方直传 → {action:"upload_register"} 登记 → 本工具 {action:"send", taskId:"${task.id}", message:"引用附件路径的分析指令"} 开始执行；无附件可直接 send`,
               }),
           ...(inheritedSkills.length ? { inheritedSkills } : {}),
           consoleUrl,
@@ -949,18 +953,18 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
   const fileManage: WorkBuddyToolDef = {
     name: 'workbuddy_file_manage',
     description:
-      '管理远端工作区文件: list（列目录）/ mkdir / upload（base64 内容 ≤1MB，或给 http(s) URL 由服务器拉取 ≤10MB）/ download（返回 utf8 文本或 base64，≤8MB）/ delete / upload_resumable_init + upload_resumable_status（大文件分片直传，最大 2GB：先对已建任务 init 拿 uploadId 与分片端点，再直发 HTTP 端点 PUT 分片、POST complete）。' +
+      '管理远端工作区文件: list（列目录）/ mkdir / upload（base64 内容 ≤1MB，或给 http(s) URL 由服务器拉取 ≤10MB）/ download（返回 utf8 文本或 base64，≤8MB）/ delete / upload_resumable_init + upload_register（大文件 P2P 直传，最大 2GB：init 下发 DSH 节点的 API 地址+密钥+会话与分片端点，调用方直连节点上传，不经本服务中转）。' +
       '目标二选一：① agent=子智能体 ID → 其 DSH 节点上该智能体 workDir；② taskId=任务 ID（agent 可省略或传 __node__）→ 该任务/项目节点的主会话工作区（项目工作台则用项目 workspace）。' +
-      '大文件场景（日志等）标准顺序：① task_manage create **不带 message**（任务 draft 不执行）→ ② upload_resumable_init 拿端点，调用方带 AI 令牌直发 HTTP：PUT 分片 → POST complete 落盘 → ③ task_manage {action:"send"} 引用 files[].path 才开始执行。JSON-RPC 装不下 2GB，分片与 complete 必须直发 HTTP（支持断点续传）',
+      '大文件场景（日志等）标准顺序：① task_manage create **不带 message**（任务 draft 不执行）→ ② upload_resumable_init 拿节点直连配方 → 直连节点：POST 节点 init → PUT 分片 → POST 节点 complete 得落盘路径 → ③ upload_register 登记附件（返回跨节点下载 URL+密钥）→ ④ task_manage {action:"send"} 引用路径（多成员协作时附 URL+密钥让其它节点自行下载）才开始执行',
     parameters: {
-      action: { type: 'string', description: '操作: list / mkdir / upload / download / delete / upload_resumable_init / upload_resumable_status' },
+      action: { type: 'string', description: '操作: list / mkdir / upload / download / delete / upload_resumable_init / upload_register' },
       agent: { type: 'string', description: '子智能体 ID（与 taskId 二选一；__node__ 或缺省且给了 taskId 时按任务节点解析）' },
-      taskId: { type: 'string', description: '任务 ID（操作任务/项目节点主会话工作区用；与 agent 二选一；upload_resumable_* 必填，任务需已创建）' },
-      path: { type: 'string', description: '路径（绝对路径，或相对其工作目录；list 缺省 = 工作目录；upload 缺省 = 上传到工作目录）' },
+      taskId: { type: 'string', description: '任务 ID（操作任务/项目节点主会话工作区用；与 agent 二选一；upload_resumable_init/upload_register 必填，任务需已创建）' },
+      path: { type: 'string', description: '路径（绝对路径，或相对其工作目录；list 缺省 = 工作目录；upload 缺省 = 上传到工作目录；upload_register 用：节点 complete 返回的落盘路径）' },
       name: { type: 'string', description: 'mkdir 的新目录名 / upload 的文件名（upload_resumable_init 用：落盘文件名）' },
       size: { type: 'string', description: 'upload_resumable_init 用：文件字节大小（最大 2GB）' },
       mimeType: { type: 'string', description: 'upload_resumable_init 可选：MIME 类型' },
-      uploadId: { type: 'string', description: 'upload_resumable_status 用：init 返回的上传会话 ID' },
+      uploadId: { type: 'string', description: 'upload_register 用：upload_resumable_init 返回的直传会话 ID' },
       contentBase64: { type: 'string', description: 'upload 方式一：文件内容 base64（解码后 ≤1MB）' },
       url: { type: 'string', description: 'upload 方式二：http(s) 文件地址，由服务器拉取（≤10MB）' },
       encoding: { type: 'string', description: 'download 返回编码：auto（默认，文本 utf8 / 二进制 base64）或 base64' },
@@ -968,53 +972,80 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
     async execute(args, rawCtx) {
       const ctx = ctxOf(rawCtx)
       const action = args.action || 'list'
-      // 大文件分片直传（≤2GB）：不需要解析节点/工作区目标 —— 任务存在即可 init；
-      // 真正的分片 PUT 与 complete 走 HTTP 二进制端点（JSON-RPC 单帧装不下 2GB，complete 中继耗时也不该占住 MCP 会话）
-      if (action === 'upload_resumable_init' || action === 'upload_resumable_status') {
+      // 大文件 P2P 直传（≤2GB）：本服务只当下发节点直连配方的控制面，文件字节客户端直连 DSH 节点；
+      // JSON-RPC 单帧装不下 2GB，分片 PUT / 节点 complete / register 凭据都由调用方直发 HTTP
+      if (action === 'upload_resumable_init' || action === 'upload_register') {
         const tid = String(args.taskId || '').trim()
         if (!tid) return JSON.stringify({ ok: false, error: '缺少 taskId（先用 workbuddy_task_manage {action:"create"} 建任务，再往该任务上传）' })
         const task0 = store.getTask(tid)
         if (!task0) return JSON.stringify({ ok: false, error: `任务不存在: ${tid}（用 workbuddy_task_manage {action:"list"} 查看可用任务）` })
+        const base = String(ctx.requestBase || consoleUrl).replace(/\/$/, '')
+        const enc = encodeURIComponent
         if (action === 'upload_resumable_init') {
           const size = Number(args.size)
           if (!Number.isFinite(size) || size <= 0) return JSON.stringify({ ok: false, error: '缺少或非法 size（文件字节大小）' })
-          const out = await engine.resumableInit(tid, String(args.name || ''), size, args.mimeType ? String(args.mimeType) : undefined)
+          const out = await engine.directUploadInit(tid, String(args.name || ''), size, args.mimeType ? String(args.mimeType) : undefined)
           if (!out.ok) return JSON.stringify(out, null, 2)
-          // 端点基址跟随调用方：反代/公网入口下 consoleUrl（服务端自视角）对调用方不可达，
-          // 优先用通道层按本次请求头推导的 requestBase，无请求上下文的通道（小智等）回退 consoleUrl
-          const base = String(ctx.requestBase || consoleUrl).replace(/\/$/, '')
+          const t = out.target!
+          const nodeEp = (tail: string) => `${t.baseUrl}/sessions/${enc(t.sessionId)}/files/resumable${tail}`
+          const chunkUrl = nodeEp(`/${enc('<nodeUploadId>')}`)
           // 任务状态回显 + 非 draft 警示：AI 常犯「create 带 message 已开跑才想起传附件」——
           // 执行者此刻已开始工作，附件传完也读不到；正确流程是 draft → 传附件 → send 启动
           const taskStatus = task0.status
           const notDraftHint = taskStatus !== 'draft'
             ? { warning: `任务当前状态 ${taskStatus}（已在执行或已结束，大概率是 create 带了 message）——本次上传执行者很可能读不到。推荐流程：create 不带 message（draft）→ 传附件 → task_manage send 引用路径启动` }
             : {}
-          const enc = encodeURIComponent
-          const uploadId = String(out.uploadId || '')
-          const ep = (tail: string) => `${base}/api/tasks/${enc(tid)}/attachments/resumable/${enc(uploadId)}${tail}`
           return JSON.stringify({
             ok: true,
             taskId: tid,
             taskStatus,
             ...notDraftHint,
-            uploadId,
-            name: String(args.name || ''),
-            size,
-            received: out.received || 0,
-            chunkBytes: 8 * 1024 * 1024,
-            endpoints: {
-              chunk: { method: 'PUT', url: `${ep('')}?offset=<已传字节数>`, body: '原始分片字节（≤8MB/片，按顺序追加；offset 必须等于服务端已接收字节数，409 时先 GET status 对账）' },
-              status: { method: 'GET', url: ep(''), desc: '查询服务端已接收字节数（断点续传对账用）' },
-              complete: { method: 'POST', url: `${ep('')}/complete`, desc: '完成上传（异步受理，立即返回 accepted/relaying）：中继转服务端后台执行，落盘结果轮询任务附件列表（GET /api/tasks/<taskId>）或本 status 端点确认；重复提交返回 RELAYING' },
+            uploadId: out.uploadId,
+            name: out.name,
+            size: out.size,
+            targetAgent: { agentId: t.agentId, agentName: t.agentName, sessionId: t.sessionId },
+            direct: {
+              baseUrl: t.baseUrl,
+              apiKey: t.apiKey,
+              sessionId: t.sessionId,
+              auth: `所有节点请求带 Authorization: Bearer ${t.apiKey}`,
+              endpoints: {
+                init: { method: 'POST', url: nodeEp(`?name=${enc(out.name!)}&size=${out.size}`) + (args.mimeType ? `&mimeType=${enc(String(args.mimeType))}` : ''), desc: '节点侧初始化 → 返回 data.uploadId（nodeUploadId）' },
+                chunk: { method: 'PUT', url: chunkUrl.replace('<nodeUploadId>', '<nodeUploadId>') + '?offset=<已传字节数>', body: '原始分片字节（建议 4MB/片，顺序追加；offset 必须等于节点已接收字节数，409 时 GET status 对账）' },
+                status: { method: 'GET', url: chunkUrl, desc: '查询节点已接收字节数（断点续传对账用）' },
+                complete: { method: 'POST', url: `${chunkUrl}/complete`, desc: '节点侧完成 → 返回 data.files[0].path（工作区落盘绝对路径）' },
+              },
+              example: [
+                `# ① 初始化（拿 nodeUploadId）`,
+                `curl -X POST -H "Authorization: Bearer ${t.apiKey}" "${nodeEp(`?name=${enc(out.name!)}&size=${out.size}`)}"`,
+                `# ② 顺序 PUT 分片（每片 4MB，offset=已传字节数）`,
+                `curl -X PUT -H "Authorization: Bearer ${t.apiKey}" --data-binary @chunk.bin "${chunkUrl}?offset=0"`,
+                `# ③ 完成（拿落盘路径）`,
+                `curl -X POST -H "Authorization: Bearer ${t.apiKey}" "${chunkUrl}/complete"`,
+                `# ④ 回本服务登记（把 ③ 返回的 path 填入 path 参数）`,
+                `curl -X POST -H "Authorization: Bearer <AI令牌>" -H "Content-Type: application/json" -d '{"uploadId":"${out.uploadId}","path":"<③的path>"}" "${base}/api/tasks/${enc(tid)}/attachments/direct/register"`,
+              ].join('\n'),
             },
-            auth: '与本次工具调用相同的 AI 令牌：Authorization: Bearer <AI令牌>（也支持 X-WorkBuddy-Token 头或 ?token= 查询参数）',
-            example: `curl -X PUT -H "Authorization: Bearer <AI令牌>" --data-binary @chunk.bin "${ep('')}?offset=0"`,
-            notes: 'complete 为异步受理（立即返回 accepted/relaying，中继在服务端后台执行）：确认落盘用 GET /api/tasks/<taskId> 的 attachments（name/size 匹配）或 status 端点轮询；失败时 status 返回 state=failed+error，可直接重试 complete。任务仍是 draft 未执行——确认附件落盘后用 workbuddy_task_manage {action:"send", taskId, message:"…<路径>…"} 才开始分析。旧版节点无分片端点时自动降级 multipart（≤100MB），2GB 文件要求节点支持 /files/resumable 协议',
+            registerHint: { action: 'upload_register', taskId: tid, uploadId: out.uploadId, path: '<节点 complete 返回的 files[0].path>' },
+            notes: 'P2P 直传：文件字节直连 DSH 节点，不经本服务。节点 complete 成功后必须调 upload_register 登记（否则任务附件列表/其它成员看不到该文件）。多成员协作：register 返回 downloadUrl + 节点密钥，把它们写进 send 的 message，其它节点的成员自行 curl 下载。任务仍是 draft 未执行——登记后再 send 才开始分析',
             consoleUrl,
           }, null, 2)
         }
-        const out = await engine.resumableStatus(tid, String(args.uploadId || ''))
-        return JSON.stringify(out, null, 2)
+        // upload_register：凭节点侧落盘路径登记附件
+        const out = await engine.directUploadRegister(tid, String(args.uploadId || ''), String(args.path || ''), Number(args.size) || 0, args.mimeType ? String(args.mimeType) : undefined)
+        if (!out.ok) return JSON.stringify(out, null, 2)
+        const a = out.attachment!
+        return JSON.stringify({
+          ok: true,
+          taskId: tid,
+          attachment: { name: a.name, path: a.path, size: a.size },
+          downloadUrl: a.downloadUrl,
+          downloadAuth: '跨节点下载需带节点密钥头：Authorization: Bearer <init 返回的 apiKey>（DSH 下载接口不支持 query 密钥）',
+          example: `curl -H "Authorization: Bearer <节点apiKey>" -o ${a.name} "${a.downloadUrl}"`,
+          multiAgentHint: '多成员协作：把 downloadUrl 与节点 apiKey 写进 workbuddy_task_manage {action:"send"} 的 message，其它节点的成员用它下载文件',
+          nextAction: `任务仍是 draft 未执行：用 workbuddy_task_manage {action:"send", taskId:"${tid}", message:"附件已就位（路径 ${a.path}${a.downloadUrl ? '，跨节点下载 ' + a.downloadUrl : ''}），请分析…"} 开始`,
+          consoleUrl,
+        }, null, 2)
       }
       // 目标解析优先级：① agent 命中子智能体 → 其节点 + workDir；② taskId（或 agent=__node__）→ 任务/项目节点主会话 + 项目 workspace
       const agentId = String(args.agent || '').trim()
