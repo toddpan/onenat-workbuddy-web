@@ -52,7 +52,7 @@ node dist/server.js --port 3081 \
 
 | 项 | 默认 | 说明 |
 |---|---|---|
-| `onenatBaseUrl` | `https://onenat.sooncore.com` | ONENAT 服务地址（HTTPS 域名入口；旧 `http://123.57.138.43:18080` 已弃用） |
+| `onenatBaseUrl` | `https://onenat.sooncore.com` | ONENAT 服务地址（HTTPS 域名入口；旧 `http://<旧IP入口>:18080` 已弃用） |
 | `onenatApiKey` | 内置默认 | `onk-…` AI 只读 Key |
 | `autoRefreshMs` | 60000 | 资源目录自动刷新间隔 |
 | `planner.mode` | `auto` | LLM 规划器：auto=本地 DSH 优先；agent=指定子智能体节点 |

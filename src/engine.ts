@@ -1524,7 +1524,7 @@ export class TaskEngine {
     }
     // 窗口结束 ask 工具仍 running：远端悬停在提问上，但批次不可桥接 ——
     // 实测形态：批次被浏览器应答器持走 / waterfall 归属失败（/questions count=0）或节点过旧（无路由）。
-    // 此时答复桥触达不了，唯一可靠杠杆是 cancelSession 中止悬停回合（笔记本节点节点实测 running→idle）。
+    // 此时答复桥触达不了，唯一可靠杠杆是 cancelSession 中止悬停回合（笔记本节点实测 running→idle）。
     if (streamCtrl.signal.aborted || !this.askToolStillRunning(taskId, turnId)) return
     askWatch.fired = true
     askWatch.mode = 'unbridged'
@@ -2595,7 +2595,7 @@ export class TaskEngine {
     if (opts?.modelOverride === 'default') {
       // 模型回退自愈（runSubtask）：agent 自带模型上游失败后重建会话。
       // 回退目标 = 调度模型（任务级/全局 planner 选中值）——不是「不带模型」：节点默认模型
-      // 本身也可能就是坏的（实测 测试环境B defaultModel 指向不可用的 qwen38）。调度模型也空时才用节点默认。
+      // 本身也可能就是坏的（实测某节点 defaultModel 指向不可用的模型）。调度模型也空时才用节点默认。
       const pm = plannerModelSetting || ''
       const slash = pm.indexOf('/')
       targetProvider = slash >= 0 ? pm.slice(0, slash).trim() || undefined : undefined

@@ -7,7 +7,7 @@
  *      → 二次挂起再次等待 → 停止自动解挂批次
  *   5（stub-ask2，无答复桥：/questions 404）：悬停不可桥接 → 监视窗结束即表面化问题内容 +
  *      中止远端悬停回合（cancelSession）→ 会话回 idle，用户下一条消息作新指令执行
- * 复现线上两种真实卡死形态（brain 批次挂 67 分钟 / 笔记本节点批次不可见悬停）。
+ * 复现线上两种真实卡死形态（远程批次挂 67 分钟 / 笔记本批次不可见悬停）。
  */
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'

@@ -92,7 +92,7 @@ node dist/server.js --port 3081 \
 控制台与全部业务 API（`{prefix}/api/**`）均需登录：未登录访问控制台返回登录页，访问 API 返回 401；
 `/healthz` 保持公开供探活。
 
-- 管理员默认 `workbuddy / workbuddy-admin`，**仅首次启动**播种到 `dataDir/auth.json`
+- 管理员默认 `workbuddy / workbuddy-admin`（请首次登录后立即修改），**仅首次启动**播种到 `dataDir/auth.json`
   （scrypt 加盐哈希，不落明文）；之后改密码请走 API，再改环境变量/启动参数不生效；
 - 会话为 HttpOnly Cookie（`wb_session`），7 天滑动过期；服务重启后需重新登录；
 - 登录失败限速：单 IP 5 分钟内 10 次失败即 429（另有 400ms 失败延迟）；

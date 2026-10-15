@@ -12,7 +12,7 @@ function defaultSettings(): WorkBuddySettings {
   return {
     onenat: {
       baseUrl: 'https://onenat.sooncore.com',
-      apiKey: 'onk-REDACTED-rotate-this-key',
+      apiKey: '', // 凭证不入库默认值：首次启动后在设置页填写，或经环境注入
       autoRefreshMs: 60_000,
     },
     planner: {},

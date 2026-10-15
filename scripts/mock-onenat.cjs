@@ -1,5 +1,5 @@
 /**
- * Mock ONENAT 服务 — 仅为本地链路验证用（云端 123.57.138.43:18080 恢复后无需此服务）
+ * Mock ONENAT 服务 — 仅为本地链路验证用（云端旧 IP 入口恢复后无需此服务）
  * 数据形状与真实 ONENAT /api/v1 完全一致（见 onenat-skill.md 实测）
  */
 const http = require('node:http')

@@ -118,7 +118,7 @@ export function sanitizeEngineInstruction(
 /**
  * 从子任务文本恢复指派成员（agentId 缺失/非法时的兜底回推）：模型偶发整段漏写 agentId 字段，
  * 改在指令里用成员名/节点身份表达分工（线上 2026-10-13 禅道同步规划实证：prompt 写
- * 「你在笔记本节点节点执行本子任务」但无 agentId → 全部子任务被过滤 → 静态兜底把整段塌给被 @ 成员）。
+ * 「你在甲节点执行本子任务」但无 agentId → 全部子任务被过滤 → 静态兜底把整段塌给被 @ 成员）。
  * 三层匹配，各自要求「唯一命中」才恢复（歧义一律不猜，维持过滤）：
  *   1. 节点归属语句「在 X 节点…」：X（空白归一后）唯一对应某成员 nodeLabel；
  *   2. 成员名唯一出现在 title+prompt；
@@ -132,7 +132,7 @@ export function recoverAssigneeFromText(
   if (!text.trim() || !members.length) return undefined
   const norm = (v: string) => v.replace(/\s+/g, '')
   // 全文节点命中：≥2 个成员的节点标注被提及 → 指派归属无法唯一判定，不猜
-  //（「再到 测试环境B 环境节点推送」这类数据流表述没有「在」字，归属语句正则抓不到，必须先做全文歧义检查）
+  //（「再到乙环境节点推送」这类数据流表述没有「在」字，归属语句正则抓不到，必须先做全文歧义检查）
   const nodeHits = [...new Set(
     members
       .filter((m) => m.nodeLabel && norm(m.nodeLabel).length >= 2 && norm(text).includes(norm(m.nodeLabel)))

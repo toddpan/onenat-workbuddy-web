@@ -1,6 +1,6 @@
 # OneNat WorkBuddy 附件上传 P2P 直传 实现文档
 
-> 状态：已实现并部署线上（2026-10-14，commit `c6cf023`，internal-deploy 环境）。
+> 状态：已实现并部署线上（2026-10-14，commit `c6cf023`，内网部署环境）。
 > 前代方案（服务端暂存 + 分片中继）已整体删除，本文描述现行 P2P 架构，并在附录记录演进史供考古。
 > 关联：`docs/streaming-integrity.md`（流式）、`docs/standalone-deploy.md`（部署）。
 
@@ -82,8 +82,8 @@ workbuddy 从「数据面」退役为「控制面」：只下发直连配方与�
   "uploadId": "dup-9e5e4f38…",
   "taskId": "task-6a216377",
   "name": "app.log", "size": 20971520,
-  "target": { "agentId": "__node__", "agentName": "笔记本节点-DSH · 主会话",
-              "baseUrl": "http://natpass.yikaihui.com:31285/api/v1",
+  "target": { "agentId": "__node__", "agentName": "笔记本-DSH · 主会话",
+              "baseUrl": "http://<公网隧道域名>:31285/api/v1",
               "apiKey": "<节点apiKey>", "sessionId": "session-945c…" }
 }
 ```
@@ -119,12 +119,12 @@ init 会据此合成 `direct.baseUrlIntranet` 一并下发。**该地址有歧�
 - 两套基址除前缀外端点完全一致，apiKey 通用
 - 提速场景：调用方与节点同机/同内网（AI 宿主跑在节点本机上时走回环）
 - 代价：跨内网时多付一次短超时探测（wbmcp 6s / 控制台 5s）
-- **实战验证（2026-10-14，internal-deploy 线上 4 节点全测）**：
+- **实战验证（2026-10-14，内网部署线上 4 节点全测）**：
   - 同机命中：AI 宿主=笔记本节点，目标=笔记本节点（local 127.0.0.1:19387）→ 内网回环，20MB 2s（公网 54s）
   - 跨内网回退：目标=测试环境B（local 127.0.0.1:3080，本机该端口无监听）→ 即时 Connection refused → 回退公网，1MB 6s
   - **端口碰撞（最严苛）**：目标=家 WINDOWS 笔记本（local 同为 127.0.0.1:19387）→ 探测撞上本机自己的真实 DSH →
     会话自证拒绝（本机 DSH 不认识家 WINDOWS 任务创建的 sessionId）→ 回退公网，文件正确落至
-    `C:\Users\webmaster\...`，本机 DSH 工作区零污染
+    `C:\Users\<用户名>\...`，本机 DSH 工作区零污染
 
 ### 3.3.1 流式代理回退（浏览器专用）
 
@@ -139,7 +139,7 @@ fetch（`127.0.0.1` 豁免）。因此浏览器直连仅在本机节点场景可
 （等价 register，返回 attachment/downloadUrl/downloadUrlIntranet）。失败可重试（重新 init 全量重传）。
 
 - AI/wbmcp 通道无混合内容概念，保持纯 P2P 直传，不走此端点
-- 代价：浏览器 + 远程节点场景带宽回到隧道速度（如 测试环境B ~0.4MB/s）；同机节点仍走 127.0.0.1 直连豁免
+- 代价：浏览器 + 远程节点场景带宽回到隧道速度（如远程节点 ~0.4MB/s）；同机节点仍走 127.0.0.1 直连豁免
 - 状态面板：代理上传阶段进度条为浏览器→workbuddy 实速；满格后节点侧收尾通常瞬间完成（管道式）
 
 ### 3.4 跨节点下载
@@ -204,7 +204,7 @@ wbmcp.sh putfile <本地文件> <taskId> [远端文件名]
     complete 路径 / register / 跨节点下载字节一致 + 无密钥 401 / 防重复登记 / 超 2GB 拒绝 / 非 draft 警示 / MCP 通道
   - `scripts/attachment-e2e.mjs`（控制台会话通道，7 项）：登录 → init → 直传 → register → 附件 → 下载比对
 - MCP 冒烟 `scripts/smoke-mcp-server.mjs` 25/25；typecheck + standalone 构建通过
-- 线上（internal-deploy 公网入口 + 笔记本节点真实节点）：wbmcp putfile 20MB 全程 54s；
+- 线上（部署环境公网入口 + 笔记本真实节点）：wbmcp putfile 20MB 全程 54s；
   下载 URL + 密钥取回**字节级一致**（cmp）；附件 `source=direct` + nodeBaseUrl；旧中继端点已 403/404 下线
 
 ---

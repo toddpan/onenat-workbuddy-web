@@ -77,7 +77,7 @@ const HELP = `OneNat WorkBuddy — 独立部署 WEB 服务（不依赖 DSH）
       --token <token>         AI APIKEY 种子（env WORKBUDDY_TOKEN；存储为空时写入；未配置任何令牌时工具通道拒绝一切调用）
       --xiaozhi-mcp <url>     小智平台 MCP 接入点（env WORKBUDDY_XIAOZHI_MCP；存储为空时作种子，设置页可改）
       --admin-username <name> 管理员用户名（env WORKBUDDY_ADMIN_USERNAME；默认 workbuddy，仅首次播种生效）
-      --admin-password <pwd>  管理员密码（env WORKBUDDY_ADMIN_PASSWORD；默认 workbuddy-admin，仅首次播种生效）
+      --admin-password <pwd>  管理员密码（env WORKBUDDY_ADMIN_PASSWORD；默认 workbuddy-admin（首次启动后请立即修改），仅首次播种生效）
       --quiet                 关闭请求日志
   -h, --help                  显示帮助
   -v, --version               显示版本

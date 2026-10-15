@@ -2258,7 +2258,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
       <div class="panel" style="margin-top:12px">
         <div class="lib-head"><b>🔗 平台公网地址</b><span class="lib-tip">安装任务里给 DSH 的下载链接基址；留空 = 按浏览器访问域名自动推断</span></div>
         <div style="padding:10px 14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-          <input id="lib-base" placeholder="例如 https://onenat.yikaihui.com/onenat-workbuddy" style="flex:1;min-width:260px;width:auto">
+          <input id="lib-base" placeholder="例如 https://your-host.example.com/onenat-workbuddy" style="flex:1;min-width:260px;width:auto">
           <button class="mini-btn" id="lib-base-save">保存</button>
         </div>
       </div>
@@ -2288,7 +2288,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
       <div class="panel" style="margin-top:12px">
         <div class="lib-head"><b>🔗 平台公网地址</b><span class="lib-tip">安装任务里给 DSH 的下载链接基址；留空 = 按浏览器访问域名自动推断</span></div>
         <div style="padding:10px 14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-          <input id="lib-base2" placeholder="例如 https://onenat.yikaihui.com/onenat-workbuddy" style="flex:1;min-width:260px;width:auto">
+          <input id="lib-base2" placeholder="例如 https://your-host.example.com/onenat-workbuddy" style="flex:1;min-width:260px;width:auto">
           <button class="mini-btn" id="lib-base2-save">保存</button>
         </div>
       </div>
