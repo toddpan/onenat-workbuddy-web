@@ -126,6 +126,22 @@ init 会据此合成 `direct.baseUrlIntranet` 一并下发。**该地址有歧�
     会话自证拒绝（本机 DSH 不认识家 WINDOWS 任务创建的 sessionId）→ 回退公网，文件正确落至
     `C:\Users\webmaster\...`，本机 DSH 工作区零污染
 
+### 3.3.1 流式代理回退（浏览器专用）
+
+**约束**：控制台页面是 https，而节点直传地址是 http —— 浏览器混合内容策略会拦截 https→http 的
+fetch（`127.0.0.1` 豁免）。因此浏览器直连仅在本机节点场景可用；目标为远程节点时两个候选
+（内网/公网）都会失败。
+
+**回退**：直连任一环节失败，控制台自动改走
+`POST /api/tasks/:taskId/attachments/direct/relay?uploadId=<init 下发的会话>`——
+浏览器把整文件 PUT 给 workbuddy（同源 https，无混合内容问题），服务端**边收边以 4MB 分片**
+写入节点 resumable 会话（纯管道不落盘，>8MB 触发读端背压，内存有界），节点 complete 后自动登记附件
+（等价 register，返回 attachment/downloadUrl/downloadUrlIntranet）。失败可重试（重新 init 全量重传）。
+
+- AI/wbmcp 通道无混合内容概念，保持纯 P2P 直传，不走此端点
+- 代价：浏览器 + 远程节点场景带宽回到隧道速度（如 测试环境B ~0.4MB/s）；同机节点仍走 127.0.0.1 直连豁免
+- 状态面板：代理上传阶段进度条为浏览器→workbuddy 实速；满格后节点侧收尾通常瞬间完成（管道式）
+
 ### 3.4 跨节点下载
 
 ```
@@ -215,6 +231,8 @@ wbmcp.sh putfile <本地文件> <taskId> [远端文件名]
 | 节点 PUT 409 | offset ≠ 节点已收字节（并发/重试） | 按 409 响应 `data.received` 对账续传（putfile/控制台自动处理） |
 | 下载 401 | 未带 Bearer 头或密钥错 | `-H "Authorization: Bearer <init 返回的 apiKey>"` |
 | 内网通道探测失败（正常现象） | 调用方与节点不同机/不同内网 | 自动回退公网隧道，无需处理 |
+| 控制台报「所有直传通道均不可达」且不回退 | 旧版前端（无流式代理回退） | 重新部署/强刷页面 |
+| 浏览器控制台出现 Mixed Content 报错 | https 页面直连 http 节点被拦 | 属预期：前端已自动改走流式代理，无需处理 |
 | 跨节点下载 404 | path 与节点侧实际落盘不一致 | 以节点 complete 返回的 `files[0].path` 为准 |
 
 ---

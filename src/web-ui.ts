@@ -7006,6 +7006,10 @@ function uploadAttachments(files) {
       const mime = f.type || '';
       const sessSeg = encodeURIComponent(t.sessionId);
 
+      let destPath = null, dlUrl = null;
+
+      // ②-⑤ P2P 直传（内网/本机基址优先 + 会话自证 + 公网兜底）
+      const directUpload = async () => {
       // ② 节点侧 init：内网/本机基址优先（会话自证——sessionId 只有目标任务节点认识，返回 uploadId 即证明通向的就是它），
       //    失败/超时自动回退公网隧道；两套端点除基址外完全一致
       const candidates = [];
@@ -7061,10 +7065,36 @@ function uploadAttachments(files) {
         body: JSON.stringify({ uploadId: upId, path: destPath, size: f.size, mimeType: mime || undefined }),
       });
       if (!(reg.status < 300 && reg.json?.ok)) throw new Error(reg.json?.error || 'register HTTP ' + reg.status);
+      destPath = reg.json.data?.attachment?.path || destPath;
+      dlUrl = reg.json.data?.attachment?.downloadUrl || '';
+      };
+
+      try {
+        await directUpload();
+      } catch (directErr) {
+        // 直连失败（常见：浏览器 https 页面 → http 节点地址，被混合内容策略拦截；或目标节点不可达）
+        // → 流式代理回退：整文件 PUT 给本服务（同源 https），服务端边收边以 4MB 分片转发节点（纯管道不落盘）
+        r.pct = 0; renderRow(r);
+        const done = await new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open('POST', API + '/tasks/' + taskId + '/attachments/direct/relay?uploadId=' + encodeURIComponent(upId));
+          xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+          xhr.upload.onprogress = e => { if (e.lengthComputable) { r.pct = Math.min(99, Math.floor(e.loaded * 100 / f.size)); r.loaded = e.loaded; r.total = f.size; renderRow(r); } };
+          xhr.onload = () => {
+            let j = null; try { j = JSON.parse(xhr.responseText); } catch (err) {}
+            if (xhr.status >= 200 && xhr.status < 300 && j && j.ok) return resolve(j);
+            reject(new Error((j && j.error) || '代理 HTTP ' + xhr.status));
+          };
+          xhr.onerror = () => reject(new Error('代理网络错误'));
+          xhr.send(f);
+        });
+        const att = (done.data || {}).attachment || {};
+        destPath = att.path || f.name; dlUrl = att.downloadUrl || '';
+      }
       r.dest = destPath; r.memberCount = 1;
       r.status = 'done'; r.pct = 100; renderRow(r);
-      let line = '[附件·直传] ' + destPath + ' (' + fmtSize(f.size) + ')';
-      if (reg.json.data?.downloadUrl) line += '\\n[跨节点下载] ' + reg.json.data.downloadUrl + ' （请求头 Authorization: Bearer <节点apiKey>）';
+      let line = '[附件' + (dlUrl ? '·直传' : '') + '] ' + destPath + ' (' + fmtSize(f.size) + ')';
+      if (dlUrl) line += '\\n[跨节点下载] ' + dlUrl + ' （请求头 Authorization: Bearer <节点apiKey>）';
       appendAttachmentLine(line);
     } catch (e) {
       r.status = 'error';

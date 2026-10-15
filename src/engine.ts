@@ -7,6 +7,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import type { IncomingMessage } from 'node:http'
 import { mkdir, writeFile, appendFile, stat, readFile, readdir, rm, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { PromptResult, DshTarget } from './remote-client.js'
@@ -3093,6 +3094,93 @@ export class TaskEngine {
       ok: true,
       attachment: { name: pending.name, path: safePath, size: attSize, mimeType: mimeType || pending.mimeType, agentId: pending.agentId, agentName: pending.agentName, downloadUrl },
       ...(downloadUrlIntranet ? { downloadUrlIntranet } : {}),
+    }
+  }
+
+  /**
+   * 直传回退（流式代理）：浏览器 https 页面无法直连 http 节点地址（混合内容拦截，127.0.0.1 豁免除外）。
+   * 调用方把文件体原样 PUT 到本端点，服务端边收边以 4MB 分片写入节点 resumable 会话——
+   * 纯管道不落盘，内存有界（>8MB 触发读端背压）。完成后自动登记附件（等价 directUploadRegister）。
+   * 失败不消费登记簿：可重试本端点（节点侧重新 init 全量重传）。
+   */
+  public async directUploadRelay(
+    taskId: string,
+    uploadId: string,
+    body: IncomingMessage,
+  ): Promise<{
+    ok: boolean
+    accepted?: boolean
+    attachment?: { name: string; path: string; size: number; mimeType?: string; agentId: string; agentName: string; downloadUrl: string }
+    downloadUrlIntranet?: string
+    error?: string
+  }> {
+    this.pruneDirectPending()
+    const pending = this.directPending.get(uploadId)
+    if (!pending || pending.taskId !== taskId) return { ok: false, error: '直传会话不存在或已登记过（init 后 30 分钟内有效）' }
+    const task = this.store.getTask(taskId)
+    if (!task) return { ok: false, error: '任务不存在' }
+    const target = await this.resolveExecTarget(task, pending.agentId)
+    if (!target?.online || !target.baseUrl) return { ok: false, error: '节点不可用' }
+    const sessionId = pending.nodeSessionId
+
+    // 请求体 → 有界缓冲队列（背压：>8MB 暂停读，消费后恢复）
+    const queue: Buffer[] = []
+    let queued = 0
+    let ended = false
+    let streamErr: any = null
+    let wakeup: (() => void) | null = null
+    body.on('data', (c: Buffer) => {
+      queue.push(c)
+      queued += c.length
+      if (queued > 8 * 1024 * 1024) body.pause()
+      const w = wakeup
+      if (w) { wakeup = null; w() }
+    })
+    body.once('end', () => { ended = true; const w = wakeup; if (w) { wakeup = null; w() } })
+    body.once('error', (e: any) => { streamErr = e ?? new Error('上传流错误'); ended = true; const w = wakeup; if (w) { wakeup = null; w() } })
+
+    let buf = Buffer.alloc(0)
+    const readSlice = async (offset: number, length: number): Promise<Buffer> => {
+      while (buf.length < length && !ended) {
+        if (!queue.length) { body.resume(); await new Promise<void>((r) => { wakeup = r }) }
+        while (queue.length) {
+          const c = queue.shift()!
+          buf = Buffer.concat([buf, c])
+          queued -= c.length
+        }
+        if (streamErr) { const e = streamErr; streamErr = null; throw e }
+      }
+      while (queue.length) { buf = Buffer.concat([buf, queue.shift()!]) }
+      if (buf.length < length && ended) {
+        if (buf.length === 0) throw new Error(`客户端上传字节数不足（节点已确认 ${offset}/${pending.size}）`)
+        length = buf.length // 末段短读：节点按实收字节记账
+      }
+      const out = buf.subarray(0, length)
+      buf = buf.subarray(length)
+      if (buf.length === 0) buf = Buffer.alloc(0)
+      return out
+    }
+
+    const up = await this.client.uploadFileResumable(
+      target,
+      sessionId,
+      { filename: pending.name, mimeType: pending.mimeType, size: pending.size },
+      readSlice,
+      { chunkSize: 4 * 1024 * 1024 },
+    ).catch((e: any) => ({ ok: false as const, error: e?.message || String(e) }))
+    if (!up.ok) {
+      this.taskLog(taskId, 'error', `附件流式代理失败（${pending.agentName}）: ${up.error}`)
+      return { ok: false, error: up.error }
+    }
+    const saved = (up.files || [])[0]
+    if (!saved?.path) return { ok: false, error: '节点 complete 未返回落盘路径' }
+    const reg = await this.directUploadRegister(taskId, uploadId, saved.path, saved.size || pending.size, pending.mimeType)
+    if (!reg.ok) return { ok: false, error: reg.error }
+    return {
+      ok: true,
+      accepted: true,
+      attachment: reg.attachment,
+      ...(reg.downloadUrlIntranet ? { downloadUrlIntranet: reg.downloadUrlIntranet } : {}),
     }
   }
 

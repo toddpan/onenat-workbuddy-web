@@ -210,6 +210,20 @@ async function main() {
   const reInit = await req('POST', `${PREFIX}/api/tools/workbuddy_file_manage`, { action: 'upload_resumable_init', taskId, name: 'late.log', size: 1 })
   check('非 draft 任务 init 带警示', typeof reInit.json?.result?.warning === 'string', String(reInit.json?.result?.warning || '').slice(0, 80))
 
+  // 8.5 流式代理回退（浏览器混合内容场景）：文件体直接 POST 给 workbuddy，服务端边收边转发节点（不落盘）
+  const init2 = await req('POST', `${PREFIX}/api/tools/workbuddy_file_manage`, { action: 'upload_resumable_init', taskId, name: 'relay.log', size: 10, mimeType: 'text/plain' })
+  const up2 = init2.json?.result?.uploadId
+  const relay = await fetch(`${BASE}${PREFIX}/api/tasks/${taskId}/attachments/direct/relay?uploadId=${encodeURIComponent(up2)}`, {
+    method: 'POST', headers: { 'X-WorkBuddy-Token': AI_TOKEN, 'Content-Type': 'application/octet-stream' }, body: Buffer.from('relaybytes'),
+  })
+  const relayJson = await relay.json().catch(() => ({}))
+  check('流式代理受理成功', relay.status === 200 && relayJson?.data?.accepted === true && (relayJson?.data?.attachment?.path || '').endsWith('/relay.log'), JSON.stringify([relay.status, relayJson?.data?.accepted, relayJson?.data?.attachment?.path]))
+  const dl2 = await fetch(relayJson?.data?.attachment?.downloadUrl, { headers: { Authorization: `Bearer ${NODE_KEY}` } })
+  const dl2Buf = Buffer.from(await dl2.arrayBuffer())
+  check('代理落盘文件可经下载 URL 取回且内容一致', dl2.status === 200 && dl2Buf.toString() === 'relaybytes', `status=${dl2.status}`)
+  const detail2 = await req('GET', `${PREFIX}/api/tasks/${taskId}`)
+  check('代理与直传附件并存（登记 = 2）', (detail2.json?.data?.attachments || []).length === 2)
+
   // 9. MCP 通道 init（免会话头宽松模式）
   const mcp = await fetch(`${BASE}${PREFIX}/mcp`, {
     method: 'POST', headers: { ...AI_H, Accept: 'application/json' },

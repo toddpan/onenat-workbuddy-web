@@ -557,7 +557,7 @@ function isAiTokenAllowedPath(pathname: string, prefix: string): boolean {
   // 任务级文件面：下载成员工作区文件 / 附件上传（最大 2GB）/ 任务清单与统计（读）；messages 为多轮追问
   if (/^\/api\/tasks\/[^/]+\/(files\/download|attachments|todos|stats|messages)$/.test(p)) return true
   // 附件 P2P 直传控制面：init 下发节点直连配方（地址+密钥，文件字节不经本服务），register 登记落盘结果
-  if (/^\/api\/tasks\/[^/]+\/attachments\/direct\/(init|register)$/.test(p)) return true
+  if (/^\/api\/tasks\/[^/]+\/attachments\/direct\/(init|register|relay)$/.test(p)) return true
   // 任务只读面（状态/详情/流）：AI 令牌跟踪自己派发的任务用
   if (/^\/api\/tasks\/[^/]+$/.test(p)) return true
   if (p === '/api/tasks') return true

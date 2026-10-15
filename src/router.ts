@@ -2835,6 +2835,22 @@ export class WorkBuddyRouter {
       this.sendJson(res, result.ok ? 200 : 400, { ok: result.ok, data: result.ok ? result : undefined, error: result.error })
       return true
     }
+    // 附件流式代理回退：浏览器 https 页面无法直连 http 节点（混合内容拦截）→ 文件体 PUT 给本端点，
+    // 服务端边收边以 4MB 分片写入节点 resumable 会话（纯管道不落盘），完成后自动登记附件。
+    // ⚠ 裸流端点：请求体不进 parseBody，必须先于任何会消费 body 的通用处理
+    const directRelayMatch = /^\/api\/tasks\/([^/]+)\/attachments\/direct\/relay$/.exec(p)
+    if (directRelayMatch && method === 'POST') {
+      const taskId = decodeURIComponent(directRelayMatch[1])
+      const url = new URL(req.url || '/', 'http://localhost')
+      const uploadId = String(url.searchParams.get('uploadId') || '')
+      try {
+        const result = await this.engine.directUploadRelay(taskId, uploadId, req)
+        this.sendJson(res, result.ok ? 200 : 400, { ok: result.ok, data: result.ok ? result : undefined, error: result.error })
+      } catch (err: any) {
+        this.sendJson(res, 500, { ok: false, error: err?.message || String(err) })
+      }
+      return true
+    }
     // 会话工作区文件下载（代理成员远端 DSH，支持 AI 回复中的绝对/相对路径）
     const dlMatch = /^\/api\/tasks\/([^/]+)\/files\/download$/.exec(p)
     if (dlMatch && method === 'GET') {
