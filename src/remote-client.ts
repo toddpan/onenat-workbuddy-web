@@ -383,27 +383,70 @@ export class DshClient {
     }
   }
 
-  /** 远端绝对路径文件下载/预览流（返回 Response） */
+  /**
+   * 流式下载通用请求。
+   * 注意：不能用 AbortSignal.timeout(ms) 充当下载超时 —— 那是"发起后固定 ms 必中止"的
+   * 总时限，响应体还在流式传输时也会被掐断，大文件下载必然中途断开（表现为每次都断在
+   * 差不多的字节数，如 100M 文件按 ~340KB/s 在 60s 断在 ~20M）。
+   * 这里改为"空闲超时"：每收到一段响应数据就重置计时器，只有持续 idleMs 无数据（真卡死）
+   * 才中止；流正常结束或对端取消时清理计时器。
+   */
+  private async streamDownload(
+    url: string,
+    headers: Record<string, string>,
+    idleMs: number,
+    readError: (res: Response) => Promise<string>,
+  ): Promise<{ ok: boolean; res?: Response; error?: string; status?: number }> {
+    const ac = new AbortController()
+    let idleTimer: ReturnType<typeof setTimeout> | undefined
+    const touch = () => {
+      if (idleTimer) clearTimeout(idleTimer)
+      idleTimer = setTimeout(() => ac.abort(new Error(`下载空闲超过 ${Math.round(idleMs / 1000)}s，已中止`)), idleMs)
+    }
+    const clear = () => {
+      if (idleTimer) {
+        clearTimeout(idleTimer)
+        idleTimer = undefined
+      }
+    }
+    try {
+      touch()
+      const res = await fetch(url, { headers, signal: ac.signal })
+      if (!res.ok || !res.body) {
+        clear()
+        return { ok: false, error: await readError(res), status: res.status }
+      }
+      touch()
+      const transformer: Transformer<Uint8Array, Uint8Array> = {
+        transform: (chunk, ctrl) => {
+          touch()
+          ctrl.enqueue(chunk)
+        },
+        flush: () => clear(),
+      }
+      // TS 内置 Transformer 类型尚未收录 cancel（Streams 规范已支持）：对端取消时清理计时器
+      ;(transformer as { cancel?: () => void }).cancel = () => clear()
+      const guarded = res.body.pipeThrough(new TransformStream(transformer))
+      return { ok: true, res: new Response(guarded, { status: res.status, statusText: res.statusText, headers: res.headers }) }
+    } catch (err: any) {
+      clear()
+      return { ok: false, error: err?.message || '下载失败' }
+    }
+  }
+
+  /** 远端绝对路径文件下载/预览流（返回 Response 供流式转发；空闲超时保护，不设总时限） */
   public async fsDownload(
     target: DshTarget,
     filePath: string,
     inline?: boolean,
   ): Promise<{ ok: boolean; res?: Response; name?: string; error?: string }> {
-    try {
-      const url = `${clean(target.baseUrl)}/fs/download?path=${encodeURIComponent(filePath)}${inline ? '&inline=1' : ''}`
-      const res = await fetch(url, {
-        headers: this.headers(target.apiKey),
-        signal: AbortSignal.timeout(60_000),
-      })
-      if (!res.ok) {
-        const json: any = await res.json().catch(() => ({}))
-        return { ok: false, error: json?.error || `HTTP ${res.status}` }
-      }
-      const name = filePath.split(/[\\/]/).pop() || 'file'
-      return { ok: true, res, name }
-    } catch (err: any) {
-      return { ok: false, error: err?.message || '文件读取失败' }
-    }
+    const url = `${clean(target.baseUrl)}/fs/download?path=${encodeURIComponent(filePath)}${inline ? '&inline=1' : ''}`
+    const out = await this.streamDownload(url, this.headers(target.apiKey), 60_000, async (res) => {
+      const json: any = await res.json().catch(() => ({}))
+      return json?.error || `HTTP ${res.status}`
+    })
+    if (!out.ok || !out.res) return { ok: false, error: out.error || '文件读取失败' }
+    return { ok: true, res: out.res, name: filePath.split(/[\\/]/).pop() || 'file' }
   }
 
   /** 远端删除文件或目录 */
@@ -482,19 +525,15 @@ export class DshClient {
     }
   }
 
-  /** 下载远端会话工作区文件，返回原始 Response 供流式转发 */
+  /** 下载远端会话工作区文件，返回原始 Response 供流式转发（空闲超时保护，不设总时限） */
   public async downloadFile(target: DshTarget, sessionId: string, relPath: string): Promise<{ ok: boolean; res?: Response; name?: string; error?: string }> {
-    try {
-      const url = `${clean(target.baseUrl)}/sessions/${sessionId}/files/download?path=${encodeURIComponent(relPath)}`
-      const res = await fetch(url, { headers: this.headersAuth(target.apiKey), signal: AbortSignal.timeout(120_000) })
-      if (!res.ok || !res.body) {
-        const json: any = await res.json().catch(() => ({}))
-        return { ok: false, error: json?.error || `HTTP ${res.status}` }
-      }
-      return { ok: true, res, name: relPath.split('/').pop() }
-    } catch (err: any) {
-      return { ok: false, error: err?.message || '下载失败' }
-    }
+    const url = `${clean(target.baseUrl)}/sessions/${sessionId}/files/download?path=${encodeURIComponent(relPath)}`
+    const out = await this.streamDownload(url, this.headersAuth(target.apiKey), 120_000, async (res) => {
+      const json: any = await res.json().catch(() => ({}))
+      return json?.error || `HTTP ${res.status}`
+    })
+    if (!out.ok || !out.res) return { ok: false, error: out.error || '下载失败' }
+    return { ok: true, res: out.res, name: relPath.split('/').pop() }
   }
 
   // ---------- 技能管理（dsh-web-service /skills） ----------
