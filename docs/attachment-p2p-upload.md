@@ -106,13 +106,28 @@ workbuddy 从「数据面」退役为「控制面」：只下发直连配方与�
 }
 ```
 
-### 3.3 跨节点下载
+### 3.3 双地址：内网/本机基址优先（会话自证）
+
+mapping 节点的 ONENAT 目录带 `local` 字段（natpass 隧道的节点侧本机端，如 `127.0.0.1:19387`），
+init 会据此合成 `direct.baseUrlIntranet` 一并下发。**该地址有歧义**——每个节点的本机端都长这样，
+客户端无法从地址判断通向的是不是目标任务节点。
+
+判定不靠猜，靠**会话自证**：直传接口全部会话作用域（sessionId 是目标节点上的 UUID），
+对内网基址发一次节点 init——返回 `uploadId` 即证明通向的就是目标任务节点（可全程走内网）；
+404/401/超时则回退公网基址。即使探测被绕过，后续每个分片 PUT 也带 sessionId，错误机器上写不进任何字节。
+
+- 两套基址除前缀外端点完全一致，apiKey 通用
+- 提速场景：调用方与节点同机/同内网（AI 宿主跑在节点本机上时走回环）
+- 代价：跨内网时多付一次短超时探测（wbmcp 6s / 控制台 5s）
+
+### 3.4 跨节点下载
 
 ```
 curl -H "Authorization: Bearer <节点apiKey>" -o app.log "<downloadUrl>"
 ```
 
 密钥即 init 响应里的 `direct.apiKey`（节点级）；**URL 与密钥必须成对交付**。
+register 同时返回 `downloadUrlIntranet`（节点内网变体）——下载方与该节点同内网时优先尝试，失败用公网 `downloadUrl`。
 
 ---
 
@@ -142,8 +157,10 @@ curl -H "Authorization: Bearer <节点apiKey>" -o app.log "<downloadUrl>"
 wbmcp.sh putfile <本地文件> <taskId> [远端文件名]
 ```
 
-自动完成：MCP init → 节点侧 init → 4MB 分片直连节点（409 对账）→ 节点 complete →
-MCP upload_register → 回显「落盘路径 + 跨节点下载 URL」。实测 20MB 全程 54s（含分片 ~5s）。
+自动完成：MCP init → 直传通道优选（内网基址 6s 短超时探测，会话自证通过即走内网；失败回退公网）→
+节点侧 init → 4MB 分片直连（409 对账）→ 节点 complete → MCP upload_register →
+回显「落盘路径 + 跨节点下载 URL」。中断/超时直接重跑：状态文件（`$TMPDIR/wb-putfile-*.json`）
+自动从节点断点续传，完成后自清。实测 20MB：公网隧道 54s → 内网回环 **2s**（27×）。
 
 ---
 
@@ -191,6 +208,7 @@ MCP upload_register → 回显「落盘路径 + 跨节点下载 URL」。实测 
 | register 报「直传会话不存在或已登记过」 | uploadId 已消费或超 30 分钟 | 重新 init |
 | 节点 PUT 409 | offset ≠ 节点已收字节（并发/重试） | 按 409 响应 `data.received` 对账续传（putfile/控制台自动处理） |
 | 下载 401 | 未带 Bearer 头或密钥错 | `-H "Authorization: Bearer <init 返回的 apiKey>"` |
+| 内网通道探测失败（正常现象） | 调用方与节点不同机/不同内网 | 自动回退公网隧道，无需处理 |
 | 跨节点下载 404 | path 与节点侧实际落盘不一致 | 以节点 complete 返回的 `files[0].path` 为准 |
 
 ---

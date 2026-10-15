@@ -2948,7 +2948,7 @@ export class TaskEngine {
   private directPending = new Map<string, {
     taskId: string; name: string; size: number; mimeType?: string
     agentId: string; agentName: string
-    nodeBaseUrl: string; nodeSessionId: string
+    nodeBaseUrl: string; nodeIntranetBaseUrl?: string; nodeSessionId: string
     createdAt: number
   }>()
   private static readonly DIRECT_PENDING_TTL_MS = 30 * 60_000
@@ -2984,7 +2984,7 @@ export class TaskEngine {
     taskId?: string
     name?: string
     size?: number
-    target?: { agentId: string; agentName: string; baseUrl: string; apiKey: string; sessionId: string }
+    target?: { agentId: string; agentName: string; baseUrl: string; apiKey: string; sessionId: string; intranetBaseUrl?: string }
     error?: string
   }> {
     this.pruneDirectPending()
@@ -3011,10 +3011,25 @@ export class TaskEngine {
     if (session.target) target = session.target
     const baseUrl = target.baseUrl.replace(/\/+$/, '')
     const sessionId = session.remoteSessionId
+    // 内网基址：mapping 的 local 字段是 natpass 隧道的节点侧本机端（如 127.0.0.1:19387）。
+    // 它有歧义（每个节点的本机端都长这样），不靠调用方判断——直传接口全部会话作用域，
+    // 客户端对内网基址发一次节点 init：返回 uploadId 即证明通向的就是目标任务节点，否则回退公网。
+    let intranetBaseUrl: string | undefined
+    if (exec.dshRef?.kind === 'mapping') {
+      const ep = this.directory.resolveMapping(exec.dshRef.mappingId)
+      const local = String(ep?.local || '').trim()
+      const m = /^(?:([^:]+))?:?(\d+)$/.exec(local)
+      if (m) {
+        const host = m[1] && m[1] !== '0.0.0.0' ? m[1] : '127.0.0.1'
+        intranetBaseUrl = `http://${host}:${m[2]}/api/v1`
+      }
+    }
     const uploadId = `dup-${randomUUID().replace(/-/g, '').slice(0, 20)}`
     this.directPending.set(uploadId, {
       taskId, name: safeName, size: safeSize, mimeType: mimeType || undefined,
-      agentId, agentName: agent.name, nodeBaseUrl: baseUrl, nodeSessionId: sessionId,
+      agentId, agentName: agent.name, nodeBaseUrl: baseUrl,
+      ...(intranetBaseUrl ? { nodeIntranetBaseUrl: intranetBaseUrl } : {}),
+      nodeSessionId: sessionId,
       createdAt: Date.now(),
     })
     return {
@@ -3023,7 +3038,10 @@ export class TaskEngine {
       taskId,
       name: safeName,
       size: safeSize,
-      target: { agentId, agentName: agent.name, baseUrl, apiKey: target.apiKey || '', sessionId },
+      target: {
+        agentId, agentName: agent.name, baseUrl, apiKey: target.apiKey || '', sessionId,
+        ...(intranetBaseUrl ? { intranetBaseUrl } : {}),
+      },
     }
   }
 
@@ -3040,6 +3058,7 @@ export class TaskEngine {
   ): Promise<{
     ok: boolean
     attachment?: { name: string; path: string; size: number; mimeType?: string; agentId: string; agentName: string; downloadUrl: string }
+    downloadUrlIntranet?: string
     error?: string
   }> {
     this.pruneDirectPending()
@@ -3049,6 +3068,9 @@ export class TaskEngine {
     if (!safePath) return { ok: false, error: '缺少 path（节点侧 complete 返回的落盘路径）' }
     const attSize = Math.max(0, Math.floor(Number(size) || pending.size || 0))
     const downloadUrl = this.buildNodeDownloadUrl(pending.nodeBaseUrl, pending.nodeSessionId, safePath)
+    const downloadUrlIntranet = pending.nodeIntranetBaseUrl
+      ? this.buildNodeDownloadUrl(pending.nodeIntranetBaseUrl, pending.nodeSessionId, safePath)
+      : undefined
     this.directPending.delete(uploadId)
     this.store.mutateTask(taskId, (t) => {
       t.attachments = t.attachments || []
@@ -3061,6 +3083,7 @@ export class TaskEngine {
         agentName: pending.agentName,
         remoteSessionId: pending.nodeSessionId,
         nodeBaseUrl: pending.nodeBaseUrl,
+        ...(pending.nodeIntranetBaseUrl ? { nodeIntranetBaseUrl: pending.nodeIntranetBaseUrl } : {}),
         uploadedAt: Date.now(),
         source: 'direct',
       })
@@ -3069,6 +3092,7 @@ export class TaskEngine {
     return {
       ok: true,
       attachment: { name: pending.name, path: safePath, size: attSize, mimeType: mimeType || pending.mimeType, agentId: pending.agentId, agentName: pending.agentName, downloadUrl },
+      ...(downloadUrlIntranet ? { downloadUrlIntranet } : {}),
     }
   }
 

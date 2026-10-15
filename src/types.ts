@@ -413,6 +413,8 @@ export interface TaskAttachment {
   uploadedAt: number
   /** 附件所在节点的 API 基址（P2P 直传/跨节点下载定位用；中继时代为空） */
   nodeBaseUrl?: string
+  /** 节点内网/本机基址（natpass local 端合成；调用方与节点同机/同内网时优先用，会话作用域接口自证） */
+  nodeIntranetBaseUrl?: string
   /** 上传来源：direct = 客户端直传节点（P2P）；缺省 = 服务端中继/小文件直发 */
   source?: 'direct' | 'relay'
 }

@@ -6965,7 +6965,7 @@ function uploadAttachments(files) {
   const fetchJson = (path, opts) => fetch(API + path, opts).then(async res => ({ status: res.status, json: await res.json().catch(() => ({})) }));
 
   // 直连 DSH 节点请求（节点 CORS 已放行控制台 Origin，不经 workbuddy 中转）
-  async function nodeJson(method, url, body, headers, onProgress) {
+  async function nodeJson(method, url, body, headers, onProgress, timeoutMs) {
     if (method === 'PUT' && body) {
       return new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest();
@@ -6983,7 +6983,7 @@ function uploadAttachments(files) {
         xhr.send(body);
       });
     }
-    const res = await fetch(url, { method, headers: headers || {}, body });
+    const res = await fetch(url, { method, headers: headers || {}, body, ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}) });
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw new Error(json.error || '节点 HTTP ' + res.status);
     return { status: res.status, json };
@@ -7002,16 +7002,25 @@ function uploadAttachments(files) {
       if (!(init.status < 300 && init.json?.ok)) throw new Error(init.json?.error || 'init HTTP ' + init.status);
       const upId = init.json.data.uploadId;
       const t = init.json.data.target || {};
-      const nodeBase = (t.baseUrl || '').replace(/\\/+$/, '');
       const H = { 'Authorization': 'Bearer ' + (t.apiKey || '') };
       const mime = f.type || '';
       const sessSeg = encodeURIComponent(t.sessionId);
 
-      // ② 节点侧 init（拿 nodeUploadId）
-      const nInit = await nodeJson('POST', nodeBase + '/sessions/' + sessSeg + '/files/resumable?name=' + encodeURIComponent(f.name) + '&size=' + f.size + (mime ? '&mimeType=' + encodeURIComponent(mime) : ''), undefined, H);
-      const nid = nInit.json?.data?.uploadId;
-      if (!nid) throw new Error('节点 init 未返回 uploadId');
-      received = Number(nInit.json?.data?.received) || 0;
+      // ② 节点侧 init：内网/本机基址优先（会话自证——sessionId 只有目标任务节点认识，返回 uploadId 即证明通向的就是它），
+      //    失败/超时自动回退公网隧道；两套端点除基址外完全一致
+      const candidates = [];
+      if (t.baseUrlIntranet) candidates.push({ base: String(t.baseUrlIntranet).replace(/\\/+$/, ''), tag: '内网/本机直连' });
+      candidates.push({ base: (t.baseUrl || '').replace(/\\/+$/, ''), tag: '公网隧道' });
+      let nodeBase = null, nid = null, received = 0;
+      for (let ci = 0; ci < candidates.length && !nid; ci++) {
+        const cand = candidates[ci];
+        try {
+          const nInit = await nodeJson('POST', cand.base + '/sessions/' + sessSeg + '/files/resumable?name=' + encodeURIComponent(f.name) + '&size=' + f.size + (mime ? '&mimeType=' + encodeURIComponent(mime) : ''), undefined, H, undefined, ci < candidates.length - 1 ? 5000 : undefined);
+          nid = nInit.json?.data?.uploadId;
+          if (nid) { nodeBase = cand.base; received = Number(nInit.json?.data?.received) || 0; }
+        } catch (e) { /* 该候选不可达（不是目标节点或网络不通）→ 试下一个 */ }
+      }
+      if (!nodeBase || !nid) throw new Error('所有直传通道均不可达（内网/公网）');
       const chunkUrl = nodeBase + '/sessions/' + sessSeg + '/files/resumable/' + encodeURIComponent(nid);
 
       // ③ 分片直连节点：offset 冲突(409)以节点为准；网络错误对账后续传，连续 3 次失败报错
