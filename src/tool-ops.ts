@@ -1011,7 +1011,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
               sessionId: t.sessionId,
               auth: `所有节点请求带 Authorization: Bearer ${t.apiKey}（两套基址通用）`,
               ...(t.intranetBaseUrl ? {
-                intranetHint: 'baseUrlIntranet 是该节点的内网/本机基址（natpass 隧道 local 端），**有歧义**——每个节点的本机端都长这样，仅当「你所处的机器/内网恰好能通向该节点」时才可用且快得多。判定不靠猜：先用 baseUrlIntranet 发一次 endpoints.init（会话作用域，sessionId 只有目标任务节点认识），返回 uploadId 即证明通向的就是目标任务节点，可全程走内网；404/401/超时则改用 baseUrl（公网隧道）。两套端点除基址外完全一致',
+                intranetHint: 'baseUrlIntranet 是该节点的内网/本机基址（natpass 隧道 local 端），**有歧义**——每个节点的本机端都长这样，仅当「你所处的机器/内网恰好能通向该节点」时才可用且快得多。判定不靠猜：轻量预判可 GET baseUrlIntranet/api/v1/ping（机器指纹，免会话），返回 macs 与本机网卡 MAC（ip link/ifconfig）有交集即该节点就在本机；权威确认仍用 endpoints.init（会话作用域，sessionId 只有目标任务节点认识），返回 uploadId 即证明通向的就是目标任务节点，可全程走内网；404/401/超时则改用 baseUrl（公网隧道）。两套端点除基址外完全一致',
               } : {}),
               endpoints: {
                 init: { method: 'POST', url: nodeEp(`?name=${enc(out.name!)}&size=${out.size}`) + (args.mimeType ? `&mimeType=${enc(String(args.mimeType))}` : ''), desc: '节点侧初始化 → 返回 data.uploadId（nodeUploadId）' },
@@ -1044,7 +1044,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
           taskId: tid,
           attachment: { name: a.name, path: a.path, size: a.size },
           downloadUrl: a.downloadUrl,
-          ...(out.downloadUrlIntranet ? { downloadUrlIntranet: out.downloadUrlIntranet, downloadUrlIntranetHint: '同节点的内网/本机下载基址——下载方与该节点同机/同内网时优先用（同样需密钥头；是否真通向目标节点以能取到文件为准，失败用 downloadUrl）' } : {}),
+          ...(out.downloadUrlIntranet ? { downloadUrlIntranet: out.downloadUrlIntranet, downloadUrlIntranetHint: '同节点的内网/本机下载基址——下载方与该节点同机/同内网时优先用（同样需密钥头；同机判定可 GET <基址>/api/v1/ping 比对返回 macs 与本机网卡 MAC；是否真通向目标节点以能取到文件为准，失败用 downloadUrl）' } : {}),
           downloadAuth: '跨节点下载需带节点密钥头：Authorization: Bearer <init 返回的 apiKey>（DSH 下载接口不支持 query 密钥）',
           example: `curl -H "Authorization: Bearer <节点apiKey>" -o ${a.name} "${a.downloadUrl}"`,
           multiAgentHint: '多成员协作：把 downloadUrl 与节点 apiKey 写进 workbuddy_task_manage {action:"send"} 的 message，其它节点的成员用它下载文件',

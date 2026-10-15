@@ -360,10 +360,12 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
       }
 
       // ---------- AI 技能安装资源（公开：脚本与 SKILL 本体不含任何秘密） ----------
-      if (underPrefix && method === 'GET' && (url.pathname === `${prefix}/install-skill.sh` || url.pathname === `${prefix}/install/SKILL.md` || url.pathname === `${prefix}/install/wb.mjs`)) {
+      if (underPrefix && method === 'GET' && (url.pathname === `${prefix}/install-skill.sh` || url.pathname === `${prefix}/install/SKILL.md` || url.pathname === `${prefix}/install/wb.mjs` || url.pathname === `${prefix}/install/mcp/SKILL.md` || url.pathname === `${prefix}/install/wbmcp.sh`)) {
         const rel = url.pathname === `${prefix}/install-skill.sh` ? 'scripts/install-skill.sh'
           : url.pathname === `${prefix}/install/SKILL.md` ? 'skills/onenat-workbuddy/SKILL.md'
-            : 'skills/onenat-workbuddy/scripts/wb.mjs'
+            : url.pathname === `${prefix}/install/mcp/SKILL.md` ? 'skills/workbuddy-mcp/SKILL.md'
+              : url.pathname === `${prefix}/install/wbmcp.sh` ? 'skills/workbuddy-mcp/scripts/wbmcp.sh'
+                : 'skills/onenat-workbuddy/scripts/wb.mjs'
         const file = resolveAssetFile(rel)
         if (!file) {
           sendJson(res, 404, { ok: false, error: `安装资源缺失: ${rel}` })

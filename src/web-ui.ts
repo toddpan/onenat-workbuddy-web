@@ -2175,7 +2175,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
       <div class="panel">
         <div class="panel-head">
           <h2>🎙 语音助手</h2>
-          <span class="sub">小智平台 MCP 接入（可多实例）· 工作台全部工具注册为语音可调用的 MCP 工具（动态同步，当前 13 个） · 变更即时生效（免重启）</span>
+          <span class="sub">小智平台 MCP 接入（可多实例）· 工作台全部工具注册为语音可调用的 MCP 工具（动态同步，当前 14 个） · 变更即时生效（免重启）</span>
           <span class="hspacer"></span>
           <button class="btn pri" id="btn-xz-add">＋ 添加接入点</button>
         </div>
@@ -2388,43 +2388,28 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
         </div>
       </div>
       <div class="card ai-card">
-        <h3 style="margin-bottom:12px">AI 接入（一键安装提示词）</h3>
-        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
-          <b style="font-size:12.5px;color:var(--tx2)">① 安装提示词</b>
-          <span style="font-size:11.5px;color:var(--tx3)">复制后发给任意有终端的 AI，它执行命令即完成安装与自检</span>
-          <span class="hspacer"></span>
-          <button class="btn" id="btn-reset-ai-token" style="white-space:nowrap" title="生成新令牌，旧令牌立即失效（无需重启）">生成 / 重置 APIKEY</button>
+        <h3 style="margin-bottom:12px">AI 接入（一键安装 · HTTP + MCP 双通道）</h3>
+        <div style="display:flex;gap:8px;align-items:center">
+          <b style="font-size:12.5px;color:var(--tx2);white-space:nowrap">① APIKEY</b>
+          <input id="set-ai-token" readonly style="font-family:var(--mono);flex:1" placeholder="未生成">
+          <button class="btn" id="btn-reset-ai-token" style="white-space:nowrap" title="生成新令牌，旧令牌立即失效（无需重启）">生成 / 重置</button>
         </div>
-        <textarea id="set-ai-install" readonly rows="8" style="font-family:var(--mono);font-size:12px;width:100%" placeholder="生成 APIKEY 后这里会出现安装提示词"></textarea>
+        <div style="font-size:11.5px;color:var(--tx3);margin-top:6px">两通道共用一张凭证，已内嵌于下方提示词 · 重置后旧令牌立即失效（无需重启）</div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:14px">
+          <b style="font-size:12.5px;color:var(--tx2);white-space:nowrap">② 接口地址</b>
+          <input id="set-mcp-url" readonly style="font-family:var(--mono);flex:1" placeholder="…">
+          <button class="btn" id="btn-copy-mcp-url" style="white-space:nowrap">复制</button>
+        </div>
+        <div style="font-size:11.5px;color:var(--tx3);margin-top:6px">MCP Streamable HTTP · 专家库 MCP：<span id="set-mcp-expert-url" style="font-family:var(--mono)">…</span> · 鉴权同 APIKEY（Authorization: Bearer）。手工配置 mcpServers 用；其余场景直接用下方提示词（AI 自动选通道）。</div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:14px">
+          <b style="font-size:12.5px;color:var(--tx2);white-space:nowrap">③ 安装提示词</b>
+          <span style="font-size:11.5px;color:var(--tx3)">复制发给任意有终端的 AI——一条命令装双通道技能并自检；支持 MCP 的宿主按提示注册，AI 自动判定</span>
+          <span class="hspacer"></span>
+        </div>
+        <textarea id="set-ai-install" readonly rows="14" style="font-family:var(--mono);font-size:12px;width:100%;margin-top:6px" placeholder="生成 APIKEY 后这里会出现安装提示词"></textarea>
         <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
           <button class="btn pri" id="btn-copy-ai-install" style="white-space:nowrap" title="复制安装提示词">复制安装提示词</button>
-          <span style="font-size:11.5px;color:var(--tx3)">AI 执行后会自动装到本机所有 AI 技能目录（DSH / ZCode / Claude）并自检。</span>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;margin-top:12px">
-          <b style="font-size:12.5px;color:var(--tx2)">② APIKEY</b>
-          <input id="set-ai-token" readonly style="font-family:var(--mono);flex:1" placeholder="未生成">
-          <span style="font-size:11.5px;color:var(--tx3)">已内嵌于上方提示词，无需单独传递 · 重置后旧令牌立即失效（无需重启）</span>
-        </div>
-      </div>
-      <div class="card ai-card">
-        <h3 style="margin-bottom:12px">MCP 接入（一键复制给 AI 安装）</h3>
-        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
-          <b style="font-size:12.5px;color:var(--tx2)">① 接口地址（Streamable HTTP）</b>
-          <span style="font-size:11.5px;color:var(--tx3)">任何支持 MCP 的客户端（Claude / Cursor / Cline 等）都可接入</span>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <input id="set-mcp-url" readonly style="font-family:var(--mono);flex:1" placeholder="…">
-          <button class="btn" id="btn-copy-mcp-url" style="white-space:nowrap">复制接口地址</button>
-        </div>
-        <div style="font-size:11.5px;color:var(--tx3);margin-top:6px">专家库 MCP：<span id="set-mcp-expert-url" style="font-family:var(--mono)">…</span>（专家库增删改查）· 鉴权同 APIKEY（Authorization: Bearer）</div>
-        <div style="display:flex;gap:8px;align-items:center;margin-top:14px">
-          <b style="font-size:12.5px;color:var(--tx2)">② 安装提示词</b>
-          <span style="font-size:11.5px;color:var(--tx3)">复制后发给任意支持 MCP 的 AI，它把本服务注册为 MCP Server 即可调用工作台</span>
-        </div>
-        <textarea id="set-mcp-install" readonly rows="10" style="font-family:var(--mono);font-size:12px;width:100%;margin-top:6px" placeholder="生成 APIKEY 后这里会出现 MCP 安装提示词"></textarea>
-        <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
-          <button class="btn pri" id="btn-copy-mcp-install" style="white-space:nowrap">复制 MCP 安装提示词</button>
-          <span style="font-size:11.5px;color:var(--tx3)">AI 会把接口地址与 APIKEY 写进自己的 MCP 配置，并调用 tools/list 验证。</span>
+          <span style="font-size:11.5px;color:var(--tx3)">AI 执行第 1 步即完成接入（wb.mjs + wbmcp.sh 双技能装到 DSH / ZCode / Claude / agents 并自检）；支持 MCP 的宿主叠加第 2 步原生注册。</span>
         </div>
       </div>
       </div>
@@ -10945,26 +10930,11 @@ function renderSettings() {
   $('set-refresh').value = s.onenat.autoRefreshMs || 60000;
   $('set-ai-token').value = s.aiToken || '';
   renderAiInstall();
-  renderMcpInstall();
 }
-/** AI 安装提示词：以浏览器当前访问地址为准（反代/远程场景自动匹配），内嵌 APIKEY，发给 AI 照做即可 */
+/** AI 安装提示词（合并版）：以浏览器当前访问地址为准（反代/远程场景自动匹配），内嵌 APIKEY。
+ *  两步接入——第 1 步一键脚本（所有有终端的 AI）：双通道技能 + 自检；第 2 步 MCP 原生注册（仅 MCP 宿主叠加）。
+ *  同卡同时填充 ② 接口地址行（手工配 mcpServers 的极简用户用）。 */
 function renderAiInstall() {
-  const token = $('set-ai-token').value;
-  const base = location.origin + PREFIX;
-  const tok = token || '<先生成APIKEY>';
-  $('set-ai-install').value =
-    '请安装 OneNat WorkBuddy 技能（多智能体工作台：发任务/管理任务/监控/定时任务/文件管理/答复任务提问等 13 个工具）。\\n' +
-    '1. 在终端执行安装命令（会自动装到本机所有 AI 技能目录 DSH/ZCode/Claude 并自检）：\\n' +
-    '   curl -fsSL ' + base + '/install-skill.sh | bash -s -- --base-url ' + base + ' --token ' + tok + '\\n' +
-    '2. 安装后执行 wb.mjs tools 验证连通，并汇报安装结果。\\n' +
-    '3. 之后即可用 wb.mjs 或技能里的工具操作工作台，例如：wb.mjs monitor overview 看监控态势；wb.mjs task create --title x --agents <智能体ID> --message "任务内容" 发任务。';
-}
-$('btn-copy-ai-install').addEventListener('click', () => {
-  if (!$('set-ai-token').value) { toast('请先「生成 / 重置」APIKEY', true); return; }
-  navigator.clipboard.writeText($('set-ai-install').value).then(() => toast('✓ 安装提示词已复制，发给 AI 即可安装'), () => toast('复制失败，请手动选择复制', true));
-});
-/** MCP 接入：接口地址 + 给 AI 的安装提示词（以浏览器当前访问地址为准，内嵌 APIKEY） */
-function renderMcpInstall() {
   const token = $('set-ai-token').value;
   const base = location.origin + PREFIX;
   const tok = token || '<先生成APIKEY>';
@@ -10972,30 +10942,32 @@ function renderMcpInstall() {
   const expertUrl = base + '/api/experts/mcp';
   $('set-mcp-url').value = mcpUrl;
   $('set-mcp-expert-url').textContent = expertUrl;
-  $('set-mcp-install').value =
-    '请把「OneNat WorkBuddy 多智能体工作台」接入为你的 MCP Server 并验证可用。它提供 13 个工具：任务创建/管理/查询/答复提问、监控态势、定时任务、项目管理、文件管理、专家库等（接入后可通过 tools/list 查看全部）。\\n' +
-    '\\n【接入方法】\\n' +
-    '你当前正运行在某个支持 MCP 的宿主环境（如 Claude Desktop、Cursor、Cline、DSH 或其它框架），请自行判定并按该环境自身的 MCP 配置方式接入，不局限于任何特定客户端。\\n' +
+  $('set-ai-install').value =
+    '请把「OneNat WorkBuddy 多智能体工作台」接入为你的工具平台并验证可用。它提供 14 个工具：任务创建/管理/查询/答复提问、监控态势、定时任务、项目管理、文件管理、专家库、SSH 资源池等（接入后 tools/list 查看全部）。\\n' +
+    '\\n【第 1 步 · 一键安装（有终端就先做这步）】\\n' +
+    'curl -fsSL ' + base + '/install-skill.sh | bash -s -- --base-url ' + base + ' --token ' + tok + '\\n' +
+    '自动装两套技能到本机 AI 技能目录（DSH/ZCode/Claude/agents）：HTTP 通道 wb.mjs + MCP 通道 workbuddy-mcp（共用 ~/.workbuddy-skill.json），并双通道自检。完成后即已可用：bash <技能目录>/workbuddy-mcp/scripts/wbmcp.sh tools 验证（脚本通道与 MCP 等价）。\\n' +
+    '\\n【第 2 步 · MCP 原生注册（仅宿主支持 MCP 时叠加，否则跳过）】\\n' +
     '服务地址（Streamable HTTP，JSON-RPC over POST）：' + mcpUrl + '\\n' +
     '鉴权：Authorization: Bearer ' + tok + '（也支持 X-WorkBuddy-Token 请求头或 ?token= 查询参数）。\\n' +
-    '若你的环境使用 mcpServers 形式的配置，对应条目为：\\n' +
+    'mcpServers 条目：\\n' +
     '{ "mcpServers": { "onenat-workbuddy": { "url": "' + mcpUrl + '", "headers": { "Authorization": "Bearer ' + tok + '" } } } }\\n' +
-    '\\n【接入后验证】\\n' +
-    '保存并生效配置后，调用 tools/list 确认能看到 workbuddy_task_manage 等工具，即接入成功。\\n' +
-    '\\n【使用约定】\\n' +
+    '生效后 tools/list 应能看到 workbuddy_task_manage 等工具。说明：MCP 只提供工具签名，大文件三步流程、@ 派活等使用知识在技能 SKILL.md 里，操作前先读。\\n' +
+    '\\n【使用约定（两通道一致）】\\n' +
     '1. 发任务前先调用 project_manage list 判断需求归属的项目：能确定项目就从该项目发起并带 projectId。\\n' +
     '2. 需求有歧义时先向用户问清，再创建任务。\\n' +
     '3. 在 message 中用 @子智能体名 / @专家名 / @专家团名 / @资源名 派活；@ 多个即编排协作。\\n' +
     '4. 任务创建后用 task_manage wait 或 task_status 轮询获取结果，不要重复 create。\\n' +
+    '5. 带大文件（≤2GB）必须三步走：create 不带 message（draft 不执行）→ putfile 直传 → send 引用路径启动；create 带 message 任务会立即开跑。\\n' +
     '\\n【完成汇报】\\n' +
-    '说明：你判定的宿主环境、实际写入的配置文件/配置位置、tools/list 验证结果；若失败，给出原因。';
+    '说明：宿主类型与所选通道（脚本/MCP/两者）、安装与注册写入的位置、验证结果；若失败，给出原因。';
 }
+$('btn-copy-ai-install').addEventListener('click', () => {
+  if (!$('set-ai-token').value) { toast('请先「生成 / 重置」APIKEY', true); return; }
+  navigator.clipboard.writeText($('set-ai-install').value).then(() => toast('✓ 安装提示词已复制，发给 AI 即可安装'), () => toast('复制失败，请手动选择复制', true));
+});
 $('btn-copy-mcp-url').addEventListener('click', () => {
   navigator.clipboard.writeText($('set-mcp-url').value).then(() => toast('✓ MCP 接口地址已复制'), () => toast('复制失败，请手动选择复制', true));
-});
-$('btn-copy-mcp-install').addEventListener('click', () => {
-  if (!$('set-ai-token').value) { toast('请先「生成 / 重置」APIKEY', true); return; }
-  navigator.clipboard.writeText($('set-mcp-install').value).then(() => toast('✓ MCP 安装提示词已复制，发给 AI 即可接入'), () => toast('复制失败，请手动选择复制', true));
 });
 $('btn-reset-ai-token').addEventListener('click', async () => {
   if (!confirm('生成新 APIKEY？旧令牌立即失效，已安装到各智能体的 SKILL 需要更新令牌。')) return;
@@ -11004,7 +10976,6 @@ $('btn-reset-ai-token').addEventListener('click', async () => {
     $('set-ai-token').value = r.data.token;
     state.settings = Object.assign({}, state.settings || {}, { aiToken: r.data.token });
     renderAiInstall();
-    renderMcpInstall();
     toast('✓ 新 APIKEY 已生成（无需重启）');
   } else toast(r.error || '生成失败', true);
 });

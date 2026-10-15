@@ -5,7 +5,7 @@ description: OneNat WorkBuddy 多智能体工作台 AI 管理技能：发任务�
 
 # OneNat WorkBuddy 工作台技能
 
-通过 **13 个工具**操作多智能体工作台。本文件是总入口：先看核心概念与路由表，**细节按需读子技能文件**（`skills/` 目录，相对本文件所在目录）。
+通过 **14 个工具**操作多智能体工作台。本文件是总入口：先看核心概念与路由表，**细节按需读子技能文件**（`skills/` 目录，相对本文件所在目录）。
 
 **鉴权**：HTTP 调用带 `Authorization: Bearer <APIKEY>`（控制台「设置 → AI 接入」生成）。未配置令牌时服务端拒绝一切调用；设置/登录接口不接受令牌。
 
@@ -66,6 +66,10 @@ description: OneNat WorkBuddy 多智能体工作台 AI 管理技能：发任务�
 6. 凭证敏感：APIKEY / SSH 密码不进无关输出；推荐 `self-fetch` 凭证模式。
 7. `ssh exec` 与文件删除是危险操作：先确认目标与路径。
 8. 任务执行中不能改成员或删除；对 ONENAT 只读，不改隧道映射。
+
+## 双通道：HTTP 与 MCP
+
+本技能走 HTTP 工具通道（wb.mjs / 直接 HTTP 调用）。宿主支持 MCP 时可改走/并走 MCP 通道：把 `$BASE_URL/mcp` 注册为 MCP Server（Streamable HTTP），工具与 HTTP 通道**同源同步**（同一 14 个工具、同一套约定）。**通道只解决传输，使用知识（三步大文件流程、@ 派活、轮询约定）以技能文档为准**——MCP 通道的完整说明见 `workbuddy-mcp/SKILL.md`（同一安装脚本一并装入）。
 
 ## 无工具宿主
 
