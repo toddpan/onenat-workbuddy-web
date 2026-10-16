@@ -2164,7 +2164,9 @@ export class TaskEngine {
         this.store.mutateSubtask(taskId, sub.id, (s) => {
           s.result = { content: (s.result?.content || '') + delta }
         })
-        if (++deltaCount % 25 === 0) this.store.save() // 崩溃恢复粒度
+        // 崩溃恢复粒度：尾随合并落盘（3s 窗口）。此前每 25 delta 全量同步 save，
+        // 15MB 级 store 上单次 ~300ms 冻结事件循环，多成员并行流式时循环近乎满冻结
+        if (++deltaCount % 25 === 0) this.store.scheduleSave()
       },
       onLog: (msg, level) => {
         subLog(msg, level || 'info')

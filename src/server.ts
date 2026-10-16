@@ -319,7 +319,7 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
         const body = await readJsonBody(req)
         const username = String(body?.username || '').trim()
         const password = String(body?.password || '')
-        const token = auth.login(username, password, clientIp)
+        const token = await auth.login(username, password, clientIp)
         if (!token) {
           await new Promise((r) => setTimeout(r, 400)) // 失败小延迟，增加爆破成本
           sendJson(res, 401, { ok: false, error: '用户名或密码错误' })
@@ -349,7 +349,7 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
           return
         }
         const body = await readJsonBody(req)
-        const ok = auth.changePassword(sessionUser, String(body?.oldPassword || ''), String(body?.newPassword || ''))
+        const ok = await auth.changePassword(sessionUser, String(body?.oldPassword || ''), String(body?.newPassword || ''))
         if (!ok) {
           sendJson(res, 400, { ok: false, error: '旧密码错误或新密码过短（至少 6 位）' })
           return

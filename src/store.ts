@@ -2,7 +2,8 @@
  * onenat-workbuddy-web - WorkStore: 子智能体池 + 任务会话 + 设置 持久化
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs'
+import { writeFile as fspWriteFile, rename as fspRename } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import type { AgentResourceBinding, DshRef, ExpertTeam, Project, StorageData, SubAgent, WorkBuddySettings, WorkTask, PlanSubtask, TaskTurn, ScheduledTask, TeamTemplateId } from './types.js'
@@ -35,17 +36,28 @@ function normalizeUrl(u: string): string {
 export class WorkStore {
   private filePath: string
   private data: StorageData
-  /** 尾随合并落盘窗口：流式增量期间避免每个 delta 全量写盘阻塞事件循环 */
-  private static readonly TRAILING_SAVE_MS = 250
+  /**
+   * 尾随合并落盘窗口：流式增量期间避免每个 delta 都触发落盘。
+   * 3s：线上实测 15.7MB store 单次快照 ~110ms，250ms 间隔会把事件循环打到 ~50% 冻结占空比
+   * （登录等无关请求全部排队），放宽到 3s 后占空比 ~4%；代价是崩溃最多丢 3s 流式文本。
+   */
+  private static readonly TRAILING_SAVE_MS = 3_000
   private saveTimer: NodeJS.Timeout | null = null
   private dirty = false
+  /** 每次数据变更信号（save/scheduleSave）递增：用于判断快照后是否又有新变更 */
+  private dirtyGen = 0
+  /** 异步落盘单飞状态 */
+  private writing = false
+  private rerunNeeded = false
+  /** 同步 flush 递增：使仍在途的异步写放弃 rename，防止旧快照覆盖更新的落盘 */
+  private writeEpoch = 0
 
   constructor(customPath?: string) {
     const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh')
     this.filePath = customPath || join(dshHome, 'onenat-workbuddy', 'store.json')
     this.data = { agents: [], tasks: [], schedules: [], projects: [], teams: [], settings: { ...defaultSettings(), xiaozhi: {} } }
     this.load()
-    // 进程退出前把尾随写入落盘（SIGKILL 除外），避免最后 250ms 的流式增量丢失。
+    // 进程退出前把未落盘变更同步写盘（SIGKILL 除外）：覆盖尾随窗口内与仍在途的异步写。
     // 只挂 'exit'：SIGINT/SIGTERM 走默认终止路径同样会触发 exit，且不会劫持 Ctrl-C 语义。
     process.once('exit', () => { if (this.dirty) this.flush() })
   }
@@ -83,44 +95,92 @@ export class WorkStore {
     }
   }
 
+  /**
+   * 常规落盘入口：异步单飞写（主线程只付 JSON.stringify 快照成本，写盘走线程池）。
+   * 结构性变更（增删任务/智能体/成员等）与流式尾随都汇入这里。
+   */
   public save(): void {
-    this.flush()
+    this.dirtyGen++
+    this.flushAsync()
   }
 
   /**
    * 高频写入合并（流式增量专用）。
    *
-   * 背景：每个 delta 都会走 mutateTask → save()，而 save() 是全量
-   * `JSON.stringify(data) + writeFileSync`。实测在 1.5MB 级 store 上单次约 3.5ms，
-   * 且**同步阻塞事件循环**：长回合（上千个 delta）可累计数秒阻塞，把远端 SSE 的读取
-   * 与浏览器方向的写入一起拖慢，静默段还会触发隧道/反代的空闲超时把流掐断
-   * （表现就是「流式卡住 / 内容收不全」）。
+   * 背景：每个 delta 都会走 mutateTask → save()，而落盘是全量
+   * `JSON.stringify(data) + 写盘`。1.5MB 级 store 单次 ~3.5ms 尚可全同步；
+   * 线上 15.7MB 后单次 ~300ms 且**同步阻塞事件循环**：250ms 尾随间隔意味着
+   * 长回合期间事件循环约一半时间处于冻结，登录等无关请求全部排队
+   * （2026-10-16 线上实测，详见 healthz 探针数据）。
    *
    * 因此流式增量只改内存（内存态始终权威），磁盘写入按 TRAILING_SAVE_MS 尾随合并；
-   * 结构性变更（增删任务/智能体/成员等）仍走 save() 立即落盘。
+   * 结构性变更（增删任务/智能体/成员等）仍走 save() 立即触发异步落盘。
    */
   public scheduleSave(): void {
+    this.dirtyGen++
     this.dirty = true
     if (this.saveTimer) return
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null
-      if (this.dirty) this.flush()
+      if (this.dirty) this.flushAsync()
     }, WorkStore.TRAILING_SAVE_MS)
     // 常驻定时器不阻止进程退出（standalone server 由 http server 保持存活）
     this.saveTimer.unref?.()
   }
 
-  /** 立即落盘（结构性变更、回合边界、进程退出前） */
+  /**
+   * 异步落盘（单飞合并）：主线程只做一次 JSON.stringify 快照（13MB 级 ~110ms），
+   * 写盘走 fs.promises 线程池，不阻塞事件循环；写临时文件后 rename 原子替换，
+   * 写盘中途崩溃/断电不会留下截断的 store.json（旧版直接 writeFileSync 会）。
+   * 写盘期间再次调用只置重跑标记，完成后补写最新快照，串行不堆积。
+   */
+  public flushAsync(): void {
+    this.dirty = true
+    if (this.writing) {
+      this.rerunNeeded = true
+      return
+    }
+    this.writing = true
+    void this.doWrite()
+  }
+
+  private async doWrite(): Promise<void> {
+    try {
+      const dir = dirname(this.filePath)
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+      const json = JSON.stringify(this.data, null, 2)
+      const atSnapshot = this.dirtyGen
+      const epoch = this.writeEpoch
+      const tmp = this.filePath + '.tmp'
+      await fspWriteFile(tmp, json, 'utf-8')
+      if (epoch !== this.writeEpoch) return // 期间发生过同步 flush（如进程退出），放弃旧快照防止回写覆盖
+      await fspRename(tmp, this.filePath)
+      if (atSnapshot >= this.dirtyGen) this.dirty = false // 快照后无新变更才清脏；有则留给下一轮补写
+    } catch (err) {
+      console.error('[onenat-workbuddy] Failed to save store (async):', err)
+    } finally {
+      this.writing = false
+      if (this.rerunNeeded) {
+        this.rerunNeeded = false
+        this.flushAsync()
+      }
+    }
+  }
+
+  /** 同步立即落盘（进程退出前兜底用；常规路径一律走 flushAsync） */
   public flush(): void {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer)
       this.saveTimer = null
     }
+    this.writeEpoch++
     this.dirty = false
     try {
       const dir = dirname(this.filePath)
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-      writeFileSync(this.filePath, JSON.stringify(this.data, null, 2), 'utf-8')
+      const tmp = this.filePath + '.tmp'
+      writeFileSync(tmp, JSON.stringify(this.data, null, 2), 'utf-8')
+      renameSync(tmp, this.filePath)
     } catch (err) {
       console.error('[onenat-workbuddy] Failed to save store:', err)
     }

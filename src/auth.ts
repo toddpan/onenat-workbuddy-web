@@ -7,9 +7,10 @@
  * - 登录失败限速：单 IP 5 分钟内 10 次失败即 429。
  */
 
-import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
+import { randomBytes, scrypt, scryptSync, timingSafeEqual } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { promisify } from 'node:util'
 
 export interface AuthUser {
   username: string
@@ -33,8 +34,16 @@ const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const LOGIN_FAIL_WINDOW_MS = 5 * 60 * 1000
 const LOGIN_FAIL_MAX = 10
 
+const scryptAsync = promisify(scrypt) as (password: string, salt: string, keylen: number) => Promise<Buffer>
+
+/** 同步版哈希：仅用于启动播种（进程启动时事件循环空闲，一次 ~55ms 无影响） */
 function hashPassword(password: string, salt: string): string {
   return scryptSync(password, salt, 64).toString('hex')
+}
+
+/** 登录/改密热路径用异步 scrypt（libuv 线程池执行，不阻塞事件循环） */
+async function hashPasswordAsync(password: string, salt: string): Promise<string> {
+  return (await scryptAsync(password, salt, 64)).toString('hex')
 }
 
 function safeEqual(a: string, b: string): boolean {
@@ -149,15 +158,15 @@ export class AuthService {
     return user
   }
 
-  /** 校验登录；成功返回新会话 token，失败返回 null（内置单 IP 限速） */
-  public login(username: string, password: string, clientIp: string): string | null {
+  /** 校验登录；成功返回新会话 token，失败返回 null（内置单 IP 限速）。异步 scrypt 不阻塞事件循环 */
+  public async login(username: string, password: string, clientIp: string): Promise<string | null> {
     const fails = this.failCounts.get(clientIp) || []
     const recent = fails.filter((t) => Date.now() - t < LOGIN_FAIL_WINDOW_MS)
     this.failCounts.set(clientIp, recent)
     if (recent.length >= LOGIN_FAIL_MAX) return null
 
     const user = this.users.find((u) => u.username === username)
-    const ok = user ? safeEqual(hashPassword(password, user.salt), user.hash) : false
+    const ok = user ? safeEqual(await hashPasswordAsync(password, user.salt), user.hash) : false
     if (!ok) {
       recent.push(Date.now())
       return null
@@ -194,10 +203,10 @@ export class AuthService {
   }
 
   /** 修改密码（校验旧密码）；成功后吊销该用户全部会话 */
-  public changePassword(username: string, oldPassword: string, newPassword: string): boolean {
+  public async changePassword(username: string, oldPassword: string, newPassword: string): Promise<boolean> {
     const user = this.users.find((u) => u.username === username)
     if (!user) return false
-    if (!safeEqual(hashPassword(oldPassword, user.salt), user.hash)) return false
+    if (!safeEqual(await hashPasswordAsync(oldPassword, user.salt), user.hash)) return false
     if (!newPassword || newPassword.length < 6) return false
     user.salt = randomBytes(16).toString('hex')
     user.hash = hashPassword(newPassword, user.salt)
