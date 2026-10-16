@@ -359,6 +359,12 @@ export interface WorkTask {
   updatedAt: number
   /** 归档时间戳（参考 DSH web 归档语义：仅从列表隐藏，不影响数据与继续对话） */
   archivedAt?: number
+  /**
+   * 批量落盘归档标记：turns/taskLogs 的磁盘主体移至 data/archive/<id>.json，
+   * store.json 只留骨架；内存仍持全量（读路径零改动），任何 mutation 自动解除。
+   * 与 archivedAt（列表隐藏）语义无关。
+   */
+  bulkArchived?: { at: number; turns: number; logs: number }
   /** 会话附件（上传到各成员远端工作区后的登记） */
   attachments?: TaskAttachment[]
   /** 由定时任务派生时记录来源（调度删除/滚动出窗口后类型标识仍可恢复） */
