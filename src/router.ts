@@ -124,6 +124,13 @@ export class WorkBuddyRouter {
     return String(ref.apiBaseUrl || '直连节点')
   }
 
+  /** 节点稳定键（随 DshRef 种类取 id），用于下发给节点智能体做载荷一致性校验，与 nodeLabel 的展示名区分 */
+  private nodeKeyOf(ref: DshRef): string {
+    if (ref.kind === 'mapping') return ref.mappingId
+    if (ref.kind === 'app') return ref.appId
+    return String(ref.apiBaseUrl || '')
+  }
+
   /** 按当前 HTTP 请求头推断访问基址（浏览器地址栏视角）：反代场景优先 x-forwarded-* */
   private requestBase(req: IncomingMessage, prefix: string): string {
     const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() || 'http'
@@ -855,7 +862,7 @@ export class WorkBuddyRouter {
         task = await this.engine.createTask({
           title: `分析并导入项目「${name}」→ 平台（${nodeLabel}）`,
           nodeRef,
-          message: buildProjectImportPrompt({ name, path: wsPath, createUrl, nodeLabel, experts: expertCandidates, connectors: connectorCandidates }),
+          message: buildProjectImportPrompt({ name, path: wsPath, createUrl, nodeLabel, nodeKey: this.nodeKeyOf(nodeRef), importId, experts: expertCandidates, connectors: connectorCandidates }),
           creator: 'console',
         })
       } catch (err: any) {
@@ -881,7 +888,16 @@ export class WorkBuddyRouter {
       }
       const body = await this.parseBody(req).catch(() => null as any)
       if (!body || typeof body !== 'object' || Array.isArray(body)) {
-        this.sendJson(res, 400, { ok: false, error: '请求体必须是 JSON 对象：{name, instruction, expertIds, connectorIds, skillNames, summary}' })
+        this.sendJson(res, 400, { ok: false, error: '请求体必须是 JSON 对象：{node, workspace, name, instruction, expertIds, connectorIds, skillNames, summary}' })
+        return true
+      }
+      // 防串号校验（载荷必须带与导入令牌一致的 node/workspace，提示词已预填）：同机并发导入可能互相
+      // 覆盖载荷文件，比对不符即 409 拒收，避免把 A 项目的表单写进 B 项目（2026-10-18 线上事故）
+      const normPath = (v: string) => v.replace(/\/+$/, '')
+      const bodyNode = String(body.node || '').trim()
+      const bodyWorkspace = String(body.workspace || '').trim()
+      if (bodyNode !== this.nodeKeyOf(pending.nodeRef) || normPath(bodyWorkspace) !== normPath(pending.path)) {
+        this.sendJson(res, 409, { ok: false, error: `载荷校验不一致（载荷 node=${bodyNode || '缺失'} workspace=${bodyWorkspace || '缺失'}；本任务应为 node=${this.nodeKeyOf(pending.nodeRef)} workspace=${pending.path}）——这份载荷可能被同机并发导入任务覆盖，请用本任务专属文件名 /tmp/wb-import-<导入ID> 重写载荷后重试` })
         return true
       }
       const name = String(body.name || '').trim() || pending.name
@@ -908,7 +924,6 @@ export class WorkBuddyRouter {
       }
       const instruction = String(body.instruction || '').trim().slice(0, 6000) || (String(body.summary || '').trim() ? `项目概述：${String(body.summary).trim()}` : undefined)
       // 幂等：同节点同路径的项目已存在 → 视为重新导入，更新原项目而不是重复建卡
-      const normPath = (v: string) => v.replace(/\/+$/, '')
       const sameRef = (a: DshRef, b: DshRef): boolean => {
         if (a.kind !== b.kind) return false
         if (a.kind === 'mapping' && b.kind === 'mapping') return a.mappingId === b.mappingId
@@ -933,7 +948,7 @@ export class WorkBuddyRouter {
         connectorIds: Math.max(0, (Array.isArray(body.connectorIds) ? body.connectorIds.length : 0) - connectorIds.length),
       }
       this.pendingProjectImports.delete(token)
-      this.sendJson(res, 200, { ok: true, data: { projectId: project.id, name: project.name, workspace: project.workspace, updated: Boolean(existing), dropped } })
+      this.sendJson(res, 200, { ok: true, data: { projectId: project.id, name: project.name, workspace: project.workspace, node: pending.nodeRef, nodeLabel: pending.nodeLabel, updated: Boolean(existing), dropped } })
       return true
     }
     const projMatch = /^\/api\/projects\/([^/]+)$/.exec(p)

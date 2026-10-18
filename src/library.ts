@@ -399,30 +399,40 @@ export function extractExportedPaths(text: string): string[] {
 
 /** 项目导入任务提示词：节点智能体分析远程项目 → 推断新建项目表单各字段 → 调平台接口自动建项目。
  * ⚠️ 提示词里不能出现「@ + 路径」字面量（如 curl 的 "@/tmp/x.json"）：服务端 extractMentions 会把
- * 独立路径样式的 @提及 兜底挂到 agents[0]，导致导入任务被定向委派到错误执行者。故用 $PAYLOAD 变量承载。 */
+ * 独立路径样式的 @提及 兜底挂到 agents[0]，导致导入任务被定向委派到错误执行者。故用 $PAYLOAD 变量承载。
+ * ⚠️ 临时文件必须带本次导入 ID：同一台机器可能同时执行多个导入任务，固定文件名（如
+ * /tmp/wb-import-payload.json）会被并发任务互相覆盖（2026-10-18 线上事故：并发导入互相写走了对方载荷）。
+ * 节点归属由平台按导入令牌在服务端绑定；payload 里的 node/workspace 只是防串号的一致性校验字段，
+ * 平台比对不符会 409 拒收，智能体须原样照抄预填值。 */
 export function buildProjectImportPrompt(opts: {
   name: string
   path: string
   createUrl: string
   nodeLabel: string
+  nodeKey: string
+  importId: string
   experts: Array<{ id: string; name: string; role?: string }>
   connectors: Array<{ id: string; label: string }>
 }): string {
-  const { name, path, createUrl, nodeLabel, experts, connectors } = opts
+  const { name, path, createUrl, nodeLabel, nodeKey, importId, experts, connectors } = opts
   const expertList = experts.length
     ? experts.map((e) => `  - ${e.id}｜${e.name}${e.role ? `（${e.role}）` : ''}`).join('\n')
     : '  （平台当前没有可选专家，expertIds 留空数组）'
   const connectorList = connectors.length
     ? connectors.map((c) => `  - ${c.id}｜${c.label}`).join('\n')
     : '  （平台当前没有可选连接器，connectorIds 留空数组）'
+  const tmpPrefix = `/tmp/wb-import-${importId}`
   return [
     `【平台下发任务】分析本节点上的项目工作区「${path}」，推断它在 Web 平台「新建项目」表单里应填的内容，然后调用平台接口把这个项目添加到平台（来源节点：${nodeLabel}；参考名：${name}）。请严格按步骤执行并汇报。`,
+    `本项目将挂在来源节点「${nodeLabel}」（节点键：${nodeKey}）下，由平台按导入令牌自动绑定；你无需在 payload 里选节点，只要原样照抄下面的 node 与 workspace 预填值（平台会比对校验，不符即拒收）。`,
     '',
     '只能从下面的候选里选，禁止编造不存在的 ID：',
     '项目专家候选（expertIds，按职责与项目性质匹配）：',
     expertList,
     '项目连接器候选（connectorIds，项目需要访问的外部环境/服务才选）：',
     connectorList,
+    '',
+    '⚠️ 本任务的所有临时文件（载荷 JSON、中间稿等）统一用前缀 ' + tmpPrefix + '（如 ' + tmpPrefix + '.json、' + tmpPrefix + '-instr.md）。同一台机器可能同时执行多个导入任务，禁止使用不带本 ID 的临时文件名（如固定的 /tmp/wb-import-payload.json），否则并发任务会互相覆盖载荷。',
     '',
     `1. 确认目录存在：ls -la "${path}"（不存在则直接汇报失败，不要调用接口）。`,
     '2. 分析项目：查看目录结构（如 ls 或 tree 两层）、README/README.md、package.json / pyproject.toml / requirements.txt / pom.xml / go.mod / Cargo.toml 等清单与关键配置、主要源码入口，搞清楚：这是什么项目、技术栈、如何构建/运行/测试、大致用途与当前状态。',
@@ -433,16 +443,16 @@ export function buildProjectImportPrompt(opts: {
     '   - connectorIds：从候选里挑项目会涉及的连接器（没有就空数组）',
     '   - skillNames：本节点已安装技能里项目会用到的（可 ls ~/.dsh/skills 查看，取目录名；没有就空数组）',
     '   - summary：一句话分析结论（这个项目是做什么的）',
-    '4. 把上述字段写成 JSON 文件（UTF-8、合法 JSON；用 heredoc 写文件，注意 instruction 内的引号与换行要转义）：',
-    '   PAYLOAD="/tmp/wb-import-payload.json"',
+    `4. 把上述字段加上预填的 node/workspace 写成 JSON 文件（UTF-8、合法 JSON；node 与 workspace 必须=如下原值，一字不改；用 heredoc 写文件，注意 instruction 内的引号与换行要转义）：`,
+    `   PAYLOAD="${tmpPrefix}.json"`,
     '   cat > "$PAYLOAD" <<\'JSON\'',
-    '   {"name":"…","instruction":"…","expertIds":[],"connectorIds":[],"skillNames":[],"summary":"…"}',
+    `   {"node":"${nodeKey}","workspace":"${path}","name":"…","instruction":"…","expertIds":[],"connectorIds":[],"skillNames":[],"summary":"…"}`,
     '   JSON',
-    '   （写完后用 python3 -m json.tool "$PAYLOAD" 校验合法，不合法就修好再继续。）',
+    '   （写完后用 python3 -m json.tool "$PAYLOAD" 校验合法并核验 node/workspace 原值仍在，不对就修好再继续。）',
     '5. 调用平台接口创建项目（JSON 原文 POST，记录 HTTP 响应原文）：',
     '   curl -sS -X POST -H "Content-Type: application/json" --data-binary "@$PAYLOAD" "' + createUrl + '"',
-    '   响应为 JSON：ok=true 表示平台已按推断的表单建好项目；ok=false 时把 error 原文一并汇报。',
-    '6. 汇报：项目分析结论（是什么项目/技术栈/怎么跑）、表单各字段的取值与理由（各一句话）、平台创建结果原文。',
+    '   响应为 JSON：ok=true 且 data.workspace=' + path + ' 表示平台已按你推断的表单建好项目；ok=false 时把 error 原文一并汇报。若响应里 data.workspace 与本任务路径不一致，说明载荷被并发任务覆盖了——立即用本任务专属文件名重写载荷并重试一次，仍不一致则汇报失败。',
+    '6. 汇报：项目分析结论（是什么项目/技术栈/怎么跑）、表单各字段的取值与理由（各一句话，含平台侧 data.name 与你提交的 name 是否一致）、平台创建结果原文。',
     '不要修改工作区内的任何文件，不要做与本任务无关的其他操作。',
   ].join('\n')
 }
