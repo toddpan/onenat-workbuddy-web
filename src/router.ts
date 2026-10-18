@@ -193,6 +193,14 @@ export class WorkBuddyRouter {
     res.end(JSON.stringify(data))
   }
 
+  /** 端点列表附带引擎探测档案（有则带，无则原样 —— 探测是异步后台过程） */
+  private attachEngine(endpoints: ReturnType<OnenatDirectory['listEndpoints']>): ReturnType<OnenatDirectory['listEndpoints']> {
+    return endpoints.map((e) => {
+      const eng = this.directory.engineInfoOf(e.mappingId)
+      return eng ? { ...e, engine: eng } : e
+    })
+  }
+
   /**
    * 解析 fs 通道目标节点：优先 node=<dshRef JSON>（项目工作区浏览，无需子智能体），
    * 否则回退 agent=<id>（子智能体所在节点）。三个返回字段与 list/mkdir 既有行为一致。
@@ -1007,13 +1015,16 @@ export class WorkBuddyRouter {
     if (p === '/api/resources' && method === 'GET') {
       try {
         const snap = await this.directory.refresh(false)
+        // 后台预热引擎探测（TTL 内不重复打节点）；响应不等它 —— 首屏拿到 endpoints，
+        // 探测完成后前端经 /api/resources/probe 增量补 engine 字段
+        void this.directory.probeAllDsh().catch(() => {})
         this.sendJson(res, 200, {
           ok: true,
           data: {
             fetchedAt: snap.fetchedAt,
             configured: this.directory.configured,
             baseUrl: this.directory.endpoint,
-            endpoints: this.directory.listEndpoints(),
+            endpoints: this.attachEngine(this.directory.listEndpoints()),
           },
         })
       } catch (err: any) {
@@ -1024,7 +1035,25 @@ export class WorkBuddyRouter {
     if (p === '/api/resources/refresh' && method === 'POST') {
       try {
         const snap = await this.directory.refresh(true)
-        this.sendJson(res, 200, { ok: true, data: { fetchedAt: snap.fetchedAt, endpoints: this.directory.listEndpoints() } })
+        this.sendJson(res, 200, { ok: true, data: { fetchedAt: snap.fetchedAt, endpoints: this.attachEngine(this.directory.listEndpoints()) } })
+      } catch (err: any) {
+        this.sendJson(res, 502, { ok: false, error: err?.message || String(err) })
+      }
+      return true
+    }
+    // 引擎探测：对全部 DSH 映射探引擎身份/健康/默认模型（force=true 绕过 TTL）。
+    // 前端打开节点下拉时调用（默认 TTL 门控），探测后按 mappingId 合并回 state.resources
+    if (p === '/api/resources/probe' && method === 'POST') {
+      try {
+        const body = await this.parseBody(req).catch(() => ({} as any))
+        const eps = this.directory.listDshEndpoints()
+        const infos = await Promise.all(eps.map((ep) => this.directory.probeEngine(ep, { force: Boolean(body?.force) }).catch((err) => ({ engine: 'unknown' as const, reachable: false, error: err?.message || '探测失败', probedAt: Date.now() }))))
+        this.sendJson(res, 200, {
+          ok: true,
+          data: {
+            engines: eps.map((ep, i) => ({ mappingId: ep.mappingId, appName: ep.appName, tunnelName: ep.tunnelName, engine: infos[i] })),
+          },
+        })
       } catch (err: any) {
         this.sendJson(res, 502, { ok: false, error: err?.message || String(err) })
       }
@@ -2912,15 +2941,37 @@ export class WorkBuddyRouter {
     if (p === '/api/planner/options' && method === 'GET') {
       const settings = this.store.getSettings()
       const picked = await this.planner.plannerTarget()
-      let models: Array<{ provider: string; id: string; name?: string; isDefault?: boolean }> = []
+      let models: Array<{ provider: string; id: string; name?: string; isDefault: boolean }> = []
       const providers: string[] = []
       let modelError: string | undefined
-      if (picked.baseUrl) {
+      // 调度模型作用于「任务节点的主会话」（engine.ensureSession isMain 分支）——
+      // 模型目录应跟随所选任务节点（?node=<mappingId>），而不是主智能体所在节点：
+      // 两个节点是不同引擎时注册表互不相通（DSH 的 zai-coding-cn 在 ZCode 节点不存在）
+      const url = new URL(req.url || '/', 'http://localhost')
+      const nodeMappingId = (url.searchParams.get('node') || '').trim()
+      let nodeSource: string | undefined
+      let nodeError: string | undefined
+      let modelsBaseUrl = picked.baseUrl
+      let modelsApiKey = picked.apiKey
+      if (nodeMappingId) {
+        const ep = this.directory.resolveMapping(nodeMappingId)
+        if (!ep || !ep.online || !ep.baseUrl) {
+          nodeError = ep ? `映射「${ep.appName || ep.tunnelName || nodeMappingId}」当前离线` : `映射 ${nodeMappingId} 已不存在`
+          modelError = nodeError
+        } else {
+          // 远程节点 /models 需要鉴权：映射实例凭证优先（限速保护内），失败回应用默认
+          const cred = await this.directory.fetchMappingCredentials(ep.mappingId)
+          modelsBaseUrl = ep.baseUrl
+          modelsApiKey = cred.ok ? cred.apiKey || cred.token : picked.apiKey
+          nodeSource = ep.appName || ep.tunnelName || nodeMappingId
+        }
+      }
+      if (modelsBaseUrl) {
         // 必须带上解析出的 apiKey：远程 DSH 节点的 /models 需要鉴权，无 key 会 401 → 列表静默变空
-        const target = { baseUrl: picked.baseUrl, online: true, resolvedAt: new Date().toISOString(), mappingId: '', apiKey: picked.apiKey }
+        const target = { baseUrl: modelsBaseUrl, online: true, resolvedAt: new Date().toISOString(), mappingId: nodeMappingId || '', apiKey: modelsApiKey }
         const mr = await this.client.getModels(target as any)
-        models = mr.models || []
-        if (!mr.ok) modelError = mr.error || '模型目录获取失败'
+        models = (mr.models || []).map((m) => ({ provider: m.provider, id: m.id, name: m.name, isDefault: Boolean(m.isDefault) }))
+        if (!mr.ok && !modelError) modelError = mr.error || '模型目录获取失败'
         for (const m of models) if (m.provider && !providers.includes(m.provider)) providers.push(m.provider)
       }
       this.sendJson(res, 200, {
@@ -2933,6 +2984,9 @@ export class WorkBuddyRouter {
           source: picked.source,
           error: picked.error,
           modelError,
+          node: nodeMappingId || undefined,
+          nodeSource,
+          nodeError,
         },
       })
       return true

@@ -214,6 +214,16 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
   }
 
   const directory = new OnenatDirectory(settings.onenat.baseUrl, settings.onenat.apiKey, log)
+  // 映射漂移自动重绑：natpass 重注册换 mappingId 后，存量引用（子智能体绑定/任务节点/定时任务）
+  // 按 tunnelId+本地端口 稳定键自动改写，用户无感，不必逐个「重新绑定 DSH 节点」
+  directory.onMappingDrift = (pairs) => {
+    try {
+      const n = store.rebindMappingRefs(pairs)
+      if (n) log(`映射漂移自动重绑：已更新 ${n} 处节点引用`)
+    } catch (err: any) {
+      log(`映射漂移重绑失败: ${err?.message || err}`)
+    }
+  }
   directory.startAutoRefresh(settings.onenat.autoRefreshMs)
 
   const resolver = new AgentResolver(store, directory)

@@ -350,6 +350,14 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
   cursor: pointer; font-size: 12.5px; color: var(--tx); transition: background .12s ease;
 }
 .main-agent-item:hover { background: var(--bg-hover); }
+/* 节点下拉：引擎健康点 + 引擎徽标（探测档案驱动） */
+.main-agent-item .np-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--tx3); flex: none; }
+.main-agent-item .np-dot.ok { background: var(--ok); }
+.main-agent-item .np-dot.err { background: var(--err); }
+.ag-badge {
+  display: inline-block; font-size: 10px; font-weight: 600; line-height: 1; padding: 2px 6px;
+  border-radius: 8px; margin-left: 4px; background: var(--ok-light); color: var(--tx2); vertical-align: 1px;
+}
 .main-agent-item.on { color: var(--pri); background: var(--pri-light); }
 .main-agent-item .ag-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .main-agent-item .ag-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -4161,11 +4169,11 @@ async function openProjectDrawer(projectId, preset) {
   const browseAgentId = v.expertIds[0] || (state.agents[0] && state.agents[0].id) || '';
   const nodeOptions = [];
   for (const r of state.resources) {
-    if (r.kind === 'dsh' && r.mappingId) nodeOptions.push({ label: (r.title || r.appName || r.note || r.mappingId), ref: { kind: 'mapping', mappingId: r.mappingId } });
+    if (r.kind === 'dsh' && r.mappingId) nodeOptions.push({ label: (r.title || r.appName || r.note || r.mappingId), tunnel: (r.tunnelName || ''), ref: { kind: 'mapping', mappingId: r.mappingId } });
   }
   for (const a of state.agents) {
     if (a.dshRef && a.dshRef.kind === 'direct' && a.dshRef.apiBaseUrl) {
-      nodeOptions.push({ label: (a.name + '（直连）'), ref: { kind: 'direct', apiBaseUrl: a.dshRef.apiBaseUrl } });
+      nodeOptions.push({ label: (a.name + '（直连）'), tunnel: '直连', ref: { kind: 'direct', apiBaseUrl: a.dshRef.apiBaseUrl } });
     }
   }
   // 节点已装技能（供项目技能勾选）
@@ -4194,10 +4202,28 @@ async function openProjectDrawer(projectId, preset) {
   const bodyHtml =
     '<div class="field" style="margin-bottom:10px"><label>项目名称</label><input id="pj-f-name" value="' + esc(v.name) + '" placeholder="例：KB 平台交付"></div>' +
     '<div class="field" style="margin-bottom:10px"><label>DSH 节点</label><select id="pj-f-node" class="cfg-sel">' +
-    nodeOptions.map(function (n) {
-      const sel = sameRef(v.nodeRef, n.ref) ? ' selected' : '';
-      return '<option value="' + esc(JSON.stringify(n.ref)) + '"' + sel + '>' + esc(n.label) + '</option>';
-    }).join('') +
+    (function () {
+      // 按隧道（=机器）分组：同机多引擎（DSH/ZCode）一眼可辨
+      const seen = {};
+      let out = '';
+      for (const n of nodeOptions) {
+        const g = n.tunnel || '';
+        if (g && !seen[g]) {
+          seen[g] = true;
+          out += '<optgroup label="' + esc(g) + '">';
+          for (const m of nodeOptions) {
+            if ((m.tunnel || '') !== g) continue;
+            const sel2 = sameRef(v.nodeRef, m.ref) ? ' selected' : '';
+            out += '<option value="' + esc(JSON.stringify(m.ref)) + '"' + sel2 + '>' + esc(m.label) + '</option>';
+          }
+          out += '</optgroup>';
+        } else if (!g) {
+          const sel3 = sameRef(v.nodeRef, n.ref) ? ' selected' : '';
+          out += '<option value="' + esc(JSON.stringify(n.ref)) + '"' + sel3 + '>' + esc(n.label) + '</option>';
+        }
+      }
+      return out;
+    })() +
     '</select></div>' +
     '<div class="field" style="margin-bottom:10px"><label>项目工作目录（从远程 DSH 节点浏览选择，会话 cwd 与工作区）</label>' +
     '<div style="display:flex;gap:8px;align-items:center"><input id="pj-f-ws" style="font-family:var(--mono);flex:1" value="' + esc(v.workspace) + '" placeholder="/workspace/project">' +
@@ -7656,18 +7682,64 @@ function renderNodePop() {
   const opts = dshNodeOptions();
   let html = '<div class="main-agent-pop-head"><span>任务节点（主 DSH）</span><span>新建任务在此执行</span></div>';
   if (!opts.length) html += '<div class="model-empty">暂无 DSH 节点（资源目录未同步）</div>';
+  // 按隧道分组：隧道=机器，组内每条映射=一个可执行引擎入口（同一台机器可并存 DSH 与 ZCode 引擎）
+  const byTunnel = {};
+  const tunnelOrder = [];
   for (const n of opts) {
-    const label = n.title || n.appName || n.note || n.mappingId;
-    html += '<div class="main-agent-item' + (nodeState.cur === n.mappingId ? ' on' : '') + '" data-mid="' + esc(n.mappingId) + '">' +
-      '<div class="ag-info"><div class="ag-title">🖥 ' + esc(label) + '</div><div class="ag-sub">' + esc(n.baseUrl || '') + '</div></div>' +
-      '<span class="ag-ck">✓</span></div>';
+    const k = n.tunnelName || '未命名隧道';
+    if (!byTunnel[k]) { byTunnel[k] = []; tunnelOrder.push(k); }
+    byTunnel[k].push(n);
+  }
+  for (const tn of tunnelOrder) {
+    const group = byTunnel[tn];
+    if (tunnelOrder.length > 1 || group.length > 1) html += '<div class="model-group">🖥 ' + esc(tn) + '</div>';
+    for (const n of group) {
+      const label = n.title || n.appName || n.note || n.mappingId;
+      const eng = n.engine || null;
+      const isCur = nodeState.cur === n.mappingId;
+      // 引擎徽标 + 健康点：探测档案有则显示；未探测（灰点）/不可达（红点）均可点选
+      const engBadge = eng ? (eng.engine === 'zcode' ? 'ZCode' : eng.engine === 'dsh' ? 'DSH' : '引擎?') : '';
+      const dotCls = !eng ? 'np-dot' : eng.reachable ? 'np-dot ok' : 'np-dot err';
+      const subParts = [];
+      if (eng && eng.reachable && eng.defaultModel) subParts.push('默认 ' + eng.defaultModel);
+      if (!eng || !eng.reachable) subParts.push(eng && eng.error ? '⚠️ ' + eng.error : '探测中…');
+      const sub = esc(n.baseUrl || '') + (subParts.length ? ' · ' + esc(subParts.join(' · ')) : '');
+      const style = eng && !eng.reachable ? ' style="opacity:.62"' : '';
+      html += '<div class="main-agent-item' + (isCur ? ' on' : '') + '"' + style + ' data-mid="' + esc(n.mappingId) + '">' +
+        '<div class="ag-info"><div class="ag-title"><span class="' + dotCls + '" style="display:inline-block;margin-right:6px"></span>🖥 ' + esc(label) +
+        (engBadge ? ' <span class="ag-badge">' + esc(engBadge) + '</span>' : '') + '</div>' +
+        '<div class="ag-sub">' + sub + '</div></div>' +
+        '<span class="ag-ck">✓</span></div>';
+    }
   }
   pop.innerHTML = html;
   pop.querySelectorAll('.main-agent-item').forEach(function (it) {
     it.addEventListener('click', function () { selectNode(it.dataset.mid); });
   });
+  // 引擎档案缺失/临期 → 后台探测（TTL 门控）后按 mappingId 合并回列表重绘
+  const needProbe = opts.some(function (n) { return !n.engine || Date.now() - (n.engine.probedAt || 0) > 90000; });
+  if (needProbe) refreshNodeEngines(false);
+}
+
+/** 探测全部 DSH 节点引擎档案并合并进 state.resources（force=true 绕过 TTL） */
+async function refreshNodeEngines(force) {
+  try {
+    const r = await api('/resources/probe', { method: 'POST', body: JSON.stringify({ force: !!force }) });
+    if (!r.ok || !r.data || !Array.isArray(r.data.engines)) return;
+    let changed = false;
+    for (const e of r.data.engines) {
+      if (!e.mappingId || !e.engine) continue;
+      const res = state.resources.find(function (x) { return x.mappingId === e.mappingId; });
+      if (!res) continue;
+      const before = JSON.stringify(res.engine || null);
+      res.engine = e.engine;
+      if (JSON.stringify(e.engine) !== before) changed = true;
+    }
+    if (changed && $('node-pop') && $('node-pop').classList.contains('on')) renderNodePop();
+  } catch (e) { /* 探测失败静默：下拉里已显示「探测中…」 */ }
 }
 function selectNode(mappingId) {
+  const prev = nodeState.cur;
   nodeState.cur = mappingId || '';
   try { localStorage.setItem('wb-node-id', nodeState.cur); } catch (e) { /* ignore */ }
   // 与新任务环境同步（创建任务时随 body.nodeRef 下发，engine 按 task.nodeRef 路由主会话）
@@ -7675,6 +7747,8 @@ function selectNode(mappingId) {
   closeNodePop();
   setNodeBtnUi('节点: ' + nodeBtnLabel());
   hintComposer('✓ 新建任务将在「' + nodeBtnLabel() + '」上执行；@子智能体 回到其绑定节点远程执行');
+  // 节点换了 → 模型目录跟着换（不同引擎注册表互不相通），当前选中模型可能不再适用
+  if (prev !== nodeState.cur) loadPlannerOptions();
 }
 function setNodeBtnUi(label) {
   const btn = $('node-btn');
@@ -7705,6 +7779,9 @@ function initNodeState() {
   nodeState.cur = cur;
   state.taskEnv.nodeRef = cur ? { kind: 'mapping', mappingId: cur } : null;
   setNodeBtnUi('节点: ' + nodeBtnLabel());
+  // 首屏 loadPlannerOptions 先于本函数执行（boot Promise.all 顺序），那次目录走的是
+  // 「主智能体节点」回退；这里就绪后若与选中节点不一致，补一次按节点联动拉取
+  if (modelState.loaded && modelState.loadedForNode !== nodeState.cur) loadPlannerOptions();
 }
 
 if ($('main-agent-btn')) {
@@ -7766,7 +7843,7 @@ async function selectMainAgent(agentId) {
 
 // ---------- 主调度模型选择（自定义弹层：原生 select 的移动端全屏弹窗字大折行且样式失控） ----------
 // curEffort/curPreset：当前执行会话的推理强度与模式预设（任务内才有意义；打开会话时回读回显）
-const modelState = { groups: {}, cur: '', loaded: false, error: '', presets: [], curEffort: '', curPreset: '', presetsLoaded: false };
+const modelState = { groups: {}, cur: '', loaded: false, error: '', presets: [], curEffort: '', curPreset: '', presetsLoaded: false, loadedForNode: '' };
 function modelBtnTitle() { return '主调度模型 + 执行会话模型（点选即生效）'; }
 function curModelEntry() {
   if (!modelState.cur) return null;
@@ -7793,7 +7870,9 @@ function renderModelPop() {
   let html = '<div class="model-pop-head"><span>主调度 + 执行会话模型</span><span>点选即生效</span></div>';
   html += '<div class="model-item' + (!cur ? ' on' : '') + '" data-v=""><span class="n">主调度默认模型</span><span class="ck">✓</span></div>';
   if (cur && !known) {
-    html += '<div class="model-item on" data-v="' + esc(cur) + '"><span class="n">' + esc(cur + '（已保存）') + '</span><span class="ck">✓</span></div>';
+    // 目录按所选任务节点拉取：已保存模型不在目录里 = 该节点引擎没有这个模型（跨引擎配置的典型症状）
+    const mismatchNote = Object.keys(modelState.groups).length ? '（已保存 · 当前节点目录不存在）' : '（已保存）';
+    html += '<div class="model-item on" data-v="' + esc(cur) + '" style="color:var(--warn)"><span class="n">' + esc(cur + mismatchNote) + '</span><span class="ck">✓</span></div>';
   }
   for (const pv of Object.keys(modelState.groups)) {
     html += '<div class="model-group">' + esc(pv) + '</div>';
@@ -7838,7 +7917,10 @@ async function loadPlannerOptions() {
   if (modelBtn) modelBtn.disabled = true;
   if (agentBtn) agentBtn.disabled = true;
 
-  const r = await api('/planner/options');
+  // 模型目录跟随所选任务节点（?node=）：调度模型作用于任务节点的主会话，
+  // 节点切换后目录必须换成该节点引擎的注册表（否则会把 A 引擎的模型配到 B 引擎上）
+  const nodeQs = nodeState && nodeState.cur ? '?node=' + encodeURIComponent(nodeState.cur) : '';
+  const r = await api('/planner/options' + nodeQs);
   if (!r.ok || !r.data) {
     if (modelBtn) modelBtn.disabled = false;
     if (agentBtn) agentBtn.disabled = false;
@@ -7874,11 +7956,14 @@ async function loadPlannerOptions() {
   if (modelBtn) {
     modelBtn.disabled = false;
     modelBtn.textContent = modelBtnLabel(modelState.cur);
-    modelBtn.title = modelBtnTitle() + ' · ' + Object.keys(modelState.groups).length + ' 个提供商 / ' + (d.models || []).length + ' 个模型';
+    const catalogFrom = d.nodeSource ? ' · 模型目录: ' + d.nodeSource : '';
+    const nodeErr = d.nodeError ? ' · ⚠️ ' + d.nodeError : '';
+    modelBtn.title = modelBtnTitle() + ' · ' + Object.keys(modelState.groups).length + ' 个提供商 / ' + (d.models || []).length + ' 个模型' + catalogFrom + nodeErr;
     renderModelPop();
   }
   // 服务端权威状态到位后，气泡模型标签与之一致（主智能体 = 列表选中模型）
   refreshMainAgentModelBadges();
+  modelState.loadedForNode = (nodeState && nodeState.cur) || '';
 }
 function closeModelPop() { $('model-pop').classList.remove('on'); }
 $('chat-model-btn').addEventListener('click', (e) => {

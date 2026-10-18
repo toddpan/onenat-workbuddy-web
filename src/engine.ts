@@ -2677,6 +2677,21 @@ export class TaskEngine {
         }
       }
     }
+    // 自愈 4：模型注册表错配 —— 调度模型/子智能体自带模型是 A 引擎的（如 DSH 的 zai-coding-cn/*），
+    // 所选节点却是 B 引擎（如 ZCode），两套 Provider Registry 互不相通 → 远端拒识。
+    // 回退 = 不带模型重建，让节点用它自己的默认选择（天然合法，且 ZCode 的 GLM-5.3 系列
+    // 要求模型选择对象自带 reasoningLevel，显式传模型会因缺等级被拒 —— 节点默认不存在此问题）。
+    // 会话记录仍按调度模型登记（plannerModel）：用户把模型按钮换成该节点合法值之前，
+    // 会话保持在回退模型上不被对齐逻辑反复切回。
+    if (!res.ok && res.error && /Provider Registry/i.test(res.error)) {
+      const mappingId = (effTarget as any).mappingId || ''
+      const probe = mappingId ? this.directory.engineInfoOf(mappingId) : undefined
+      const rejected = `${targetProvider || '(默认)'}/${targetModel || '(默认)'}`
+      const fbLabel = probe?.defaultModel || '(节点自选默认)'
+      this.taskLog(taskId, 'warn', `模型 ${rejected} 不在节点「${probe?.name || mappingId || '当前节点'}」的注册表，已回退节点默认模型 ${fbLabel} 重建会话；请把模型按钮切换为该节点可用的模型`)
+      const fbPayload = { agentPreset: createPayload.agentPreset, ...(workspaceId ? { workspaceId } : wantedCwd ? { cwd: wantedCwd } : {}) }
+      res = await this.client.createSession(effTarget, `[WorkBuddy] ${task.title}`, fbPayload)
+    }
     if (workspaceId) {
       this.taskLog(taskId, 'info', `会话已对齐工作区（${agent.name}）: workspace=${workspaceId} · 目录 ${wantedCwd}`)
     }

@@ -51,6 +51,8 @@ export interface ResolvedEndpoint {
   host: string
   port?: number
   local: string
+  /** 本地端口（从 local 解析；同隧道多 DSH 映射的区分后缀与漂移重绑稳定键都用它） */
+  localPort?: number
   /** tcp 隧道承载 HTTP 或 http 映射时合成的 web 入口（路径不变） */
   baseUrl?: string
   kind: 'ssh' | 'dsh' | 'http' | 'tcp' | 'unknown'
@@ -64,6 +66,8 @@ export interface ResolvedEndpoint {
   appType?: string
   appSkills?: Array<{ name: string; size?: number; url: string }>
   resolvedAt: number
+  /** 引擎探测档案（运行时由 directory 探测后附带，非平台字段；见 DshEngineInfo） */
+  engine?: DshEngineInfo
 }
 
 export interface ResourceSnapshot {
@@ -122,6 +126,28 @@ export type DshRef =
   | { kind: 'mapping'; mappingId: string }
   | { kind: 'app'; appId: string }
   | { kind: 'direct'; apiBaseUrl: string }
+
+/**
+ * DSH 兼容引擎探测档案（/system/status + /models 主动探测，按映射缓存）。
+ * 一条 ONENAT 隧道（一台机器）可并存多个 DSH 兼容引擎映射（如 DSH 与 ZCode headless），
+ * 平台 app 元数据无法区分 —— 只有探测节点本身才知道它是谁、默认模型是什么、活没活着。
+ */
+export interface DshEngineInfo {
+  /** 引擎族：dsh = DeepSeek Harness web service；zcode = ZCode headless web service；unknown = 无法识别 */
+  engine: 'dsh' | 'zcode' | 'unknown'
+  /** 节点自报服务名（如 dsh-web-service / zcode-web-service） */
+  name?: string
+  version?: string
+  /** 节点默认模型（provider/model 形式） */
+  defaultModel?: string
+  /** 节点默认模型的推理等级（defaultModel.reasoningEffort；部分模型如 GLM-5.3 必填，缺了会被拒） */
+  defaultReasoningEffort?: string
+  /** 节点模型目录摘要（节点联动过滤用；避免把 A 引擎的模型配到 B 引擎节点上） */
+  models?: Array<{ provider: string; id: string; name?: string; isDefault?: boolean }>
+  reachable: boolean
+  error?: string
+  probedAt: number
+}
 
 export type CredentialMode = 'inline' | 'self-fetch' | 'omit'
 

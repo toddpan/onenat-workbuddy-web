@@ -502,6 +502,46 @@ export class WorkStore {
     return out
   }
 
+  /**
+   * 映射漂移重绑：natpass 重注册后 mappingId 会变（服务没换、身份换了），按 from→to
+   * 改写所有存量引用 —— 子智能体绑定节点（dshRef）、任务节点（nodeRef）、定时任务节点
+   * （nodeMappingId）。返回改写的引用条数（0 = 没有需要重绑的引用）。
+   */
+  public rebindMappingRefs(pairs: Array<{ from: string; to: string }>): number {
+    if (!pairs?.length) return 0
+    // from===to 是无效迁移（检测缺陷的兜底防线）：过滤掉，绝不空转改写存盘
+    const map = new Map(pairs.filter((p) => p.from !== p.to).map((p) => [p.from, p.to]))
+    if (!map.size) return 0
+    let changed = 0
+    for (const a of this.data.agents) {
+      if (a.dshRef?.kind === 'mapping' && map.has(a.dshRef.mappingId)) {
+        const to = map.get(a.dshRef.mappingId)!
+        this.mutateAgent(a.id, (x) => {
+          if (x.dshRef?.kind === 'mapping') x.dshRef.mappingId = to
+        })
+        changed++
+      }
+    }
+    for (const t of this.data.tasks) {
+      if (t.nodeRef?.kind === 'mapping' && map.has(t.nodeRef.mappingId)) {
+        const to = map.get(t.nodeRef.mappingId)!
+        this.mutateTask(t.id, (x) => {
+          if (x.nodeRef?.kind === 'mapping') x.nodeRef.mappingId = to
+        })
+        changed++
+      }
+    }
+    for (const s of this.data.schedules) {
+      if (s.nodeMappingId && map.has(s.nodeMappingId)) {
+        this.mutateSchedule(s.id, (x) => {
+          x.nodeMappingId = map.get(x.nodeMappingId!)
+        })
+        changed++
+      }
+    }
+    return changed
+  }
+
   // ---- Tasks ----
 
   public getTasks(): WorkTask[] {

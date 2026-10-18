@@ -10,6 +10,7 @@
  */
 
 import type {
+  DshEngineInfo,
   OnenatApp,
   OnenatCredentials,
   OnenatTunnel,
@@ -140,7 +141,9 @@ export class OnenatDirectory {
     }
     const json: any = await res.json()
     const tunnels: OnenatTunnel[] = Array.isArray(json?.tunnels) ? json.tunnels : []
-    return { fetchedAt: Date.now(), baseUrl: this.baseUrl, tunnels }
+    const snap: ResourceSnapshot = { fetchedAt: Date.now(), baseUrl: this.baseUrl, tunnels }
+    this.detectMappingDrift(snap)
+    return snap
   }
 
   public current(): ResourceSnapshot | undefined {
@@ -191,6 +194,14 @@ export class OnenatDirectory {
         uniqueName = `${t.name}-${uniqueName}`
       }
     }
+    // 同一隧道下同 kind 映射 ≥2 条时（典型：一台机器并存 DSH 引擎与 ZCode 引擎两个 web service），
+    // 泛称唯一名会撞名、用户无法辨识选的是哪个引擎 → 追加本地端口后缀。
+    // 用本地端口而非公网端口：natpass 公网端口天天漂，本地端口语义稳定（"这台机器的哪个服务"）。
+    const localPort = Number(/:(\d+)$/.exec(String(m.local ?? '').trim())?.[1] ?? 0) || undefined
+    if ((kind === 'dsh' || kind === 'http') && this.sameKindSiblingCount(t, kind) > 1) {
+      const suffix = String(localPort || parsed?.port || '')
+      if (suffix) uniqueName = `${uniqueName}:${suffix}`
+    }
 
     const ep: ResolvedEndpoint = {
       mappingId: m.id,
@@ -203,6 +214,7 @@ export class OnenatDirectory {
       host: parsed?.host || '',
       port: parsed?.port,
       local: String(m.local ?? ''),
+      localPort,
       kind,
       // 平台已给出"是否实例级覆盖"标志：接住它，合成时才能区分
       // 实例独立凭证(mapping) 与 继承应用默认(app)；字段缺失时保持 undefined(未知)
@@ -236,6 +248,182 @@ export class OnenatDirectory {
       }
     }
     return out
+  }
+
+  /** 隧道内同 kind 映射条数（唯一名撞名判定用） */
+  private sameKindSiblingCount(t: OnenatTunnel, kind: ResolvedEndpoint['kind']): number {
+    let n = 0
+    for (const m of t.mappings || []) {
+      if (classifyKind(m.app, String(m.local ?? ''), m.proto === 'http' ? 'http' : 'tcp') === kind) n++
+    }
+    return n
+  }
+
+  // ---------- 引擎探测（DshEngineInfo） ----------
+  // 一条隧道可并存多个 DSH 兼容引擎（DSH / ZCode headless），平台元数据区分不了；
+  // 主动探测 /system/status + /models 拿到引擎身份、健康态与模型目录（模型按钮按节点联动的数据源）。
+
+  private engineCache = new Map<string, DshEngineInfo>()
+  private engineInflight = new Map<string, Promise<DshEngineInfo>>()
+  /** 探测档案 TTL：节点下拉打开时按需刷新，平时不主动打节点 */
+  private static ENGINE_TTL = 90_000
+  /**
+   * 平台凭证接口限速退避：凭证 429 后全局暂停探测（生产流量与探测共用同一 5 次/分预算，
+   * 不退避的 warmup 会跟派发流量互相挤兑）。退避期内探测返回「健康未知」而非再打凭证接口。
+   */
+  private credLimitedUntil = 0
+  private static CRED_LIMIT_BACKOFF = 5 * 60_000
+
+  public engineInfoOf(mappingId: string): DshEngineInfo | undefined {
+    return this.engineCache.get(mappingId)
+  }
+
+  /** 把所有 kind=dsh 映射标记为待重探（下次 probe 生效） */
+  public invalidateEngineInfo(): void {
+    this.engineCache.clear()
+  }
+
+  /** 探测单个 DSH 端点（并发去重 + TTL 缓存；失败也缓存，避免下拉每次打开都打一遍死节点） */
+  public async probeEngine(ep: ResolvedEndpoint, opts?: { force?: boolean }): Promise<DshEngineInfo> {
+    const cached = this.engineCache.get(ep.mappingId)
+    if (!opts?.force && cached && Date.now() - cached.probedAt < OnenatDirectory.ENGINE_TTL) return cached
+    const inflight = this.engineInflight.get(ep.mappingId)
+    if (inflight) return inflight
+    const p = this.doProbeEngine(ep).finally(() => this.engineInflight.delete(ep.mappingId))
+    this.engineInflight.set(ep.mappingId, p)
+    return p
+  }
+
+  private async doProbeEngine(ep: ResolvedEndpoint): Promise<DshEngineInfo> {
+    const base: DshEngineInfo = { engine: 'unknown', reachable: false, probedAt: Date.now() }
+    const fail = (error: string): DshEngineInfo => {
+      const info: DshEngineInfo = { ...base, error }
+      this.engineCache.set(ep.mappingId, info)
+      return info
+    }
+    if (!ep.online || !ep.baseUrl) return fail('映射离线或公网入口未合成')
+    if (Date.now() < this.credLimitedUntil) {
+      return fail(`平台凭证接口限速退避中（${Math.ceil((this.credLimitedUntil - Date.now()) / 1000)}s 后自动恢复），节点健康未知`)
+    }
+    const root = cleanBaseUrl(ep.baseUrl)
+    const call = async (apiKey?: string, path = 'system/status'): Promise<{ res: Response; json: any }> => {
+      const headers: Record<string, string> = { Accept: 'application/json' }
+      if (apiKey) headers.Authorization = `Bearer ${apiKey}`
+      const res = await fetch(`${root}/${path}`, { headers, signal: AbortSignal.timeout(6_000) })
+      const json: any = await res.json().catch(() => ({}))
+      return { res, json }
+    }
+    const callOk = async (apiKey?: string): Promise<any> => {
+      const r = await call(apiKey)
+      if (!r.res.ok || r.json?.ok !== true) throw new Error(r.json?.error || `HTTP ${r.res.status}`)
+      return r.json
+    }
+    // 凭证：映射实例凭证优先（走限速保护的缓存）。
+    // 平台凭证接口限速 5 次/分：拿不到凭证时只做一次无 key 探测（兼容免鉴权节点），
+    // 节点若 401 如实上报「凭证获取失败」并停止 —— 此时 force 重取大概率还是 429，
+    // 重试只会每节点再烧一次限速预算（实测会把整轮探测拖进连环 429）。
+    let cred = await this.fetchMappingCredentials(ep.mappingId)
+    if (!cred.ok && /429|频繁/i.test(String(cred.error || ''))) {
+      this.credLimitedUntil = Date.now() + OnenatDirectory.CRED_LIMIT_BACKOFF
+    }
+    let statusJson: any
+    try {
+      statusJson = await callOk(cred.ok ? cred.apiKey || cred.token : undefined)
+    } catch (err: any) {
+      const unauthorized = /401|unauthorized/i.test(String(err?.message || ''))
+      if (unauthorized && !cred.ok) return fail(`凭证获取失败（${cred.error || '未知'}），节点要求鉴权，稍后重试`)
+      if (unauthorized) {
+        cred = await this.fetchMappingCredentials(ep.mappingId, true)
+        if (!cred.ok) return fail(`凭证获取失败（${cred.error || '未知'}），节点要求鉴权，稍后重试`)
+        try {
+          statusJson = await callOk(cred.apiKey || cred.token)
+        } catch (err2: any) {
+          return fail(err2?.message || '探测失败')
+        }
+      } else {
+        return fail(err?.message || '探测失败')
+      }
+    }
+    const data = statusJson?.data || {}
+    const svcName = String(data.name || '')
+    const engine: DshEngineInfo['engine'] = /zcode/i.test(svcName) ? 'zcode' : /dsh|harness/i.test(svcName) ? 'dsh' : 'unknown'
+    const info: DshEngineInfo = {
+      engine,
+      name: svcName || undefined,
+      version: data.version || undefined,
+      reachable: true,
+      probedAt: Date.now(),
+    }
+    // 模型目录（默认模型 + 摘要）：失败不影响可达判定 —— 活着但模型目录拿不到也是有用信息
+    try {
+      const cred = this.credLastGood.get(ep.mappingId) || this.credCache.get(ep.mappingId)?.data
+      const key = cred?.ok ? cred.apiKey || cred.token : undefined
+      const r = await call(key, 'models')
+      if (r.res.ok && r.json?.ok) {
+        const dm = r.json.data?.defaultModel
+        if (dm && typeof dm === 'object' && dm.provider && dm.model) {
+          info.defaultModel = `${dm.provider}/${dm.model}`
+          if (dm.reasoningEffort) info.defaultReasoningEffort = String(dm.reasoningEffort)
+        } else if (typeof dm === 'string' && dm) info.defaultModel = dm
+        info.models = (Array.isArray(r.json.data?.models) ? r.json.data.models : [])
+          .slice(0, 80)
+          .map((m: any) => ({ provider: String(m.provider || ''), id: String(m.id || ''), name: m.name || undefined, isDefault: Boolean(m.isDefault) }))
+      }
+    } catch {
+      /* 模型目录失败不影响节点可达判定 */
+    }
+    this.engineCache.set(ep.mappingId, info)
+    return info
+  }
+
+  /** 探测全部 DSH 映射（并发；force 绕过 TTL） */
+  public async probeAllDsh(opts?: { force?: boolean }): Promise<void> {
+    const eps = this.listDshEndpoints()
+    await Promise.allSettled(eps.map((ep) => this.probeEngine(ep, opts)))
+  }
+
+  // ---------- 映射漂移检测（natpass 重注册后 mappingId 变化） ----------
+  // 稳定键 = tunnelId + local（本地端口）：natpass 语义里「哪台机器的哪个本地服务」不随重注册变。
+  // 检测到 旧id 消失 且 稳定键命中新映射 时回调 onMappingDrift，由 server 接线改写 store 存量引用。
+
+  public onMappingDrift?: (pairs: Array<{ from: string; to: string; tunnelName?: string; local?: string }>) => void
+
+  private detectMappingDrift(next: ResourceSnapshot): void {
+    const prev = this.snapshot
+    if (!prev) return
+    const keyOf = (t: OnenatTunnel, m: any): string => `${t.id}|${String(m.local ?? '').trim()}`
+    const nextIds = new Set<string>()
+    const nextByKey = new Map<string, { id: string; tunnel: OnenatTunnel; local: string }>()
+    for (const t of next.tunnels) {
+      for (const m of t.mappings || []) {
+        nextIds.add(m.id)
+        nextByKey.set(keyOf(t, m), { id: m.id, tunnel: t, local: String(m.local ?? '') })
+      }
+    }
+    const pairs: Array<{ from: string; to: string; tunnelName?: string; local?: string }> = []
+    const seenKey = new Set<string>()
+    for (const t of prev.tunnels) {
+      for (const m of t.mappings || []) {
+        if (nextIds.has(m.id)) continue // 旧 id 仍在线，无漂移
+        const k = keyOf(t, m)
+        if (seenKey.has(k)) continue // 同稳定键多条旧映射（历史重复登记），只迁一次
+        const hit = nextByKey.get(k)
+        if (!hit || hit.id === m.id) continue // 服务下线 / 稳定键命中自身（非漂移），交给既有报错路径
+        seenKey.add(k)
+        pairs.push({ from: m.id, to: hit.id, tunnelName: t.name, local: hit.local })
+        // 引擎档案跟着身份走：置为临期，下次探测刷新（本地服务没换，引擎不会变）
+        const oldInfo = this.engineCache.get(m.id)
+        if (oldInfo) this.engineCache.set(hit.id, { ...oldInfo, probedAt: 0 })
+      }
+    }
+    if (pairs.length) {
+      for (const p of pairs) {
+        this.credCache.delete(p.from)
+        this.credLastGood.delete(p.from)
+      }
+      this.log(`[onenat] 检测到映射漂移 ${pairs.length} 条: ${pairs.map((p) => `${p.from}→${p.to}（${p.tunnelName || ''} ${p.local}）`).join(', ')}`)
+      this.onMappingDrift?.(pairs)
+    }
   }
 
   /** 全量资源清单（供资源目录页展示） */
