@@ -103,6 +103,36 @@ function rfc2047(text: string): string {
   return `=?UTF-8?B?${Buffer.from(text, 'utf-8').toString('base64')}?=`
 }
 
+/**
+ * 邮件类接口限流（B-04）：滑动窗口内按 key（惯例 `${ip}|${action}|${email}`）计数，
+ * 超限返回 true。内存态即可（重启清零，攻击面是发信骚扰而非计费）。
+ */
+export class RateLimiter {
+  private hits = new Map<string, number[]>()
+  constructor(private windowMs: number = 60 * 60 * 1000, private max: number = 5) {}
+
+  /** 记一次并返回是否超限（超限时本次同样被拒） */
+  public hit(key: string): boolean {
+    const now = Date.now()
+    const recent = (this.hits.get(key) || []).filter((t) => now - t < this.windowMs)
+    recent.push(now)
+    this.hits.set(key, recent)
+    if (this.hits.size > 5000) {
+      // 惰性清理：键过多时丢弃全空窗口
+      for (const [k, v] of this.hits) {
+        if (!v.some((t) => now - t < this.windowMs)) this.hits.delete(k)
+      }
+    }
+    return recent.length > this.max
+  }
+
+  public remaining(key: string): number {
+    const now = Date.now()
+    const recent = (this.hits.get(key) || []).filter((t) => now - t < this.windowMs)
+    return Math.max(0, this.max - recent.length)
+  }
+}
+
 function escapeHtml(s: string): string {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
@@ -148,6 +178,39 @@ export class MailService {
       '</div>',
     ].join('')
     return this.send({ type: 'user_invite', to: opts.to, subject, html, attempts: opts.attempts, timeoutMs: opts.timeoutMs })
+  }
+
+  /** 项目成员邀请邮件 */
+  public async sendProjectInviteMail(opts: { to: string; projectName: string; inviterName: string; role: 'owner' | 'member'; inviteLink: string; expiresAt: number; attempts?: number; timeoutMs?: number }): Promise<SendResult> {
+    const roleText = opts.role === 'owner' ? 'owner（可管理项目）' : 'member'
+    const expires = new Date(opts.expiresAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
+    const subject = `【OneNat WorkBuddy】项目邀请：加入「${opts.projectName}」`
+    const html = [
+      '<div style="font-family:-apple-system,\'PingFang SC\',\'Microsoft YaHei\',sans-serif;max-width:520px;margin:0 auto;padding:24px;">',
+      '<h2 style="color:#1f2329;">OneNat WorkBuddy 项目邀请</h2>',
+      `<p style="color:#5f6673;font-size:14px;line-height:1.8;"><b style="color:#1f2329;">${escapeHtml(opts.inviterName)}</b> 邀请你以 <b style="color:#4d6bfe;">${roleText}</b> 身份加入项目 <b style="color:#1f2329;">「${escapeHtml(opts.projectName)}」</b>：</p>`,
+      `<p style="text-align:center;margin:26px 0;"><a href="${escapeHtml(opts.inviteLink)}" style="background:#4d6bfe;color:#fff;padding:12px 30px;border-radius:8px;text-decoration:none;font-size:14px;font-weight:600;">查看并接受邀请</a></p>`,
+      `<p style="color:#8f959e;font-size:12.5px;line-height:1.8;">链接 7 天内有效（至 ${expires}）。若按钮不可点，请复制以下链接到浏览器打开：<br><span style="color:#4d6bfe;word-break:break-all;">${escapeHtml(opts.inviteLink)}</span></p>`,
+      '<p style="color:#8f959e;font-size:12px;">如非本人操作，请忽略本邮件。</p>',
+      '</div>',
+    ].join('')
+    return this.send({ type: 'project_invite', to: opts.to, subject, html, attempts: opts.attempts, timeoutMs: opts.timeoutMs })
+  }
+
+  /** 密码重置邮件 */
+  public async sendResetMail(opts: { to: string; resetLink: string; expiresAt: number; attempts?: number; timeoutMs?: number }): Promise<SendResult> {
+    const expires = new Date(opts.expiresAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
+    const subject = '【OneNat WorkBuddy】密码重置'
+    const html = [
+      '<div style="font-family:-apple-system,\'PingFang SC\',\'Microsoft YaHei\',sans-serif;max-width:520px;margin:0 auto;padding:24px;">',
+      '<h2 style="color:#1f2329;">OneNat WorkBuddy 密码重置</h2>',
+      '<p style="color:#5f6673;font-size:14px;line-height:1.8;">我们收到了您（或他人）重置该邮箱账号密码的请求。请点击下方按钮设置新密码：</p>',
+      `<p style="text-align:center;margin:26px 0;"><a href="${escapeHtml(opts.resetLink)}" style="background:#4d6bfe;color:#fff;padding:12px 30px;border-radius:8px;text-decoration:none;font-size:14px;font-weight:600;">重置密码</a></p>`,
+      `<p style="color:#8f959e;font-size:12.5px;line-height:1.8;">链接 24 小时内有效（至 ${expires}）。若按钮不可点，请复制以下链接到浏览器打开：<br><span style="color:#4d6bfe;word-break:break-all;">${escapeHtml(opts.resetLink)}</span></p>`,
+      '<p style="color:#8f959e;font-size:12px;">如非本人操作，请忽略本邮件，您的账号不会受影响。</p>',
+      '</div>',
+    ].join('')
+    return this.send({ type: 'password_reset', to: opts.to, subject, html, attempts: opts.attempts, timeoutMs: opts.timeoutMs })
   }
 
   /** 发送邮件：未配置 SMTP → mock 落库；已配置 → 真发（失败重试；认证类失败不重试） */

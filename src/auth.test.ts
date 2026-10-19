@@ -165,5 +165,123 @@ test('邀请有效期常量与过期拒绝', async () => {
   }
 })
 
+test('撤销注册邀请（U-04）', async () => {
+  const { auth, dir } = makeAuth()
+  try {
+    const r = auth.createUserInvite('rv@x.com', '')
+    assert.ok('token' in r)
+    assert.equal(auth.inspectInvite(r.token).valid, true)
+    assert.equal(auth.revokeUserInvite(r.user.id), true)
+    assert.equal(auth.inspectInvite(r.token).valid, false)
+    // 用户保持 invited：可重发获得新 token
+    assert.equal(auth.listUsers().find((u) => u.id === r.user.id)?.status, 'invited')
+    assert.ok(auth.resendInvite(r.user.id))
+  } finally {
+    cleanup(dir)
+  }
+})
+
+test('忘记密码/重置全流程（U-07）', async () => {
+  const { auth, dir } = makeAuth()
+  try {
+    // 未注册邮箱：无 token（调用方恒定响应）
+    assert.equal(auth.requestPasswordReset('nobody@x.com'), null)
+    // invited 用户不可重置（无密码）
+    const inv = auth.createUserInvite('inv-rst@x.com', '')
+    assert.ok('token' in inv)
+    assert.equal(auth.requestPasswordReset('inv-rst@x.com'), null)
+    // active 用户：签发 24h token
+    const admin = auth.listUsers()[0]
+    const token = auth.requestPasswordReset(admin.username)
+    assert.ok(token && token.length >= 40)
+    // 弱密码拒绝，token 未消耗（后续正常重置仍可用）
+    const weak = await auth.resetPassword(token!, 'short1')
+    assert.equal(weak.ok, false)
+    // 正常重置：旧会话吊销 + 新密码可登录
+    const oldSession = await auth.login(admin.username, 'admin-pass-1', '127.0.0.1')
+    assert.ok(oldSession)
+    const done = await auth.resetPassword(token!, 'NewPassw0rd9')
+    assert.ok(done.ok)
+    assert.equal(auth.validateSession(oldSession!), undefined)
+    assert.ok(await auth.login(admin.username, 'NewPassw0rd9', '127.0.0.1'))
+    // 旧密码失效、token 复用拒绝
+    assert.equal(await auth.login(admin.username, 'admin-pass-1', '127.0.0.1'), null)
+    const reuse = await auth.resetPassword(token!, 'AnotherPass1')
+    assert.equal(reuse.ok, false)
+  } finally {
+    cleanup(dir)
+  }
+})
+
+test('项目邀请：创建/回显/重复/拒绝/撤销/重发', () => {
+  const { auth, dir } = makeAuth()
+  try {
+    const c1 = auth.createProjectInvite('proj-1', 'U1@x.com', 'member', 'usr-admin')
+    assert.ok('token' in c1)
+    // 同项目同邮箱 pending 唯一
+    assert.ok('conflict' in auth.createProjectInvite('proj-1', 'u1@x.com', 'member', 'usr-admin'))
+    // 回显：未注册 → account=none
+    const info = auth.inspectProjectInvite(c1.token)
+    assert.ok(info.valid && info.email === 'u1@x.com' && info.role === 'member' && info.projectId === 'proj-1' && info.account === 'none')
+    // 拒绝后链接失效
+    assert.equal(auth.declineProjectInvite(c1.token), true)
+    assert.equal(auth.inspectProjectInvite(c1.token).valid, false)
+    // 列表与撤销/重发
+    const c2 = auth.createProjectInvite('proj-1', 'u2@x.com', 'owner', 'usr-admin')
+    assert.ok('token' in c2)
+    assert.equal(auth.listProjectInvites('proj-1').length, 2)
+    assert.equal(auth.revokeProjectInvite('proj-1', 'missing-id'), false)
+    const nt = auth.resendProjectInvite('proj-1', 'missing-id')
+    assert.equal(nt, undefined)
+  } finally {
+    cleanup(dir)
+  }
+})
+
+test('接受项目邀请：未注册一步创建 / invited 激活 / active 需本人会话', async () => {
+  const { auth, dir } = makeAuth()
+  try {
+    // ① 未注册邮箱：一步创建账号（新会话签发）
+    const c1 = auth.createProjectInvite('proj-9', 'fresh@x.com', 'member', 'usr-admin')
+    assert.ok('token' in c1)
+    const weak = await auth.acceptProjectInvite(c1.token, { password: 'short1' })
+    assert.equal(weak.ok, false)
+    const ok1 = await auth.acceptProjectInvite(c1.token, { password: 'Passw0rd123', displayName: '小新' })
+    assert.ok(ok1.ok && ok1.user.status === 'active' && ok1.user.username === 'fresh@x.com')
+    assert.ok(ok1.ok && ok1.newSessionToken)
+    assert.equal((ok1.ok && auth.validateSession(ok1.newSessionToken))?.role, 'user')
+    // token 一次性
+    const again = await auth.acceptProjectInvite(c1.token, { password: 'Passw0rd123' })
+    assert.equal(again.ok, false)
+    // ② invited 用户（管理员预建）：激活 + 会话
+    const pre = auth.createUserInvite('pre@x.com', '老预建')
+    assert.ok('token' in pre)
+    const c2 = auth.createProjectInvite('proj-9', 'pre@x.com', 'member', 'usr-admin')
+    assert.ok('token' in c2)
+    const ok2 = await auth.acceptProjectInvite(c2.token, { password: 'Passw0rd123' })
+    assert.ok(ok2.ok && ok2.user.id === pre.user.id && ok2.user.status === 'active')
+    assert.ok(ok2.ok && ok2.newSessionToken)
+    // ③ active 用户：需本人会话；无会话 401、错会话 403
+    const fresh = ok1.ok ? ok1.user : undefined
+    const c3 = auth.createProjectInvite('proj-9', 'fresh@x.com', 'owner', 'usr-admin')
+    assert.ok('token' in c3)
+    const noSess = await auth.acceptProjectInvite(c3.token, {})
+    assert.ok(!noSess.ok && noSess.code === 401)
+    const wrongSess = await auth.acceptProjectInvite(c3.token, { sessionUserId: 'usr-someone-else' })
+    assert.ok(!wrongSess.ok && wrongSess.code === 403)
+    const goodSess = await auth.acceptProjectInvite(c3.token, { sessionUserId: fresh!.id })
+    assert.ok(goodSess.ok && !(goodSess.ok && goodSess.newSessionToken))
+    // ④ 禁用账号拒绝
+    const uid = (auth.listUsers().find((u) => u.username === 'fresh@x.com'))!.id
+    assert.equal(auth.setUserStatus(uid, 'disabled').ok, true)
+    const c4 = auth.createProjectInvite('proj-9', 'fresh@x.com', 'member', 'usr-admin')
+    assert.ok('token' in c4)
+    const dis = await auth.inspectProjectInvite(c4.token)
+    assert.ok(dis.valid && dis.account === 'disabled')
+  } finally {
+    cleanup(dir)
+  }
+})
+
 // 防止 unused 警告
 void createHash; void randomBytes; void existsSync

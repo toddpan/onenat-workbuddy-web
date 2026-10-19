@@ -2404,6 +2404,20 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
         </div>
         <div style="max-height:260px;overflow:auto"><table class="res" id="users-table" style="width:100%;font-size:12px"><thead><tr><th>用户</th><th>角色</th><th>状态</th><th>最后登录</th><th>操作</th></tr></thead><tbody id="users-body"></tbody></table></div>
       </div>
+      <div class="card" id="account-card" style="display:none">
+        <h3 style="margin-bottom:12px">当前账号</h3>
+        <div style="font-size:12px;color:var(--tx2);margin-bottom:10px" id="account-info">—</div>
+        <div class="grid3">
+          <div class="field"><label>显示昵称</label><div style="display:flex;gap:6px"><input id="account-name" placeholder="显示名称"><button class="mini-btn" id="btn-save-profile" style="padding:8px 12px;white-space:nowrap">保存昵称</button></div></div>
+        </div>
+        <div class="grid3" style="margin-top:4px">
+          <div class="field"><label>修改密码（旧密码 + 新密码 ≥6 位）</label><div style="display:flex;gap:6px"><input id="account-oldpw" type="password" placeholder="旧密码" style="flex:1"><input id="account-newpw" type="password" placeholder="新密码" style="flex:1"><button class="mini-btn" id="btn-change-pw" style="padding:8px 12px;white-space:nowrap">修改密码</button></div></div>
+        </div>
+      </div>
+      <div class="card" id="audit-card" style="display:none">
+        <h3 style="margin-bottom:12px">审计日志（管理员 · 最近 100 条）</h3>
+        <div style="max-height:260px;overflow:auto"><table class="res" id="audit-table" style="width:100%;font-size:11.5px"><thead><tr><th>时间</th><th>操作者</th><th>动作</th><th>对象</th><th>详情</th></tr></thead><tbody id="audit-body"><tr><td colspan="5" style="color:var(--tx3)">加载中…</td></tr></tbody></table></div>
+      </div>
       <div class="card ai-card">
         <h3 style="margin-bottom:12px">AI 接入（一键安装 · HTTP + MCP 双通道）</h3>
         <div style="display:flex;gap:8px;align-items:center">
@@ -4280,6 +4294,19 @@ async function openProjectDrawer(projectId, preset) {
       if (isEdit && state.projectId === projectId) updateProjectBanner();
     } },
   ];
+  // 归档/恢复（P-08）：编辑态追加（权限由服务端校验，非 owner 点击会得到明确报错）
+  if (isEdit) {
+    actions.push({ label: p && p.archived ? '恢复项目' : '归档项目', cls: '', act: async function () {
+      const toArchive = !(p && p.archived);
+      if (toArchive && !confirm('归档后项目只读（不可编辑/邀请/加人），可随时恢复。确认归档？')) return;
+      const r = await api('/projects/' + projectId + '/' + (toArchive ? 'archive' : 'restore'), { method: 'POST' });
+      if (!r.ok) { toast(r.error || '操作失败', true); return; }
+      toast(toArchive ? '✓ 项目已归档' : '✓ 项目已恢复');
+      await loadProjects();
+      closeModal();
+      renderProjects();
+    } });
+  }
   openModal(isEdit ? '项目配置 · ' + v.name : '新建项目', bodyHtml, actions);
   if (isEdit) loadProjectMembers(projectId);
   // 📁 浏览节点目录：打开远程目录浏览器（复用子智能体的实现），选完带回并保留表单其余内容。
@@ -11096,9 +11123,42 @@ state.me = null;
       state.me = r.data;
       var card = document.getElementById('users-card');
       if (card && r.data.role === 'admin') { card.style.display = ''; loadUsers(); loadMailStatus(); }
+      var acct = document.getElementById('account-card');
+      if (acct) {
+        acct.style.display = '';
+        document.getElementById('account-info').textContent = '登录名：' + (r.data.username || '—') + ' · 角色：' + (r.data.role === 'admin' ? '管理员' : '普通用户');
+        document.getElementById('account-name').value = r.data.displayName || '';
+      }
+      if (r.data.role === 'admin') loadAuditLog();
     }
   }).catch(function () {});
 })();
+async function loadAuditLog() {
+  const r = await api('/audit-log?limit=100');
+  const tb = document.getElementById('audit-body');
+  if (!tb) return;
+  if (!r.ok) { tb.innerHTML = '<tr><td colspan="5" style="color:var(--tx3)">' + esc(r.error || '加载失败') + '</td></tr>'; return; }
+  const list = r.data || [];
+  if (!list.length) { tb.innerHTML = '<tr><td colspan="5" style="color:var(--tx3)">暂无记录</td></tr>'; return; }
+  tb.innerHTML = list.map(function (e) {
+    return '<tr><td style="white-space:nowrap">' + fmtTime(e.createdAt) + '</td><td>' + esc(e.actorName || e.actorId) + '</td>' +
+      '<td>' + esc(e.action) + '</td><td>' + esc(e.targetType + ':' + (e.targetId || '')) + '</td>' +
+      '<td style="color:var(--tx3)">' + esc(e.detail || '') + '</td></tr>';
+  }).join('');
+}
+$('btn-save-profile').addEventListener('click', async () => {
+  const name = $('account-name').value.trim();
+  const r = await api('/users/me/profile', { method: 'PUT', body: JSON.stringify({ displayName: name }) });
+  if (r.ok) { toast('✓ 昵称已保存'); if (state.me) state.me.displayName = name; }
+  else toast(r.error || '保存失败', true);
+});
+$('btn-change-pw').addEventListener('click', async () => {
+  const oldPassword = $('account-oldpw').value, newPassword = $('account-newpw').value;
+  if (!oldPassword || !newPassword) { toast('请填写旧密码与新密码', true); return; }
+  const r = await api('/auth/password', { method: 'POST', body: JSON.stringify({ oldPassword: oldPassword, newPassword: newPassword }) });
+  if (r.ok) { toast('✓ 密码已修改，请重新登录'); setTimeout(function () { location.reload(); }, 900); }
+  else toast(r.error || '修改失败', true);
+});
 async function loadMailStatus() {
   var el = document.getElementById('mail-status-hint');
   if (!el) return;
@@ -11123,6 +11183,7 @@ async function loadUsers() {
     const isSelf = state.me && state.me.userId === u.id;
     const acts = [];
     if (u.status === 'invited') acts.push('<button class="mini-btn" data-uact="resend" data-uid="' + esc(u.id) + '">重发邀请</button>');
+    if (u.status === 'invited') acts.push('<button class="mini-btn" data-uact="revoke" data-uid="' + esc(u.id) + '">撤销邀请</button>');
     if (u.status === 'active' && !isSelf) acts.push(u.role === 'admin'
       ? '<button class="mini-btn" data-uact="role-user" data-uid="' + esc(u.id) + '">设为普通</button>'
       : '<button class="mini-btn" data-uact="role-admin" data-uid="' + esc(u.id) + '">设为管理员</button>');
@@ -11140,8 +11201,10 @@ async function loadUsers() {
     b.addEventListener('click', async function () {
       const uid = b.getAttribute('data-uid'), act = b.getAttribute('data-uact');
       if (act === 'del' && !confirm('删除该用户？（软删除：会话立即失效，成员关系保留标记）')) return;
+      if (act === 'revoke' && !confirm('撤销该用户的邀请？链接将立即失效（用户保持 invited 态，可重发）。')) return;
       let r2;
       if (act === 'resend') r2 = await api('/users/' + uid + '/resend-invite', { method: 'POST' });
+      else if (act === 'revoke') r2 = await api('/users/' + uid + '/revoke-invite', { method: 'POST' });
       else if (act === 'disable') r2 = await api('/users/' + uid + '/disable', { method: 'POST' });
       else if (act === 'enable') r2 = await api('/users/' + uid + '/enable', { method: 'POST' });
       else if (act === 'del') r2 = await api('/users/' + uid, { method: 'DELETE' });
@@ -11186,19 +11249,55 @@ async function loadProjectMembers(projectId) {
   const r = await api('/projects/' + projectId + '/members');
   if (!r.ok) { box.innerHTML = '<span style="color:var(--tx3)">' + esc(r.error || '成员加载失败') + '</span>'; return; }
   const members = r.data.members || [];
-  if (!r.data.isolated && !members.length) {
-    box.innerHTML = '<div style="color:var(--tx3);margin-bottom:6px">未启用成员隔离（存量项目：所有登录用户可见）。添加成员后即启用隔离。</div>';
+  const isolated = r.data.isolated;
+  // 我是否该项目 owner（或平台管理员）：决定管理操作展示
+  const me = state.me;
+  const iAmOwner = members.some(function (m) { return me && m.userId === me.userId && m.role === 'owner'; }) || Boolean(me && me.role === 'admin');
+  const invR = iAmOwner ? await api('/projects/' + projectId + '/invitations') : { ok: false };
+  const invitations = (invR.ok && invR.data && invR.data.invitations) || [];
+  const pendingInv = invitations.filter(function (x) { return x.status === 'pending'; });
+
+  let html = '';
+  if (!isolated && !members.length) {
+    html += '<div style="color:var(--tx3);margin-bottom:6px">未启用成员隔离（存量项目：所有登录用户可见）。添加成员后即启用隔离。</div>';
   }
-  let html = members.length ? ('<div style="margin-bottom:8px">' + members.map(function (m) {
+  // 成员列表：角色角标 + 管理操作（改角色 / 转让 / 移除）
+  html += '<div style="margin-bottom:8px">' + (members.length ? members.map(function (m) {
     const name = (m.userInfo && (m.userInfo.displayName || m.userInfo.username)) || m.userId;
+    const isOwner = m.role === 'owner';
+    const ops = [];
+    if (iAmOwner) {
+      ops.push('<a href="javascript:void(0)" data-pm-role="' + esc(m.userId) + '" data-to="' + (isOwner ? 'member' : 'owner') + '">' + (isOwner ? '降为 member' : '升为 owner') + '</a>');
+      if (!isOwner) ops.push('<a href="javascript:void(0)" data-pm-transfer="' + esc(m.userId) + '" style="color:var(--pri,#4d6bfe)">转让 owner</a>');
+      ops.push('<a href="javascript:void(0)" data-pm-remove="' + esc(m.userId) + '" style="color:var(--err,#e5484d)">✕</a>');
+    }
     return '<span style="display:inline-flex;align-items:center;gap:6px;background:var(--bg3,#f2f3f5);border-radius:14px;padding:3px 10px;margin:0 6px 6px 0">' +
-      esc(name) + '（' + (m.role === 'owner' ? 'owner' : 'member') + '）' +
-      '<a href="javascript:void(0)" data-pm-remove="' + esc(m.userId) + '" style="color:var(--err,#e5484d);text-decoration:none">✕</a></span>';
-  }).join('') + '</div>') : '';
+      esc(name) + '<span style="font-size:10.5px;color:' + (isOwner ? 'var(--pri,#4d6bfe)' : 'var(--tx3,#8f959e)') + '">' + (isOwner ? 'owner' : 'member') + '</span>' +
+      (ops.length ? '<span style="font-size:10.5px">' + ops.join(' · ') + '</span>' : '') +
+      '</span>';
+  }).join('') : '<div style="color:var(--tx3)">暂无成员</div>') + '</div>';
+  // 直接添加已激活用户（不走邮件）
   html += '<div style="display:flex;gap:6px;align-items:center">' +
     '<input id="pj-member-input" list="pj-member-list" placeholder="输入用户名/邮箱搜索已激活用户" style="flex:1;font-size:12px">' +
     '<datalist id="pj-member-list"></datalist>' +
     '<button class="mini-btn" id="pj-member-add" style="padding:8px 12px">＋ 添加成员</button></div>';
+  // 邮件邀请（P-04/09，owner 可见）：邀请任意邮箱，未注册用户可一步注册入项
+  if (iAmOwner) {
+    html += '<div style="border-top:1px dashed var(--line,#e8eaed);margin-top:10px;padding-top:8px">' +
+      '<div style="font-size:11.5px;color:var(--tx3);margin-bottom:6px">✉️ 邮件邀请：被邀请人经链接接受后加入项目；未注册邮箱可在接受页一步设置密码入项（7 天有效）。</div>' +
+      '<div style="display:flex;gap:6px;align-items:center">' +
+      '<input id="pj-inv-email" placeholder="被邀请邮箱" style="flex:1;font-size:12px">' +
+      '<select id="pj-inv-role" style="font-size:12px;padding:6px 4px"><option value="member">member</option><option value="owner">owner</option></select>' +
+      '<button class="mini-btn" id="pj-inv-send" style="padding:8px 12px;white-space:nowrap">发送邀请</button></div>' +
+      (pendingInv.length ? '<div style="margin-top:8px;font-size:11.5px">' + pendingInv.map(function (x) {
+        const inviter = x.inviterInfo && (x.inviterInfo.displayName || x.inviterInfo.username);
+        return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="flex:1">' + esc(x.email) +
+          '（' + (x.role || 'member') + '，' + esc(inviter || '—') + ' 邀请）</span>' +
+          '<a href="javascript:void(0)" data-inv-resend="' + esc(x.id) + '" style="color:var(--pri,#4d6bfe)">重发</a>' +
+          '<a href="javascript:void(0)" data-inv-revoke="' + esc(x.id) + '" style="color:var(--err,#e5484d)">撤销</a></div>';
+      }).join('') + '</div>' : '') +
+      '</div>';
+  }
   box.innerHTML = html;
   // 候选用户（登录用户可搜索 active 用户最小字段）
   const lu = await api('/users/lookup');
@@ -11218,6 +11317,37 @@ async function loadProjectMembers(projectId) {
     toast('✓ 成员已添加');
     loadProjectMembers(projectId);
   });
+  const sendBtn = document.getElementById('pj-inv-send');
+  if (sendBtn) sendBtn.addEventListener('click', async function () {
+    const email = document.getElementById('pj-inv-email').value.trim();
+    const role = document.getElementById('pj-inv-role').value;
+    if (!email) { toast('请填写被邀请邮箱', true); return; }
+    sendBtn.disabled = true;
+    const r2 = await api('/projects/' + projectId + '/invitations', { method: 'POST', body: JSON.stringify({ email: email, role: role }) });
+    sendBtn.disabled = false;
+    if (!r2.ok) { toast(r2.error || '邀请失败', true); return; }
+    if (r2.data && r2.data.emailSent) toast('✓ 邀请邮件已发送至 ' + email);
+    else if (r2.data && r2.data.emailStatus === 'mock') { showInviteLink(r2.data.inviteLink, null); toast('SMTP 未配置：已生成邀请链接，请手动发送', true); }
+    else toast('⚠️ 邮件发送失败（' + ((r2.data && r2.data.emailError) || '未知') + '），可复制链接手动发送', true);
+    loadProjectMembers(projectId);
+  });
+  box.querySelectorAll('[data-pm-role]').forEach(function (a) {
+    a.addEventListener('click', async function () {
+      const uid = a.getAttribute('data-pm-role'), to = a.getAttribute('data-to');
+      const r2 = await api('/projects/' + projectId + '/members/' + encodeURIComponent(uid), { method: 'PUT', body: JSON.stringify({ role: to }) });
+      if (!r2.ok) { toast(r2.error || '操作失败', true); return; }
+      toast('✓ 角色已更新'); loadProjectMembers(projectId);
+    });
+  });
+  box.querySelectorAll('[data-pm-transfer]').forEach(function (a) {
+    a.addEventListener('click', async function () {
+      const uid = a.getAttribute('data-pm-transfer');
+      if (!confirm('确认转让 owner 给该成员？你的角色将变为 member。')) return;
+      const r2 = await api('/projects/' + projectId + '/ownership-transfer', { method: 'POST', body: JSON.stringify({ targetMemberId: uid }) });
+      if (!r2.ok) { toast(r2.error || '转让失败', true); return; }
+      toast('✓ owner 已转让'); loadProjectMembers(projectId);
+    });
+  });
   box.querySelectorAll('[data-pm-remove]').forEach(function (a) {
     a.addEventListener('click', async function () {
       const uid = a.getAttribute('data-pm-remove');
@@ -11226,6 +11356,23 @@ async function loadProjectMembers(projectId) {
       if (!r2.ok) { toast(r2.error || '移除失败', true); return; }
       toast('✓ 已移除');
       loadProjectMembers(projectId);
+    });
+  });
+  box.querySelectorAll('[data-inv-resend]').forEach(function (a) {
+    a.addEventListener('click', async function () {
+      const r2 = await api('/projects/' + projectId + '/invitations/' + a.getAttribute('data-inv-resend') + '/resend', { method: 'POST' });
+      if (!r2.ok) { toast(r2.error || '重发失败', true); return; }
+      if (r2.data && r2.data.email && r2.data.email.sent) toast('✓ 邀请邮件已重发');
+      else if (r2.data && r2.data.inviteLink) { showInviteLink(r2.data.inviteLink, null); }
+      loadProjectMembers(projectId);
+    });
+  });
+  box.querySelectorAll('[data-inv-revoke]').forEach(function (a) {
+    a.addEventListener('click', async function () {
+      if (!confirm('撤销该邀请？链接将立即失效。')) return;
+      const r2 = await api('/projects/' + projectId + '/invitations/' + a.getAttribute('data-inv-revoke') + '/revoke', { method: 'POST' });
+      if (!r2.ok) { toast(r2.error || '撤销失败', true); return; }
+      toast('✓ 已撤销'); loadProjectMembers(projectId);
     });
   });
 }

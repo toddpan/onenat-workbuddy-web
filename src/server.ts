@@ -39,8 +39,9 @@ import { SshResourceStore } from './ssh-store.js'
 import { createWorkBuddyToolDefs, HTTP_TOOL_CTX, type WorkBuddyToolDef } from './tool-ops.js'
 import { AuthService, SESSION_COOKIE } from './auth.js'
 import { renderLoginUi } from './login-ui.js'
-import { renderInviteUi } from './invite-ui.js'
-import { MailService, loadDotEnv } from './mail.js'
+import { renderInviteUi, renderResetUi, renderProjectInviteUi } from './invite-ui.js'
+import { MailService, RateLimiter, loadDotEnv } from './mail.js'
+import { AuditLog } from './audit.js'
 import { SkillPluginLibrary } from './library.js'
 import { formatDateVersion, readPackageVersion } from './date-version.js'
 
@@ -245,6 +246,9 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
   auth.seedAiToken(cfg.apiToken)
   // SMTP 邮件服务（用户邀请自动发信；未配置时开发模式，邀请链接仍可手动复制）
   const mail = new MailService(cfg.dataDir)
+  // 审计日志（B-03）与邮件接口限流（B-04）
+  const auditLog = new AuditLog(cfg.dataDir)
+  const mailLimiter = new RateLimiter()
 
   // 小智平台 MCP 桥接：接入点优先级 命令行/env > 存储设置（存储为空时种子）；语音助手页可随时增删改（免重启）
   const xiaozhi = new XiaozhiMcpClient({
@@ -263,7 +267,7 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
     xiaozhi.configureAll(endpoints)
   }
   const library = new SkillPluginLibrary(cfg.dataDir, store, log)
-  const router = new WorkBuddyRouter(store, directory, resolver, composer, planner, engine, sshStore, scheduler, monitor, auth, xiaozhi, library, mail)
+  const router = new WorkBuddyRouter(store, directory, resolver, composer, planner, engine, sshStore, scheduler, monitor, auth, xiaozhi, library, mail, auditLog, mailLimiter)
   // 专家团专家成员的 persona 来源：引擎与路由共用同一份 ExpertRegistry（构造顺序晚于引擎，此处回填）
   engine.attachExperts(router.expertRegistry)
 
@@ -398,6 +402,102 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
         res.setHeader('Content-Type', 'text/html; charset=utf-8')
         res.setHeader('Cache-Control', 'no-store')
         res.end(renderInviteUi(prefix, url.searchParams.get('token') || '', pkgVersion()))
+        return
+      }
+
+      // ---------- 忘记密码 / 重置（U-07，公开；恒定响应防枚举） ----------
+      if (underPrefix && url.pathname === `${prefix}/api/auth/forgot-password` && method === 'POST') {
+        const body = await readJsonBody(req)
+        const email = String(body?.email || '')
+        const limited = mailLimiter.hit(`${clientIp}|password_reset|${email.trim().toLowerCase()}`)
+        if (limited) {
+          sendJson(res, 429, { ok: false, error: '请求过于频繁，请 1 小时后再试' })
+          return
+        }
+        const resetToken = auth.requestPasswordReset(email)
+        if (resetToken) {
+          const base = `${url.protocol}//${String(req.headers['x-forwarded-host'] || req.headers.host || '')}${prefix}`
+          await mail.sendResetMail({
+            to: email.trim().toLowerCase(), resetLink: `${base}/reset?token=${resetToken}`,
+            expiresAt: Date.now() + 24 * 60 * 60 * 1000, attempts: 2, timeoutMs: 8000,
+          })
+          auditLog.record({ actorId: 'system', action: 'auth.password_reset_request', targetType: 'user', targetId: email.trim().toLowerCase(), ip: clientIp })
+        }
+        sendJson(res, 202, { ok: true, message: '如果该邮箱已注册，重置邮件已发送（24 小时内有效），请注意查收' })
+        return
+      }
+      if (underPrefix && url.pathname === `${prefix}/api/auth/reset-password` && method === 'POST') {
+        const body = await readJsonBody(req)
+        const result = await auth.resetPassword(String(body?.token || ''), String(body?.newPassword || ''))
+        if (!result.ok) {
+          sendJson(res, 400, { ok: false, error: result.error })
+          return
+        }
+        auditLog.record({ actorId: 'system', action: 'auth.password_reset', targetType: 'user', targetId: result.username, ip: clientIp })
+        sendJson(res, 200, { ok: true, message: '密码已重置，请使用新密码登录' })
+        return
+      }
+      // 重置密码页（公开静态壳）
+      if (underPrefix && method === 'GET' && url.pathname === `${prefix}/reset`) {
+        res.statusCode = 200
+        res.setHeader('Content-Type', 'text/html; charset=utf-8')
+        res.setHeader('Cache-Control', 'no-store')
+        res.end(renderResetUi(prefix, url.searchParams.get('token') || '', pkgVersion()))
+        return
+      }
+
+      // ---------- 项目邀请接受（P-05，公开：token 自鉴权；active 用户需本人登录态） ----------
+      const projInviteApiMatch = underPrefix && /^\/api\/project-invitations\/([A-Za-z0-9_-]+)(?:\/(decline))?$/.exec(url.pathname.slice(prefix.length))
+      if (projInviteApiMatch && (method === 'GET' || method === 'POST')) {
+        const inviteToken = projInviteApiMatch[1]
+        const session = auth.validateSession(sessionToken)
+        if (method === 'GET') {
+          const info = auth.inspectProjectInvite(inviteToken)
+          if (!info.valid) { sendJson(res, 200, { ok: true, data: info }); return }
+          const proj = store.getProject(info.projectId)
+          sendJson(res, 200, { ok: true, data: { ...info, projectName: proj?.name || '', projectArchived: Boolean(proj?.archivedAt) } })
+          return
+        }
+        if (projInviteApiMatch[2] === 'decline') {
+          const ok = auth.declineProjectInvite(inviteToken)
+          sendJson(res, ok ? 200 : 400, ok ? { ok: true, message: '已拒绝该邀请' } : { ok: false, error: '邀请不存在或已处理' })
+          return
+        }
+        // accept 前快照（accept 会把令牌原子置 used，之后不可再 inspect）
+        const info = auth.inspectProjectInvite(inviteToken)
+        const body = await readJsonBody(req)
+        const result = await auth.acceptProjectInvite(inviteToken, {
+          password: body?.password ? String(body.password) : undefined,
+          displayName: body?.displayName ? String(body.displayName) : undefined,
+          sessionUserId: session?.userId,
+        })
+        if (!result.ok) {
+          sendJson(res, result.code || 400, { ok: false, error: result.error })
+          return
+        }
+        // 写成员记录（角色=邀请角色；已在成员中则幂等跳过）
+        if (info.valid) {
+          const proj = store.getProject(info.projectId)
+          if (proj && !(proj.projectMembers || []).some((m) => m.userId === result.user.id)) {
+            const patch: Record<string, unknown> = {
+              id: proj.id,
+              projectMembers: [...(proj.projectMembers || []), { userId: result.user.id, role: info.role, joinedAt: Date.now() }],
+            }
+            if (!proj.owner && info.role === 'owner') patch.owner = result.user.id
+            store.upsertProject(patch)
+          }
+          auditLog.record({ actorId: result.user.id, actorName: result.user.displayName || result.user.username, action: 'project.invite.accept', targetType: 'project', targetId: info.projectId, detail: result.user.username, ip: clientIp })
+        }
+        if (result.newSessionToken) res.setHeader('Set-Cookie', AuthService.serializeSession(result.newSessionToken, isSecure))
+        sendJson(res, 200, { ok: true, data: { username: result.user.username, projectId: info.valid ? info.projectId : '', newSession: Boolean(result.newSessionToken) } })
+        return
+      }
+      // 项目邀请接受页（公开静态壳）
+      if (underPrefix && method === 'GET' && url.pathname === `${prefix}/project-invite`) {
+        res.statusCode = 200
+        res.setHeader('Content-Type', 'text/html; charset=utf-8')
+        res.setHeader('Cache-Control', 'no-store')
+        res.end(renderProjectInviteUi(prefix, url.searchParams.get('token') || '', pkgVersion()))
         return
       }
 

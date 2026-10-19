@@ -28,14 +28,19 @@ export interface AuthUser {
   lastLoginAt?: number
 }
 
-/** 一次性令牌（统一表）：type 区分用户注册邀请 / 密码重置；库里只存 sha256 哈希 */
+/** 一次性令牌（统一表）：type 区分用户注册邀请 / 密码重置 / 项目成员邀请；库里只存 sha256 哈希 */
 export interface InviteToken {
   id: string
-  type: 'user_invite' | 'password_reset'
+  type: 'user_invite' | 'password_reset' | 'project_invite'
   tokenHash: string
   email: string
+  /** user_invite / password_reset：关联用户；project_invite：目标可能尚未注册，为空 */
   userId: string
-  status: 'pending' | 'used' | 'revoked'
+  /** project_invite 专属：目标项目与入项角色、发起人 */
+  projectId?: string
+  role?: 'owner' | 'member'
+  invitedBy?: string
+  status: 'pending' | 'used' | 'revoked' | 'declined'
   expiresAt: number
   usedAt?: number
   createdAt: number
@@ -64,8 +69,10 @@ export const SESSION_COOKIE = 'wb_session'
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const LOGIN_FAIL_WINDOW_MS = 5 * 60 * 1000
 const LOGIN_FAIL_MAX = 10
-/** 注册邀请链接有效期：72 小时 */
+/** 注册邀请链接有效期：72 小时；密码重置：24 小时；项目邀请：7 天 */
 export const INVITE_TTL_MS = 72 * 60 * 60 * 1000
+export const RESET_TTL_MS = 24 * 60 * 60 * 1000
+export const PROJECT_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
 const scryptAsync = promisify(scrypt) as (password: string, salt: string, keylen: number) => Promise<Buffer>
 
@@ -236,10 +243,14 @@ export class AuthService {
     return this.users.find((u) => u.username === username && u.status !== 'deleted')
   }
 
-  /** 管理员用户列表（脱敏：不含哈希） */
-  public listUsers(): Array<Pick<AuthUser, 'id' | 'username' | 'displayName' | 'role' | 'status' | 'createdAt' | 'lastLoginAt'>> {
+  /** 管理员用户列表（脱敏：不含哈希）；支持 status/role/q（用户名或昵称包含，大小写不敏感）过滤 */
+  public listUsers(filters: { status?: string; role?: string; q?: string } = {}): Array<Pick<AuthUser, 'id' | 'username' | 'displayName' | 'role' | 'status' | 'createdAt' | 'lastLoginAt'>> {
+    const q = String(filters.q || '').trim().toLowerCase()
     return this.users
       .filter((u) => u.status !== 'deleted')
+      .filter((u) => !filters.status || u.status === filters.status)
+      .filter((u) => !filters.role || u.role === filters.role)
+      .filter((u) => !q || u.username.toLowerCase().includes(q) || (u.displayName || '').toLowerCase().includes(q))
       .map(({ id, username, displayName, role, status, createdAt, lastLoginAt }) => ({ id, username, displayName, role, status, createdAt, lastLoginAt }))
   }
 
@@ -292,7 +303,183 @@ export class AuthService {
     return this.issueToken('user_invite', e, user.id)
   }
 
-  private issueToken(type: InviteToken['type'], email: string, userId: string): string {
+  /** 撤销邀请（U-04）：pending 注册邀请置 revoked；用户保持 invited 态，可后续重发或删除 */
+  public revokeUserInvite(userId: string): boolean {
+    const user = this.users.find((u) => u.id === userId && u.status === 'invited')
+    if (!user) return false
+    const e = AuthService.normalizeEmail(user.username)
+    let hit = false
+    for (const inv of this.invites) {
+      if (inv.type === 'user_invite' && inv.email === e && inv.status === 'pending') { inv.status = 'revoked'; hit = true }
+    }
+    if (hit) this.save()
+    return hit
+  }
+
+  // ---------- 密码重置（U-07）：与注册邀请同一令牌机制，type=password_reset，24h ----------
+
+  /** 申请重置：仅 active 用户签发 token；邮箱不存在返回 null（调用方恒定响应，防枚举）。旧 pending 重置作废 */
+  public requestPasswordReset(email: string): string | null {
+    const e = AuthService.normalizeEmail(email)
+    const user = this.users.find((u) => AuthService.normalizeEmail(u.username) === e && u.status === 'active')
+    if (!user) return null
+    for (const inv of this.invites) {
+      if (inv.type === 'password_reset' && inv.email === e && inv.status === 'pending') inv.status = 'revoked'
+    }
+    return this.issueToken('password_reset', e, user.id, { ttlMs: RESET_TTL_MS })
+  }
+
+  /** 重置密码：校验 token → 设置新密码（≥8 位字母+数字）→ 吊销该用户全部会话。token 原子置 used */
+  public async resetPassword(token: string, newPassword: string): Promise<{ ok: true; username: string } | { ok: false; error: string }> {
+    const inv = this.findInvite(token)
+    if (!inv || inv.type !== 'password_reset') return { ok: false, error: '重置链接无效' }
+    const hash = inv.tokenHash
+    if (this.usedTokenHashes.has(hash)) return { ok: false, error: '重置链接已被使用' }
+    if (inv.status !== 'pending') return { ok: false, error: inv.status === 'revoked' ? '重置链接已失效，请重新申请' : '重置链接已被使用' }
+    if (Date.now() > inv.expiresAt) return { ok: false, error: '重置链接已过期，请重新申请' }
+    if (!AuthService.validNewPassword(newPassword)) return { ok: false, error: '密码需至少 8 位，且同时包含字母与数字' }
+    const user = this.users.find((u) => u.id === inv.userId)
+    if (!user || user.status !== 'active') return { ok: false, error: '账号状态异常，请联系管理员' }
+    this.usedTokenHashes.add(hash)
+    user.salt = randomBytes(16).toString('hex')
+    user.hash = await hashPasswordAsync(newPassword, user.salt)
+    inv.status = 'used'
+    inv.usedAt = Date.now()
+    for (const [t, s] of this.sessions) {
+      if (s.userId === user.id) this.sessions.delete(t)
+    }
+    this.save()
+    return { ok: true, username: user.username }
+  }
+
+  // ---------- 项目成员邀请（P-04/05/09）：统一令牌表 type=project_invite，7 天 ----------
+
+  /** 发起项目邀请：同项目同邮箱仅一份 pending；返回 token 原文（拼邀请链接用一次） */
+  public createProjectInvite(projectId: string, email: string, role: 'owner' | 'member', invitedBy: string): { token: string } | { conflict: string } {
+    const e = AuthService.normalizeEmail(email)
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return { conflict: '邮箱格式不正确' }
+    if (this.invites.some((x) => x.type === 'project_invite' && x.projectId === projectId && x.email === e && x.status === 'pending')) {
+      return { conflict: '该邮箱已有待处理邀请（可重发刷新有效期）' }
+    }
+    return { token: this.issueToken('project_invite', e, '', { ttlMs: PROJECT_INVITE_TTL_MS, projectId, role, invitedBy }) }
+  }
+
+  /** 重发项目邀请：旧 token 作废、刷新 7 天有效期 */
+  public resendProjectInvite(projectId: string, inviteId: string): string | undefined {
+    const inv = this.invites.find((x) => x.id === inviteId && x.type === 'project_invite' && x.projectId === projectId)
+    if (!inv || inv.status !== 'pending') return undefined
+    inv.status = 'revoked'
+    return this.issueToken('project_invite', inv.email, '', { ttlMs: PROJECT_INVITE_TTL_MS, projectId, role: inv.role, invitedBy: inv.invitedBy })
+  }
+
+  /** 撤销项目邀请 */
+  public revokeProjectInvite(projectId: string, inviteId: string): boolean {
+    const inv = this.invites.find((x) => x.id === inviteId && x.type === 'project_invite' && x.projectId === projectId)
+    if (!inv || inv.status !== 'pending') return false
+    inv.status = 'revoked'
+    this.save()
+    return true
+  }
+
+  /** 项目邀请列表（管理用，含历史） */
+  public listProjectInvites(projectId: string): Array<Pick<InviteToken, 'id' | 'email' | 'role' | 'status' | 'invitedBy' | 'createdAt' | 'expiresAt' | 'usedAt'>> {
+    return this.invites
+      .filter((x) => x.type === 'project_invite' && x.projectId === projectId)
+      .map(({ id, email, role, status, invitedBy, createdAt, expiresAt, usedAt }) => ({ id, email, role: role || 'member', status, invitedBy, createdAt, expiresAt, usedAt }))
+  }
+
+  /** 校验项目邀请（不消耗）：回显邮箱/角色/有效期/发起人 + 目标邮箱账号状态（接受页据此决定表单形态） */
+  public inspectProjectInvite(token: string): { valid: true; email: string; role: 'owner' | 'member'; projectId: string; expiresAt: number; account: 'none' | 'invited' | 'active' | 'disabled'; inviterName?: string } | { valid: false; reason: string } {
+    const inv = this.findInvite(token)
+    if (!inv || inv.type !== 'project_invite') return { valid: false, reason: '邀请链接无效' }
+    if (inv.status === 'used') return { valid: false, reason: '邀请已被接受' }
+    if (inv.status === 'declined') return { valid: false, reason: '邀请已被拒绝' }
+    if (inv.status === 'revoked') return { valid: false, reason: '邀请已被撤销，请联系邀请人重发' }
+    if (Date.now() > inv.expiresAt) return { valid: false, reason: '邀请已过期，请联系邀请人重发' }
+    const user = this.users.find((u) => AuthService.normalizeEmail(u.username) === AuthService.normalizeEmail(inv.email) && u.status !== 'deleted')
+    const account = !user ? 'none' : user.status === 'active' ? 'active' : user.status === 'invited' ? 'invited' : 'disabled'
+    const inviter = inv.invitedBy ? this.users.find((u) => u.id === inv.invitedBy) : undefined
+    return { valid: true, email: inv.email, role: inv.role || 'member', projectId: inv.projectId!, expiresAt: inv.expiresAt, account, inviterName: inviter?.displayName || inviter?.username }
+  }
+
+  /**
+   * 接受项目邀请（P-05）：token 原子置 used。
+   * - 邮箱未注册：{password} 必填，一步创建账号（active）并入项；
+   * - 邮箱为 invited（管理员预建）：{password} 必填，激活并入项（一步完成，签发会话）；
+   * - 邮箱已 active：需以该邮箱的登录态调用（sessionUserId 匹配），否则 403 文案；不签发新会话；
+   * - disabled：拒绝。
+   * 成员记录由路由层写 store（本方法只管账号与令牌），返回 joined 用户信息与可选新会话。
+   */
+  public async acceptProjectInvite(
+    token: string,
+    opts: { password?: string; displayName?: string; sessionUserId?: string },
+  ): Promise<{ ok: true; user: AuthUser; newSessionToken?: string } | { ok: false; error: string; code?: number }> {
+    const inv = this.findInvite(token)
+    if (!inv || inv.type !== 'project_invite') return { ok: false, error: '邀请链接无效' }
+    const hash = inv.tokenHash
+    if (this.usedTokenHashes.has(hash)) return { ok: false, error: '邀请已被接受' }
+    const checked = this.inspectProjectInvite(token)
+    if (!checked.valid) return { ok: false, error: checked.reason }
+    const e = AuthService.normalizeEmail(inv.email)
+    const existing = this.users.find((u) => AuthService.normalizeEmail(u.username) === e && u.status !== 'deleted')
+    if (existing && existing.status === 'disabled') return { ok: false, error: '该账号已被禁用，无法接受邀请', code: 403 }
+    let user: AuthUser
+    let newSessionToken: string | undefined
+    if (existing && existing.status === 'active') {
+      if (!opts.sessionUserId) return { ok: false, error: '该邮箱已有账号，请登录后接受邀请', code: 401 }
+      if (opts.sessionUserId !== existing.id) return { ok: false, error: '请退出后使用被邀请邮箱对应的账号登录再接受', code: 403 }
+      user = existing
+    } else {
+      // none / invited：一步设置密码（注册或激活）
+      if (!AuthService.validNewPassword(String(opts.password || ''))) {
+        return { ok: false, error: '密码需至少 8 位，且同时包含字母与数字' }
+      }
+      if (existing) {
+        user = existing
+        user.salt = randomBytes(16).toString('hex')
+        user.hash = await hashPasswordAsync(String(opts.password), user.salt)
+        user.status = 'active'
+      } else {
+        const salt = randomBytes(16).toString('hex')
+        user = {
+          id: 'usr-' + randomBytes(8).toString('hex'),
+          username: e,
+          salt,
+          hash: await hashPasswordAsync(String(opts.password), salt),
+          role: 'user',
+          status: 'active',
+          createdAt: Date.now(),
+        }
+        this.users.push(user)
+      }
+      const dn = String(opts.displayName || '').trim()
+      if (dn) user.displayName = dn
+      newSessionToken = randomBytes(32).toString('hex')
+      this.sessions.set(newSessionToken, { userId: user.id, username: user.username, expiresAt: Date.now() + SESSION_TTL_MS })
+    }
+    this.usedTokenHashes.add(hash)
+    inv.status = 'used'
+    inv.usedAt = Date.now()
+    if (!inv.invitedBy && opts.sessionUserId) inv.invitedBy = opts.sessionUserId
+    this.save()
+    return { ok: true, user, newSessionToken }
+  }
+
+  /** 拒绝项目邀请（持 token 即可，效果=该链接作废） */
+  public declineProjectInvite(token: string): boolean {
+    const inv = this.findInvite(token)
+    if (!inv || inv.type !== 'project_invite' || inv.status !== 'pending' || Date.now() > inv.expiresAt) return false
+    inv.status = 'declined'
+    this.save()
+    return true
+  }
+
+  private issueToken(
+    type: InviteToken['type'],
+    email: string,
+    userId: string,
+    opts: { ttlMs?: number; projectId?: string; role?: 'owner' | 'member'; invitedBy?: string } = {},
+  ): string {
     const token = randomBytes(32).toString('base64url')
     const inv: InviteToken = {
       id: 'inv-' + randomBytes(6).toString('hex'),
@@ -301,8 +488,9 @@ export class AuthService {
       email,
       userId,
       status: 'pending',
-      expiresAt: Date.now() + INVITE_TTL_MS,
+      expiresAt: Date.now() + (opts.ttlMs ?? INVITE_TTL_MS),
       createdAt: Date.now(),
+      ...(opts.projectId ? { projectId: opts.projectId, role: opts.role || 'member', invitedBy: opts.invitedBy } : {}),
     }
     this.invites.push(inv)
     // 过期/已用令牌定期瘦身：保留最近 500 条

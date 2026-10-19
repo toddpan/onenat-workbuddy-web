@@ -281,6 +281,8 @@ export interface Project {
   skillNames: string[]
   /** 从远程 DSH 导入的溯源信息（来源节点/路径 + 导入分析任务） */
   importedFrom?: { sourceNode: string; sourcePath: string; taskId: string; at: number }
+  /** 归档时间（P-08）：非空=归档态（只读，不可编辑/邀请/加人）；restore 清空 */
+  archivedAt?: number
   createdAt: number
   updatedAt: number
 }

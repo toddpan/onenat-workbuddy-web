@@ -587,7 +587,8 @@ export class WorkStore {
     return this.data.projects.find((p) => p.id === id)
   }
 
-  public upsertProject(input: Partial<Project>): Project {
+  /** 归档字段入参约定：传 null/0 表示清除（恢复），见 archivedAt 合并行 */
+  public upsertProject(input: Omit<Partial<Project>, 'archivedAt'> & { archivedAt?: number | null }): Project {
     const now = Date.now()
     const existing = input.id ? this.data.projects.find((p) => p.id === input.id) : undefined
     const project: Project = {
@@ -604,6 +605,8 @@ export class WorkStore {
       projectMembers: input.projectMembers !== undefined ? input.projectMembers : existing?.projectMembers,
       visibility: input.visibility !== undefined ? input.visibility : existing?.visibility,
       importedFrom: input.importedFrom ?? existing?.importedFrom,
+      // 归档：传 truthy 时间戳=归档；传 null/0=恢复（清空）；不传=保持
+      archivedAt: input.archivedAt !== undefined ? (input.archivedAt || undefined) : existing?.archivedAt,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     }

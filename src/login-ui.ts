@@ -66,6 +66,11 @@ body::before { content: ''; position: fixed; inset: 0; background: radial-gradie
     <div class="field"><label>密码</label><input id="password" type="password" autocomplete="current-password" placeholder="密码"></div>
     <button class="btn-login" id="btn" type="submit">登 录</button>
   </form>
+  <div style="margin-top:10px;text-align:center"><a href="javascript:void(0)" id="forgot-link" style="font-size:12px;color:var(--tx2);text-decoration:none">忘记密码？</a></div>
+  <div id="forgot-box" style="display:none;margin-top:12px;border-top:1px dashed var(--line);padding-top:12px">
+    <div class="field"><label>注册邮箱</label><input id="forgot-email" autocomplete="email" placeholder="user@example.com"></div>
+    <button class="btn-login" id="forgot-btn" type="button" style="box-shadow:none">发送重置邮件</button>
+  </div>
   <div class="hint">登录状态保留 7 天 · 会话 Cookie 仅存放于浏览器${version ? `<br>版本 v${version}` : ''}</div>
 </div>
 <script>
@@ -74,6 +79,26 @@ body::before { content: ''; position: fixed; inset: 0; background: radial-gradie
   var errEl = document.getElementById('err');
   var btn = document.getElementById('btn');
   function showErr(msg) { errEl.textContent = msg; errEl.className = 'err on'; }
+  document.getElementById('forgot-link').addEventListener('click', function () {
+    var box = document.getElementById('forgot-box');
+    box.style.display = box.style.display === 'none' ? '' : 'none';
+  });
+  document.getElementById('forgot-btn').addEventListener('click', async function () {
+    var fbtn = this;
+    var email = document.getElementById('forgot-email').value.trim();
+    if (!email) { showErr('请填写注册邮箱'); return; }
+    fbtn.disabled = true; fbtn.textContent = '发送中…';
+    try {
+      var res = await fetch(PREFIX + '/api/auth/forgot-password', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email })
+      });
+      var json = null; try { json = await res.json(); } catch (e) {}
+      if (json && json.ok) showErr(json.message || '如果该邮箱已注册，重置邮件已发送，请注意查收');
+      else showErr((json && json.error) || '发送失败，请稍后重试');
+    } catch (e) { showErr('网络异常，请重试'); }
+    fbtn.disabled = false; fbtn.textContent = '发送重置邮件';
+  });
   document.getElementById('form').addEventListener('submit', async function (ev) {
     ev.preventDefault();
     var username = document.getElementById('username').value.trim();
