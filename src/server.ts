@@ -39,6 +39,8 @@ import { SshResourceStore } from './ssh-store.js'
 import { createWorkBuddyToolDefs, HTTP_TOOL_CTX, type WorkBuddyToolDef } from './tool-ops.js'
 import { AuthService, SESSION_COOKIE } from './auth.js'
 import { renderLoginUi } from './login-ui.js'
+import { renderInviteUi } from './invite-ui.js'
+import { MailService, loadDotEnv } from './mail.js'
 import { SkillPluginLibrary } from './library.js'
 import { formatDateVersion, readPackageVersion } from './date-version.js'
 
@@ -241,6 +243,8 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
   const auth = new AuthService(cfg.dataDir, cfg.adminUsername, cfg.adminPassword)
   // --token / WORKBUDDY_TOKEN 作为种子：存储为空时写入，此后以设置页「AI APIKEY」为唯一权威
   auth.seedAiToken(cfg.apiToken)
+  // SMTP 邮件服务（用户邀请自动发信；未配置时开发模式，邀请链接仍可手动复制）
+  const mail = new MailService(cfg.dataDir)
 
   // 小智平台 MCP 桥接：接入点优先级 命令行/env > 存储设置（存储为空时种子）；语音助手页可随时增删改（免重启）
   const xiaozhi = new XiaozhiMcpClient({
@@ -259,7 +263,7 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
     xiaozhi.configureAll(endpoints)
   }
   const library = new SkillPluginLibrary(cfg.dataDir, store, log)
-  const router = new WorkBuddyRouter(store, directory, resolver, composer, planner, engine, sshStore, scheduler, monitor, auth, xiaozhi, library)
+  const router = new WorkBuddyRouter(store, directory, resolver, composer, planner, engine, sshStore, scheduler, monitor, auth, xiaozhi, library, mail)
   // 专家团专家成员的 persona 来源：引擎与路由共用同一份 ExpertRegistry（构造顺序晚于引擎，此处回填）
   engine.attachExperts(router.expertRegistry)
 
@@ -350,7 +354,8 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
           sendJson(res, 401, { ok: false, error: '未登录', authRequired: true })
           return
         }
-        sendJson(res, 200, { ok: true, data: { username: sessionUser } })
+        const me = auth.validateSession(sessionToken)
+        sendJson(res, 200, { ok: true, data: { username: me?.username || sessionUser, userId: me?.userId, displayName: me?.displayName, role: me?.role || 'admin' } })
         return
       }
       if (underPrefix && url.pathname === `${prefix}/api/auth/password` && method === 'POST') {
@@ -366,6 +371,33 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
         }
         res.setHeader('Set-Cookie', AuthService.serializeCleared())
         sendJson(res, 200, { ok: true, message: '密码已更新，请重新登录' })
+        return
+      }
+
+      // ---------- 邀请接受（公开：token 自鉴权，无需登录态） ----------
+      const inviteApiMatch = underPrefix && /^\/api\/invitations\/([A-Za-z0-9_-]+)$/.exec(url.pathname.slice(prefix.length))
+      if (inviteApiMatch && (method === 'GET' || method === 'POST')) {
+        const inviteToken = inviteApiMatch[1]
+        if (method === 'GET') {
+          sendJson(res, 200, { ok: true, data: auth.inspectInvite(inviteToken) })
+          return
+        }
+        const body = await readJsonBody(req)
+        const result = await auth.acceptInvite(inviteToken, String(body?.password || ''), body?.displayName ? String(body.displayName) : undefined)
+        if (!result.ok) {
+          sendJson(res, 400, { ok: false, error: result.error })
+          return
+        }
+        res.setHeader('Set-Cookie', AuthService.serializeSession(result.sessionToken, isSecure))
+        sendJson(res, 200, { ok: true, data: { username: result.username } })
+        return
+      }
+      // 邀请接受页（公开静态壳：数据经上方 API 拉取）
+      if (underPrefix && method === 'GET' && url.pathname === `${prefix}/invite`) {
+        res.statusCode = 200
+        res.setHeader('Content-Type', 'text/html; charset=utf-8')
+        res.setHeader('Cache-Control', 'no-store')
+        res.end(renderInviteUi(prefix, url.searchParams.get('token') || '', pkgVersion()))
         return
       }
 
@@ -512,7 +544,7 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
       }
 
       // ---------- 业务路由（控制台 + REST + SSE） ----------
-      const handled = await router.dispatch(req, res, prefix, { auth: true })
+      const handled = await router.dispatch(req, res, prefix, { auth: true, session: auth.validateSession(sessionToken) })
       if (!handled && !res.headersSent) {
         sendJson(res, 404, { ok: false, error: `Endpoint not found: ${req.url}`, consoleUrl })
       }
@@ -660,6 +692,8 @@ export async function start(cfg: StandaloneConfig): Promise<StandaloneApp> {
 }
 
 async function main(): Promise<void> {
+  // .env 尽早加载（不覆盖显式环境变量）：CWD/.env 或数据目录/.env，供 SMTP/WORKBUDDY_* 等配置使用
+  loadDotEnv(process.env.WORKBUDDY_HOME || join(homedir(), '.onenat-workbuddy'))
   let cfg: StandaloneConfig
   try {
     const parsed = parseArgs(process.argv.slice(2))

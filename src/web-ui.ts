@@ -2395,6 +2395,15 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <div class="field"><label>自动刷新间隔 (ms)</label><input id="set-refresh" type="number"></div>
         </div>
       </div>
+      <div class="card" id="users-card" style="display:none">
+        <h3 style="margin-bottom:12px">用户管理（管理员）</h3>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+          <span style="font-size:11.5px;color:var(--tx3)"><span id="mail-status-hint">✉️ 邮件服务检测中…</span>；邀请链接 72 小时有效，可重发。</span>
+          <span class="hspacer"></span>
+          <button class="btn pri" id="btn-invite-user" style="white-space:nowrap">＋ 邀请用户</button>
+        </div>
+        <div style="max-height:260px;overflow:auto"><table class="res" id="users-table" style="width:100%;font-size:12px"><thead><tr><th>用户</th><th>角色</th><th>状态</th><th>最后登录</th><th>操作</th></tr></thead><tbody id="users-body"></tbody></table></div>
+      </div>
       <div class="card ai-card">
         <h3 style="margin-bottom:12px">AI 接入（一键安装 · HTTP + MCP 双通道）</h3>
         <div style="display:flex;gap:8px;align-items:center">
@@ -4247,6 +4256,7 @@ async function openProjectDrawer(projectId, preset) {
       return '<label><input type="checkbox" class="pj-skill" value="' + esc(n) + '"' + (on ? ' checked' : '') + '> ' + esc(n) + '</label>';
     }).join('') : '<div class="mon-empty">该节点暂无已装技能（或采样智能体不可达）</div>') +
     '</div></div>';
+  if (isEdit) bodyHtml += '<div class="field" style="margin-top:14px"><label>项目成员（人类用户；owner 可编辑项目/管理成员，member 只读访问）</label><div id="pj-members-box" style="font-size:12px">加载中…</div></div>';
   const actions = [
     { label: '取消', cls: '', act: function () { closeModal(); } },
     { label: isEdit ? '保存配置' : '创建项目', cls: 'pri', act: async function () {
@@ -4271,6 +4281,7 @@ async function openProjectDrawer(projectId, preset) {
     } },
   ];
   openModal(isEdit ? '项目配置 · ' + v.name : '新建项目', bodyHtml, actions);
+  if (isEdit) loadProjectMembers(projectId);
   // 📁 浏览节点目录：打开远程目录浏览器（复用子智能体的实现），选完带回并保留表单其余内容。
   // 目标节点跟随「DSH 节点」下拉的当前选中值（直连该节点，不经过采样智能体——
   // 否则改了下拉后浏览到的仍是首位专家所在节点的目录）。
@@ -11076,6 +11087,150 @@ $('btn-save-settings').addEventListener('click', async () => {
   }
   else toast(r.error || '保存失败', true);
 });
+
+// ---------- 当前用户与用户管理（管理员） ----------
+state.me = null;
+(function loadMe() {
+  api('/auth/me').then(function (r) {
+    if (r.ok && r.data) {
+      state.me = r.data;
+      var card = document.getElementById('users-card');
+      if (card && r.data.role === 'admin') { card.style.display = ''; loadUsers(); loadMailStatus(); }
+    }
+  }).catch(function () {});
+})();
+async function loadMailStatus() {
+  var el = document.getElementById('mail-status-hint');
+  if (!el) return;
+  var r = await api('/users/mail-status');
+  if (!r.ok) { el.textContent = '✉️ 邮件状态未知'; return; }
+  var d = r.data || {};
+  el.innerHTML = d.configured
+    ? '✉️ SMTP 已配置：<span style="color:var(--ok,#2f9e63)">' + esc((d.host || '') + ':' + (d.port || '') + ' · ' + (d.fromName || d.from || '')) + '</span>（邀请自动发邮件）'
+    : '<span style="color:#b8860b">✉️ SMTP 未配置（开发模式）：邀请仅生成链接，需手动发送</span>';
+}
+function fmtUserStatus(st) {
+  return st === 'active' ? '<span style="color:var(--ok,#2f9e63)">active</span>' : st === 'invited' ? '<span style="color:#b8860b">invited</span>' : st === 'disabled' ? '<span style="color:var(--err,#e5484d)">disabled</span>' : esc(st || '');
+}
+async function loadUsers() {
+  const r = await api('/users');
+  const tb = document.getElementById('users-body');
+  if (!tb) return;
+  if (!r.ok) { tb.innerHTML = '<tr><td colspan="5" style="color:var(--tx3)">' + esc(r.error || '加载失败') + '</td></tr>'; return; }
+  const users = r.data || [];
+  if (!users.length) { tb.innerHTML = '<tr><td colspan="5" style="color:var(--tx3)">暂无用户</td></tr>'; return; }
+  tb.innerHTML = users.map(function (u) {
+    const isSelf = state.me && state.me.userId === u.id;
+    const acts = [];
+    if (u.status === 'invited') acts.push('<button class="mini-btn" data-uact="resend" data-uid="' + esc(u.id) + '">重发邀请</button>');
+    if (u.status === 'active' && !isSelf) acts.push(u.role === 'admin'
+      ? '<button class="mini-btn" data-uact="role-user" data-uid="' + esc(u.id) + '">设为普通</button>'
+      : '<button class="mini-btn" data-uact="role-admin" data-uid="' + esc(u.id) + '">设为管理员</button>');
+    if (u.status === 'active' && !isSelf) acts.push('<button class="mini-btn" data-uact="disable" data-uid="' + esc(u.id) + '">禁用</button>');
+    if (u.status === 'disabled') acts.push('<button class="mini-btn" data-uact="enable" data-uid="' + esc(u.id) + '">启用</button>');
+    if (!isSelf) acts.push('<button class="mini-btn" data-uact="del" data-uid="' + esc(u.id) + '">删除</button>');
+    return '<tr>' +
+      '<td>' + esc(u.displayName || u.username) + '<div style="font-size:11px;color:var(--tx3)">' + esc(u.username) + '</div></td>' +
+      '<td>' + (u.role === 'admin' ? '管理员' : '普通') + '</td>' +
+      '<td>' + fmtUserStatus(u.status) + '</td>' +
+      '<td style="font-size:11px;color:var(--tx3)">' + (u.lastLoginAt ? fmtTime(u.lastLoginAt) : '—') + '</td>' +
+      '<td style="white-space:nowrap">' + acts.join(' ') + '</td></tr>';
+  }).join('');
+  tb.querySelectorAll('[data-uact]').forEach(function (b) {
+    b.addEventListener('click', async function () {
+      const uid = b.getAttribute('data-uid'), act = b.getAttribute('data-uact');
+      if (act === 'del' && !confirm('删除该用户？（软删除：会话立即失效，成员关系保留标记）')) return;
+      let r2;
+      if (act === 'resend') r2 = await api('/users/' + uid + '/resend-invite', { method: 'POST' });
+      else if (act === 'disable') r2 = await api('/users/' + uid + '/disable', { method: 'POST' });
+      else if (act === 'enable') r2 = await api('/users/' + uid + '/enable', { method: 'POST' });
+      else if (act === 'del') r2 = await api('/users/' + uid, { method: 'DELETE' });
+      else if (act === 'role-admin') r2 = await api('/users/' + uid, { method: 'PUT', body: JSON.stringify({ role: 'admin' }) });
+      else if (act === 'role-user') r2 = await api('/users/' + uid, { method: 'PUT', body: JSON.stringify({ role: 'user' }) });
+      if (r2 && r2.ok && r2.data && r2.data.inviteLink) {
+        showInviteLink(r2.data.inviteLink, r2.data.email);
+      } else if (r2 && r2.ok) { toast('✓ 已更新'); loadUsers(); }
+      else toast((r2 && r2.error) || '操作失败', true);
+    });
+  });
+}
+function mailHint(email) {
+  if (!email) return '';
+  if (email.sent) return '<div style="font-size:12px;color:var(--ok,#2f9e63);margin-bottom:8px">✉️ 邀请邮件已发送至对方邮箱</div>';
+  if (email.status === 'mock') return '<div style="font-size:12px;color:#b8860b;margin-bottom:8px">⚠️ SMTP 未配置（开发模式）：请复制链接通过 IM 发送给对方</div>';
+  return '<div style="font-size:12px;color:var(--err,#e5484d);margin-bottom:8px">⚠️ 邮件发送失败（' + esc(email.error || '未知原因') + '）：请复制链接手动发送</div>';
+}
+function showInviteLink(link, email) {
+  openModal('邀请已生成', mailHint(email) + '<div class="field"><label>邀请链接（72 小时内有效；复制后通过邮件/IM 发给对方）</label><textarea id="invite-link" rows="3" readonly style="font-family:var(--mono);font-size:12px">' + esc(link) + '</textarea></div>', [
+    { label: '复制链接', cls: 'pri', act: function () { navigator.clipboard.writeText(link).then(function () { toast('✓ 邀请链接已复制'); }, function () { toast('复制失败，请手动选择复制', true); }); } },
+    { label: '关闭', cls: '', act: function () { closeModal(); loadUsers(); } },
+  ]);
+}
+document.getElementById('btn-invite-user').addEventListener('click', function () {
+  openModal('邀请用户', '<div class="field" style="margin-bottom:10px"><label>邮箱（作为登录名，全局唯一）</label><input id="inv-email" placeholder="user@example.com"></div><div class="field"><label>昵称（可选）</label><input id="inv-name" placeholder="显示名称"></div>', [
+    { label: '取消', cls: '', act: function () { closeModal(); } },
+    { label: '生成邀请', cls: 'pri', act: async function () {
+      const email = document.getElementById('inv-email').value.trim();
+      const name = document.getElementById('inv-name').value.trim();
+      if (!email) { toast('请填写邮箱', true); return; }
+      const r = await api('/users', { method: 'POST', body: JSON.stringify({ email: email, displayName: name }) });
+      if (!r.ok) { toast(r.error || '创建失败', true); return; }
+      showInviteLink(r.data.inviteLink, r.data.email);
+    } },
+  ]);
+});
+// 设置视图打开时顺带刷新用户表
+async function loadProjectMembers(projectId) {
+  const box = document.getElementById('pj-members-box');
+  if (!box) return;
+  const r = await api('/projects/' + projectId + '/members');
+  if (!r.ok) { box.innerHTML = '<span style="color:var(--tx3)">' + esc(r.error || '成员加载失败') + '</span>'; return; }
+  const members = r.data.members || [];
+  if (!r.data.isolated && !members.length) {
+    box.innerHTML = '<div style="color:var(--tx3);margin-bottom:6px">未启用成员隔离（存量项目：所有登录用户可见）。添加成员后即启用隔离。</div>';
+  }
+  let html = members.length ? ('<div style="margin-bottom:8px">' + members.map(function (m) {
+    const name = (m.userInfo && (m.userInfo.displayName || m.userInfo.username)) || m.userId;
+    return '<span style="display:inline-flex;align-items:center;gap:6px;background:var(--bg3,#f2f3f5);border-radius:14px;padding:3px 10px;margin:0 6px 6px 0">' +
+      esc(name) + '（' + (m.role === 'owner' ? 'owner' : 'member') + '）' +
+      '<a href="javascript:void(0)" data-pm-remove="' + esc(m.userId) + '" style="color:var(--err,#e5484d);text-decoration:none">✕</a></span>';
+  }).join('') + '</div>') : '';
+  html += '<div style="display:flex;gap:6px;align-items:center">' +
+    '<input id="pj-member-input" list="pj-member-list" placeholder="输入用户名/邮箱搜索已激活用户" style="flex:1;font-size:12px">' +
+    '<datalist id="pj-member-list"></datalist>' +
+    '<button class="mini-btn" id="pj-member-add" style="padding:8px 12px">＋ 添加成员</button></div>';
+  box.innerHTML = html;
+  // 候选用户（登录用户可搜索 active 用户最小字段）
+  const lu = await api('/users/lookup');
+  const dl = document.getElementById('pj-member-list');
+  if (dl && lu.ok) {
+    dl.innerHTML = (lu.data || []).map(function (u) {
+      return '<option value="' + esc(u.username) + '">' + esc(u.displayName || u.username) + '</option>';
+    }).join('');
+  }
+  const addBtn = document.getElementById('pj-member-add');
+  if (addBtn) addBtn.addEventListener('click', async function () {
+    const input = document.getElementById('pj-member-input');
+    const v = (input.value || '').trim();
+    if (!v) { toast('请输入用户名/邮箱', true); return; }
+    const r2 = await api('/projects/' + projectId + '/members', { method: 'POST', body: JSON.stringify({ username: v }) });
+    if (!r2.ok) { toast(r2.error || '添加失败', true); return; }
+    toast('✓ 成员已添加');
+    loadProjectMembers(projectId);
+  });
+  box.querySelectorAll('[data-pm-remove]').forEach(function (a) {
+    a.addEventListener('click', async function () {
+      const uid = a.getAttribute('data-pm-remove');
+      if (!confirm('移除该成员？（成员自身也可通过此方式退出项目）')) return;
+      const r2 = await api('/projects/' + projectId + '/members/' + encodeURIComponent(uid), { method: 'DELETE' });
+      if (!r2.ok) { toast(r2.error || '移除失败', true); return; }
+      toast('✓ 已移除');
+      loadProjectMembers(projectId);
+    });
+  });
+}
+const _renderSettingsOrig = renderSettings;
+renderSettings = function () { _renderSettingsOrig(); if (state.me && state.me.role === 'admin') loadUsers(); };
 
 // ---------- 抽屉与弹窗控制 ----------
 function openDrawer(title, wide) { $('drawer-title').textContent = title; $('drawer').classList.toggle('wide', Boolean(wide)); $('drawer').classList.add('on'); $('drawer-mask').classList.add('on'); }

@@ -7,3 +7,4 @@ dist/
 .v2c/
 .video_agent/
 dist-test/
+.env

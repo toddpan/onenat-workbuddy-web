@@ -32,7 +32,8 @@ import { expertPersona } from './expert-registry.js'
 import { ExpertRegistry } from './expert-registry.js'
 import { UserExpertStore } from './expert-store.js'
 import { parseTeamInput, BUILTIN_TEAMS } from './expert-teams.js'
-import type { AuthService } from './auth.js'
+import type { AuthService, SessionInfo } from './auth.js'
+import type { MailService } from './mail.js'
 import { UsageService } from './usage.js'
 import type { XiaozhiMcpClient } from './xiaozhi-mcp.js'
 import type { DshRef, Project, SubAgent, WorkTask, ScheduledTask } from './types.js'
@@ -79,6 +80,7 @@ export class WorkBuddyRouter {
     private auth?: AuthService,
     private xiaozhi?: XiaozhiMcpClient,
     private library?: SkillPluginLibrary,
+    private mail?: MailService,
   ) {
     // 用户自建专家层：数据落 <dataDir>/user-experts.json，与只读资产层合并为统一视图
     this.registry.attachUserStore(new UserExpertStore(store.dataDir))
@@ -87,6 +89,41 @@ export class WorkBuddyRouter {
   /** 统一专家注册表（供 MCP Server 等外部挂载点复用同一份数据与缓存）。 */
   public get expertRegistry(): ExpertRegistry {
     return this.registry
+  }
+
+  /** 当前请求会话（dispatch 时注入；权限判定与审计展示用） */
+  private session?: SessionInfo
+
+  private isPlatformAdmin(): boolean {
+    return this.session?.role === 'admin'
+  }
+
+  /** 项目是否启用成员隔离（存量项目无 owner 且无成员 → 宽容模式，登录用户可见） */
+  private static projectIsolated(proj: Project): boolean {
+    return Boolean(proj.owner || (proj.projectMembers && proj.projectMembers.length))
+  }
+
+  private canSeeProject(proj: Project): boolean {
+    if (!WorkBuddyRouter.projectIsolated(proj)) return true
+    if (this.isPlatformAdmin()) return true
+    const uid = this.session?.userId
+    if (!uid) return false
+    return Boolean(proj.projectMembers?.some((m) => m.userId === uid))
+  }
+
+  private isProjectOwner(proj: Project): boolean {
+    if (this.isPlatformAdmin()) return true
+    const uid = this.session?.userId
+    if (!uid) return false
+    if (proj.owner === uid) return true
+    return Boolean(proj.projectMembers?.some((m) => m.userId === uid && m.role === 'owner'))
+  }
+
+  /** 发送用户邀请邮件：结果随响应返回（sent/status/error）供 UI 提示；失败不抛错，inviteLink 仍可手动复制 */
+  private async sendInviteEmail(to: string, displayName: string | undefined, inviteLink: string, expiresAt: number) {
+    if (!this.mail || !to) return { sent: false, status: 'mock' as const, error: this.mail ? '收件邮箱缺失' : '邮件服务不可用' }
+    const r = await this.mail.sendInviteMail({ to, displayName, inviteLink, expiresAt, attempts: 2, timeoutMs: 8000 })
+    return { sent: r.ok, status: r.status, error: r.error }
   }
 
   /** 插件导出任务的回收结果缓存（taskId → 已拉取结果），保证 poll 幂等 */
@@ -291,6 +328,10 @@ export class WorkBuddyRouter {
       experts: proj.expertIds.map((id) => ({ id, name: this.store.getAgent(id)?.name || id })),
       connectorIds: proj.connectorIds,
       skillNames: proj.skillNames,
+      owner: proj.owner,
+      ownerInfo: proj.owner ? this.auth?.describeUser(proj.owner) || null : null,
+      projectMembers: (proj.projectMembers || []).map((m) => ({ ...m, userInfo: this.auth?.describeUser(m.userId) || null })),
+      isolated: WorkBuddyRouter.projectIsolated(proj),
       importedFrom: proj.importedFrom,
       createdAt: proj.createdAt,
       updatedAt: proj.updatedAt,
@@ -742,7 +783,8 @@ export class WorkBuddyRouter {
     }
   }
 
-  public async dispatch(req: IncomingMessage, res: ServerResponse, prefix: string, opts?: { auth?: boolean }): Promise<boolean> {
+  public async dispatch(req: IncomingMessage, res: ServerResponse, prefix: string, opts?: { auth?: boolean; session?: SessionInfo }): Promise<boolean> {
+    this.session = opts?.session
     const rawUrl = req.url || '/'
     const method = (req.method || 'GET').toUpperCase()
     if (method === 'OPTIONS') {
@@ -817,13 +859,23 @@ export class WorkBuddyRouter {
 
     // ---------- 项目（列表/创建/详情/修改/删除） ----------
     if (p === '/api/projects' && method === 'GET') {
-      this.sendJson(res, 200, { ok: true, data: this.store.getProjects().map((proj) => this.projectSummary(proj)) })
+      this.sendJson(res, 200, { ok: true, data: this.store.getProjects().filter((proj) => this.canSeeProject(proj)).map((proj) => this.projectSummary(proj)) })
       return true
     }
     if (p === '/api/projects' && method === 'POST') {
       const body = await this.parseBody(req)
       try {
         const saved = this.upsertProjectFromInput(body)
+        // 创建者自动成为 owner（未启用成员隔离的存量流程不受影响）
+        if (this.session?.userId && !saved.owner) {
+          const finalized = this.store.upsertProject({
+            id: saved.id,
+            owner: this.session.userId,
+            projectMembers: [{ userId: this.session.userId, role: 'owner', joinedAt: Date.now() }],
+          })
+          this.sendJson(res, 200, { ok: true, data: this.projectSummary(finalized) })
+          return true
+        }
         this.sendJson(res, 200, { ok: true, data: this.projectSummary(saved) })
       } catch (err: any) {
         this.sendJson(res, 400, { ok: false, error: err?.message || String(err) })
@@ -955,16 +1007,26 @@ export class WorkBuddyRouter {
     if (projMatch) {
       const id = decodeURIComponent(projMatch[1])
       const proj = this.store.getProject(id)
+      // 防枚举：成员隔离项目对非成员一律 404（不泄露存在性）
+      if (proj && !this.canSeeProject(proj)) { this.sendJson(res, 404, { ok: false, error: '项目不存在' }); return true }
       if (method === 'GET') {
         if (!proj) { this.sendJson(res, 404, { ok: false, error: '项目不存在' }); return true }
         this.sendJson(res, 200, { ok: true, data: this.projectSummary(proj) })
         return true
       }
       if (method === 'DELETE') {
+        if (proj && WorkBuddyRouter.projectIsolated(proj) && !this.isProjectOwner(proj)) {
+          this.sendJson(res, 403, { ok: false, error: '仅项目 owner 或平台管理员可删除项目' })
+          return true
+        }
         this.sendJson(res, 200, { ok: true, data: { deleted: this.store.deleteProject(id) } })
         return true
       }
       if (method === 'PATCH' || method === 'PUT') {
+        if (proj && WorkBuddyRouter.projectIsolated(proj) && !this.isProjectOwner(proj)) {
+          this.sendJson(res, 403, { ok: false, error: '仅项目 owner 或平台管理员可编辑项目' })
+          return true
+        }
         const body = await this.parseBody(req)
         try {
           const saved = this.upsertProjectFromInput({ ...body, id })
@@ -972,6 +1034,134 @@ export class WorkBuddyRouter {
         } catch (err: any) {
           this.sendJson(res, 400, { ok: false, error: err?.message || String(err) })
         }
+        return true
+      }
+    }
+
+    // ---------- 项目成员管理（人类用户成员；与 expertIds 智能体成员区分） ----------
+    const projMembersMatch = /^\/api\/projects\/([^/]+)\/members(?:\/([^/]+))?$/.exec(p)
+    if (projMembersMatch) {
+      const proj = this.store.getProject(decodeURIComponent(projMembersMatch[1]))
+      if (!proj || !this.canSeeProject(proj)) { this.sendJson(res, 404, { ok: false, error: '项目不存在' }); return true }
+      const canManage = this.isProjectOwner(proj) || WorkBuddyRouter.projectIsolated(proj) === false
+      const listMembers = () => (proj.projectMembers || []).map((m) => ({ ...m, userInfo: this.auth?.describeUser(m.userId) || null }))
+      if (projMembersMatch[2]) {
+        const targetUserId = decodeURIComponent(projMembersMatch[2])
+        if (method === 'DELETE') {
+          if (!WorkBuddyRouter.projectIsolated(proj)) { this.sendJson(res, 400, { ok: false, error: '该项目未启用成员管理' }); return true }
+          const isSelf = this.session?.userId === targetUserId
+          if (!canManage && !isSelf) { this.sendJson(res, 403, { ok: false, error: '仅项目 owner 或平台管理员可移除成员' }); return true }
+          const target = (proj.projectMembers || []).find((m) => m.userId === targetUserId)
+          if (!target) { this.sendJson(res, 404, { ok: false, error: '成员不存在' }); return true }
+          // 最后一个 owner 不可移除/退出，需先转让（防呆）
+          const owners = (proj.projectMembers || []).filter((m) => m.role === 'owner')
+          if (target.role === 'owner' && owners.length <= 1) {
+            this.sendJson(res, 422, { ok: false, error: '不能移除最后一个 owner：请先将其他成员升级为 owner' })
+            return true
+          }
+          const saved = this.store.upsertProject({
+            id: proj.id,
+            projectMembers: (proj.projectMembers || []).filter((m) => m.userId !== targetUserId),
+          })
+          this.sendJson(res, 200, { ok: true, data: { removed: targetUserId, members: saved.projectMembers } })
+          return true
+        }
+      } else {
+        if (method === 'GET') {
+          this.sendJson(res, 200, { ok: true, data: { members: listMembers(), isolated: WorkBuddyRouter.projectIsolated(proj) } })
+          return true
+        }
+        if (method === 'POST') {
+          if (!WorkBuddyRouter.projectIsolated(proj) && !canManage) { this.sendJson(res, 403, { ok: false, error: '仅项目 owner 或平台管理员可添加成员' }); return true }
+          if (!this.isProjectOwner(proj)) { this.sendJson(res, 403, { ok: false, error: '仅项目 owner 或平台管理员可添加成员' }); return true }
+          const body = await this.parseBody(req)
+          const raw = String(body?.userId || body?.username || '').trim()
+          const user = this.auth ? (raw.startsWith('usr-') ? this.auth.getUserById(raw) : (this.auth.getUserByUsername(raw) || this.auth.describeUser(raw) && this.auth.getUserById(this.auth.describeUser(raw)!.id))) : undefined
+          if (!user) { this.sendJson(res, 404, { ok: false, error: '用户不存在（仅已激活账号可作为项目成员）' }); return true }
+          if (user.status !== 'active') { this.sendJson(res, 400, { ok: false, error: '该用户尚未激活（invited/disabled）' }); return true }
+          if ((proj.projectMembers || []).some((m) => m.userId === user.id)) { this.sendJson(res, 409, { ok: false, error: '该用户已是项目成员' }); return true }
+          const role: 'owner' | 'member' = body?.role === 'owner' ? 'owner' : 'member'
+          const saved = this.store.upsertProject({
+            id: proj.id,
+            owner: proj.owner || (role === 'owner' ? user.id : undefined),
+            projectMembers: [...(proj.projectMembers || []), { userId: user.id, role, joinedAt: Date.now(), invitedBy: this.session?.userId }],
+          })
+          this.sendJson(res, 200, { ok: true, data: { members: saved.projectMembers } })
+          return true
+        }
+      }
+    }
+
+    // ---------- 用户管理（平台管理员） ----------
+    if (p === '/api/users' && method === 'GET') {
+      if (!this.isPlatformAdmin()) { this.sendJson(res, 403, { ok: false, error: '需要管理员权限' }); return true }
+      this.sendJson(res, 200, { ok: true, data: this.auth?.listUsers() || [] })
+      return true
+    }
+    if (p === '/api/users/lookup' && method === 'GET') {
+      // 登录用户可用：添加项目成员时的用户搜索（仅最小字段）
+      const url = new URL(req.url || '/', 'http://localhost')
+      const q = (url.searchParams.get('q') || '').trim().toLowerCase()
+      const all = this.auth?.listActiveUsers() || []
+      const filtered = q ? all.filter((u) => u.username.toLowerCase().includes(q) || (u.displayName || '').toLowerCase().includes(q)) : all
+      this.sendJson(res, 200, { ok: true, data: filtered.slice(0, 50).map((u) => ({ id: u.id, username: u.username, displayName: u.displayName })) })
+      return true
+    }
+    if (p === '/api/users' && method === 'POST') {
+      if (!this.isPlatformAdmin()) { this.sendJson(res, 403, { ok: false, error: '需要管理员权限' }); return true }
+      const body = await this.parseBody(req)
+      const result = this.auth?.createUserInvite(String(body?.email || ''), String(body?.displayName || ''))
+      if (!result) { this.sendJson(res, 503, { ok: false, error: '认证服务不可用' }); return true }
+      if ('conflict' in result) { this.sendJson(res, 409, { ok: false, error: result.conflict }); return true }
+      const inviteLink = `${this.requestBase(req, prefix)}/invite?token=${result.token}`
+      // 邀请邮件自动发送（已配置 SMTP 时）；失败/mock 不阻塞创建，inviteLink 始终返回供手动发送
+      const email = await this.sendInviteEmail(result.user.username, result.user.displayName, inviteLink, Date.now() + 72 * 60 * 60 * 1000)
+      this.sendJson(res, 201, { ok: true, data: { userId: result.user.id, username: result.user.username, inviteLink, email, expiresAt: Date.now() + 72 * 60 * 60 * 1000 } })
+      return true
+    }
+    if (p === '/api/users/mail-status' && method === 'GET') {
+      if (!this.isPlatformAdmin()) { this.sendJson(res, 403, { ok: false, error: '需要管理员权限' }); return true }
+      this.sendJson(res, 200, { ok: true, data: this.mail?.status() || { configured: false, recent: [] } })
+      return true
+    }
+    const userActionMatch = /^\/api\/users\/([^/]+)(?:\/([a-z-]+))?$/.exec(p)
+    if (userActionMatch) {
+      if (!this.isPlatformAdmin()) { this.sendJson(res, 403, { ok: false, error: '需要管理员权限' }); return true }
+      const userId = decodeURIComponent(userActionMatch[1])
+      const action = userActionMatch[2]
+      if (!action && method === 'PUT') {
+        const body = await this.parseBody(req)
+        if (body?.displayName !== undefined) this.auth?.setDisplayName(userId, String(body.displayName))
+        if (body?.role !== undefined) {
+          const r = this.auth?.setRole(userId, body.role === 'admin' ? 'admin' : 'user')
+          if (r && !r.ok) { this.sendJson(res, 422, { ok: false, error: r.error }); return true }
+        }
+        const u = this.auth?.getUserById(userId)
+        if (!u) { this.sendJson(res, 404, { ok: false, error: '用户不存在' }); return true }
+        this.sendJson(res, 200, { ok: true, data: { id: u.id, username: u.username, displayName: u.displayName, role: u.role, status: u.status } })
+        return true
+      }
+      if (action === 'resend-invite' && method === 'POST') {
+        const token = this.auth?.resendInvite(userId)
+        if (!token) { this.sendJson(res, 404, { ok: false, error: '仅 invited 用户可重发邀请' }); return true }
+        const inviteLink = `${this.requestBase(req, prefix)}/invite?token=${token}`
+        const target = this.auth?.getUserById(userId)
+        const email = await this.sendInviteEmail(target?.username || '', target?.displayName, inviteLink, Date.now() + 72 * 60 * 60 * 1000)
+        this.sendJson(res, 200, { ok: true, data: { inviteLink, email } })
+        return true
+      }
+      if ((action === 'disable' || action === 'enable') && method === 'POST') {
+        const r = this.auth?.setUserStatus(userId, action === 'disable' ? 'disabled' : 'active')
+        if (!r) { this.sendJson(res, 503, { ok: false, error: '认证服务不可用' }); return true }
+        if (!r.ok) { this.sendJson(res, 422, { ok: false, error: r.error }); return true }
+        this.sendJson(res, 200, { ok: true })
+        return true
+      }
+      if (!action && method === 'DELETE') {
+        const r = this.auth?.softDeleteUser(userId)
+        if (!r) { this.sendJson(res, 503, { ok: false, error: '认证服务不可用' }); return true }
+        if (!r.ok) { this.sendJson(res, 422, { ok: false, error: r.error }); return true }
+        this.sendJson(res, 200, { ok: true })
         return true
       }
     }

@@ -247,9 +247,24 @@ export interface ExtractedMentions {
  * 项目：捆绑 DSH 节点 / 工作区 / 指令 / 专家 / 连接器 / 技能 的一等实体。
  * 项目内发起的任务自动继承全部上下文；专家与节点解耦（专家可在任意项目节点执行）。
  */
+/** 项目人类成员（区别于 Project.expertIds 等智能体成员）：权限隔离与协作的最小单元 */
+export interface ProjectMember {
+  /** 用户 ID（usr-…，对应 auth.json 用户表） */
+  userId: string
+  role: 'owner' | 'member'
+  joinedAt: number
+  invitedBy?: string
+}
+
 export interface Project {
   id: string
   name: string
+  /** 项目所有者（用户 userId）；存量项目缺省（宽容模式：不启用成员隔离） */
+  owner?: string
+  /** 人类项目成员；缺省/空数组 = 未启用成员隔离（所有人可见，向后兼容存量项目） */
+  projectMembers?: ProjectMember[]
+  /** 可见性：private=仅成员，team=登录用户可见（预留），public=所有人；缺省按 team 处理 */
+  visibility?: 'private' | 'team' | 'public'
   /** 项目 DSH 节点 */
   dshRef: DshRef
   /** 节点鉴权（direct 直连时可填） */
