@@ -2385,7 +2385,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
       <div id="team-list"></div>
     </div></div>
     <div class="view" id="view-settings"><div class="panel" style="max-width:1100px;margin:0 auto">
-      <div class="panel-head"><h2>设置</h2><span class="sub">平台连接 · AI 接入</span><span class="hspacer"></span><button class="btn pri" id="btn-save-settings">保存设置</button></div>
+      <div class="panel-head"><h2>设置</h2><span class="sub">平台连接 · 任务归档 · AI 接入</span><span class="hspacer"></span><button class="btn pri" id="btn-save-settings">保存设置</button></div>
       <div class="settings-grid">
       <div class="card">
         <h3 style="margin-bottom:12px">ONENAT 平台</h3>
@@ -2394,6 +2394,13 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <div class="field"><label>API Key (onk-…)</label><input id="set-key"></div>
           <div class="field"><label>自动刷新间隔 (ms)</label><input id="set-refresh" type="number"></div>
         </div>
+      </div>
+      <div class="card">
+        <h3 style="margin-bottom:12px">任务归档</h3>
+        <div class="grid3">
+          <div class="field"><label>自动归档天数（0 = 关闭）</label><input id="set-archive-days" type="number" min="0" step="1"></div>
+        </div>
+        <div style="font-size:11.5px;color:var(--tx3);margin-top:6px">终态任务（已完成 / 失败 / 已取消等）超过该天数未更新，自动挪入「已归档会话」并瘦身本地存储（正文移入 data/archive/，点开仍可查看）；「取消归档」后重新计时。保存即时生效，无需重启。</div>
       </div>
       <div class="card" id="users-card" style="display:none">
         <h3 style="margin-bottom:12px">用户管理（管理员）</h3>
@@ -3397,7 +3404,7 @@ function renderMonTasks(tasks) {
       '<div class="mon-row1"><span>' + t.typeIcon + '</span><span class="mon-nm">' + esc(monTaskTitle(t)) + '</span>' +
       '<span class="mon-spacer"></span>' +
       (t.running ? '<span class="mon-badge run">⏱ ' + monFmtElapse(t.elapsedMs) + '</span>' : '') +
-      '<span class="mon-badge ' + (t.running ? 'run' : monHlCls(t) === 'bad' ? 'bad' : monHlCls(t) === 'ok' ? 'ok' : monHlCls(t) === 'stop' ? 'warn' : '') + '">' + esc(t.status === 'running' ? '运行中' : t.status === 'completed' || t.status === 'success' ? '完成' : t.status === 'failed' ? '失败' : t.status === 'cancelled' ? '已中止' : t.status === 'draft' ? '草稿' : '部分成功') + '</span>' +
+      '<span class="mon-badge ' + (t.running ? 'run' : (!t.running && t.pendingAsk) ? 'warn' : monHlCls(t) === 'bad' ? 'bad' : monHlCls(t) === 'ok' ? 'ok' : monHlCls(t) === 'stop' ? 'warn' : '') + '">' + esc((!t.running && t.pendingAsk) ? '⏳ 等待答复' : t.status === 'running' ? '运行中' : t.status === 'completed' || t.status === 'success' ? '完成' : t.status === 'failed' ? '失败' : t.status === 'cancelled' ? '已中止' : t.status === 'draft' ? '草稿' : '部分成功') + '</span>' +
       '</div>' +
       (t.running && t.headline ? '<div class="mon-hl ' + monHlCls(t) + '">' + esc(t.headline) + '</div>' : '') +
       (metaBits.length ? '<div class="mon-meta">' + metaBits.join('<span class="sep">·</span>') + '</div>' : '') +
@@ -3539,7 +3546,7 @@ async function monOpenTask(taskId) {
   if (!turns.length) html += '<div class="mon-empty">还没有对话</div>';
   for (var ti = 0; ti < turns.length; ti++) {
     var turn = turns[ti];
-    var who = turn.role === 'user' ? '👤 你' : turn.role === 'system' ? '⚙ 系统' : '🤖 ' + (turn.agentName || '智能体');
+    var who = turn.role === 'user' ? '👤 你' : turn.role === 'system' ? '⚙ 系统' : '🤖 ' + (turn.agentName === '__node__' || turn.agentName === '__main__' ? '主智能体' : (turn.agentName || '智能体'));
     var toolsHtml = '';
     var tools = turn.tools || [];
     for (var t2 = 0; t2 < tools.length; t2++) {
@@ -3715,7 +3722,7 @@ function topoEnvKey(title) {
   const t = String(title || '').replace(/\s+/g, '').replace(/环境$/, '').toLowerCase();
   return t || String(title || '');
 }
-function topoResLabel(r) { return r.tunnelName || r.appName || r.note || r.mappingId || r.appId || ''; }
+function topoResLabel(r) { return r.appName || r.note || r.mappingId || r.appId || ''; }
 function topoHealthColor(h) { return h === 'all' ? 'var(--ok)' : h === 'partial' ? 'var(--warn)' : h === 'down' ? 'var(--err)' : 'var(--tx3)'; }
 function topoHealthText(h) { return h === 'all' ? '在线' : h === 'partial' ? '部分在线' : h === 'down' ? '离线' : ''; }
 function topoEntityEnvKey(dshRef, nodeTitle) {
@@ -3933,7 +3940,7 @@ function renderProjects() {
 function projectCardHtml(p) {
   const taskCount = state.tasks.filter(t => t.projectId === p.id).length;
   const chips = [
-    p.expertIds.length ? '可@ ' + p.expertIds.map(id => { const a = state.agents.find(x => x.id === id); return a ? a.name : id; }).join('、') : '可@ 任意子智能体',
+    p.expertIds.length ? '默认成员 ' + p.expertIds.map(id => { const a = state.agents.find(x => x.id === id); return a ? a.name : id; }).join('、') : '未设默认成员（可自由 @）',
     p.skillNames.length ? p.skillNames.length + ' 技能' : '',
     p.connectorIds.length ? p.connectorIds.length + ' 连接器' : '',
   ].filter(Boolean).join(' ｜ ');
@@ -4252,7 +4259,7 @@ async function openProjectDrawer(projectId, preset) {
     '<div style="display:flex;gap:8px;align-items:center"><input id="pj-f-ws" style="font-family:var(--mono);flex:1" value="' + esc(v.workspace) + '" placeholder="/workspace/project">' +
     '<button class="mini-btn" id="pj-f-browse" style="padding:10px 14px;white-space:nowrap">📁 浏览节点目录</button></div></div>' +
     '<div class="field" style="margin-bottom:10px"><label>项目指令（注入每次任务，角色/阶段/规范）</label><textarea id="pj-f-ins" rows="6" style="font-family:var(--mono);font-size:12px" placeholder="# 角色\\n你是一个…助手…">' + esc(v.instruction) + '</textarea></div>' +
-    '<div class="field" style="margin-bottom:10px"><label>项目专家（勾选 = 项目内任务的默认执行专家；角色与执行指导随派工注入）</label><div class="pj-checks">' +
+    '<div class="field" style="margin-bottom:10px"><label>默认协作成员（勾选 = 该项目创建任务时服务端自动继承的执行智能体；不限制 @ —— 任务里仍可 @ 其他成员/专家，未分配工作也不会自动全员派工）</label><div class="pj-checks">' +
     state.agents.map(function (a) {
       const on = v.expertIds.indexOf(a.id) >= 0;
       return '<label><input type="checkbox" class="pj-exp" value="' + esc(a.id) + '"' + (on ? ' checked' : '') + '> ' + esc(a.name) + (a.role ? '（' + esc(a.role) + '）' : '') + '</label>';
@@ -4377,7 +4384,7 @@ async function openRunConfig(focus) {
   };
   const expertSection = isProject
     ? '<div class="pj-chips">' + chipsOf(proj.expertIds) + '</div>' +
-      '<div class="hint" style="margin-top:8px">主会话在项目节点上执行（不绑定智能体）；消息里输入 @ 调用 sub agent，在其绑定的节点上远程执行专项任务（发飞书、发邮件…）。集合在「⚙ 项目配置」维护。</div>'
+      '<div class="hint" style="margin-top:8px">上述为项目默认协作成员（创建任务时自动继承）。主会话在项目节点执行（不绑定身份）；仍可 @ 任意 sub agent/专家库角色在其绑定节点执行专项任务（发飞书、发邮件…）——不受这份清单限制。集合在「⚙ 项目配置」维护。</div>'
     : '<div class="pj-chips">' + state.agents.map(function (a) { return '<span class="tag">🤖 ' + esc(a.name) + '</span>'; }).join(' ') + '</div>' +
       '<div class="hint" style="margin-top:8px">主会话在当前节点执行（右上角切换节点）；消息里输入 @ 调用 sub agent，在其绑定的节点上远程执行专项任务（发飞书、发邮件…）。</div>';
 
@@ -4405,7 +4412,7 @@ async function openRunConfig(focus) {
   const modelSection = '<div class="rc-row"><span class="rc-k">调度模型</span><span class="tag">' + esc((state.settings && state.settings.planner && state.settings.planner.model) || '默认模型') + '</span></div><div class="hint" style="margin-top:8px">切换用输入区下方模型按钮（全局生效，含项目任务）</div>';
 
   const bodyHtml =
-    '<div class="rc-section" id="rc-sec-expert"><b>① Sub Agent（@ 调用）</b>' + expertSection + '</div>' +
+    '<div class="rc-section" id="rc-sec-expert"><b>① 默认协作成员（不限制 @）</b>' + expertSection + '</div>' +
     '<div class="rc-section"><b>② 执行节点 与 工作区</b>' + nodeSection + '</div>' +
     '<div class="rc-section"><b>③ 连接器 / 技能</b>' + connSection + skillSection + '</div>' +
     '<div class="rc-section"><b>④ 模型</b>' + modelSection + '</div>';
@@ -5376,20 +5383,34 @@ function renderAskUserCard(el, t, turnMeta) {
     renderNormalToolRow(el, t);
     return;
   }
-  const isDone = t.status === 'done' || Boolean(t.result);
+  // 「已答复」判定不得把 running 态的等待占位 result（engine 塞入的 ⏳ 等待用户答复）当成答复，
+  // 否则提问卡被渲染成禁用的假答复卡，用户无法作答，子智能体永久挂起（线上 2026-10-23 卡死主因）
+  const isDone = t.status !== 'running' && (t.status === 'done' || Boolean(t.result));
+  // 单一事实源：只有引擎登记进 task.pendingAsk 的提问（awaiting=true）才可作答。
+  // running 但未登记 = 幽灵调用（模型重复发起、远端无批次），渲染为不可交互，等清扫器关闭。
+  const canAnswer = !isDone && t.awaiting === true;
   let qHtml = '';
   questions.forEach((q, qIdx) => {
-    const qTitle = q.header ? '【' + esc(q.header) + '】' + esc(q.question) : esc(q.question);
+    // header 去重：模型常把 header 原样写进 question 前缀（如「【T8b-Q1 蓝绿】」重复两次），已包含则不再拼（对齐安卓端）
+    const qHeader = String(q.header || '');
+    const qRaw = String(q.question || '');
+    const qTitle = (qHeader && qRaw.indexOf(qHeader) === -1)
+      ? ('【' + esc(qHeader) + '】' + esc(qRaw))
+      : esc(qRaw);
     const isMulti = Boolean(q.multi_select);
     const inputType = isMulti ? 'checkbox' : 'radio';
     const groupName = 'ask_q_' + t.id + '_' + (q.id || qIdx);
+    // 已答复态回显所选：服务端 result 形如「✅ 已答复: 绿」，含选项文本即视为该项被选中（对齐安卓端）
+    const resultEcho = String(t.result || '');
     let optHtml = '';
     (q.options || []).forEach((opt, oIdx) => {
       const optLabel = typeof opt === 'string' ? opt : opt.label;
       const optDesc = typeof opt === 'object' && opt.description ? opt.description : '';
+      const optEcho = isDone && resultEcho.indexOf(optLabel) !== -1;
       const isDefault = oIdx === 0 && !isMulti;
-      optHtml += '<label class="ask-opt' + (isDefault && !isDone ? ' selected' : '') + '">' +
-        '<input type="' + inputType + '" name="' + groupName + '" value="' + esc(optLabel) + '"' + (isDefault && !isDone ? ' checked' : '') + (isDone ? ' disabled' : '') + '>' +
+      const checked = optEcho || (isDefault && canAnswer);
+      optHtml += '<label class="ask-opt' + (checked ? ' selected' : '') + '">' +
+        '<input type="' + inputType + '" name="' + groupName + '" value="' + esc(optLabel) + '"' + (checked ? ' checked' : '') + ((isDone || !canAnswer) ? ' disabled' : '') + '>' +
         '<div class="ask-opt-main">' +
           '<div class="ask-opt-label">' + esc(optLabel) + '</div>' +
           (optDesc ? '<div class="ask-opt-desc">' + esc(optDesc) + '</div>' : '') +
@@ -5403,14 +5424,19 @@ function renderAskUserCard(el, t, turnMeta) {
     '</div>';
   });
 
-  const statusText = isDone ? '✓ 已答复' : '⏳ 等待选择';
+  const resultText = String(t.result || '');
+  const statusText = isDone
+    ? (resultText.indexOf('⚠️') === 0 ? '⚠️ 已失效' : '✓ 已答复')
+    : (canAnswer ? '⏳ 等待选择' : '⏳ 候问中');
   const footHtml = isDone
-    ? (t.result ? '<div class="ask-result-hint" style="font-size:11.5px;color:var(--tx3);margin-top:4px">答复内容: ' + esc(t.result) + '</div>' : '')
-    : '<div class="ask-actions">' +
-        '<span style="font-size:11.5px;color:var(--tx3);margin-right:auto">选择后提交答复；答复会直接回传给子智能体</span>' +
-        '<button class="ask-btn-skip" type="button">跳过</button>' +
-        '<button class="ask-btn-submit" type="button">📤 提交答复</button>' +
-      '</div>';
+    ? (t.result ? '<div class="ask-result-hint" style="font-size:11.5px;color:var(--tx3);margin-top:4px">答复内容: ' + esc(String(t.result).replace(/^✅\s*已答复[:：]\s*/, '') || String(t.result)) + '</div>' : '')
+    : (canAnswer
+        ? '<div class="ask-actions">' +
+          '<span style="font-size:11.5px;color:var(--tx3);margin-right:auto">选择后提交答复；答复会直接回传给子智能体</span>' +
+          '<button class="ask-btn-skip" type="button">跳过</button>' +
+          '<button class="ask-btn-submit" type="button">📤 提交答复</button>' +
+        '</div>'
+        : '<div class="ask-result-hint" style="font-size:11.5px;color:var(--tx3);margin-top:4px">该提问尚未接入答复通道（候问中），数秒内就绪；若长时间停留请直接在下方输入框回复</div>');
 
   el.innerHTML = '<div class="ask-card' + (isDone ? ' submitted' : '') + '">' +
     '<div class="ask-head">' +
@@ -5423,7 +5449,7 @@ function renderAskUserCard(el, t, turnMeta) {
   '</div>';
 
   const card = el.querySelector('.ask-card');
-  if (!isDone && card) {
+  if (canAnswer && card) {
     card.querySelectorAll('.ask-opt').forEach(optEl => {
       optEl.addEventListener('click', () => {
         const inp = optEl.querySelector('input');
@@ -5462,6 +5488,10 @@ function renderAskUserCard(el, t, turnMeta) {
       const markSubmitted = () => {
         card.classList.add('submitted');
         card.querySelectorAll('input, button').forEach(i => { i.disabled = true; });
+        const sb = card.querySelector('.ask-btn-submit');
+        if (sb) sb.textContent = '✓ 已提交';
+        const sk = card.querySelector('.ask-btn-skip');
+        if (sk) sk.textContent = '已答复';
         const st = card.querySelector('.ask-status');
         if (st) st.textContent = '✓ 已提交答复';
       };
@@ -5481,8 +5511,12 @@ function renderAskUserCard(el, t, turnMeta) {
         });
         if (r.ok) {
           markSubmitted();
-          toast('✓ 答复已回传，子智能体继续执行中…');
-          setSending(true);
+          if (r.data && r.data.stale) {
+            toast('⚠️ 提问已失效（远端批次消失），确认卡已关闭；可把选择直接发给子智能体', true);
+          } else {
+            toast('✓ 答复已回传，子智能体继续执行中…');
+            setSending(true);
+          }
         } else {
           submitBtn.disabled = false;
           submitBtn.textContent = '📤 提交答复';
@@ -5683,7 +5717,7 @@ function buildTurnElement(taskId, turn) {
       '<div class="dsh-amroot"><div class="dsh-body"></div></div>' +
       '<div class="dsh-actions dsh-actions-foot">' +
         '<button type="button" class="dsh-action" data-act="copy" title="复制">' + DSH_ICONS.copy + '</button>' +
-        '<span class="dsh-usage-pill" data-role="agent">' + esc(turn.agentName || '子智能体') + (badgeModel ? ' · ' + esc(badgeModel) : '') + '</span>' +
+        '<span class="dsh-usage-pill" data-role="agent">' + esc(turn.agentName === '__node__' || turn.agentName === '__main__' ? '主智能体' : (turn.agentName || '子智能体')) + (badgeModel ? ' · ' + esc(badgeModel) : '') + '</span>' +
         '<span class="dsh-timeEnd">' + fmtTime(turn.at) + '</span>' +
       '</div>';
     wireCopyAction(flow, () => {
@@ -5929,6 +5963,15 @@ function finalizeTurnBlocks(el, turn, taskId) {
         const tb = createBlock('tool'); tb.upsert(t, turnMeta); blocks.appendChild(tb.el);
       } else if (!isAskTool(t) || t.status === 'error') {
         renderNormalToolRow(row, t);
+      } else {
+        // ask 卡：running 中但记录有实质变化（登记 awaiting → 可作答 / 落账 → 已答复）时必须刷新，
+        // 否则卡片永远停留在首次渲染态（候问中/假答复）——线上实时刷新缺口的根因。
+        // 以状态签名去重，避免流式期间的冗余事件打断用户正在进行的选择。
+        const cur = t.status + '|' + (t.awaiting ? 'a' : '') + '|' + String(t.result || '').slice(0, 24);
+        if (row._lastAskState !== cur) {
+          row._lastAskState = cur;
+          dispatchToolBlock(row, t, turnMeta);
+        }
       }
     }
   }
@@ -5965,7 +6008,9 @@ function memberDisplayName(agentId) {
   return em ? em.name : agentId;
 }
 function isExpertMemberId(agentId) {
-  return String(agentId || '').startsWith('expert-');
+  // 动态专家伪 id：新版 __expert__: 前缀 + 存量任务 expert- 前缀
+  const s = String(agentId || '');
+  return s.startsWith('expert-') || s.startsWith('__expert__:');
 }
 /** 场外成员的 DSH 节点名：按子智能体绑定的 dshRef 反查资源目录（与拓扑页/引擎节点日志同源口径）；解析不到返回空 */
 function memberNodeLabel(agentId) {
@@ -5976,16 +6021,37 @@ function memberNodeLabel(agentId) {
   const r = (state.resources || []).find(x => (ref.kind === 'mapping' && x.mappingId === ref.mappingId) || (ref.kind === 'app' && x.appId === ref.appId));
   return r ? topoResLabel(r) : '';
 }
-/** 当前任务绑定团队（含内置团）的成员元信息：key → {name, duty, isExpert}；供编排视图泳道与职责展示 */
-function teamMemberMeta() {
-  const teamId = state.task && state.task.teamId;
-  if (!teamId) return null;
-  const team = (state.teams || []).find(t => t.id === teamId);
+/** 当前计划生效的团队合同（v2026.10.23：plan.scope.team 计划时点快照；旧计划无 scope 时回退 task.teamId）。
+ * 编排视图泳道与职责展示只按本轮 scope 展开——专项追问轮（scope.kind=members）不再按历史团队摊开空泳道。 */
+function planScopeTeam(plan) {
+  const sc = plan && plan.scope;
+  // 有 scope 时以它为准：members 轮 = 本轮无团队合同（不回退 task.teamId，避免按历史团队摊开空泳道）
+  if (sc && sc.kind === 'members') return null;
+  if (sc && sc.kind === 'team' && sc.team) return sc.team;
+  const taskId = state.task && state.task.teamId;
+  if (!taskId) return null;
+  return (state.teams || []).find(t => t.id === taskId) || null;
+}
+function planScopeMembers(plan) {
+  const sc = plan && plan.scope;
+  const keys = sc && Array.isArray(sc.memberIds) && sc.memberIds.length ? sc.memberIds : null;
+  if (keys) return keys.slice();
+  const roster = [...((state.task && state.task.memberAgentIds) || []), ...((state.task && state.task.expertMembers) || []).map(e => e.id)];
+  return roster;
+}
+function teamMemberMeta(plan) {
+  const team = planScopeTeam(plan);
   if (!team) return null;
+  const scopeKeys = planScopeMembers(plan);
+  const scoped = Boolean(plan && plan.scope);
   const meta = {};
   (team.members || []).forEach(m => {
-    const key = m.agentId || ('expert-' + m.expertId);
-    const name = m.agentId ? (state.agents.find(a => a.id === m.agentId) || {}).name : ((state.task && state.task.expertMembers || []).find(e => e.id === key) || {}).name;
+    // 家族键：优先 scope.memberIds 中命中的写法；无 scope 的旧计划回退 task.teamId 行为（expert- 键）
+    const oldKey = m.agentId ? m.agentId : ('expert-' + m.expertId);
+    const newKey = m.agentId ? m.agentId : ('__expert__:' + m.expertId);
+    const key = scoped ? (scopeKeys.includes(newKey) ? newKey : (scopeKeys.includes(oldKey) ? oldKey : newKey)) : oldKey;
+    const em = (state.task && state.task.expertMembers || []).find(e => e.id === key || e.expertId === m.expertId);
+    const name = m.agentId ? (state.agents.find(a => a.id === m.agentId) || {}).name : (em || {}).name;
     meta[key] = { name: name || key, duty: m.duty || '', isExpert: !m.agentId };
   });
   return { team, meta };
@@ -6003,7 +6069,7 @@ function createPlanCardElement(plan) {
   // 判断是否有任何依赖关系（决定是否显示 DAG 依赖区）
   const hasDep = subs.some(s => s.dependsOn && s.dependsOn.length);
   const stratLabel = plan.strategy === 'dag' ? 'DAG 依赖编排' : (plan.strategy === 'sequential' ? '顺序执行' : '并行协同');
-  const tm = teamMemberMeta();
+  const tm = teamMemberMeta(plan);
   const teamBadge = tm ? '<span class="tag team" style="font-weight:600">🧩 ' + esc(tm.team.name) + '</span>' : '';
   const headerTail = teamBadge +
     '<span class="plan-strat" style="font-weight:600;color:var(--pri)">' + esc(stratLabel) + '</span>' +
@@ -7226,7 +7292,7 @@ async function refreshMentionCandidates() {
     // 降级使用本地 state 聚合
     const list = [];
     (state.projects || []).forEach(p => {
-      list.push({ type: 'project', id: p.id, name: p.name, kind: 'project', detail: '项目 · ' + (p.workspace || '未设工作目录') + (p.expertIds && p.expertIds.length ? ' · ' + p.expertIds.length + ' 名专家' : '') });
+      list.push({ type: 'project', id: p.id, name: p.name, kind: 'project', detail: '项目 · ' + (p.workspace || '未设工作目录') + (p.expertIds && p.expertIds.length ? ' · ' + p.expertIds.length + ' 名默认协作成员' : '') });
     });
     (state.teams || []).forEach(t => {
       if (t.enabled !== false) {
@@ -8372,7 +8438,13 @@ async function createNewTaskDirectly() {
   const body = {
     title: '新任务',
   };
-  if (proj) { body.projectId = proj.id; body.memberAgentIds = proj.expertIds; if (proj.skillNames.length) body.skillNames = proj.skillNames; if (proj.connectorIds.length) body.connectorIds = proj.connectorIds; }
+  if (proj) {
+    body.projectId = proj.id;
+    // 项目默认协作成员由服务端继承（defaultAgentIds）：客户端不再塞 memberAgentIds，
+    // 控制台/AI 通道行为一致；显式 @ 仍按消息级路由，清单不限制 @。
+    if (proj.skillNames.length) body.skillNames = proj.skillNames;
+    if (proj.connectorIds.length) body.connectorIds = proj.connectorIds;
+  }
   if (env.nodeRef) body.nodeRef = env.nodeRef;
   if (env.connectorIds && env.connectorIds.length) body.connectorIds = env.connectorIds;
   if (env.skillNames && env.skillNames.length) body.skillNames = env.skillNames;
@@ -9097,6 +9169,8 @@ function collectAgent(existing) {
   }
   payload.workDir = $('ag-workdir').value.trim() || '';
   if (existing && existing.id) payload.id = existing.id;
+  // 新建且由专家名册预填 → 携带 fromExpertId，服务端权威记录复制快照来源（expertSource）
+  if (!existing && window.__wbRosterFromExpert) payload.fromExpertId = window.__wbRosterFromExpert;
   // 复制场景（无 id 新建）必须显式携带：upsertAgent 对新实体不会从 target 兜底这些字段
   if (existing && existing.skills) payload.skills = existing.skills;
   if (existing && existing.tags) payload.tags = existing.tags;
@@ -11051,6 +11125,8 @@ function renderSettings() {
   $('set-base').value = s.onenat.baseUrl || '';
   $('set-key').value = s.onenat.apiKey || '';
   $('set-refresh').value = s.onenat.autoRefreshMs || 60000;
+  const days = (s.archive || {}).taskArchiveDays;
+  $('set-archive-days').value = (days == null ? 7 : days);
   $('set-ai-token').value = s.aiToken || '';
   renderAiInstall();
 }
@@ -11103,14 +11179,17 @@ $('btn-reset-ai-token').addEventListener('click', async () => {
   } else toast(r.error || '生成失败', true);
 });
 $('btn-save-settings').addEventListener('click', async () => {
+  const days = Math.floor(Number($('set-archive-days').value));
   const payload = {
     onenat: { baseUrl: $('set-base').value.trim(), apiKey: $('set-key').value.trim(), autoRefreshMs: Number($('set-refresh').value) || 60000 },
+    archive: { taskArchiveDays: Number.isFinite(days) && days >= 0 ? days : 7 },
   };
   const r = await api('/settings', { method: 'POST', body: JSON.stringify(payload) });
   if (r.ok) {
     state.settings = r.data;
     toast('✓ 设置已保存');
     loadResources();
+    loadTasks(); // 归档天数收窄时服务端可能刚归档了超期任务，刷新会话列表分组
   }
   else toast(r.error || '保存失败', true);
 });
@@ -11445,8 +11524,12 @@ async function openExpertRosterPicker() {
       if (!$('ag-name').value.trim()) $('ag-name').value = e.name;
       $('ag-role').value = e.role || e.name;
       $('ag-sp').value = e.systemPrompt || '';
+      if ($('ag-ep') && typeof e.executionPrompt === 'string') $('ag-ep').value = e.executionPrompt;
+      // 复制快照：保存时携带 fromExpertId，服务端权威记录来源（expertSource.revision=人格内容哈希），
+      // 之后子智能体独立编辑、不随专家档案自动同步
+      window.__wbRosterFromExpert = e.id;
       closeModal();
-      toast('已预填「' + e.name + '」，可继续调整');
+      toast('已预填「' + e.name + '」（复制快照；后续专家档案变更不会自动同步到本子智能体）');
     }));
   }
   $('ros-div').addEventListener('change', () => { st.division = $('ros-div').value; renderRos(); });
