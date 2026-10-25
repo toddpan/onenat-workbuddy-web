@@ -404,8 +404,11 @@ export class WorkBuddyRouter {
       running: this.engine.isRunning(t.id),
       pendingAsk: Boolean(t.pendingAsk),
       memberAgentIds: t.memberAgentIds,
+      // 任务节点：会话头部节点选择器按它回显（否则列表壳/E2E 下显示的是「新任务默认节点」，与实际执行节点不符）
+      nodeRef: t.nodeRef,
       lastRoute: t.lastRoute,
       createdAt: t.createdAt,
+      updatedAt: t.updatedAt,
       archivedAt: t.archivedAt,
       turnsCount: turns.length,
       lastPreview: last ? String(last.text || '').slice(0, 120) : '',
@@ -640,9 +643,26 @@ export class WorkBuddyRouter {
     return { error: '任务尚无可用的远端会话（先发一条消息建立会话后重试）', httpStatus: 409 }
   }
 
+  /** 节点引擎标签缓存（baseUrl → 5 分钟）：能力不支持时附带真实版本，避免「版本过低」误判 */
+  private nodeEngineCache = new Map<string, { at: number; label: string }>()
+
+  /** 探测节点引擎名/版本（短超时 + 缓存）；失败返回空串，不阻断能力探测 */
+  private async nodeEngineLabel(target: { baseUrl: string; apiKey?: string }): Promise<string> {
+    const key = String(target.baseUrl || '')
+    if (!key) return ''
+    const hit = this.nodeEngineCache.get(key)
+    if (hit && Date.now() - hit.at < 5 * 60_000) return hit.label
+    const p = await this.client.ping(target, { timeoutMs: 3000 }).catch(() => undefined)
+    const label = p?.ok ? `${p.name || 'dsh-web-service'}${p.version ? ' v' + p.version : ''}` : ''
+    if (label) this.nodeEngineCache.set(key, { at: Date.now(), label })
+    return label
+  }
+
   /**
    * 任务级会话协作接口（goal / plan / compact）：等价 GUI 斜杠命令的远程入口。
    * 操作任务主会话（见 resolveTaskMainSession）；远端需要 dsh-web-service ≥ 0.3.9。
+   * 语义约定：**能力探测（GET）** 不支持时返回 200 + supported:false（reason 为准确原因）；
+   * **动作调用（PUT/POST）** 不支持时返回 501（表示这次操作无法执行）。
    */
   private async handleTaskCollab(
     taskId: string,
@@ -660,7 +680,11 @@ export class WorkBuddyRouter {
       if (kind === 'goal') {
         if (method === 'GET') {
           const r = await this.client.getGoal(target, sid)
-          return { httpStatus: r.ok ? 200 : r.supported === false ? 501 : 409, payload: r.ok ? { ok: true, data: { ...r, goal: r.goal ?? null } } : { ok: false, error: r.error, supported: r.supported } }
+          // 能力探测：不支持不是请求失败。返回 200 + supported:false（带准确原因），
+          // 避免客户端/监控把“节点未装载目标服务”记成 HTTP 501 故障。
+          if (r.supported === false) return { httpStatus: 200, payload: { ok: true, supported: false, data: { supported: false, reason: r.error, goal: null } } }
+          if (!r.ok) return { httpStatus: 409, payload: { ok: false, error: r.error, supported: true } }
+          return { httpStatus: 200, payload: { ok: true, supported: true, data: { supported: true, goal: r.goal ?? null } } }
         }
         if (method === 'POST') {
           const objective = typeof body?.objective === 'string' ? body.objective.trim() : ''
@@ -686,7 +710,15 @@ export class WorkBuddyRouter {
       if (kind === 'plan') {
         if (method === 'GET') {
           const r = await this.client.getPlan(target, sid)
-          return { httpStatus: r.ok ? 200 : r.supported === false ? 501 : 409, payload: r.ok ? { ok: true, data: { active: !!r.active, pending: !!r.pending } } : { ok: false, error: r.error, supported: r.supported } }
+          // 计划模式能力探测：节点未装载 planMode 服务时返回 200 + supported:false + 实际版本，
+          // 不再用 501（旧行为会让日志/监控误判成部署故障，也被误读成“版本过低”）。
+          if (r.supported === false) {
+            const engine = await this.nodeEngineLabel(target)
+            const reason = r.error + (engine ? `（当前节点 ${engine}）` : '')
+            return { httpStatus: 200, payload: { ok: true, supported: false, data: { supported: false, reason, engine, active: false, pending: false } } }
+          }
+          if (!r.ok) return { httpStatus: 409, payload: { ok: false, error: r.error, supported: true } }
+          return { httpStatus: 200, payload: { ok: true, supported: true, data: { supported: true, active: !!r.active, pending: !!r.pending } } }
         }
         if (typeof body?.active !== 'boolean') {
           return { httpStatus: 400, payload: { ok: false, error: 'active (boolean) 必填' } }
@@ -2987,6 +3019,29 @@ export class WorkBuddyRouter {
       }
       return true
     }
+    // 批量归档管理（归档管理页）：op=restore 批量恢复 / delete 批量删除；仅作用于已归档（archivedAt 非空）会话。
+    // 范围：不传 projectId = 全部；projectId: null = 仅未分组会话；字符串 = 指定项目；ids 可再限定到指定清单。
+    if (p === '/api/tasks/bulk-archive' && method === 'POST') {
+      const body = await this.parseBody(req)
+      const op = String(body?.op || '')
+      const hasProjectScope = body !== null && typeof body === 'object' && Object.prototype.hasOwnProperty.call(body, 'projectId')
+      const projectId = hasProjectScope ? (body.projectId || null) : undefined
+      const ids = Array.isArray(body?.ids) ? new Set(body.ids.map(String)) : null
+      const scoped = (t: WorkTask) =>
+        (!hasProjectScope || (projectId ? t.projectId === projectId : !t.projectId)) && (!ids || ids.has(t.id))
+      if (op === 'restore') {
+        const restored = this.store.bulkUnarchive(scoped)
+        this.sendJson(res, 200, { ok: true, data: { restored } })
+        return true
+      }
+      if (op === 'delete') {
+        const deleted = await this.engine.bulkDeleteArchived(scoped)
+        this.sendJson(res, 200, { ok: true, data: { deleted } })
+        return true
+      }
+      this.sendJson(res, 400, { ok: false, error: 'op 需为 restore（批量恢复）或 delete（批量删除）' })
+      return true
+    }
     const taskMatch = /^\/api\/tasks\/([^/]+)$/.exec(p)
     if (taskMatch) {
       const taskId = decodeURIComponent(taskMatch[1])
@@ -3172,17 +3227,62 @@ export class WorkBuddyRouter {
         this.sendJson(res, 502, { ok: false, error: (target as any)?.error || '成员节点当前不可达' })
         return true
       }
+      let provider = typeof body?.provider === 'string' && body.provider ? body.provider : undefined
+      let model = typeof body?.model === 'string' && body.model ? body.model : undefined
+      let defaultModel: { provider: string; model: string; reasoningEffort?: string } | undefined
+      // 显式「恢复节点默认」：远端 PUT /sessions/:id 传空 model 不会清除覆盖（会把字段忽略），
+      // 必须先解析节点默认 provider/model，再显式下发，否则按钮显示默认但会话仍跑旧模型。
+      const wantsDefault = body !== null && typeof body === 'object'
+        && Object.prototype.hasOwnProperty.call(body, 'model')
+        && !model && !provider
+      if (wantsDefault) {
+        const def = await this.client.getModels(target)
+        const dm = def.ok
+          ? (def.defaultModel || def.models.find((m) => m.isDefault))
+          : undefined
+        if (!dm || !dm.provider || !dm.model) {
+          const why = def.ok ? '' : `（${def.error || '模型目录不可用'}）`
+          this.sendJson(res, 502, { ok: false, error: `无法解析节点默认模型${why}，请改选具体模型` })
+          return true
+        }
+        provider = dm.provider
+        model = dm.model
+        defaultModel = { provider: dm.provider, model: dm.model, reasoningEffort: def.defaultModel?.reasoningEffort || (dm as any).reasoningEffort }
+      }
+      // 前置校验（仅显式指定 provider+model 时）：所选模型必须存在于目标节点模型目录。
+      // 跨引擎/跨节点的已保存选择会被远端拒绝——ZCode 引擎对该场景的报错是
+      // 「Provider Registry 中不存在 Model: [object Object]」，天书且无法定位，故本地拦截给可读提示。
+      // 目录不可用（节点临时不可达等）时放行，由远端兜底，避免误伤。
+      if (provider && model && !wantsDefault) {
+        const cat = await this.client.getModels(target)
+        if (cat.ok && cat.models.length && !cat.models.some((m) => m.provider === provider && m.id === model)) {
+          const nodeLabel = (target as any)?.mappingId
+            ? this.directory.resolveMapping(String((target as any).mappingId))?.appName || String((target as any).mappingId)
+            : '当前节点'
+          this.sendJson(res, 400, {
+            ok: false,
+            code: 'MODEL_NOT_IN_CATALOG',
+            error: `模型 ${provider}/${model} 不在节点「${nodeLabel}」的模型目录中（跨引擎或跨节点的已保存选择），请另选该节点目录内的模型，或点「主调度默认模型」恢复节点默认`,
+          })
+          return true
+        }
+      }
       const r = await this.client.updateSessionModel(target, binding.remoteSessionId, {
-        provider: typeof body?.provider === 'string' && body.provider ? body.provider : undefined,
-        model: typeof body?.model === 'string' && body.model ? body.model : undefined,
-        reasoningEffort: typeof body?.reasoningEffort === 'string' && body.reasoningEffort ? body.reasoningEffort : undefined,
+        provider,
+        model,
+        reasoningEffort: typeof body?.reasoningEffort === 'string' && body.reasoningEffort
+          ? body.reasoningEffort
+          : defaultModel?.reasoningEffort,
         agentPreset: typeof body?.agentPreset === 'string' ? body.agentPreset : undefined,
       })
       if (!r.ok) {
         this.sendJson(res, 502, { ok: false, error: r.error || '更新会话模型失败' })
         return true
       }
-      this.sendJson(res, 200, { ok: true, data: { selected: r.selected, presetApplied: r.preset ? r.preset.applied : undefined } })
+      this.sendJson(res, 200, {
+        ok: true,
+        data: { selected: r.selected, presetApplied: r.preset ? r.preset.applied : undefined, defaultModel },
+      })
       return true
     }
     // 任务执行会话的模式预设（agentPreset）：任务级持久化（task > 智能体实体 > 远端默认 cordis）
@@ -3321,6 +3421,46 @@ export class WorkBuddyRouter {
       const applied = await this.engine.applyTaskPermission(taskId)
         .catch((e: any) => [{ agentId: '*', ok: false, error: e?.message || String(e) }])
       this.sendJson(res, 200, { ok: true, data: { permission: updated.permission || '', applied } })
+      return true
+    }
+    // 运行权限回读：读任务主会话的 harness 权限（preset/sandbox/approval/available），
+    // 供聊天窗「🔒 权限」入口展示与选择；旧节点无该路由 → supported=false，前端隐藏入口。
+    if (taskPermissionMatch && method === 'GET') {
+      const taskId = decodeURIComponent(taskPermissionMatch[1])
+      const task = this.store.getTask(taskId)
+      if (!task) {
+        this.sendJson(res, 404, { ok: false, error: 'Task not found' })
+        return true
+      }
+      const main = await this.resolveTaskMainSession(taskId)
+      if (main.error || !main.target || !main.remoteSessionId) {
+        this.sendJson(res, main.httpStatus || 409, {
+          ok: false,
+          error: main.error || '任务尚无可用的远端会话（先发一条消息建立会话后重试）',
+          supported: true,
+        })
+        return true
+      }
+      const r = await this.client.getSessionPermission(main.target, main.remoteSessionId)
+      if (r.supported === false) {
+        this.sendJson(res, 501, { ok: false, error: r.error || '远端节点不支持运行权限接口', supported: false })
+        return true
+      }
+      if (!r.ok) {
+        this.sendJson(res, 409, { ok: false, error: r.error || '读取运行权限失败', supported: true })
+        return true
+      }
+      this.sendJson(res, 200, {
+        ok: true,
+        data: {
+          preset: r.preset || '',
+          sandbox: r.sandbox || '',
+          approval: r.approval || '',
+          available: r.available || [],
+          taskPermission: task.permission || '',
+          agentId: main.agentId,
+        },
+      })
       return true
     }
     // App「AI 控制台」模型透传（登录会话）：节点凭证由服务端持有，App 不接触节点 Key
@@ -3514,8 +3654,13 @@ export class WorkBuddyRouter {
     }
     const cancelMatch = /^\/api\/tasks\/([^/]+)\/cancel$/.exec(p)
     if (cancelMatch && method === 'POST') {
-      await this.engine.cancelTask(decodeURIComponent(cancelMatch[1]))
-      this.sendJson(res, 200, { ok: true })
+      const out = await this.engine.cancelTask(decodeURIComponent(cancelMatch[1]))
+      // warnings = 远端中断未确认项（节点不可达/会话消失/旧版无 cancel）：本地已停，但如实告知
+      this.sendJson(res, 200, {
+        ok: true,
+        data: { warnings: out.warnings },
+        ...(out.warnings.length ? { warning: out.warnings.join('；') } : {}),
+      })
       return true
     }
     // ---- 会话协作状态：goal / plan / compact（需要远端 dsh-web-service ≥ 0.3.9）----

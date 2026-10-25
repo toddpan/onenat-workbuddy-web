@@ -73,6 +73,33 @@ function clean(url: string): string {
 }
 
 /**
+ * 会话协作接口（goal/plan/compact）的「不支持」语义归一。
+ * dsh-web-service 0.5.0 实测：路由不存在返回 404；路由存在但宿主未装载子系统返回
+ * 501 + code=SERVICE_UNAVAILABLE（error 文案形如 "planMode service unavailable on this host"）。
+ * 旧实现把 501 也当成「版本过低」，用户被误导去升级节点，实际是节点侧没开服务。
+ */
+function collabUnsupported(
+  res: { status: number },
+  json: any,
+  feature: string,
+): { supported?: boolean; error: string } | undefined {
+  if (res.status === 404) {
+    // 带业务 code 的 404（GOAL_NOT_FOUND / SESSION_NOT_FOUND…）是「对象/状态不存在」，
+    // 接口本身存在；按版本过低处理会误导用户升级节点。交回调用方按 409 提示并允许刷新重试。
+    if (json?.code) return { supported: true, error: String(json?.error || json.code) }
+    return { supported: false, error: `远端 dsh-web-service 版本过低，不含${feature}接口（需 ≥ 0.3.9）` }
+  }
+  if (res.status === 501 || json?.code === 'SERVICE_UNAVAILABLE' || json?.code === 'NOT_SUPPORTED') {
+    const detail = String(json?.error || '').trim()
+    return {
+      supported: false,
+      error: `当前节点未启用${feature}服务${detail ? `（${detail}）` : ''}；这不是版本问题，请在该 DSH 节点装载对应服务后重试`,
+    }
+  }
+  return undefined
+}
+
+/**
  * SSE 帧分隔：必须容忍 CRLF。
  * 若中间链路（反代/隧道/某些网关）把行尾改写成 `\r\n`，帧分隔就是 `\r\n\r\n`，
  * 用 `indexOf('\n\n')` 一个帧都切不出来（表现为「一个字的增量都没收到」）。
@@ -695,11 +722,12 @@ export class DshClient {
     }
   }
 
-  public async ping(target: DshTarget): Promise<PingResult> {
+  public async ping(target: DshTarget, opts?: { timeoutMs?: number }): Promise<PingResult> {
     try {
       const res = await fetch(`${clean(target.baseUrl)}/system/status`, {
         headers: this.headers(target.apiKey),
-        signal: AbortSignal.timeout(10_000),
+        // 派发前预检用短超时（不把用户卡在 10s 的不可达节点上）；常规探活保持 10s
+        signal: AbortSignal.timeout(Math.max(500, opts?.timeoutMs ?? 10_000)),
       })
       const json: any = await res.json().catch(() => ({}))
       if (!res.ok || !json?.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
@@ -797,6 +825,35 @@ export class DshClient {
       return { ok: true, supported: true, preset: json.data?.preset, sandbox: json.data?.sandbox, approval: json.data?.approval }
     } catch (err: any) {
       return { ok: false, supported: true, error: err?.message || '设置运行权限失败' }
+    }
+  }
+
+  /**
+   * 读取远端会话当前运行权限（GET /sessions/:id/permission，dsh-web-service ≥ 0.3.1）。
+   * 返回 { preset, sandbox, approval, available[] }；旧版节点 404/501 → supported=false（调用方隐藏 UI）。
+   */
+  public async getSessionPermission(
+    target: DshTarget,
+    sessionId: string,
+  ): Promise<{ ok: boolean; supported?: boolean; preset?: string; sandbox?: string; approval?: string; available?: string[]; error?: string }> {
+    try {
+      const res = await fetch(`${clean(target.baseUrl)}/sessions/${encodeURIComponent(sessionId)}/permission`, {
+        headers: this.headers(target.apiKey),
+        signal: AbortSignal.timeout(10_000),
+      })
+      const json: any = await res.json().catch(() => ({}))
+      if (res.status === 404 || res.status === 501) return { ok: false, supported: false, error: 'remote dsh-web-service has no /permission route' }
+      if (!res.ok || !json?.ok) return { ok: false, supported: true, error: json?.error || `HTTP ${res.status}` }
+      return {
+        ok: true,
+        supported: true,
+        preset: String(json.data?.preset || ''),
+        sandbox: String(json.data?.sandbox || ''),
+        approval: String(json.data?.approval || ''),
+        available: Array.isArray(json.data?.available) ? json.data.available.map(String) : [],
+      }
+    } catch (err: any) {
+      return { ok: false, supported: true, error: err?.message || '读取运行权限失败' }
     }
   }
 
@@ -1060,8 +1117,10 @@ export class DshClient {
         signal: AbortSignal.timeout(12_000),
       })
       const json: any = await res.json().catch(() => ({}))
-      if (res.status === 404 || res.status === 501) return { ok: false, supported: false, error: '远端 dsh-web-service 版本过低，不含目标接口（需 ≥ 0.3.9）' }
-      if (!res.ok || !json?.ok) return { ok: false, supported: res.status !== 409, error: json?.error || `HTTP ${res.status}` }
+      const unsupported = collabUnsupported(res, json, '目标')
+      if (unsupported) return { ok: false, ...unsupported }
+      // 409（SESSION_NOT_LIVE / GOAL_* 状态冲突）说明接口存在、只是状态不可用 → supported 仍为 true
+      if (!res.ok || !json?.ok) return { ok: false, supported: true, error: json?.error || `HTTP ${res.status}` }
       return { ok: true, supported: true, goal: json.data?.goal ?? null }
     } catch (err: any) {
       return { ok: false, error: err?.message || '读取目标失败' }
@@ -1078,7 +1137,8 @@ export class DshClient {
         signal: AbortSignal.timeout(12_000),
       })
       const json: any = await res.json().catch(() => ({}))
-      if (res.status === 404 || res.status === 501) return { ok: false, supported: false, error: '远端 dsh-web-service 版本过低，不含目标接口（需 ≥ 0.3.9）' }
+      const unsupported = collabUnsupported(res, json, '目标')
+      if (unsupported) return { ok: false, ...unsupported }
       if (!res.ok || !json?.ok) return { ok: false, supported: true, error: json?.error || `HTTP ${res.status}` }
       return { ok: true, supported: true, goal: json.data?.goal }
     } catch (err: any) {
@@ -1096,7 +1156,8 @@ export class DshClient {
         signal: AbortSignal.timeout(12_000),
       })
       const json: any = await res.json().catch(() => ({}))
-      if (res.status === 404 || res.status === 501) return { ok: false, supported: false, error: '远端 dsh-web-service 版本过低，不含目标接口（需 ≥ 0.3.9）' }
+      const unsupported = collabUnsupported(res, json, '目标')
+      if (unsupported) return { ok: false, ...unsupported }
       if (!res.ok || !json?.ok) return { ok: false, supported: true, error: json?.error || `HTTP ${res.status}` }
       return { ok: true, supported: true, data: json.data }
     } catch (err: any) {
@@ -1112,8 +1173,9 @@ export class DshClient {
         signal: AbortSignal.timeout(12_000),
       })
       const json: any = await res.json().catch(() => ({}))
-      if (res.status === 404 || res.status === 501) return { ok: false, supported: false, error: '远端 dsh-web-service 版本过低，不含计划模式接口（需 ≥ 0.3.9）' }
-      if (!res.ok || !json?.ok) return { ok: false, supported: res.status !== 409, error: json?.error || `HTTP ${res.status}` }
+      const unsupported = collabUnsupported(res, json, '计划模式')
+      if (unsupported) return { ok: false, ...unsupported }
+      if (!res.ok || !json?.ok) return { ok: false, supported: true, error: json?.error || `HTTP ${res.status}` }
       return { ok: true, supported: true, active: !!json.data?.active, pending: !!json.data?.pending }
     } catch (err: any) {
       return { ok: false, error: err?.message || '查询计划模式失败' }
@@ -1130,7 +1192,8 @@ export class DshClient {
         signal: AbortSignal.timeout(12_000),
       })
       const json: any = await res.json().catch(() => ({}))
-      if (res.status === 404 || res.status === 501) return { ok: false, supported: false, error: '远端 dsh-web-service 版本过低，不含计划模式接口（需 ≥ 0.3.9）' }
+      const unsupported = collabUnsupported(res, json, '计划模式')
+      if (unsupported) return { ok: false, ...unsupported }
       if (!res.ok || !json?.ok) return { ok: false, supported: true, error: json?.error || `HTTP ${res.status}` }
       return { ok: true, supported: true, active: !!json.data?.active, pending: !!json.data?.pending, transition: String(json.data?.transition || '') }
     } catch (err: any) {
@@ -1147,7 +1210,8 @@ export class DshClient {
         signal: AbortSignal.timeout(120_000),
       })
       const json: any = await res.json().catch(() => ({}))
-      if (res.status === 404 || res.status === 501) return { ok: false, supported: false, error: '远端 dsh-web-service 版本过低，不含压缩接口（需 ≥ 0.3.9）' }
+      const unsupported = collabUnsupported(res, json, '压缩')
+      if (unsupported) return { ok: false, ...unsupported }
       if (!res.ok || !json?.ok) return { ok: false, supported: true, error: json?.error || `HTTP ${res.status}` }
       return { ok: true, supported: true, compacted: !!json.data?.compacted, message: json.data?.message }
     } catch (err: any) {

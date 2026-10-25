@@ -1393,6 +1393,55 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .modal-body { padding: 18px 20px; overflow-y: auto; }
 .modal-foot { padding: 12px 20px; border-top: 1px solid var(--line); display: flex; gap: 10px; justify-content: flex-end; }
 .ros-bar { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
+#view-archive .ros-bar select { width: auto; }
+
+/* ---- 归档管理页（view-archive）---- */
+.arch-set-card { padding: 0; overflow: hidden; }
+.arch-set-row { display: flex; align-items: center; gap: 16px; padding: 14px 16px; }
+.arch-set-main { flex: 1; min-width: 0; }
+.arch-set-title { font-size: 13.5px; font-weight: 600; color: var(--tx); }
+.arch-set-desc { font-size: 11.5px; color: var(--tx3); margin-top: 3px; line-height: 1.55; }
+.arch-set-div { height: 1px; background: var(--line); }
+.arch-sw { position: relative; flex: none; width: 40px; height: 22px; border-radius: 11px; border: 1px solid var(--line2); background: var(--bg3); cursor: pointer; transition: background .18s, border-color .18s; padding: 0; }
+.arch-sw .arch-sw-dot { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.22); transition: left .18s; }
+.arch-sw.on { background: var(--pri); border-color: var(--pri); }
+.arch-sw.on .arch-sw-dot { left: 20px; }
+.arch-sw:disabled { opacity: .55; cursor: default; }
+.arch-days-sel { flex: none; min-width: 148px; width: auto; }
+.arch-list-head { display: flex; align-items: center; gap: 8px; margin: 20px 0 10px; }
+.arch-list-head h3 { font-size: 14px; display: flex; align-items: center; gap: 7px; }
+.arch-cnt { display: inline-block; min-width: 20px; padding: 0 7px; height: 18px; line-height: 18px; text-align: center; border-radius: 9px; background: var(--pri-light); color: var(--pri); font-size: 11.5px; font-weight: 600; }
+.arch-proj { border: 1px solid var(--line); border-radius: var(--rad); background: var(--bg2); margin-bottom: 8px; overflow: visible; }
+.arch-proj-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; cursor: pointer; user-select: none; }
+.arch-proj-head:hover { background: var(--bg3); border-radius: var(--rad); }
+.arch-proj-chev { font-size: 10px; color: var(--tx3); width: 12px; flex: none; }
+.arch-proj-name { font-weight: 600; font-size: 13px; color: var(--tx); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.arch-proj-cnt { font-size: 12px; color: var(--tx3); flex: none; }
+.arch-more-btn { flex: none; border: none; background: none; color: var(--tx3); font-size: 15px; letter-spacing: 1px; cursor: pointer; padding: 2px 7px; border-radius: 6px; line-height: 1; }
+.arch-more-btn:hover { background: var(--bg3); color: var(--tx); }
+.arch-pop-wrap { position: relative; flex: none; }
+.arch-pop { position: absolute; right: 0; top: calc(100% + 6px); z-index: 40; background: var(--bg2); border: 1px solid var(--line2); border-radius: 10px; box-shadow: 0 10px 28px rgba(15,20,35,.14); min-width: 152px; padding: 4px; display: none; }
+.arch-pop.open { display: block; }
+.arch-pop button { display: block; width: 100%; text-align: left; background: none; border: none; padding: 8px 10px; font-size: 12.5px; color: var(--tx); border-radius: 7px; cursor: pointer; }
+.arch-pop button:hover { background: var(--bg3); }
+.arch-pop button.danger { color: var(--err); }
+.arch-proj-body { border-top: 1px solid var(--line); }
+.arch-sess { display: flex; align-items: center; gap: 8px; padding: 9px 12px 9px 32px; }
+.arch-sess + .arch-sess { border-top: 1px dashed var(--line); }
+.arch-sess .s { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--tx3); }
+.arch-sess-main { flex: 1; min-width: 0; cursor: pointer; }
+.arch-sess-title { font-size: 12.5px; color: var(--tx); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.arch-sess-sub { font-size: 11px; color: var(--tx3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+.arch-sess-time { flex: none; font-size: 11px; color: var(--tx3); white-space: nowrap; }
+.arch-sess .mini-btn { flex: none; }
+.arch-empty { color: var(--tx3); font-size: 12.5px; text-align: center; padding: 34px 12px; border: 1px dashed var(--line); border-radius: var(--rad); line-height: 1.8; }
+.gh-manage { margin-left: 8px; border: none; background: none; color: var(--pri); font-size: 11px; cursor: pointer; padding: 2px 7px; border-radius: 6px; flex: none; }
+.gh-manage:hover { background: var(--pri-light); }
+@media (max-width: 768px) {
+  .arch-set-row { flex-direction: column; align-items: stretch; gap: 10px; }
+  .arch-sw, .arch-days-sel { align-self: flex-end; }
+  .arch-days-sel { max-width: 200px; }
+}
 .ros-list { max-height: 52vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
 .ros-row { display: flex; gap: 8px; align-items: baseline; padding: 8px 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
 .ros-row:last-child { border-bottom: none; }
@@ -2020,6 +2069,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <button data-v="schedules" type="button" role="menuitem"><span class="ic">⏰</span><span class="lb">定时任务</span></button>
           <button data-v="files" type="button" role="menuitem"><span class="ic">📁</span><span class="lb">文件管理</span></button>
           <button data-v="experts" type="button" role="menuitem"><span class="ic">🧠</span><span class="lb">专家管理</span></button>
+          <button data-v="archive" type="button" role="menuitem"><span class="ic">🗄</span><span class="lb">归档管理</span></button>
           <span class="nav-more-sep" aria-hidden="true"></span>
           <button data-v="settings" type="button" role="menuitem"><span class="ic">⚙️</span><span class="lb">设置</span></button>
         </div>
@@ -2053,6 +2103,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <button class="mini-btn" id="btn-goal" style="display:none" title="长期目标（/goal）">🎯</button>
           <button class="mini-btn" id="btn-plan" style="display:none" title="计划模式（/plan）">📋</button>
           <button class="mini-btn" id="btn-compact" style="display:none" title="压缩以上对话（/compact，降低上下文占用）">🗜️</button>
+          <button class="mini-btn" id="btn-permission" style="display:none" title="运行权限（沙箱 / 审批）">🔒</button>
           <span class="badge mode" id="chat-goal-badge" style="display:none" title="当前长期目标"></span>
           <span class="badge mode" id="chat-mode" style="display:none"></span>
           <span class="hspacer"></span>
@@ -2401,10 +2452,8 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
       </div>
       <div class="card">
         <h3 style="margin-bottom:12px">任务归档</h3>
-        <div class="grid3">
-          <div class="field"><label>自动归档天数（0 = 关闭）</label><input id="set-archive-days" type="number" min="0" step="1"></div>
-        </div>
-        <div style="font-size:11.5px;color:var(--tx3);margin-top:6px">终态任务（已完成 / 失败 / 已取消等）超过该天数未更新，自动挪入「已归档会话」并瘦身本地存储（正文移入 data/archive/，点开仍可查看）；「取消归档」后重新计时。保存即时生效，无需重启。</div>
+        <div style="font-size:11.5px;color:var(--tx3)">自动归档开关、归档保留时长与已归档会话的搜索 / 批量恢复 / 批量删除，已整合到「归档管理」页。</div>
+        <div style="margin-top:10px"><button class="btn" id="btn-goto-archive">🗄 前往归档管理</button></div>
       </div>
       <div class="card" id="users-card" style="display:none">
         <h3 style="margin-bottom:12px">用户管理（管理员）</h3>
@@ -2455,6 +2504,49 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
         </div>
       </div>
       </div>
+    </div></div>
+    <div class="view" id="view-archive"><div class="panel" style="max-width:980px;margin:0 auto">
+      <div class="panel-head"><h2>🗄 归档管理</h2><span class="sub">自动归档设置 · 已归档会话搜索 / 批量恢复 / 批量删除</span><span class="hspacer"></span><button class="btn" id="arch-refresh">↻ 刷新</button></div>
+      <div class="card arch-set-card">
+        <div class="arch-set-row">
+          <div class="arch-set-main">
+            <div class="arch-set-title">自动归档旧会话</div>
+            <div class="arch-set-desc">定时扫描，将最后更新时间超过保留期的终态会话（已完成 / 失败 / 已取消等）自动归档；运行中的会话不受影响。</div>
+          </div>
+          <button class="arch-sw" id="arch-auto-sw" role="switch" aria-checked="false" title="开启 / 关闭自动归档"><span class="arch-sw-dot"></span></button>
+        </div>
+        <div class="arch-set-div"></div>
+        <div class="arch-set-row">
+          <div class="arch-set-main">
+            <div class="arch-set-title">归档保留时长</div>
+            <div class="arch-set-desc">会话最后更新时间早于该时长后，才会进入自动归档候选；「取消归档」后重新计时。</div>
+          </div>
+          <select id="arch-days" class="arch-days-sel">
+            <option value="3">3 天后归档</option>
+            <option value="7">7 天后归档</option>
+            <option value="14">14 天后归档</option>
+            <option value="30">30 天后归档</option>
+            <option value="90">90 天后归档</option>
+            <option value="180">180 天后归档</option>
+            <option value="365">1 年后归档</option>
+          </select>
+        </div>
+      </div>
+      <div class="arch-list-head">
+        <h3>已归档的会话 <span class="arch-cnt" id="arch-count">0</span></h3>
+        <span class="hspacer"></span>
+        <button class="btn danger" id="arch-del-all">🗑 全部删除</button>
+      </div>
+      <div class="ros-bar">
+        <input id="arch-q" placeholder="搜索已归档会话（标题 / 最新内容）" style="flex:1;min-width:160px">
+        <select id="arch-sort" style="flex:0 0 auto">
+          <option value="updated">排序：更新时间</option>
+          <option value="archived">排序：归档时间</option>
+          <option value="title">排序：标题</option>
+        </select>
+        <select id="arch-proj" style="flex:0 0 auto;max-width:230px"><option value="all">所有项目</option></select>
+      </div>
+      <div id="arch-list"></div>
     </div></div>
   </main>
 </div>
@@ -4446,7 +4538,7 @@ async function openRunConfig(focus) {
 
 // ---------- 导航 ----------
 // 折叠进「更多」的低频页签；switchView 高亮与弹层展开都依赖这份清单
-var MORE_VIEWS = ['resources', 'library', 'plugins', 'voice', 'schedules', 'files', 'experts', 'settings'];
+var MORE_VIEWS = ['resources', 'library', 'plugins', 'voice', 'schedules', 'files', 'experts', 'archive', 'settings'];
 var navMore = document.getElementById('nav-more');
 var navMoreBtn = document.getElementById('nav-more-btn');
 function closeNavMore() { if (navMore) navMore.classList.remove('open'); }
@@ -4475,6 +4567,7 @@ function switchView(v) {
   if (v === 'resources') renderResources();
   if (v === 'agents') { renderAgents(); startAgentLive(); } else stopAgentLive();
   if (v === 'schedules') renderSchedules();
+  if (v === 'archive') renderArchiveView();
   if (v === 'settings') renderSettings();
   if (v === 'voice') voiceStart(); else voiceStop();
   if (v === 'monitor') monitorStart(); else monitorStop();
@@ -4538,6 +4631,7 @@ const NAV_LABELS = {
   resources: { full: '资源目录', short: '资源' },
   library: { full: '技能库', short: '技能' },
   plugins: { full: '插件库', short: '插件' },
+  archive: { full: '归档管理', short: '归档' },
   settings: { full: '设置', short: '设置' },
   more: { full: '更多', short: '更多' },
 };
@@ -4572,6 +4666,8 @@ async function boot() {
     updateProjectBanner();
   }
   initNodeState();
+  // 后台探测节点健康（TTL 门控），拿到结果后校正默认节点：不可达的默认节点不应被新任务选中
+  void refreshNodeEngines(false).then(applyReachableNodeDefault).catch(function () {});
   renderTaskList();
   // 按 hash 恢复刷新前的页签（#monitor / #voice / #settings …），无 hash 停在工作台
   var initial = (location.hash || '').replace('#', '');
@@ -4655,10 +4751,12 @@ $('side-search-clear').addEventListener('click', () => {
   renderTaskList();
 });
 
+let taskListSig = '';
 function renderTaskList() {
   // 项目工作台模式：只显示本项目任务
   var visibleTasks = state.projectId ? state.tasks.filter(function (t) { return t.projectId === state.projectId; }) : state.tasks;
   const el = $('task-list');
+  const prevScroll = el.scrollTop;
   el.innerHTML = '';
   if (!visibleTasks.length) {
     el.innerHTML = state.projectId
@@ -4702,6 +4800,21 @@ function renderTaskList() {
     else groups.older.items.push(t);
   }
 
+  // 稳态轮询（每 4s / 每个 turn_end）不该整列重建：内容签名一致时直接跳过，
+  // 否则侧栏滚动位置归零、悬停中的 🗄/🗑 按钮消失、mousedown→mouseup 之间重建会吞掉点击。
+  const sig = JSON.stringify({
+    p: state.projectId || '', q: state.searchQuery || '', cur: state.currentTaskId || '',
+    gc: state.groupCollapsed || {},
+    items: filtered.map(function (t) {
+      return [t.id, t.title, t.lastPreview, t.status, t.running ? 1 : 0, t.archivedAt ? 1 : 0, (t.memberAgentIds || []).join(','), t.updatedAt];
+    }),
+  });
+  if (sig === taskListSig && el.childElementCount) {
+    el.scrollTop = prevScroll;
+    return;
+  }
+  taskListSig = sig;
+
   for (const [key, grp] of Object.entries(groups)) {
     if (!grp.items.length) continue;
     const isCollapsed = state.groupCollapsed[key] ?? (key === 'archived');
@@ -4710,11 +4823,14 @@ function renderTaskList() {
 
     const head = document.createElement('div');
     head.className = 'group-header';
-    head.innerHTML = '<span class="gh-left"><span class="gh-chev">' + (isCollapsed ? '▸' : '▾') + '</span><span>' + esc(grp.title) + '</span></span><span class="gh-cnt">' + grp.items.length + '</span>';
+    head.innerHTML = '<span class="gh-left"><span class="gh-chev">' + (isCollapsed ? '▸' : '▾') + '</span><span>' + esc(grp.title) + '</span></span><span style="display:flex;align-items:center;gap:2px"><span class="gh-cnt">' + grp.items.length + '</span>' +
+      (key === 'archived' ? '<button class="gh-manage" title="搜索 / 批量恢复 / 批量删除已归档会话">管理</button>' : '') + '</span>';
     head.addEventListener('click', () => {
       state.groupCollapsed[key] = !isCollapsed;
       renderTaskList();
     });
+    const manageBtn = head.querySelector('.gh-manage');
+    if (manageBtn) manageBtn.addEventListener('click', (e) => { e.stopPropagation(); switchView('archive'); });
     grpDiv.appendChild(head);
 
     const body = document.createElement('div');
@@ -4725,6 +4841,8 @@ function renderTaskList() {
     grpDiv.appendChild(body);
     el.appendChild(grpDiv);
   }
+  // 重建后恢复滚动位置（内容确实变化时也不跳回顶部）
+  el.scrollTop = prevScroll;
 }
 
 function createTaskItemElement(t, archived) {
@@ -4769,7 +4887,9 @@ function createTaskItemElement(t, archived) {
   div.querySelector('[data-a=delete]').addEventListener('click', async (e) => {
     e.stopPropagation();
     if (!confirm('确定删除会话「' + t.title + '」？')) return;
-    await api('/tasks/' + t.id, { method: 'DELETE' });
+    const del = await api('/tasks/' + t.id, { method: 'DELETE' });
+    // 删除失败不能动本地缓存/视图（旧实现不校验 → 弱网下提示「已删除」但服务端还在）
+    if (!del.ok) { toast(del.error || '删除失败', true); return; }
     state.taskCache.delete(t.id);
     if (state.currentTaskId === t.id) {
       state.currentTaskId = null;
@@ -4886,7 +5006,16 @@ function applyTaskToView(task, isInitialRender) {
   if ($('btn-goal')) $('btn-goal').style.display = '';
   if ($('btn-plan')) $('btn-plan').style.display = '';
   if ($('btn-compact')) $('btn-compact').style.display = '';
+  // 会话协作（goal/plan/compact）都作用于「主会话」：还没有任何远端会话（草稿/首轮失败）时
+  // 入口点了只会报「任务尚无可用的远端会话」，直接隐藏更诚实；首轮建立会话后由 refreshCollab 恢复。
+  if (!task.sessions || !Object.keys(task.sessions).length) {
+    ['btn-goal', 'btn-plan', 'btn-compact', 'btn-permission'].forEach(function (id) {
+      var b = document.getElementById(id);
+      if (b) b.style.display = 'none';
+    });
+  }
   refreshChatHead(task);
+  syncNodeChipToTask(task);
   setSending(task.status === 'running');
 
   const scroll = $('chat-scroll');
@@ -4948,11 +5077,13 @@ function resetChatView() {
   if ($('btn-goal')) $('btn-goal').style.display = 'none';
   if ($('btn-plan')) $('btn-plan').style.display = 'none';
   if ($('btn-compact')) $('btn-compact').style.display = 'none';
+  if ($('btn-permission')) $('btn-permission').style.display = 'none';
   var gb = $('chat-goal-badge'); if (gb) { gb.style.display = 'none'; gb.textContent = ''; }
   if ($('btn-plan')) { $('btn-plan').textContent = '📋'; $('btn-plan').style.background = ''; $('btn-plan').style.borderColor = ''; }
   if ($('chat-mode')) $('chat-mode').style.display = 'none';
   const mc = $('member-chips'); if (mc) mc.innerHTML = '';
   removeTurnStatus();
+  setSending(false); // 空视图不应残留上一个会话的运行态（停止键 / body.task-running）
   resetTaskStats();
   resetTaskTodos();
   resetTrajView();
@@ -5163,7 +5294,12 @@ function connectStream(taskId) {
       const ev = JSON.parse(e.data);
       if (ev.task) {
         state.taskCache.set(ev.task.id, ev.task);
-        if (ev.task.id === state.currentTaskId) refreshChatHead(ev.task);
+        if (ev.task.id === state.currentTaskId) {
+          refreshChatHead(ev.task);
+          // 首轮结束后会话才建立：协作能力探测（plan/compact/goal）需重跑一次，
+          // 否则节点不支持时按钮会一直显示（首次 openTask 时还没有远端会话，探测拿不到 supported）
+          refreshCollab();
+        }
       }
     } catch {}
     loadTasksQuiet();
@@ -5173,7 +5309,8 @@ function connectStream(taskId) {
       if (c) c.remove();
     }
     removeTurnStatus();
-    setSending(false);
+    // 迟到的旧会话 task_end 不能关掉新会话的停止键（切会话瞬间的竞态）
+    if (!ev.task || ev.task.id === state.currentTaskId) setSending(false);
     markTrajDirty();
   });
 
@@ -5853,6 +5990,7 @@ function wireCopyAction(flow, getText) {
 }
 
 function appendLiveTurn(taskId, turn) {
+  if (taskId !== state.currentTaskId) return; // 旧会话的迟到事件不得插入当前会话视图
   const column = chatColumn();
   if (!column) return;
   // 幂等：同一轮次的 turn_start 重复到达（重连回放 / 视图刚重建）时复用已有气泡，不重复插入
@@ -5884,6 +6022,10 @@ async function resyncCurrentTask() {
   if (!r.ok || !r.data || state.currentTaskId !== taskId) return;
   state.taskCache.set(taskId, r.data);
   reconcileViewWithServer(taskId, r.data);
+  // 断连窗口里可能恰好跨过 task_end/task_status：正文补齐之外还要恢复运行态，
+  // 否则停止键与 body.task-running 会永久残留（旧实现只补 turns）
+  setSending(!!r.data.running);
+  refreshChatHead(r.data);
 }
 
 /** 用服务端权威任务状态校正当前视图（见 resyncCurrentTask） */
@@ -6993,51 +7135,79 @@ async function send() {
   const text = $('input').value.trim();
   if (!text) return;
   if (!state.currentTaskId) {
-    toast('请先从左侧选择任务，或点击「＋ 新建任务」', true);
-    return;
+    // 欢迎页直接输入即开新会话（对齐 DSH 体验）：不必先点「＋ 新建任务」再回来输入。
+    // 创建失败（或并发点击）时直接返回，错误已由创建流程 toast。
+    if (document.body.classList.contains('task-running')) return;
+    await createNewTaskDirectly();
+    if (!state.currentTaskId) return;
   }
+  const sendTaskId = state.currentTaskId;
+  const wasRunning = document.body.classList.contains('task-running');
   $('input').value = '';
   setSending(true);
-  const r = await api('/tasks/' + state.currentTaskId + '/messages', { method: 'POST', body: JSON.stringify({ message: text }) });
+  const r = await api('/tasks/' + sendTaskId + '/messages', { method: 'POST', body: JSON.stringify({ message: text }) });
   if (!r.ok) {
+    // 发送失败：把内容回填输入框（旧实现先清空 → 弱网/服务重启时消息直接丢失，只能重打）
+    const input = $('input');
+    if (input && !input.value.trim() && state.currentTaskId === sendTaskId) input.value = text;
     toast(r.error || '发送失败', true);
-    setSending(false);
+    // 恢复发送前的运行态：排队失败不能把正在运行任务的停止键误关掉
+    if (state.currentTaskId === sendTaskId) setSending(wasRunning);
     return;
   }
-  // 运行中的补充意见 → 服务端排队：就地提示（气泡上带 ⏳ 标记与 ⚡ 立即发送）
-  if (r.queued) hintComposer('⏳ 任务运行中，消息已排队（本轮结束后自动发送）');
+  // 运行中的补充意见 → 服务端已经落账为排队轮：立即渲染该轮（⏳ 排队气泡 + ⚡ 立即发送），
+  // 不能只留一句 composer 提示——否则用户以为消息丢了，刷新后又看到「补发 + 原排队」两条重复。
+  if (r.queued && r.turn && state.currentTaskId === sendTaskId) {
+    appendLiveTurn(sendTaskId, r.turn);
+    hintComposer('⏳ 任务运行中，消息已排队（本轮结束后自动发送；气泡上可 ⚡ 立即发送）');
+  }
 }
 
 $('btn-stop').addEventListener('click', async () => {
-  if (state.currentTaskId) {
-    const btn = $('btn-stop');
-    btn.disabled = true;
-    btn.style.opacity = '0.5';
-    const r = await api('/tasks/' + state.currentTaskId + '/cancel', { method: 'POST' });
-    btn.disabled = false;
-    btn.style.opacity = '';
-    if (r.ok) {
-      setSending(false);
-      toast('✓ 任务已成功停止');
-    } else {
-      toast(r.error || '停止指令发送失败', true);
-    }
+  if (!state.currentTaskId) return;
+  const stopTaskId = state.currentTaskId;
+  const btn = $('btn-stop');
+  btn.disabled = true;
+  btn.style.opacity = '0.5';
+  const r = await api('/tasks/' + stopTaskId + '/cancel', { method: 'POST' });
+  btn.disabled = false;
+  btn.style.opacity = '';
+  // 请求期间可能已切到另一个运行中的会话：只对发起停止的会话改 UI，避免把新会话的停止键误关
+  if (state.currentTaskId !== stopTaskId) return;
+  if (r.ok) {
+    setSending(false);
+    const warns = (r.data && r.data.warnings) || [];
+    if (warns.length) toast('⚠️ 本地已停止，远端未确认：' + warns.join('；'), true);
+    else toast('✓ 任务已成功停止');
+  } else {
+    toast(r.error || '停止指令发送失败', true);
   }
 });
 
 // ---------- 会话协作（goal / plan / compact，对应 GUI /goal /plan /compact）----------
-var collab = { goal: null, planActive: false, planPending: false };
+// supported 三态：undefined=未探测（先按可见处理）/ true / false（远端节点未启用该服务 → 隐藏入口，
+// 避免用户点一个必然失败的按钮；dsh-web-service 对「宿主未装载子系统」返回 501，不是版本过低）
+var collab = { goal: null, planActive: false, planPending: false, goalSupported: undefined, planSupported: undefined, compactSupported: undefined, hasSession: undefined, permSupported: undefined, permission: null };
 
 async function refreshCollab() {
   var tid = state.currentTaskId;
   if (!tid) return;
   var gr = api('/tasks/' + tid + '/goal');
   var pr = api('/tasks/' + tid + '/plan');
-  var grv = await gr, prv = await pr;
+  var pm = api('/tasks/' + tid + '/permission');
+  var grv = await gr, prv = await pr, pmv = await pm;
   if (state.currentTaskId !== tid) return; // 已切换会话，丢弃旧响应
   collab.goal = (grv && grv.ok && grv.data) ? (grv.data.goal || null) : null;
+  collab.goalSupported = (grv && grv.supported === false) ? false : true;
   collab.planActive = !!(prv && prv.ok && prv.data && prv.data.active);
   collab.planPending = !!(prv && prv.ok && prv.data && prv.data.pending);
+  collab.planSupported = (prv && prv.supported === false) ? false : true;
+  // 没有远端会话（草稿/首轮失败）时三个协作入口都不可用：否则点开只会报「任务尚无可用的远端会话」
+  var tk = state.task && state.task.id === tid ? state.task : state.taskCache.get(tid);
+  collab.hasSession = !!(tk && tk.sessions && Object.keys(tk.sessions).length);
+  // 运行权限：仅 dsh-web-service ≥0.3.1 提供 GET /permission；旧节点 supported=false → 隐藏入口
+  collab.permSupported = (pmv && pmv.supported === false) ? false : true;
+  collab.permission = (pmv && pmv.ok && pmv.data) ? pmv.data : null;
   renderCollabState();
 }
 
@@ -7056,24 +7226,46 @@ function renderCollabState() {
       badge.style.display = 'none';
     }
   }
+  var noSession = collab.hasSession === false;
+  var goalBtn = document.getElementById('btn-goal');
+  if (goalBtn) goalBtn.style.display = (noSession || collab.goalSupported === false) ? 'none' : '';
   if (planBtn) {
+    // 节点未装载 planMode 服务 → 直接隐藏入口（旧实现常显，点击必失败且提示误导为「版本过低」）
+    planBtn.style.display = (noSession || collab.planSupported === false) ? 'none' : '';
     planBtn.textContent = collab.planActive ? (collab.planPending ? '📋 计划中…' : '📋 计划中') : '📋';
     planBtn.title = collab.planActive ? '计划模式开启中（点击退出 /plan off）' : '计划模式（点击进入）';
     planBtn.style.background = collab.planActive ? 'var(--acc-light)' : '';
     planBtn.style.borderColor = collab.planActive ? 'rgba(111,123,247,.4)' : '';
+  }
+  var compactBtn = document.getElementById('btn-compact');
+  if (compactBtn) compactBtn.style.display = (noSession || collab.compactSupported === false) ? 'none' : '';
+  var permBtn = document.getElementById('btn-permission');
+  if (permBtn) {
+    permBtn.style.display = (noSession || collab.permSupported === false) ? 'none' : '';
+    var p = collab.permission;
+    permBtn.title = p && p.preset
+      ? '运行权限：' + p.preset + (p.sandbox ? ' · sandbox=' + p.sandbox : '') + (p.approval ? ' · approval=' + p.approval : '')
+      : '运行权限（沙箱 / 审批）';
   }
 }
 
 $('btn-goal').addEventListener('click', openGoalDialog);
 $('btn-plan').addEventListener('click', togglePlanMode);
 $('btn-compact').addEventListener('click', compactTaskSession);
+if ($('btn-permission')) $('btn-permission').addEventListener('click', openPermissionDialog);
 
 async function openGoalDialog() {
   var tid = state.currentTaskId;
   if (!tid) return;
   var r = await api('/tasks/' + tid + '/goal');
   if (r && r.supported === false) { toast(r.error || '远端 dsh-web-service 版本过低（需 ≥ 0.3.9）', true); return; }
-  var goal = r && r.ok ? (r.data && r.data.goal) || null : null;
+  if (!r || !r.ok) {
+    // 读不到目标时不要退化成「创建目标」表单（旧实现把网络错误/409 都当无目标，
+    // 用户填完提交才发现会话不可用）
+    toast((r && r.error) || '读取目标失败，请稍后重试', true);
+    return;
+  }
+  var goal = (r.data && r.data.goal) || null;
   collab.goal = goal; renderCollabState();
   var body = '';
   var actions = [];
@@ -7090,6 +7282,7 @@ async function openGoalDialog() {
       '<div style="font-weight:600;margin-bottom:4px">🎯 ' + esc(goal.objective) + '</div>' +
       '<div style="font-size:12px;color:var(--tx3)">状态：' + esc(phaseTxt) +
       ' · 已推进 ' + (goal.roundsStarted || 0) + '/' + (goal.maxGoalRounds || '∞') + ' 轮' +
+      (goal.activation === 'disarmed' ? ' · 自动续跑已停止' : '') +
       (goal.blockedReason ? ' · ' + esc(goal.blockedReason.message || goal.blockedReason.code || '') : '') +
       '</div></div>' +
       '<div style="margin-bottom:10px"><label style="display:block;font-size:12.5px;color:var(--tx3);margin-bottom:5px">修改目标描述（可选）</label>' +
@@ -7100,7 +7293,13 @@ async function openGoalDialog() {
       actions.push({ label: '✅ 标记完成', cls: 'pri', act: function () { goalAct('complete'); } });
       actions.push({ label: '⏸ 暂停', act: function () { goalAct('pause'); } });
       actions.push({ label: '🚫 标记受阻', act: function () { goalMarkBlocked(); } });
-      actions.push({ label: '⛔ 停止自动续跑', act: function () { goalAct('disarm'); } });
+      // disarm 后 phase 仍是 active（0.5.0 实测 activation=disarmed）：必须能「恢复续跑」，
+      // 旧实现只给「停止自动续跑」→ 目标一旦停用就再也无法重新武装
+      if (goal.activation === 'disarmed') {
+        actions.push({ label: '▶️ 恢复自动续跑', act: function () { goalAct('resume'); } });
+      } else {
+        actions.push({ label: '⛔ 停止自动续跑', act: function () { goalAct('disarm'); } });
+      }
     } else if (goal.phase === 'paused' || goal.phase === 'blocked') {
       actions.push({ label: '▶️ 恢复推进', cls: 'pri', act: function () { goalAct('resume'); } });
       actions.push({ label: '🗑 清除目标', act: function () { goalAct('clear'); } });
@@ -7172,6 +7371,10 @@ async function togglePlanMode() {
     var msg = d.transition === 'queued' ? '将在下个步边界生效' : d.transition === 'committed' ? '已生效' : d.transition === 'noop' ? '状态未变化' : d.transition === 'cancelled' ? '已取消' : d.transition || '';
     toast(next ? '📋 计划模式：' + msg : '已退出计划模式' + (msg ? '：' + msg : ''));
   } else {
+    if (r && r.supported === false) {
+      collab.planSupported = false;
+      renderCollabState();
+    }
     toast(r.error || '切换失败', true);
   }
 }
@@ -7186,11 +7389,67 @@ async function compactTaskSession() {
     if (r.ok) {
       toast((r.data && r.data.compacted) ? '✓ 压缩完成，上下文已瘦身' : '暂无可压缩的历史');
     } else {
+      if (r && r.supported === false) {
+        collab.compactSupported = false;
+        renderCollabState();
+      }
       toast(r.error || '压缩失败', true);
     }
   } finally {
     if (btn) { btn.disabled = false; btn.style.opacity = ''; }
   }
+}
+
+// ---------- 运行权限（沙箱 / 审批）：harness permissionPresets 原生切换 ----------
+var PERM_LABEL = {
+  'read-only': '只读（read-only）· 只能读取，禁止写文件/执行命令',
+  'workspace-write': '工作区可写（workspace-write）· 仅工作区目录可写',
+  'danger-full-access': '完全访问（danger-full-access）· 沙箱不限、无审批',
+};
+async function openPermissionDialog() {
+  var tid = state.currentTaskId;
+  if (!tid) return;
+  var r = await api('/tasks/' + tid + '/permission');
+  if (!r.ok) {
+    if (r.supported === false) { collab.permSupported = false; renderCollabState(); }
+    toast(r.error || '读取运行权限失败', true);
+    return;
+  }
+  var d = r.data || {};
+  collab.permission = d;
+  var avail = Array.isArray(d.available) && d.available.length
+    ? d.available
+    : ['read-only', 'workspace-write', 'danger-full-access'];
+  var cur = d.preset || '';
+  var rows = avail.map(function (id) {
+    return '<label style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;cursor:pointer">' +
+      '<input type="radio" name="perm-preset" value="' + esc(id) + '"' + (id === cur ? ' checked' : '') + ' style="margin-top:3px;width:auto;flex:none;accent-color:var(--pri)" />' +
+      '<span style="font-size:13px;flex:1;text-align:left">' + esc(PERM_LABEL[id] || id) + '</span></label>';
+  }).join('');
+  var body = '<div style="font-size:12px;color:var(--tx3);margin-bottom:10px">当前生效：' + esc(cur || '未知') +
+    ' · sandbox=' + esc(d.sandbox || '?') + ' · approval=' + esc(d.approval || '?') + '</div>' + rows +
+    '<div style="font-size:12px;color:var(--tx3);margin-top:4px">切换即时下发到本任务已建立的远端会话；之后新建的成员会话也按该权限创建。</div>';
+  openModal('运行权限（沙箱 / 审批）', body, [
+    { label: '应用', cls: 'pri', act: function () { applyPermission(); } },
+    { label: '关闭', act: function () { closeModal(); } },
+  ]);
+}
+async function applyPermission() {
+  var tid = state.currentTaskId;
+  if (!tid) return;
+  var sel = document.querySelector('input[name="perm-preset"]:checked');
+  if (!sel) return;
+  var r = await api('/tasks/' + tid + '/permission', { method: 'PUT', body: JSON.stringify({ permission: sel.value }) });
+  if (!r.ok) { toast(r.error || '权限切换失败', true); return; }
+  var applied = (r.data && r.data.applied) || [];
+  var failed = applied.filter(function (x) { return !x.ok; });
+  closeModal();
+  if (failed.length) {
+    toast('⚠️ 部分会话权限未生效：' + failed.map(function (x) { return (x.agentId || '?') + ' ' + (x.error || ''); }).join('；'), true);
+  } else {
+    toast('✓ 运行权限已切换：' + sel.value);
+  }
+  refreshCollab();
 }
 
 // ---------- 附件上传 ----------
@@ -7314,7 +7573,10 @@ function uploadAttachments(files) {
       const candidates = [];
       if (t.baseUrlIntranet) candidates.push({ base: String(t.baseUrlIntranet).replace(/\\/+$/, ''), tag: '内网/本机直连' });
       candidates.push({ base: (t.baseUrl || '').replace(/\\/+$/, ''), tag: '公网隧道' });
-      let nodeBase = null, nid = null, received = 0;
+      // 注意：received 必须复用 uploadOne 外层变量（用于失败时提示断点字节数）。
+      // 旧实现在这里再声明一次，导致 catch 里 r.received 永远是 0（「已传 0B」）。
+      let nodeBase = null, nid = null;
+      received = 0;
       for (let ci = 0; ci < candidates.length && !nid; ci++) {
         const cand = candidates[ci];
         try {
@@ -7328,6 +7590,7 @@ function uploadAttachments(files) {
 
       // ③ 分片直连节点：offset 冲突(409)以节点为准；网络错误对账后续传，连续 3 次失败报错
       let failCount = 0;
+      let reconcileFails = 0; // 409 对账失败上限：节点持续 409 且状态查询失败时不能原地死循环
       while (received < f.size) {
         const end = Math.min(received + CHUNK, f.size);
         const sent = await nodeJson('PUT', chunkUrl + '?offset=' + received, f.slice(received, end), { ...H, 'Content-Type': 'application/octet-stream' }, loaded => {
@@ -7343,9 +7606,16 @@ function uploadAttachments(files) {
         );
         if (sent.retry || sent.status === 409) {
           const st = await nodeJson('GET', chunkUrl, undefined, H).catch(() => null);
-          received = (st && st.json?.data?.received) || received;
+          const known = Number(st && st.json?.data?.received);
+          if (Number.isFinite(known) && known > received) {
+            received = known;
+            reconcileFails = 0;
+          } else if (++reconcileFails >= 5) {
+            throw new Error('断点对账失败：节点持续返回 409 且无法获取已接收字节，请稍后重试');
+          }
           continue;
         }
+        reconcileFails = 0;
         received = Number(sent.json?.data?.received) || Math.min(end, f.size);
         r.pct = Math.min(99, Math.floor(received * 100 / f.size));
         r.loaded = received; r.total = f.size;
@@ -7394,7 +7664,7 @@ function uploadAttachments(files) {
       r.status = 'done'; r.pct = 100; renderRow(r);
       let line = '[附件' + (dlUrl ? '·直传' : '') + '] ' + destPath + ' (' + fmtSize(f.size) + ')';
       if (dlUrl) line += '\\n[跨节点下载] ' + dlUrl + ' （请求头 Authorization: Bearer <节点apiKey>）';
-      appendAttachmentLine(line);
+      appendAttachmentLine(line, taskId);
     } catch (e) {
       r.status = 'error';
       r.err = e.message || String(e);
@@ -7415,8 +7685,11 @@ function uploadAttachments(files) {
   })();
 }
 
-function appendAttachmentLine(line) {
+function appendAttachmentLine(line, taskId) {
+  // 上传期间可能已切到别的会话：路径只回填到发起上传的那个会话，不能串到当前输入框
+  if (taskId && state.currentTaskId !== taskId) return;
   const inp = $('input');
+  if (!inp) return;
   inp.value = (inp.value ? inp.value.replace(/\\n$/, '') + '\\n' : '') + line;
   inp.focus();
 }
@@ -7601,6 +7874,8 @@ function initMentionPopup() {
   });
 
   input.addEventListener('keydown', e => {
+    // 中文/日文输入法组词中的 Enter 是「选词确认」，不是发送（旧实现会直接把半截内容发出去）
+    if (e.isComposing || e.keyCode === 229) return;
     const isPopupOpen = popup.classList.contains('on') && mentionMatched.length > 0;
     if (isPopupOpen) {
       if (e.key === 'ArrowDown') {
@@ -7655,7 +7930,8 @@ async function ensureSkillList() {
   if (skillPick.list.length || Date.now() - skillPick.fetchedAt < 60_000 || !skillPick.supported) return skillPick.supported;
   try {
     const r = await api('/tasks/' + taskId + '/skills');
-    if (r.ok) {
+    // 拉取期间可能已切到别的会话：A 的技能目录不能覆盖 B 的候选
+    if (r.ok && state.currentTaskId === taskId) {
       skillPick.supported = r.data.supported !== false;
       skillPick.list = r.data.skills || [];
       skillPick.fetchedAt = Date.now();
@@ -7765,6 +8041,7 @@ function initSkillPopup() {
   });
 
   input.addEventListener('keydown', e => {
+    if (e.isComposing || e.keyCode === 229) return; // 输入法组词中的 Enter 不是选择技能
     const isOpen = popup.classList.contains('on') && skillPick.matched.length > 0;
     if (!isOpen) return;
     if (e.key === 'ArrowDown') {
@@ -7956,7 +8233,53 @@ function closeMainAgentPop() {
 }
 
 // ---------- 任务节点切换（主 DSH：新模型下节点决定任务在哪台机器上执行） ----------
-const nodeState = { cur: '' }; // mappingId；'' = 未选（资源目录为空时）
+const nodeState = { cur: '', userPicked: false }; // mappingId；'' = 未选（资源目录为空时）
+/**
+ * 会话头部节点选择器回显「该会话实际执行节点」。
+ * 节点选择器原本只反映全局默认（新建任务用），打开一个在别的节点上创建的任务时
+ * 头部仍显示默认节点，与实际执行节点不符（用户会以为会话跑在错的机器上）。
+ */
+function syncNodeChipToTask(task) {
+  try {
+    const ref = task && task.nodeRef;
+    if (!ref || typeof ref !== 'object') return false;
+    if (ref.kind === 'mapping' && ref.mappingId && dshNodeOptions().some(function (x) { return x.mappingId === ref.mappingId; })) {
+      if (nodeState.cur !== ref.mappingId) {
+        nodeState.cur = ref.mappingId;
+        state.taskEnv.nodeRef = { kind: 'mapping', mappingId: ref.mappingId };
+        setNodeBtnUi('节点: ' + nodeBtnLabel());
+        // 回显到任务真实节点后，模型目录/规划器选项同步按该节点刷新
+        loadPlannerOptions();
+      }
+      return true;
+    }
+    if (ref.kind === 'direct' && ref.apiBaseUrl) {
+      setNodeBtnUi('节点: 直连 ' + String(ref.apiBaseUrl).replace('https://', '').replace('http://', ''));
+      return true;
+    }
+  } catch (e) { /* 回显失败不阻断渲染 */ }
+  return false;
+}
+/**
+ * 默认节点可达性校正：探测结果显示当前默认节点不可达、且存在健康节点时，
+ * 自动切到健康节点（避免新任务默认落在挂掉的节点上，随后只看到 "fetch failed"）。
+ * 只在不属于任何已打开会话、且用户未手动选过节点时生效。
+ */
+function applyReachableNodeDefault() {
+  if (nodeState.userPicked || state.currentTaskId) return;
+  const opts = dshNodeOptions();
+  const cur = opts.find(function (x) { return x.mappingId === nodeState.cur; });
+  if (!cur || !cur.engine || cur.engine.reachable !== false) return;
+  const healthy = opts.find(function (x) { return x.engine && x.engine.reachable === true; });
+  if (!healthy) return;
+  nodeState.cur = healthy.mappingId;
+  state.taskEnv.nodeRef = { kind: 'mapping', mappingId: healthy.mappingId };
+  setNodeBtnUi('节点: ' + nodeBtnLabel());
+  // 节点换了 → 模型目录/规划器选项需按新节点重拉；否则模型弹层一直显示旧（挂掉）节点的
+  // 「⚠️ 模型目录获取失败: fetch failed」，且可选模型列表为空
+  loadPlannerOptions();
+  hintComposer('⚠️ 默认节点「' + (cur.title || cur.note || cur.mappingId) + '」探测不可达，已自动切换为「' + (healthy.title || healthy.note || healthy.mappingId) + '」');
+}
 function dshNodeOptions() {
   return state.resources.filter(function (r) { return r.kind === 'dsh' && r.mappingId; });
 }
@@ -8028,6 +8351,7 @@ async function refreshNodeEngines(force) {
 }
 function selectNode(mappingId) {
   const prev = nodeState.cur;
+  nodeState.userPicked = true; // 用户显式选过节点 → 不再被可达性自动校正覆盖
   nodeState.cur = mappingId || '';
   try { localStorage.setItem('wb-node-id', nodeState.cur); } catch (e) { /* ignore */ }
   // 与新任务环境同步（创建任务时随 body.nodeRef 下发，engine 按 task.nodeRef 路由主会话）
@@ -8043,7 +8367,10 @@ function setNodeBtnUi(label) {
   if (!btn) return;
   btn.innerHTML = '<span class="ag-ico">🖥</span><span class="ag-name"></span><span class="ag-arr">▾</span>';
   const nameEl = btn.querySelector('.ag-name');
-  if (nameEl) nameEl.textContent = label;
+  if (nameEl) {
+    nameEl.id = 'node-btn-name'; // 保留 id：重建 innerHTML 会丢掉原节点名元素的标识
+    nameEl.textContent = label;
+  }
 }
 function closeNodePop() { const p = $('node-pop'); if (p) p.classList.remove('on'); }
 if ($('node-btn')) {
@@ -8287,6 +8614,7 @@ function setModelStatus(text) {
   el._h = setTimeout(() => { el.className = 'model-status'; el.textContent = ''; el._h = null; }, 8000);
 }
 async function selectModel(v) {
+  const prevModel = modelState.cur;
   modelState.cur = v;
   // 切模型后原强度不再保证适用（远端 selectModel 未带 effort 会清掉），本地同步清零回默认
   modelState.curEffort = '';
@@ -8309,12 +8637,33 @@ async function selectModel(v) {
       body: JSON.stringify({ provider: provider || undefined, model: modelId }),
     });
     if (sr.ok) {
-      // 按钮原地点亮确认 + 工具条就地写明生效范围（不再弹 toast）
-      flashBtnOk(btn, '✓ 已切换「' + modelId + '」', modelBtnLabel(v));
-      setModelStatus('✓ 主智能体会话已切到「' + modelId + '」· 主调度「' + (v || '默认') + '」');
+      // v 为空串 = 恢复节点默认：服务端会解析默认 provider/model 显式下发，用实际值回执
+      const sel = (sr.data && sr.data.selected) || {};
+      const fallback = (sr.data && sr.data.defaultModel && sr.data.defaultModel.model) || sel.model || '';
+      const actual = v ? modelId : fallback;
+      flashBtnOk(btn, '✓ ' + (v ? '已切换「' + actual + '」' : '已恢复节点默认「' + (actual || '默认') + '」'), modelBtnLabel(v));
+      setModelStatus('✓ 主智能体会话已切到「' + (actual || '默认') + '」· 主调度「' + (v || '默认') + '」');
       return;
     }
-    if (sr.code !== 'NO_SESSION') toast(sr.error || '执行会话模型更新失败', true);
+    // 无会话（草稿/首轮未建立）：主调度模型已持久化，落到下方成功提示；其余失败必须中止，
+    // 否则会同时出现红色失败 toast + 绿色「已切换」闪烁（0.5.0 默认模型清除场景实测）
+    if (sr.code === 'NO_SESSION') {
+      // fall through
+    } else {
+      // 跨引擎/跨节点的目录外选择：服务端本地拦截（不再透传远端吃天书报错），
+      // 主调度模型已先行落盘 → 就地回滚到点击前的值，按钮/弹层状态与实际生效保持一致
+      if (sr.code === 'MODEL_NOT_IN_CATALOG' && r.ok) {
+        const rr = await api('/planner/config', { method: 'POST', body: JSON.stringify({ model: prevModel || '' }) });
+        if (rr.ok) {
+          modelState.cur = prevModel;
+          modelState.curEffort = '';
+          btn.textContent = modelBtnLabel(prevModel);
+          refreshMainAgentModelBadges();
+        }
+      }
+      toast(sr.error || '执行会话模型更新失败', true);
+      return;
+    }
   }
   if (r.ok) {
     flashBtnOk(btn, '✓ 已切换「' + shortModel + '」', modelBtnLabel(v));
@@ -8325,21 +8674,25 @@ async function selectModel(v) {
 }
 /** 会话当前模型选择/模式预设回读（打开会话时调用；失败静默——弹层仍可用，只是不回显） */
 async function loadSessionModelInfo() {
-  if (!state.currentTaskId) return;
-  const r = await api('/tasks/' + state.currentTaskId + '/session-model');
-  if (!r.ok || !r.data) return;
+  const taskId = state.currentTaskId;
+  if (!taskId) return;
+  const r = await api('/tasks/' + taskId + '/session-model');
+  // 打开会话的回读可能晚于用户切换：旧任务的模型/预设不得写进新会话的弹层状态
+  if (!r.ok || !r.data || state.currentTaskId !== taskId) return;
   const d = r.data || {};
   const sess = d.session || null;
   modelState.curEffort = (sess && sess.model && sess.model.reasoningEffort) || d.taskReasoningEffort || '';
   modelState.curPreset = (sess && sess.agentPreset) || d.taskAgentPreset || '';
   const btn = $('chat-model-btn');
   if (btn) btn.textContent = modelBtnLabel(modelState.cur);
-  loadTaskPresets();
+  loadTaskPresets(taskId);
 }
 /** 任务节点模式预设候选（拉取失败 = 空列表，弹层不渲染预设段，对旧节点兼容） */
-async function loadTaskPresets() {
-  if (!state.currentTaskId) return;
-  const r = await api('/tasks/' + state.currentTaskId + '/presets');
+async function loadTaskPresets(taskId) {
+  const tid = taskId || state.currentTaskId;
+  if (!tid) return;
+  const r = await api('/tasks/' + tid + '/presets');
+  if (state.currentTaskId !== tid) return; // 旧会话的预设响应丢弃
   modelState.presets = (r.ok && r.data && r.data.presets) || [];
   modelState.presetsLoaded = true;
   const pop = $('model-pop');
@@ -8537,12 +8890,19 @@ function renderTodoDock(data) {
   }
   const list = $('todo-list');
   if (!list) return;
+  const chev = $('todo-chev');
   if (!todos.length) {
-    list.innerHTML = '<li class="todo-empty">主智能体本轮尚未写入任务清单（todo_write）</li>';
-    setTodoCollapsedUI();
+    // 空清单：删除「尚未写入任务清单」占位行并收起列表（旧实现常显一行空态，
+    // 让「任务」坞在无清单时仍占两行、压住编排计划卡底部）。标题行 + 时长仍保留。
+    list.innerHTML = '';
+    list.style.display = 'none';
+    if (chev) chev.style.display = 'none';
     todoState.lastHtml = '';
     return;
   }
+  list.style.display = '';
+  if (chev) chev.style.display = '';
+  setTodoCollapsedUI();
   const items = todos.map(function (it) {
     const raw = it && it.status;
     const st = raw === 'completed' ? 'completed' : (raw === 'in_progress' ? (running ? 'in_progress' : 'unfinished') : 'pending');
@@ -11309,8 +11669,6 @@ function renderSettings() {
   $('set-base').value = s.onenat.baseUrl || '';
   $('set-key').value = s.onenat.apiKey || '';
   $('set-refresh').value = s.onenat.autoRefreshMs || 60000;
-  const days = (s.archive || {}).taskArchiveDays;
-  $('set-archive-days').value = (days == null ? 7 : days);
   $('set-ai-token').value = s.aiToken || '';
   renderAiInstall();
 }
@@ -11363,17 +11721,15 @@ $('btn-reset-ai-token').addEventListener('click', async () => {
   } else toast(r.error || '生成失败', true);
 });
 $('btn-save-settings').addEventListener('click', async () => {
-  const days = Math.floor(Number($('set-archive-days').value));
+  // 归档设置已迁至「归档管理」页（不随本卡提交，避免误改；POST /settings 分段合并保持原值）
   const payload = {
     onenat: { baseUrl: $('set-base').value.trim(), apiKey: $('set-key').value.trim(), autoRefreshMs: Number($('set-refresh').value) || 60000 },
-    archive: { taskArchiveDays: Number.isFinite(days) && days >= 0 ? days : 7 },
   };
   const r = await api('/settings', { method: 'POST', body: JSON.stringify(payload) });
   if (r.ok) {
     state.settings = r.data;
     toast('✓ 设置已保存');
     loadResources();
-    loadTasks(); // 归档天数收窄时服务端可能刚归档了超期任务，刷新会话列表分组
   }
   else toast(r.error || '保存失败', true);
 });
@@ -11639,6 +11995,260 @@ async function loadProjectMembers(projectId) {
     });
   });
 }
+// ---------- 归档管理（view-archive）：自动归档设置 + 已归档会话按项目分组管理 ----------
+var ARCH_DAYS_MEM_KEY = 'wb-archive-days-mem'; // 关闭开关时记住上次保留时长，重开即恢复
+var archUi = { q: '', sort: 'updated', proj: 'all', expanded: {}, inited: false };
+
+/** 当前生效的自动归档天数：设置页值优先，缺省 7（与服务端回退一致）；0 = 关闭 */
+function archDays() {
+  const d = ((state.settings || {}).archive || {}).taskArchiveDays;
+  return typeof d === 'number' && Number.isFinite(d) && d >= 0 ? Math.floor(d) : 7;
+}
+
+/** 保存自动归档设置（单字段 patch，POST /settings 会做分段合并）：days>0 开启并记忆；0 = 关闭 */
+async function archApplySettings(days) {
+  if (days > 0) { try { localStorage.setItem(ARCH_DAYS_MEM_KEY, String(days)); } catch (e) {} }
+  const r = await api('/settings', { method: 'POST', body: JSON.stringify({ archive: { taskArchiveDays: days } }) });
+  if (r.ok) {
+    state.settings = Object.assign({}, state.settings, r.data); // POST 响应不含 aiToken，merge 保字段
+    renderArchSettings();
+    loadTasksQuiet(); // 天数收窄时服务端可能立即归档了超期任务，同步侧栏分组
+    toast(days > 0 ? '✓ 自动归档已开启：终态会话 ' + days + ' 天后自动归档' : '✓ 自动归档已关闭');
+  } else toast(r.error || '保存失败', true);
+}
+
+/** 设置卡渲染：开关态 + 保留时长下拉（当前值不在预设档位时补一个自定义档） */
+function renderArchSettings() {
+  const days = archDays();
+  const on = days > 0;
+  const sw = $('arch-auto-sw'), sel = $('arch-days');
+  sw.classList.toggle('on', on);
+  sw.setAttribute('aria-checked', on ? 'true' : 'false');
+  if (on && ![...sel.options].some(o => Number(o.value) === days)) {
+    const opt = document.createElement('option');
+    opt.value = String(days);
+    opt.textContent = days + ' 天后归档（自定义）';
+    sel.appendChild(opt);
+  }
+  sel.value = String(on ? days : (Number(localStorage.getItem(ARCH_DAYS_MEM_KEY)) || 7));
+  sel.disabled = !on; // 关闭时保留展示但不可改，重开时回到上次时长
+}
+
+/** 批量恢复 / 批量删除（归档管理页专用端点）。scope：undefined=全部；null=仅未分组；string=指定项目 */
+async function archBulk(op, projectId, opts) {
+  const body = { op };
+  if (projectId !== undefined) body.projectId = projectId;
+  if (opts && Array.isArray(opts.ids)) body.ids = opts.ids;
+  const r = await api('/tasks/bulk-archive', { method: 'POST', body: JSON.stringify(body) });
+  if (!r.ok) { toast(r.error || '操作失败', true); return null; }
+  await loadTasks();
+  renderArchiveList();
+  return r.data || {};
+}
+
+/** 单会话恢复 / 删除（复用既有逐任务端点，保持与侧栏一致的行为） */
+async function archToggleOne(t) {
+  const r = await api('/tasks/' + t.id + '/archive', { method: 'POST', body: JSON.stringify({ archived: false }) });
+  if (r.ok) { toast('↩️ 已恢复到会话列表'); await loadTasks(); renderArchiveList(); }
+  else toast(r.error || '操作失败', true);
+}
+async function archDeleteOne(t) {
+  if (!confirm('确定删除会话「' + t.title + '」？删除后不可恢复。')) return;
+  const r = await api('/tasks/' + t.id, { method: 'DELETE' });
+  if (!r.ok) { toast(r.error || '删除失败', true); return; }
+  state.taskCache.delete(t.id);
+  if (state.currentTaskId === t.id) { state.currentTaskId = null; disconnectStream(); resetChatView(); }
+  toast('🗑 已删除');
+  await loadTasks();
+  renderArchiveList();
+}
+
+/** 已归档会话列表：搜索 + 排序 + 项目筛选 → 按项目分组渲染 */
+function renderArchiveList() {
+  const listEl = $('arch-list');
+  const projSel = $('arch-proj');
+  if (!listEl) return;
+
+  // 项目下拉选项：所有项目 / 未分组 / 有已归档会话的项目（沿用上一次选择，失效则回退 all）
+  const archivedAll = state.tasks.filter(t => t.archivedAt);
+  const projIds = [...new Set(archivedAll.map(t => t.projectId).filter(Boolean))];
+  const prev = archUi.proj;
+  const wanted = [...projSel.options].some(o => o.value === prev) || prev === 'all' || prev === 'none' ? prev : 'all';
+  archUi.proj = wanted;
+  projSel.innerHTML = '<option value="all">所有项目</option>' +
+    '<option value="none"' + (wanted === 'none' ? ' selected' : '') + '>未分组会话</option>' +
+    projIds.map(pid => {
+      const p = (state.projects || []).find(x => x.id === pid);
+      const label = p ? p.name : '已删除项目';
+      return '<option value="' + esc(pid) + '"' + (wanted === pid ? ' selected' : '') + '>' + esc(label) + '</option>';
+    }).join('');
+
+  // 过滤：项目范围 + 关键词（标题 / 最新内容）
+  let items = archivedAll.filter(t => {
+    if (archUi.proj === 'none') { if (t.projectId) return false; }
+    else if (archUi.proj !== 'all' && t.projectId !== archUi.proj) return false;
+    if (archUi.q) {
+      const hay = ((t.title || '') + ' ' + (t.lastPreview || '')).toLowerCase();
+      if (!hay.includes(archUi.q)) return false;
+    }
+    return true;
+  });
+
+  $('arch-count').textContent = items.length;
+  $('arch-del-all').disabled = !items.length;
+  $('arch-del-all').style.opacity = items.length ? '' : '.5';
+
+  if (!archivedAll.length) {
+    listEl.innerHTML = '<div class="arch-empty">暂无已归档会话。<br>开启自动归档后，超过保留期的终态会话会自动出现在这里；也可以在会话列表条目上点 🗄 手动归档。</div>';
+    return;
+  }
+  if (!items.length) {
+    listEl.innerHTML = '<div class="arch-empty">未找到匹配的已归档会话</div>';
+    return;
+  }
+
+  // 排序：updated（默认，更新时间新→旧）/ archived（归档时间新→旧）/ title（标题）
+  items.sort((a, b) => {
+    if (archUi.sort === 'title') return String(a.title || '').localeCompare(String(b.title || ''), 'zh-Hans-CN');
+    if (archUi.sort === 'archived') return (b.archivedAt || 0) - (a.archivedAt || 0);
+    return (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0);
+  });
+
+  // 分组：按项目（未归属的进「未分组会话」）；组内保持排序；组间按组内最新会话排序
+  const groups = new Map();
+  for (const t of items) {
+    const key = t.projectId || '__none__';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(t);
+  }
+  const groupArr = [...groups.entries()].map(([key, arr]) => ({
+    key,
+    projectId: key === '__none__' ? null : key,
+    name: key === '__none__' ? '未分组会话' : ((state.projects || []).find(x => x.id === key) || {}).name || '已删除项目',
+    items: arr,
+    latest: Math.max(...arr.map(t => t.archivedAt || t.updatedAt || t.createdAt || 0)),
+  }));
+  groupArr.sort((a, b) => b.latest - a.latest);
+
+  listEl.innerHTML = '';
+  for (const g of groupArr) {
+    const expanded = !!archUi.expanded[g.key];
+    const box = document.createElement('div');
+    box.className = 'arch-proj';
+    box.innerHTML =
+      '<div class="arch-proj-head">' +
+      '<span class="arch-proj-chev">' + (expanded ? '▾' : '▸') + '</span>' +
+      '<span class="arch-proj-name">' + (g.key === '__none__' ? '🗂' : '📁') + ' ' + esc(g.name) + '</span>' +
+      '<span class="arch-proj-cnt">' + g.items.length + ' 个会话</span>' +
+      '<span class="arch-pop-wrap">' +
+      '<button class="arch-more-btn" title="批量操作">···</button>' +
+      '<div class="arch-pop">' +
+      '<button data-a="restore">↩️ 全部取消归档</button>' +
+      '<button data-a="delete" class="danger">🗑 全部删除</button>' +
+      '</div></span>' +
+      '</div>' +
+      (expanded ? '<div class="arch-proj-body">' + g.items.map(t => archSessRowHtml(t)).join('') + '</div>' : '');
+
+    const head = box.querySelector('.arch-proj-head');
+    head.addEventListener('click', (e) => {
+      if (e.target.closest('.arch-pop-wrap')) return;
+      archUi.expanded[g.key] = !expanded;
+      renderArchiveList();
+    });
+    const pop = box.querySelector('.arch-pop');
+    box.querySelector('.arch-more-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      document.querySelectorAll('.arch-pop.open').forEach(x => { if (x !== pop) x.classList.remove('open'); });
+      pop.classList.toggle('open');
+    });
+    pop.querySelector('[data-a=restore]').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      pop.classList.remove('open');
+      const r = await archBulk('restore', g.projectId, { ids: g.items.map(t => t.id) }); // ids 必须随行：组内已按搜索过滤，只按 projectId 会误伤未命中搜索的会话
+      if (r) toast('↩️ 已恢复 ' + (r.restored || 0) + ' 个会话到列表');
+    });
+    pop.querySelector('[data-a=delete]').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      pop.classList.remove('open');
+      if (!confirm('确定删除「' + g.name + '」下全部 ' + g.items.length + ' 个已归档会话？删除后不可恢复。')) return;
+      const r = await archBulk('delete', g.projectId, { ids: g.items.map(t => t.id) }); // 同上：避免搜索过滤下多删
+      if (r) toast('🗑 已删除 ' + (r.deleted || 0) + ' 个会话');
+    });
+
+    box.querySelectorAll('.arch-sess').forEach(row => {
+      const t = g.items.find(x => x.id === row.dataset.id);
+      if (!t) return;
+      row.querySelector('.arch-sess-main').addEventListener('click', () => openTask(t.id));
+      row.querySelector('[data-a=restore]').addEventListener('click', () => archToggleOne(t));
+      row.querySelector('[data-a=delete]').addEventListener('click', () => archDeleteOne(t));
+    });
+    listEl.appendChild(box);
+  }
+}
+
+/** 会话行 HTML：状态点 + 标题/最新内容 + 时间 + 逐条恢复/删除 */
+function archSessRowHtml(t) {
+  const timeTxt = fmtTime(t.archivedAt || t.updatedAt || t.createdAt);
+  const timeTitle = t.archivedAt ? '归档于 ' + new Date(t.archivedAt).toLocaleString() : '';
+  return '<div class="arch-sess" data-id="' + esc(t.id) + '">' +
+    '<span class="s ' + statusColor(t.running ? 'running' : t.status) + '"></span>' +
+    '<div class="arch-sess-main" title="' + esc(t.title) + '">' +
+    '<div class="arch-sess-title">' + esc(t.title) + '</div>' +
+    '<div class="arch-sess-sub">' + (t.lastPreview ? esc(t.lastPreview) : '—') + '</div>' +
+    '</div>' +
+    '<span class="arch-sess-time" title="' + esc(timeTitle) + '">' + esc(timeTxt) + '</span>' +
+    '<button class="mini-btn" data-a="restore" title="取消归档，恢复到会话列表">↩️ 取消归档</button>' +
+    '<button class="mini-btn" data-a="delete" title="删除会话" style="color:var(--err)">🗑</button>' +
+    '</div>';
+}
+
+/** 归档管理页入口：拉取最新数据并渲染（switchView 钩子调用） */
+async function renderArchiveView() {
+  if (!archUi.inited) {
+    archUi.inited = true;
+    $('arch-auto-sw').addEventListener('click', async () => {
+      const on = archDays() > 0;
+      if (on) { // 关闭：0；重开：上次记忆时长（缺省 7）
+        if (!confirm('关闭自动归档？已归档会话保持不变，仅不再自动归档新会话。')) return;
+        await archApplySettings(0);
+      } else {
+        const mem = Number(localStorage.getItem(ARCH_DAYS_MEM_KEY)) || 7;
+        await archApplySettings(mem);
+      }
+    });
+    $('arch-days').addEventListener('change', async (e) => archApplySettings(Math.floor(Number(e.target.value)) || 7));
+    $('arch-q').addEventListener('input', (e) => { archUi.q = e.target.value.trim().toLowerCase(); renderArchiveList(); });
+    $('arch-sort').addEventListener('change', (e) => { archUi.sort = e.target.value; renderArchiveList(); });
+    $('arch-proj').addEventListener('change', (e) => { archUi.proj = e.target.value; renderArchiveList(); });
+    $('arch-refresh').addEventListener('click', async () => { await Promise.all([loadTasks(), loadProjects(), loadSettings()]); renderArchiveView(); toast('✓ 已刷新'); });
+    $('arch-del-all').addEventListener('click', async () => {
+      // 范围 = 当前筛选（项目 + 搜索）命中的会话，确认框给出精确数量
+      const victims = state.tasks.filter(t => {
+        if (!t.archivedAt) return false;
+        if (archUi.proj === 'none') { if (t.projectId) return false; }
+        else if (archUi.proj !== 'all' && t.projectId !== archUi.proj) return false;
+        if (archUi.q) {
+          const hay = ((t.title || '') + ' ' + (t.lastPreview || '')).toLowerCase();
+          if (!hay.includes(archUi.q)) return false;
+        }
+        return true;
+      });
+      if (!victims.length) { toast('当前筛选下没有已归档会话', true); return; }
+      if (!confirm('确定删除当前筛选命中的 ' + victims.length + ' 个已归档会话？删除后不可恢复。')) return;
+      const r = await archBulk('delete', undefined, { ids: victims.map(t => t.id) });
+      if (r) toast('🗑 已删除 ' + (r.deleted || 0) + ' 个会话');
+    });
+    $('btn-goto-archive').addEventListener('click', () => switchView('archive'));
+    // ··· 菜单外点关闭
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.arch-pop-wrap')) document.querySelectorAll('.arch-pop.open').forEach(x => x.classList.remove('open'));
+    });
+  }
+  await Promise.all([loadTasks(), loadProjects(), loadSettings()]);
+  renderArchSettings();
+  renderArchiveList();
+}
+
 const _renderSettingsOrig = renderSettings;
 renderSettings = function () { _renderSettingsOrig(); if (state.me && state.me.role === 'admin') loadUsers(); };
 

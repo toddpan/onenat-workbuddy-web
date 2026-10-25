@@ -64,6 +64,45 @@ function turnFragment(prompt: string): string {
   return prompt.length > 400 ? prompt.slice(-400) : prompt
 }
 
+/**
+ * 远端 cwd 校验的路径等价判定。
+ * 远端 Node 返回的 cwd 是 realpath：macOS 上 `/tmp/xx` 会被解析成 `/private/tmp/xx`
+ * （`/var` 同理）。旧实现按字符串严格比较 → 每轮都误报「cwd 与配置不一致」，
+ * 用户会误以为工作目录没生效。这里按系统符号链接别名与尾斜杠归一后比较。
+ */
+function pathEquivalent(a?: string, b?: string): boolean {
+  const norm = (p?: string): string => String(p || '').replace(/\/+/g, '/').replace(/\/+$/, '')
+  const na = norm(a)
+  const nb = norm(b)
+  if (!na || !nb) return na === nb
+  if (na === nb) return true
+  const aliases = (p: string): string[] => {
+    const out = [p]
+    if (p.startsWith('/private/')) out.push(p.slice('/private'.length))
+    else if (/^\/(tmp|var|etc|home)(\/|$)/.test(p)) out.push('/private' + p)
+    return out
+  }
+  const aa = aliases(na)
+  const bb = aliases(nb)
+  return aa.some((x) => bb.includes(x))
+}
+
+/** 给控制面紧急操作（停止）加时限：ONENAT 抖动时不能让"停止"按钮等十几秒才返回 */
+function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((resolve) => {
+      const t = setTimeout(() => resolve(fallback), ms)
+      if (typeof (t as any).unref === 'function') (t as any).unref()
+    }),
+  ])
+}
+
+/** 节点不可达类错误（用于把 "fetch failed" 翻译成可操作提示，而不是原样丢给用户） */
+function isUnreachableError(msg: string | undefined): boolean {
+  return /fetch failed|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH|ENOTFOUND|ETIMEDOUT|timed? ?out|socket hang up|EPIPE/i.test(String(msg || ''))
+}
+
 export class TaskEngine {
   private client = new DshClient()
   private sshStore: SshResourceStore | undefined
@@ -599,7 +638,25 @@ export class TaskEngine {
     return this.store.deleteTask(taskId)
   }
 
-  public async cancelTask(taskId: string, reason = '用户中止'): Promise<void> {
+  /**
+   * 批量删除已归档任务（归档管理页）：逐个对仍在运行的（手动归档的运行中会话）先取消并清 blockCache，
+   * 最后一次性落盘删除（避免逐任务 save 的整包写盘放大）。
+   */
+  public async bulkDeleteArchived(match: (t: WorkTask) => boolean): Promise<number> {
+    const victims = this.store.getTasks().filter((t) => t.archivedAt && match(t))
+    for (const t of victims) {
+      if (this.isRunning(t.id)) await this.cancelTask(t.id, '任务已删除')
+      for (const k of [...this.blockCache.keys()]) {
+        if (k.startsWith(t.id + ':')) this.blockCache.delete(k)
+      }
+    }
+    return this.store.bulkDeleteArchived(victims.map((t) => t.id))
+  }
+
+  public async cancelTask(taskId: string, reason = '用户中止'): Promise<{ ok: boolean; warnings: string[] }> {
+    // 远端中断可能失败（节点不可达/会话已消失/旧版无 cancel）：本地状态照常收敛，
+    // 但把未确认项回传给调用方 —— 用户需要知道「本地已停、远端可能还在跑」。
+    const warnings: string[] = []
     const ctrl = this.activeJobs.get(taskId)
     if (ctrl) {
       ctrl.abort()
@@ -620,8 +677,17 @@ export class TaskEngine {
           const binding = task.sessions[sub.agentId]
           const agent = await this.resolveMemberAgent(task, sub.agentId)
           if (binding && agent) {
-            const target = await this.resolveExecTarget(task, sub.agentId).catch(() => undefined)
-            if (target?.online) await this.client.cancelSession(target, binding.remoteSessionId).catch(() => {})
+            const target = await withTimeout(this.resolveExecTarget(task, sub.agentId).catch(() => undefined), 4000, undefined)
+            if (!target?.online || !target.baseUrl) {
+              warnings.push(`${agent.name}：节点不可达，未发送远端中断`)
+            } else {
+              const cr = await withTimeout(
+                this.client.cancelSession(target, binding.remoteSessionId).catch((e: any) => ({ ok: false, error: e?.message || String(e) })),
+                6000,
+                { ok: false, error: '远端取消超时，未确认' },
+              )
+              if (!cr.ok) warnings.push(`${agent.name}：${cr.error || '远端取消失败'}`)
+            }
           }
           this.emit(taskId, { type: 'subtask_status', subtask: this.store.getTask(taskId)?.plan?.subtasks.find((s) => s.id === sub.id)! })
         }
@@ -634,23 +700,57 @@ export class TaskEngine {
         // 会话可能建在项目节点上，按项目/任务指定节点优先解析；
         // 节点主会话（__node__）无智能体记录，用会话绑定 baseUrl + 任务凭证直发中断
         const ag = this.store.getAgent(aid)
-        let tg = ag ? await this.resolveExecTarget(taskAll!, aid).catch(() => undefined) : undefined
-        if (!tg && binding.baseUrl) {
-          tg = { baseUrl: binding.baseUrl, apiKey: this.taskExec(taskAll!).apiKey, agentId: aid, online: true } as DshTarget & { online: boolean }
+        const label = ag?.name || (aid === NODE_AGENT_ID ? '主会话' : aid)
+        // 停止是控制面紧急操作：优先用会话绑定的节点地址直发（不触发 ONENAT 资源刷新，
+        // 抖动时也不会卡 12s）；凭证先看显式 key，再从映射凭证缓存取（TTL 内零网络往返）。
+        let tg: (DshTarget & { online: boolean }) | undefined
+        const exec = this.taskExec(taskAll!)
+        if (binding.baseUrl) {
+          let apiKey = exec.apiKey
+          if (!apiKey && exec.dshRef?.kind === 'mapping') {
+            const cred = await withTimeout(
+              this.directory.fetchMappingCredentials(exec.dshRef.mappingId).catch(() => undefined),
+              3000,
+              undefined,
+            )
+            if (cred?.ok) apiKey = cred.apiKey || cred.token
+          }
+          tg = { baseUrl: binding.baseUrl, apiKey, online: true }
         }
-        if (tg && binding.remoteSessionId) await this.client.cancelSession(tg, binding.remoteSessionId).catch(() => {})
+        if (!tg) {
+          tg = await withTimeout(this.resolveExecTarget(taskAll!, aid).catch(() => undefined), 4000, undefined)
+        }
+        if (!tg || !binding.remoteSessionId) {
+          if (!tg) warnings.push(`${label}：节点不可达，未发送远端中断`)
+        } else {
+          const cr = await withTimeout(
+            this.client.cancelSession(tg, binding.remoteSessionId).catch((e: any) => ({ ok: false, error: e?.message || String(e) })),
+            6000,
+            { ok: false, error: '远端取消超时，未确认' },
+          )
+          if (!cr.ok) warnings.push(`${label}：${cr.error || '远端取消失败'}`)
+        }
         // 远端 cancel 实测解不开 ask_user_question 挂起批次（批次仍登记、run 仍悬停）——
         // 停止时同步解挂：提交中止答复让挂起的 run 收尾，会话恢复可用（否则下一条消息
         // 经 followup 排队在挂起 run 后面永不被处理，表现为「停了还是卡」）。
         if (tg && binding.remoteSessionId) {
-          const pq = await this.client.listPendingQuestions(tg, binding.remoteSessionId).catch(() => undefined)
+          // 远端已不可达时，挂起提问探测/答复也要有时限（否则"停止"会被二次网络等待拖住）
+          const pq = await withTimeout(
+            this.client.listPendingQuestions(tg, binding.remoteSessionId).catch(() => undefined),
+            4000,
+            undefined,
+          )
           if (pq?.ok && (pq.count || 0) > 0) {
             const answers = (pq.batches || [])
               .flatMap((b) => b.questions || [])
               .filter((q) => q?.id)
               .map((q) => ({ id: String(q.id), selected: [] as string[], custom: '［用户已中止］停止当前执行：立即收尾，简要总结已完成的进展，不要继续新的动作。' }))
             if (answers.length) {
-              const ar = await this.client.answerQuestion(tg, binding.remoteSessionId, answers).catch(() => ({ ok: false } as const))
+              const ar = await withTimeout(
+                this.client.answerQuestion(tg, binding.remoteSessionId, answers).catch(() => ({ ok: false } as const)),
+                6000,
+                { ok: false } as const,
+              )
               if (ar.ok) this.taskLog(taskId, 'info', '挂起提问已随停止自动答复，远端会话解除挂起')
             }
           }
@@ -682,7 +782,9 @@ export class TaskEngine {
         const fresh = this.store.getTask(taskId)!
         this.emit(taskId, { type: 'task_end', task: fresh })
       }
+      if (warnings.length) this.taskLog(taskId, 'warn', `停止时远端未确认中断：${warnings.join('；')}`)
     }
+    return { ok: true, warnings }
   }
 
   public async retrySubtask(taskId: string, subtaskId: string): Promise<{ ok: boolean; error?: string }> {
@@ -746,7 +848,7 @@ export class TaskEngine {
 
   // ---------- 多轮消息入口 ----------
 
-  public async sendUserMessage(taskId: string, text: string, opts?: { teamId?: string }): Promise<{ ok: boolean; turn?: TaskTurn; queued?: boolean; error?: string }> {
+  public async sendUserMessage(taskId: string, text: string, opts?: { teamId?: string; reuseTurnId?: string }): Promise<{ ok: boolean; turn?: TaskTurn; queued?: boolean; error?: string }> {
     const task = this.store.getTask(taskId)
     if (!task) return { ok: false, error: '任务不存在' }
     if (!text.trim()) return { ok: false, error: '消息为空' }
@@ -762,11 +864,28 @@ export class TaskEngine {
         t.queue = t.queue || []
         t.queue.push({ text: text.trim(), at: Date.now(), turnId: turn.id, ...(opts?.teamId ? { teamId: opts.teamId } : {}) })
       })
+      // 推送排队轮：多标签页/重连后也能立刻看到「⏳ 已排队」气泡（旧实现只落库不广播，
+      // 发送方也不渲染 → 消息像丢了，刷新后又与补发轮重复出现）
+      this.emit(taskId, { type: 'turn_start', turn })
       return { ok: true, queued: true, turn }
     }
 
-    const turn: TaskTurn = { id: `turn-${randomUUID().slice(0, 8)}`, seq: 0, role: 'user', text: text.trim(), at: Date.now() }
-    this.store.appendTurn(taskId, turn)
+    // 队列补发：复用原排队轮（同一 turn.id），避免「排队一条 + 补发再 append 一条」出现重复用户消息
+    const reused = opts?.reuseTurnId ? this.store.getTask(taskId)?.turns.find((t) => t.id === opts.reuseTurnId) : undefined
+    let turn: TaskTurn
+    if (reused) {
+      turn = { ...reused, text: text.trim(), queued: false }
+      delete (turn as any).queued
+      this.store.mutateTask(taskId, (t) => {
+        const x = t.turns.find((y) => y.id === turn.id)
+        if (x) { delete x.queued; x.text = text.trim() }
+      })
+      this.emit(taskId, { type: 'turn_start', turn })
+    } else {
+      turn = { id: `turn-${randomUUID().slice(0, 8)}`, seq: 0, role: 'user', text: text.trim(), at: Date.now() }
+      this.store.appendTurn(taskId, turn)
+      this.emit(taskId, { type: 'turn_start', turn })
+    }
     this.store.mutateTask(taskId, (t) => {
       t.status = 'running'
     })
@@ -879,7 +998,7 @@ export class TaskEngine {
       const turn = t.turns.find((x) => x.id === next.turnId)
       if (turn) delete turn.queued
     })
-    await this.sendUserMessage(taskId, next.text, next.teamId ? { teamId: next.teamId } : undefined).catch(() => undefined)
+    await this.sendUserMessage(taskId, next.text, { ...(next.teamId ? { teamId: next.teamId } : {}), reuseTurnId: next.turnId }).catch(() => undefined)
   }
 
   /**
@@ -916,7 +1035,8 @@ export class TaskEngine {
       if (turn) delete turn.queued
     })
     if (this.activeJobs.has(taskId)) return await this.steerTaskMessage(taskId, entry.text)
-    return await this.sendUserMessage(taskId, entry.text, entry.teamId ? { teamId: entry.teamId } : undefined)
+    // 复用排队轮 id：避免「立即发送」后再 append 一条同文本用户轮（刷新/切会话出现重复气泡）
+    return await this.sendUserMessage(taskId, entry.text, { ...(entry.teamId ? { teamId: entry.teamId } : {}), reuseTurnId: turnId })
   }
 
   /** 队列「编辑」：更新排队条目与对应排队轮次的文本（仍保持 queued 标记与 FIFO 位置） */
@@ -1040,6 +1160,22 @@ export class TaskEngine {
           this.appendSystemTurn(taskId, `⚠️ 任务节点不可达: ${nodeTarget.error || '解析失败'}`)
           this.store.mutateTask(taskId, (t) => { t.status = 'failed' })
           this.emit(taskId, { type: 'task_status', status: 'failed' })
+          return
+        }
+        // 预检：ONENAT 的 online 只代表隧道在线，目标 DSH 进程仍可能挂了/端口漂移。
+        // 不预检就建会话，用户只会看到 "fetch failed"（且部分节点还要多等 10s 超时）。
+        const probe = await this.client.ping(nodeTarget, { timeoutMs: 4000 })
+        if (!probe.ok) {
+          const why = isUnreachableError(probe.error) ? '连接失败' : (probe.error || '探活失败')
+          this.appendSystemTurn(
+            taskId,
+            `⚠️ 任务节点不可达（${nodeTarget.baseUrl}）：${why}\n` +
+            `请在右上角「节点」切换到可用节点后新建会话，或检查 ONENAT 上该映射的隧道/端口是否在线`,
+          )
+          this.taskLog(taskId, 'warn', `任务节点探活失败: ${nodeTarget.baseUrl} · ${why}`)
+          this.store.mutateTask(taskId, (t) => { t.status = 'failed' })
+          this.emit(taskId, { type: 'task_status', status: 'failed' })
+          this.emit(taskId, { type: 'task_end', task: this.store.getTask(taskId)! })
           return
         }
         const nodeAgent = this.makeNodeAgent(exec0)
@@ -2014,15 +2150,27 @@ export class TaskEngine {
     // 主智能体（任务发起节点主会话）进花名册：非被 @ 成员职责的工作由它自己执行（单 @ 分工的另一半）。
     // 团队接管轮（@团队）不加——团队合同里主调度（主理人）只拆解/核验/汇总，不执行子任务。
     const execR = this.taskExec(task)
+    // 任务节点探活结果：undefined=未探测（团队轮未进花名册）/ true / false（不可达）。
+    // 供下方规划节点选择复用，避免对同一个挂掉的节点重复等 3-4s。
+    let mainNodeProbeOk: boolean | undefined
     if (!teamTurn && execR.dshRef) {
       const mainTarget = await this.resolver.resolveRef(execR.dshRef, execR.apiKey, NODE_AGENT_ID).catch(() => undefined)
       if (mainTarget?.online && mainTarget.baseUrl) {
-        targets.set(NODE_AGENT_ID, mainTarget)
-        rosterMembers.unshift({
-          agent: { ...this.makeNodeAgent(execR), name: MAIN_AGENT_LABEL },
-          resourceSummary: '任务发起节点主会话（远端默认形态，可用该节点的文件/脚本/网络等本机能力）',
-          nodeLabel: this.nodeLabelOf(mainTarget),
-        })
+        // ONENAT online ≠ DSH 进程活着：不探活就把主智能体放进花名册，规划器会把子任务派给它，
+        // 执行时才发现 "fetch failed"（本轮 1/3 子任务失败的根因）。
+        const probe = await this.client.ping(mainTarget, { timeoutMs: 3000 })
+        mainNodeProbeOk = probe.ok
+        if (probe.ok) {
+          targets.set(NODE_AGENT_ID, mainTarget)
+          rosterMembers.unshift({
+            agent: { ...this.makeNodeAgent(execR), name: MAIN_AGENT_LABEL },
+            resourceSummary: '任务发起节点主会话（远端默认形态，可用该节点的文件/脚本/网络等本机能力）',
+            nodeLabel: this.nodeLabelOf(mainTarget),
+          })
+        } else {
+          const why = isUnreachableError(probe.error) ? '连接失败' : (probe.error || '探活失败')
+          this.taskLog(taskId, 'warn', `任务节点探活失败（${mainTarget.baseUrl}）：${why} → 主智能体不参与本轮分工（退化为仅被 @ 成员执行）`)
+        }
       } else {
         this.taskLog(taskId, 'warn', '任务节点不可达，主智能体不参与本轮分工（退化为仅被 @ 成员执行）')
       }
@@ -2079,9 +2227,25 @@ export class TaskEngine {
     try {
       // 规划在任务发起节点（主 DSH）执行 —— 节点模型下无需单独指定拆解器智能体；不可达时回退 pickTarget 链
       const execForPlan = this.taskExec(task)
-      const planNodeTarget = execForPlan.dshRef
+      let planNodeTarget = execForPlan.dshRef
         ? await this.resolver.resolveRef(execForPlan.dshRef, execForPlan.apiKey, 'planner').catch(() => undefined)
         : undefined
+      // 探活预检：ONENAT online 只代表隧道在线，DSH 进程可能已挂/端口漂移。
+      // 不可达就别把它当规划节点（否则规划器只会得到 "fetch failed" 再回退静态拆解，
+      // 用户还会看到一条费解的降级告警）；改用可用成员节点规划，规划质量保住。
+      if (planNodeTarget?.online && planNodeTarget.baseUrl) {
+        if (mainNodeProbeOk === false) {
+          // 上面花名册阶段已探活失败并记录过原因，这里不再重复等待/打日志
+          planNodeTarget = undefined
+        } else if (mainNodeProbeOk === undefined) {
+          const probe = await this.client.ping(planNodeTarget, { timeoutMs: 4000 })
+          if (!probe.ok) {
+            const why = isUnreachableError(probe.error) ? '连接失败' : (probe.error || '探活失败')
+            this.taskLog(taskId, 'warn', `任务节点探活失败（${planNodeTarget.baseUrl}）：${why} → 主调度改用可用成员节点规划；如需在该节点执行请检查 ONENAT 映射或切换节点`)
+            planNodeTarget = undefined
+          }
+        }
+      }
       // 规划会话对齐任务工作目录（定时任务 workDir / 项目 workspace）：先 mkdir -p 确保存在，
       // 失败不阻断（规划会话创建端还有 ENOENT 降级默认目录的兜底）
       let plannerCwd: string | undefined
@@ -2119,8 +2283,11 @@ export class TaskEngine {
       for (const w of planned.warnings || []) this.taskLog(taskId, 'warn', `[主调度] ${w}`)
     } else {
       draft = Orchestrator.fallbackPlan(text, rosterMembers)
-      settlePlanTurn(`⚠️ LLM 规划不可用（${planned.error}），已回退静态三段拆解`)
-      this.taskLog(taskId, 'warn', `规划器不可用（${planned.error}），已回退静态三段拆解`)
+      // 不可达类失败给可操作提示：用户看到 "fetch failed" 时不知道是节点挂了还是模型坏了
+      const unreachable = isUnreachableError(planned.error)
+      const hint = unreachable ? '；主调度节点连接失败，可在右上角切换节点后重发以恢复 LLM 拆解' : ''
+      settlePlanTurn(`⚠️ LLM 规划不可用（${planned.error}${hint}），已回退静态三段拆解`)
+      this.taskLog(taskId, 'warn', `规划器不可用（${planned.error}）${hint}，已回退静态三段拆解`)
       if (planned.raw) {
         this.taskLog(taskId, 'warn', `规划器原始输出（前 500 字）: ${planned.raw.slice(0, 500).replace(/\s+/g, ' ')}`)
       }
@@ -2964,8 +3131,15 @@ export class TaskEngine {
       this.taskLog(taskId, 'info', `会话已对齐工作区（${agent.name}）: workspace=${workspaceId} · 目录 ${wantedCwd}`)
     }
     if (!res.ok || !res.sessionId) {
-      const hint = /401|403|unauthorized/i.test(res.error || '') ? '（节点鉴权失败：请检查 ONENAT 上映射的实例凭证配置）' : ''
-      return { ok: false, error: (res.error || '未知') + hint }
+      const raw = res.error || '未知'
+      // 把底层错误翻译成可操作提示：401/403 是凭证问题，fetch failed 一类是节点/隧道不可达。
+      // 原样抛 "fetch failed" 用户无法判断该改什么（切节点？换凭证？重启 DSH？）。
+      const hint = /401|403|unauthorized/i.test(raw)
+        ? `（节点鉴权失败：请检查 ONENAT 上映射「${(effTarget as any).mappingId || effTarget.baseUrl}」的实例凭证配置）`
+        : isUnreachableError(raw)
+          ? `（节点不可达 ${effTarget.baseUrl}：请检查 ONENAT 上该映射的隧道/端口是否在线，或在右上角切换执行节点后重试）`
+          : ''
+      return { ok: false, error: raw + hint }
     }
     target = effTarget
     this.store.mutateTask(taskId, (t) => {
@@ -2977,7 +3151,7 @@ export class TaskEngine {
       const info = await this.client.getSessionInfo(target, res.sessionId)
       if (!info.ok || !info.cwd) {
         this.taskLog(taskId, 'warn', `远端会话工作目录校验失败（${agent.name}）: 期望 ${wantedCwd}，实际 ${info.cwd || '(未返回)'} — 远端 dsh-web-service 可能过旧`)
-      } else if (info.cwd.replace(/\/+$/, '') !== wantedCwd.replace(/\/+$/, '')) {
+      } else if (!pathEquivalent(info.cwd, wantedCwd)) {
         this.taskLog(taskId, 'warn', `远端会话 cwd 与配置不一致（${agent.name}）: 期望 ${wantedCwd}，实际 ${info.cwd}`)
       }
     }

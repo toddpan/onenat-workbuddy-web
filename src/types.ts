@@ -177,6 +177,8 @@ export interface SubAgent {
   role?: string
   /** 专家执行提示词：角色专属工作方法与产出结构要求（注入派工提示词的「执行指导」段） */
   executionPrompt?: string
+  /** 专家角色的复制快照来源；提示词独立编辑，不随源档案自动同步。 */
+  expertSource?: { expertId: string; name: string; revision: string; copiedAt: number }
   /** 远端工作目录（绝对路径）：该成员所有远端会话的 cwd，即其文件工具根目录与附件落盘处；留空用远端默认 */
   workDir?: string
   resources: AgentResourceBinding[]
@@ -247,7 +249,7 @@ export interface ExtractedMentions {
  * 项目：捆绑 DSH 节点 / 工作区 / 指令 / 专家 / 连接器 / 技能 的一等实体。
  * 项目内发起的任务自动继承全部上下文；专家与节点解耦（专家可在任意项目节点执行）。
  */
-/** 项目人类成员（区别于 Project.expertIds 等智能体成员）：权限隔离与协作的最小单元 */
+/** 项目人类成员（区别于 Project.defaultAgentIds 等智能体成员）：权限隔离与协作的最小单元 */
 export interface ProjectMember {
   /** 用户 ID（usr-…，对应 auth.json 用户表） */
   userId: string
@@ -273,7 +275,9 @@ export interface Project {
   workspace?: string
   /** 项目指令（注入任务系统提示词最前） */
   instruction?: string
-  /** 项目专家 */
+  /** 默认协作子智能体：任务创建时继承，不限制后续 @，也不自动全员派工。 */
+  defaultAgentIds?: string[]
+  /** @deprecated defaultAgentIds 的兼容别名，引用 SubAgent.id，不是专家库 ID。 */
   expertIds: string[]
   /** 连接器：'ssh:<资源id>' | 'map:<mappingId>' | 'app:<appId>' */
   connectorIds: string[]
@@ -285,6 +289,20 @@ export interface Project {
   archivedAt?: number
   createdAt: number
   updatedAt: number
+}
+
+/** 项目默认协作成员读取（defaultAgentIds canonical，expertIds 兼容别名） */
+export function projectDefaultAgentIds(project: Pick<Project, 'defaultAgentIds' | 'expertIds'> | undefined): string[] {
+  return [...new Set((project?.defaultAgentIds ?? project?.expertIds ?? []).map(String).filter(Boolean))]
+}
+
+/**
+ * 从请求体归一默认协作成员（defaultAgentIds 优先，expertIds 兼容别名，去重去空）；
+ * 两个字段都未显式传入时返回 undefined（语义 = 不变更，而非清空）。
+ */
+export function projectDefaultAgentIdsFromInput(input: { defaultAgentIds?: unknown; expertIds?: unknown }): string[] | undefined {
+  const raw = Array.isArray(input.defaultAgentIds) ? input.defaultAgentIds : Array.isArray(input.expertIds) ? input.expertIds : undefined
+  return raw === undefined ? undefined : [...new Set(raw.map((x) => String(x)).filter(Boolean))]
 }
 
 // ---------- 任务会话（多轮） ----------
@@ -337,6 +355,8 @@ export interface TurnToolCall {
   at: number
   /** 耗时 ms（结果到达时计算） */
   ms?: number
+  /** ask_user_question 专属：已登记进 task.pendingAsk、卡片可作答（单一事实源，防幽灵卡） */
+  awaiting?: boolean
 }
 
 export interface PlanSubtask {
@@ -363,6 +383,24 @@ export interface TaskPlan {
   plannerModel?: string
   createdAt: number
   subtasks: PlanSubtask[]
+  /**
+   * 本轮参与范围（v2026.10.23）：每个编排轮记录这份计划实际生效的成员与合同。
+   * team = 本轮按团队合同编排（scope.team = 计划时点快照，成员合同覆盖/汇总核对以它为准）；
+   * members = 无团队合同的普通定向编排（覆盖度只按实际参与者计）。
+   * 旧计划无 scope：读取方回退 task.teamId（保留旧行为）。
+   */
+  scope?: TaskPlanScope
+  /** 主任务目标（本轮编排输入文本；重规划/单项重试沿用，避免丢失轮次语义） */
+  objective?: string
+}
+
+/** 编排轮参与范围：team = 团队合同轮（含判定时刻团队快照），members = 普通定向编排轮 */
+export interface TaskPlanScope {
+  kind: 'team' | 'members'
+  /** 本轮计划实际生效的成员 id（子智能体 id + 动态专家伪 id，不含主智能体 __node__） */
+  memberIds: string[]
+  /** team 轮时的团队合同快照（覆盖任务 teamId 的当前值，避免同任务多次团队切换串味） */
+  team?: ExpertTeam
 }
 
 export interface TaskSummary {
@@ -437,8 +475,8 @@ export interface WorkTask {
   workDir?: string
   /** 专家团任务来源：记录创建团队，编排/派工/汇总按团队合同注入 */
   teamId?: string
-  /** 专家库动态成员（expert-<expertId> → 展示名）：编排启动时登记，供花名册/子任务/轨迹解析成员名，不落子智能体实体 */
-  expertMembers?: Array<{ id: string; name: string }>
+  /** 专家库动态成员（伪 id expert-<expertId> / __expert__:<expertId> → 展示名）：编排启动时登记，供花名册/子任务/轨迹解析成员名，不落子智能体实体 */
+  expertMembers?: Array<{ id: string; name: string; /** 专家库 id；旧前缀任务可经 expertIdFromAgentId 回推 */ expertId?: string }>
   /** 挂起的 ask_user_question 提问：远端 run 悬停在工具内部等待答复（会话状态恒 running、后续 prompt 经 followup 排队永不被处理）。
    *  用户下一条自由文本消息将被路由到 /answers 桥作为答复解锁，而不是发新 prompt。 */
   pendingAsk?: {
@@ -601,6 +639,11 @@ export interface WorkBuddySettings {
     /** 接入点列表 */
     endpoints?: XiaozhiEndpoint[]
   }
+  /** 历史任务自动归档（设置页「任务归档」可配；缺省时回退环境变量 WORKBUDDY_ARCHIVE_DAYS，再回退 7 天） */
+  archive?: {
+    /** 终态任务超过该天数未更新，自动挪入「已归档会话」并瘦身存储；0 = 关闭自动归档 */
+    taskArchiveDays?: number
+  }
 }
 
 /** 一个小智平台 MCP 接入点 */
@@ -635,8 +678,33 @@ export interface ExpertTeamMember {
   instructions?: string
 }
 
-/** 专家库动态成员在任务账本中的伪 agentId 前缀（<前缀><expertId>），与 teamMemberKey 同源 */
-export const EXPERT_AGENT_ID_PREFIX = 'expert-'
+/**
+ * 专家库动态成员在任务账本中的伪 agentId 前缀（<前缀><expertId>）。
+ * v2026.10.23 起双冒号前缀消除与持久子智能体 id 的命名空间碰撞；历史任务的
+ * `expert-<id>` 经 expertIdFromAgentId 兼容读取。
+ */
+export const EXPERT_AGENT_ID_PREFIX = '__expert__:'
+
+/** 历史动态专家伪 id 前缀（v2026.10.23 之前的任务账本） */
+export const LEGACY_EXPERT_AGENT_ID_PREFIX = 'expert-'
+
+/** 任意合法动态专家伪 id 判定（新前缀 + 存量 expert-<id>）：已登记校验由调用方负责。
+ *  前端模板（web-ui.ts）无法 import 此处常量，前缀清单在前端各自维护，改动时同步核查。 */
+export function isExpertAgentId(id: string): boolean {
+  return id.startsWith(EXPERT_AGENT_ID_PREFIX) || id.startsWith(LEGACY_EXPERT_AGENT_ID_PREFIX)
+}
+
+/** 动态专家伪 id → 专家库 id；非伪 id 返回 undefined */
+export function expertIdFromAgentId(id: string): string | undefined {
+  if (id.startsWith(EXPERT_AGENT_ID_PREFIX)) return id.slice(EXPERT_AGENT_ID_PREFIX.length)
+  if (id.startsWith(LEGACY_EXPERT_AGENT_ID_PREFIX)) return id.slice(LEGACY_EXPERT_AGENT_ID_PREFIX.length)
+  return undefined
+}
+
+/** 按任务账本登记顺序构造动态专家伪 id（新专家用新前缀，与 isExpertAgentId/expertIdFromAgentId 同源） */
+export function makeExpertAgentId(expertId: string): string {
+  return `${EXPERT_AGENT_ID_PREFIX}${expertId}`
+}
 
 /**
  * 任务节点主会话的伪 agentId：无 @ 的主会话与「主智能体自留子任务」都在任务节点上
@@ -647,9 +715,9 @@ export const NODE_AGENT_ID = '__node__'
 /** 主智能体（任务节点主会话）的展示名：规划花名册/汇总/计划卡共用 */
 export const MAIN_AGENT_LABEL = '主智能体（发起节点）'
 
-/** 团队成员的稳定键：子智能体用 agentId；专家库成员用合成 pseudo id（expert-<expertId>），与编排花名册/子任务 agentId 同源 */
+/** 团队成员的稳定键：子智能体用 agentId；专家库成员用合成 pseudo id（makeExpertAgentId(expertId)），与编排花名册/子任务 agentId 同源 */
 export function teamMemberKey(m: Pick<ExpertTeamMember, 'agentId' | 'expertId'>): string {
-  return m.agentId ? m.agentId : `${EXPERT_AGENT_ID_PREFIX}${m.expertId}`
+  return m.agentId ? m.agentId : makeExpertAgentId(m.expertId || '')
 }
 
 /**

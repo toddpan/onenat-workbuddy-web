@@ -235,6 +235,7 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
   const engine = new TaskEngine(store, directory, resolver, composer, planner)
   // 启动自愈：重启导致中断的 running 任务标记失败（僵尸任务清理）
   const recovered = engine.recoverInterruptedTasks()
+engine.startPendingAskSweeper()
   if (recovered > 0) log(`启动自愈：${recovered} 个中断任务已标记失败`)
 
   const scheduler = new ScheduleRunner(store, engine, log, directory)

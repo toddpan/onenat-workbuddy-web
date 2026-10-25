@@ -7,6 +7,7 @@ import { writeFile as fspWriteFile, rename as fspRename, mkdir as fspMkdir } fro
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import type { AgentResourceBinding, DshRef, ExpertTeam, Project, StorageData, SubAgent, WorkBuddySettings, WorkTask, PlanSubtask, TaskTurn, ScheduledTask, TeamTemplateId } from './types.js'
+import { projectDefaultAgentIdsFromInput } from './types.js'
 import { BUILTIN_TEAMS } from './expert-teams.js'
 
 function defaultSettings(): WorkBuddySettings {
@@ -17,6 +18,8 @@ function defaultSettings(): WorkBuddySettings {
       autoRefreshMs: 60_000,
     },
     planner: {},
+    // 环境变量仅作首启动默认值（升级老部署时沿用原 WORKBUDDY_ARCHIVE_DAYS 语义）；此后设置页配置为唯一权威
+    archive: { taskArchiveDays: Number(process.env.WORKBUDDY_ARCHIVE_DAYS) || 7 },
   }
 }
 
@@ -51,8 +54,7 @@ export class WorkStore {
   private rerunNeeded = false
   /** 同步 flush 递增：使仍在途的异步写放弃 rename，防止旧快照覆盖更新的落盘 */
   private writeEpoch = 0
-  /** 冷数据归档：终态任务超过该时长后，turns/taskLogs 的磁盘主体移入 data/archive/，store.json 只留骨架 */
-  private static readonly ARCHIVE_AFTER_MS = (Number(process.env.WORKBUDDY_ARCHIVE_DAYS) || 7) * 86_400_000
+  /** 冷数据归档：终态任务超过设置页配置天数（默认 7）后自动列表归档，并把 turns/taskLogs 的磁盘主体移入 data/archive/ */
   private static readonly ARCHIVE_SWEEP_MS = 30 * 60_000
   private static readonly TERMINAL_STATUS = new Set(['completed', 'failed', 'partial_success', 'success', 'cancelled'])
   private sweeping = false
@@ -97,6 +99,7 @@ export class WorkStore {
             onenat: { ...defaultSettings().onenat, ...(parsed.settings?.onenat || {}) },
             planner: { ...defaultSettings().planner, ...(parsed.settings?.planner || {}) },
             xiaozhi: { endpoints },
+            archive: { ...defaultSettings().archive, ...(parsed.settings?.archive || {}) },
           },
         }
       }
@@ -129,26 +132,44 @@ export class WorkStore {
     return join(dirname(this.filePath), 'archive', `${taskId}.json`)
   }
 
+  /** 自动归档天数（天）：设置页配置优先；未配置时回退环境变量 WORKBUDDY_ARCHIVE_DAYS，再回退 7。0 = 关闭 */
+  private archiveDays(): number {
+    const v = this.data.settings.archive?.taskArchiveDays
+    if (typeof v === 'number' && Number.isFinite(v) && v >= 0) return Math.floor(v)
+    return Number(process.env.WORKBUDDY_ARCHIVE_DAYS) || 7
+  }
+
   /**
-   * 冷数据归档扫描：终态 + 超过 ARCHIVE_AFTER_MS 未更新的任务，把 turns/taskLogs 写入
-   * data/archive/<id>.json 后打 bulkArchived 标记（磁盘骨架化）。顺序保证崩溃安全：
-   * 先写归档文件成功、再标记+save——中途崩溃只会留下一个将被下轮覆盖的孤儿归档文件，
-   * 不会丢数据。内存始终持全量（读路径零改动），任何 mutation 走 touchTask 解除归档。
-   * 返回本轮归档的任务数。
+   * 冷数据归档扫描：终态 + 超过配置天数（默认 7，0 = 关闭）未更新的任务——
+   * ① 自动列表归档（打 archivedAt，前端挪入「已归档会话」分组，用户手动「取消归档」经 mutateTask
+   * 刷新 updatedAt 后自然获得一个周期宽限）；② 把 turns/taskLogs 写入 data/archive/<id>.json 后
+   * 打 bulkArchived 标记（磁盘骨架化）。顺序保证崩溃安全：先写归档文件成功、再标记+save——中途
+   * 崩溃只会留下一个将被下轮覆盖的孤儿归档文件，不会丢数据。内存始终持全量（读路径零改动），
+   * 任何 mutation 走 touchTask 解除归档。返回本轮骨架化的任务数。
    */
   public async archiveSweep(): Promise<number> {
     if (this.sweeping) return 0
+    const days = this.archiveDays()
+    if (days <= 0) return 0
     this.sweeping = true
     try {
-      const cutoff = Date.now() - WorkStore.ARCHIVE_AFTER_MS
-      let archived = 0
+      const cutoff = Date.now() - days * 86_400_000
+      let slimmed = 0
+      let listArchived = 0
       for (const t of this.data.tasks) {
-        if (t.bulkArchived) continue
         if (!WorkStore.TERMINAL_STATUS.has(t.status)) continue
         if ((t.updatedAt || 0) > cutoff) continue
+        if (!t.archivedAt) {
+          t.archivedAt = Date.now()
+          listArchived++
+        }
+        if (t.bulkArchived) continue // 存储已骨架化：列表归档已随上轮完成，无需重复瘦身
         const turns = t.turns || []
         const logs = t.taskLogs || []
         if (!turns.length && !logs.length) continue
+        // 写盘 await 窗口内的 mutation（touchTask 此刻还看不到 bulkArchived）会把增量写进 store.json，
+        // 若随后仍骨架化，重启重水合会用旧归档文件覆盖掉增量 → 比对 updatedAt，窗口内有变更则本轮放弃下轮重试
+        const updatedAtBefore = t.updatedAt
         try {
           const dir = join(dirname(this.filePath), 'archive')
           await fspMkdir(dir, { recursive: true })
@@ -156,17 +177,19 @@ export class WorkStore {
           const tmp = target + '.tmp'
           await fspWriteFile(tmp, JSON.stringify({ id: t.id, archivedAt: Date.now(), turns, taskLogs: logs }), 'utf-8')
           await fspRename(tmp, target)
+          if (t.updatedAt !== updatedAtBefore) continue
           t.bulkArchived = { at: Date.now(), turns: turns.length, logs: logs.length }
-          archived++
+          slimmed++
         } catch (err) {
           console.error(`[onenat-workbuddy] 任务 ${t.id} 归档失败（下轮重试）:`, err instanceof Error ? err.message : err)
         }
       }
-      if (archived) {
-        console.log(`[onenat-workbuddy] 冷归档：${archived} 个任务的 turns/taskLogs 已移入 data/archive/`)
+      if (slimmed || listArchived) {
+        if (slimmed) console.log(`[onenat-workbuddy] 冷归档：${slimmed} 个任务的 turns/taskLogs 已移入 data/archive/`)
+        if (listArchived) console.log(`[onenat-workbuddy] 自动归档：${listArchived} 个超期终态任务已挪入「已归档会话」`)
         this.save()
       }
-      return archived
+      return slimmed
     } finally {
       this.sweeping = false
     }
@@ -299,6 +322,7 @@ export class WorkStore {
     if (patch.onenat) this.data.settings.onenat = { ...this.data.settings.onenat, ...patch.onenat }
     if (patch.planner) this.data.settings.planner = { ...this.data.settings.planner, ...patch.planner }
     if (patch.xiaozhi) this.data.settings.xiaozhi = { ...(this.data.settings.xiaozhi || {}), ...patch.xiaozhi }
+    if (patch.archive) this.data.settings.archive = { ...(this.data.settings.archive || {}), ...patch.archive }
     this.save()
     return this.getSettings()
   }
@@ -577,6 +601,39 @@ export class WorkStore {
     return changed
   }
 
+  /** 批量恢复（归档管理页）：清除范围内的 archivedAt 并刷新 updatedAt（重新进入自动归档宽限计时），单次落盘 */
+  public bulkUnarchive(match: (t: WorkTask) => boolean): number {
+    const now = Date.now()
+    let restored = 0
+    for (const t of this.data.tasks) {
+      if (!t.archivedAt || !match(t)) continue
+      this.touchTask(t) // bulkArchived 骨架恢复常驻全量（下次落盘写完整数据）
+      delete t.archivedAt
+      t.updatedAt = now
+      restored++
+    }
+    if (restored) this.save()
+    return restored
+  }
+
+  /** 批量删除已归档任务（含 data/archive/ 归档文件清理），单次落盘；返回删除数 */
+  public bulkDeleteArchived(ids: string[]): number {
+    const idSet = new Set(ids)
+    const victims = this.data.tasks.filter((t) => t.archivedAt && idSet.has(t.id))
+    if (!victims.length) return 0
+    const victimIds = new Set(victims.map((t) => t.id))
+    this.data.tasks = this.data.tasks.filter((t) => !victimIds.has(t.id))
+    for (const id of victimIds) {
+      try {
+        if (existsSync(this.archivePath(id))) unlinkSync(this.archivePath(id))
+      } catch {
+        /* 归档文件清理失败不影响删除 */
+      }
+    }
+    this.save()
+    return victims.length
+  }
+
   // ---- Projects ----
 
   public getProjects(): Project[] {
@@ -591,6 +648,11 @@ export class WorkStore {
   public upsertProject(input: Omit<Partial<Project>, 'archivedAt'> & { archivedAt?: number | null }): Project {
     const now = Date.now()
     const existing = input.id ? this.data.projects.find((p) => p.id === input.id) : undefined
+    // 默认协作成员：defaultAgentIds 为 canonical；expertIds（旧字段）仅为兼容别名。
+    // 任一字段显式传入（含 []）都更新 canonical 并镜像另一份，保证旧读者（expertIds）与新读者一致；
+    // 两字段都未传 = 不变更（读取侧经 projectDefaultAgentIds 兼容旧库 expertIds）。
+    const defaultAgentIds = projectDefaultAgentIdsFromInput({ defaultAgentIds: input.defaultAgentIds, expertIds: input.expertIds })
+      ?? existing?.defaultAgentIds ?? existing?.expertIds ?? []
     const project: Project = {
       id: existing?.id || `proj-${Math.random().toString(36).slice(2, 10)}`,
       name: String(input.name ?? existing?.name ?? '未命名项目'),
@@ -598,7 +660,8 @@ export class WorkStore {
       apiKey: input.apiKey !== undefined ? input.apiKey : existing?.apiKey,
       workspace: input.workspace !== undefined ? (String(input.workspace).trim() || undefined) : existing?.workspace,
       instruction: input.instruction !== undefined ? (String(input.instruction).trim() || undefined) : existing?.instruction,
-      expertIds: input.expertIds ? [...new Set(input.expertIds.map(String))] : existing?.expertIds || [],
+      defaultAgentIds,
+      expertIds: defaultAgentIds,
       connectorIds: input.connectorIds ? [...new Set(input.connectorIds.map(String))] : existing?.connectorIds || [],
       skillNames: input.skillNames ? [...new Set(input.skillNames.map(String))] : existing?.skillNames || [],
       owner: input.owner !== undefined ? input.owner : existing?.owner,

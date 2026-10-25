@@ -417,17 +417,21 @@ export function buildProjectImportPrompt(opts: {
   const { name, path, createUrl, nodeLabel, nodeKey, importId, experts, connectors } = opts
   const expertList = experts.length
     ? experts.map((e) => `  - ${e.id}｜${e.name}${e.role ? `（${e.role}）` : ''}`).join('\n')
-    : '  （平台当前没有可选专家，expertIds 留空数组）'
+    : '  （平台当前没有可选成员，defaultAgentIds 留空数组）'
   const connectorList = connectors.length
     ? connectors.map((c) => `  - ${c.id}｜${c.label}`).join('\n')
     : '  （平台当前没有可选连接器，connectorIds 留空数组）'
   const tmpPrefix = `/tmp/wb-import-${importId}`
   return [
     `【平台下发任务】分析本节点上的项目工作区「${path}」，推断它在 Web 平台「新建项目」表单里应填的内容，然后调用平台接口把这个项目添加到平台（来源节点：${nodeLabel}；参考名：${name}）。请严格按步骤执行并汇报。`,
-    `本项目将挂在来源节点「${nodeLabel}」（节点键：${nodeKey}）下，由平台按导入令牌自动绑定；你无需在 payload 里选节点，只要原样照抄下面的 node 与 workspace 预填值（平台会比对校验，不符即拒收）。`,
+    '',
+    `⚠️ 必填预填值（原样照抄到 payload JSON，平台会校验，不符即拒收）：`,
+    `   - node（节点键）："${nodeKey}"`,
+    `   - workspace（工作区路径）："${path}"`,
+    `本项目将挂在来源节点「${nodeLabel}」下，节点归属由平台按导入令牌自动绑定，你无需在 payload 里选节点。`,
     '',
     '只能从下面的候选里选，禁止编造不存在的 ID：',
-    '项目专家候选（expertIds，按职责与项目性质匹配）：',
+    '项目默认协作成员候选（defaultAgentIds，按职责与项目性质匹配）：',
     expertList,
     '项目连接器候选（connectorIds，项目需要访问的外部环境/服务才选）：',
     connectorList,
@@ -439,14 +443,14 @@ export function buildProjectImportPrompt(opts: {
     '3. 推断「新建项目」表单各字段：',
     '   - name：简洁的项目名（尽量 ≤20 字，可用中文概括用途）',
     '   - instruction：项目指令（以「# 角色」开头的 Markdown，写明项目背景、技术栈、目录结构要点、构建/运行/测试命令、注意事项，供平台后续任务注入；300~800 字）',
-    '   - expertIds：从候选里挑该项目可能依赖的专家（没有合适的就空数组）',
+    '   - defaultAgentIds：从候选里挑该项目可能依赖的默认协作成员（没有合适的就空数组）',
     '   - connectorIds：从候选里挑项目会涉及的连接器（没有就空数组）',
     '   - skillNames：本节点已安装技能里项目会用到的（可 ls ~/.dsh/skills 查看，取目录名；没有就空数组）',
     '   - summary：一句话分析结论（这个项目是做什么的）',
     `4. 把上述字段加上预填的 node/workspace 写成 JSON 文件（UTF-8、合法 JSON；node 与 workspace 必须=如下原值，一字不改；用 heredoc 写文件，注意 instruction 内的引号与换行要转义）：`,
     `   PAYLOAD="${tmpPrefix}.json"`,
     '   cat > "$PAYLOAD" <<\'JSON\'',
-    `   {"node":"${nodeKey}","workspace":"${path}","name":"…","instruction":"…","expertIds":[],"connectorIds":[],"skillNames":[],"summary":"…"}`,
+    `   {"node":"${nodeKey}","workspace":"${path}","name":"…","instruction":"…","defaultAgentIds":[],"connectorIds":[],"skillNames":[],"summary":"…"}`,
     '   JSON',
     '   （写完后用 python3 -m json.tool "$PAYLOAD" 校验合法并核验 node/workspace 原值仍在，不对就修好再继续。）',
     '5. 调用平台接口创建项目（JSON 原文 POST，记录 HTTP 响应原文）：',

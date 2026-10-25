@@ -13,6 +13,7 @@
 
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -299,4 +300,16 @@ export function expertPersona(
 /** 角色展示名：role 优先，回退「通用执行者」（编排花名册与日志用） */
 export function expertRoleLabel(agent: Pick<SubAgent, 'role' | 'systemPrompt'>): string {
   return agent.role?.trim() || '通用执行者'
+}
+
+/**
+ * 专家角色复制快照（expertSource）：
+ * 复制子智能体与专家档案是显式的「快照」关系——落库时记录来源 + 人格内容哈希，
+ * 便于 UI/排查识别「已落后于源档案」，不自动同步（用户在实体上的手改不被覆盖）。
+ */
+export function buildExpertSource(profile: Pick<ExpertProfile, 'id' | 'name'> & { role?: string; systemPrompt: string; executionPrompt?: string }): SubAgent['expertSource'] {
+  const revision = createHash('sha1')
+    .update([profile.role?.trim() || '', profile.systemPrompt, profile.executionPrompt || ''].join('\n\u0000'))
+    .digest('hex')
+  return { expertId: profile.id, name: profile.name, revision, copiedAt: Date.now() }
 }

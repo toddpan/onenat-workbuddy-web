@@ -21,6 +21,7 @@ import { normalizeRule, nextRun, ruleText } from './scheduler.js'
 import { execOnSshResource, maskSshResource, normalizeSshResource, testSshResource } from './ssh-resources.js'
 import { normalizeDshRef } from './router.js'
 import type { ExpertRegistry } from './expert-registry.js'
+import { projectDefaultAgentIds, projectDefaultAgentIdsFromInput } from './types.js'
 
 export type ToolParamType = 'string' | 'json'
 
@@ -384,7 +385,9 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
         const inheritedSkills = [...new Set(creatorAgent?.skills || [])]
         const task = await engine.createTask({
           title: args.title,
-          memberAgentIds: explicit,
+          // 未显式提供成员时传 undefined：引擎按来源继承（团队名册 / 项目 defaultAgentIds）；
+          // 显式空数组保留「确实不要成员」的意图，不被默认成员覆盖
+          ...(Array.isArray(memberIds) ? { memberAgentIds: explicit } : {}),
           mode: args.mode,
           message: args.message,
           creator: 'tool',
@@ -1189,8 +1192,9 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
   const projectManage: WorkBuddyToolDef = {
     name: 'workbuddy_project_manage',
     description:
-      '管理 WorkBuddy 项目：list / get / upsert / delete。项目把「执行节点(DSH) + 工作目录 + 项目指令 + 可@ sub agent + 连接器 + 技能」捆绑成一个可复用上下文；' +
-      'task_manage create 带 projectId 即创建项目工作台任务（自动继承全部上下文，主会话在项目节点执行）。',
+      '管理 WorkBuddy 项目：list / get / upsert / delete。项目把「执行节点(DSH) + 工作目录 + 项目指令 + 默认协作成员 + 连接器 + 技能」捆绑成一个可复用上下文；' +
+      'task_manage create 带 projectId 即创建项目工作台任务（自动继承全部上下文，主会话在项目节点执行）。' +
+      'defaultAgentIds 是项目默认协作成员（创建任务时服务端自动继承，可随时 @ 其他成员补充；不限制 @，也不自动全员派工）。',
     parameters: {
       action: { type: 'string', description: '操作: list / get / upsert / delete' },
       projectId: { type: 'string', description: '项目 ID（get/delete 用）' },
@@ -1198,8 +1202,8 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
         type: 'json',
         description:
           'upsert 用: {name:"<项目名>", dshRef:{kind:"mapping", mappingId:"<DSH 映射 ID>"}, workspace:"<工作目录>", instruction:"<项目指令>", ' +
-          'expertIds:["<sub agent ID>",...], connectorIds:["ssh:<id>"|"map:<mappingId>",...], skillNames:["<技能名>",...]}' +
-          '（编辑时带 id；expertIds = 项目内可 @ 的 sub agent 集合）',
+          'defaultAgentIds:["<sub agent ID>",...], connectorIds:["ssh:<id>"|"map:<mappingId>",...], skillNames:["<技能名>",...]}' +
+          '（编辑时带 id；defaultAgentIds = 项目默认协作成员，非 @ 白名单；传 [] 清空）',
       },
     },
     async execute(args) {
@@ -1217,7 +1221,8 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
             dshRef: p.dshRef,
             nodeTitle: nodeTitle || '(未配置节点)',
             workspace: p.workspace || '',
-            experts: (p.expertIds || []).map((id) => ({ id, name: store.getAgent(id)?.name || id })),
+            defaultAgentIds: projectDefaultAgentIds(p),
+            experts: projectDefaultAgentIds(p).map((id) => ({ id, name: store.getAgent(id)?.name || id })),
             skillNames: p.skillNames,
             connectorIds: p.connectorIds,
             taskCount: store.getTasks().filter((t) => t.projectId === p.id).length,
@@ -1243,9 +1248,10 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
         const refInput = body.dshRef ?? existing?.dshRef
         const dshRef = normalizeDshRef(refInput)
         if ('error' in dshRef) return JSON.stringify({ ok: false, error: dshRef.error + '（形如 {kind:"mapping", mappingId:"<DSH 映射 ID>"}，映射 ID 用 workbuddy_resource_manage {action:"dsh"} 查询）' }, null, 2)
-        const expertIds = Array.isArray(body.expertIds) ? body.expertIds.map(String) : (existing?.expertIds || [])
-        for (const eid of expertIds) {
-          if (!store.getAgent(eid)) return JSON.stringify({ ok: false, error: `sub agent 不存在: ${eid}（用 workbuddy_agent_manage {action:"list"} 查询）` }, null, 2)
+        // defaultAgentIds 为 canonical；旧字段 expertIds 兼容别名（store 层镜像）
+        const defaultAgentIds = projectDefaultAgentIdsFromInput(body)
+        for (const eid of defaultAgentIds || []) {
+          if (!store.getAgent(eid)) return JSON.stringify({ ok: false, error: `默认协作成员不存在: ${eid}（用 workbuddy_agent_manage {action:"list"} 查询）` }, null, 2)
         }
         const saved = store.upsertProject({
           id: body.id ? String(body.id) : undefined,
@@ -1253,7 +1259,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
           dshRef,
           workspace: body.workspace !== undefined ? String(body.workspace) : undefined,
           instruction: body.instruction !== undefined ? String(body.instruction) : undefined,
-          expertIds,
+          ...(defaultAgentIds !== undefined ? { defaultAgentIds } : {}),
           connectorIds: Array.isArray(body.connectorIds) ? body.connectorIds.map(String) : (existing?.connectorIds || []),
           skillNames: Array.isArray(body.skillNames) ? body.skillNames.map(String) : (existing?.skillNames || []),
         })

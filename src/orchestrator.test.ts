@@ -393,3 +393,59 @@ test('recoverAssigneeFromText: 多候选/无命中一律不猜（维持过滤）
   assert.equal(recoverAssigneeFromText({ title: 'x', prompt: '独立完成数据清洗并输出。' }, roster), undefined)
   assert.equal(recoverAssigneeFromText({ title: '', prompt: '' }, roster), undefined)
 })
+
+// ---------- summarize 覆盖度：轮级 scope（2026-10-23 专家轮级合同改造） ----------
+
+import type { DshClient } from './remote-client.js'
+import { makeExpertAgentId, type ExpertTeam } from './types.js'
+
+function stubClientWithConclusion(): DshClient {
+  return {
+    async chat() {
+      return { ok: true, content: 'stub 总调度结论' }
+    },
+  } as unknown as DshClient
+}
+
+function sub(id: string, agentId: string, status: PlanSubtask['status'] = 'completed'): PlanSubtask {
+  return { id, title: id, prompt: '', agentId, dependsOn: [], status, logs: [] } as PlanSubtask
+}
+
+function summarizeHarness() {
+  const fakeStore = { getAgent: () => undefined } as never
+  const fakeResolver = {} as never
+  return new Orchestrator(fakeStore, fakeResolver, undefined, stubClientWithConclusion())
+}
+
+test('summarize: 无团队的普通编排轮覆盖度只按本轮实际参与者计（不摊团队名册）', async () => {
+  const o = summarizeHarness()
+  const s = await o.summarize('目标', [sub('s1', 'a1'), sub('s2', 'a2')], new Map(), { baseUrl: 'x', agentId: 'n', resolvedAt: 0, online: true } as never)
+  assert.equal(s.coverage!.status, 'complete')
+  assert.equal(s.coverage!.total, 2)
+  assert.deepEqual(s.coverage!.missing, [])
+  assert.ok(s.finalConclusion.includes('stub 总调度结论'))
+})
+
+test('summarize: 团队轮覆盖度按团队名册计，缺员给出动态专家伪 id 归因', async () => {
+  const o = summarizeHarness()
+  const team: ExpertTeam = {
+    id: 'team-t', name: '测试团', goal: 'g',
+    members: [
+      { agentId: 'a1', duty: 'd1' },
+      { expertId: 'alameda', duty: 'd2' },
+    ],
+    enabled: true, createdAt: 0, updatedAt: 0,
+  }
+  const s = await o.summarize(
+    '目标',
+    [sub('s1', 'a1')],
+    new Map(),
+    { baseUrl: 'x', agentId: 'n', resolvedAt: 0, online: true } as never,
+    { team, nameOf: (k) => (k === 'a1' ? '成员甲' : makeExpertAgentId('alameda') === k ? '阿拉米达' : k) },
+  )
+  assert.equal(s.coverage!.total, 2, '按团队名册全员计覆盖度')
+  assert.equal(s.coverage!.completed, 1)
+  const miss = s.coverage!.missing[0]
+  assert.equal(miss.id, makeExpertAgentId('alameda'), '缺员按动态专家伪 id 归因')
+  assert.equal(miss.duty, 'd2')
+})

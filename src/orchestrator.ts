@@ -774,8 +774,9 @@ function optionsModel(_target: DshTarget): string | undefined {
  * 成员返回覆盖度（移植 dsh-agency-agents coverage 语义）：
  * 成员「已覆盖」= 至少一个分配给它的子任务完成；failed/skipped 取首个错误归因；
  * 未被分配子任务的成员同样视为缺口（规划未覆盖其职责）。
+ * 导出仅供单测（engine/orchestrator.test 构造 members 输入），业务路径经 summarize 间接调用。
  */
-function buildCoverage(
+export function buildCoverage(
   members: Array<{ id: string; name: string; duty?: string }>,
   subtasks: PlanSubtask[],
 ): TaskCoverage {
