@@ -1050,6 +1050,111 @@ export class DshClient {
     }
   }
 
+  // ---- 会话协作状态（goal / plan / compact）——需要远端 dsh-web-service ≥ 0.3.9 ----
+
+  /** 读取会话当前长期目标（GET /sessions/:id/goal）；goal=null 表示当前无目标。 */
+  public async getGoal(target: DshTarget, sessionId: string): Promise<{ ok: boolean; supported?: boolean; goal?: any; error?: string }> {
+    try {
+      const res = await fetch(`${clean(target.baseUrl)}/sessions/${encodeURIComponent(sessionId)}/goal`, {
+        headers: this.headers(target.apiKey),
+        signal: AbortSignal.timeout(12_000),
+      })
+      const json: any = await res.json().catch(() => ({}))
+      if (res.status === 404 || res.status === 501) return { ok: false, supported: false, error: '远端 dsh-web-service 版本过低，不含目标接口（需 ≥ 0.3.9）' }
+      if (!res.ok || !json?.ok) return { ok: false, supported: res.status !== 409, error: json?.error || `HTTP ${res.status}` }
+      return { ok: true, supported: true, goal: json.data?.goal ?? null }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || '读取目标失败' }
+    }
+  }
+
+  /** 创建并武装长期目标（POST /sessions/:id/goal）。 */
+  public async createGoal(target: DshTarget, sessionId: string, objective: string, maxGoalRounds?: number): Promise<{ ok: boolean; supported?: boolean; goal?: any; error?: string }> {
+    try {
+      const res = await fetch(`${clean(target.baseUrl)}/sessions/${encodeURIComponent(sessionId)}/goal`, {
+        method: 'POST',
+        headers: this.headers(target.apiKey),
+        body: JSON.stringify({ objective, maxGoalRounds: maxGoalRounds || undefined }),
+        signal: AbortSignal.timeout(12_000),
+      })
+      const json: any = await res.json().catch(() => ({}))
+      if (res.status === 404 || res.status === 501) return { ok: false, supported: false, error: '远端 dsh-web-service 版本过低，不含目标接口（需 ≥ 0.3.9）' }
+      if (!res.ok || !json?.ok) return { ok: false, supported: true, error: json?.error || `HTTP ${res.status}` }
+      return { ok: true, supported: true, goal: json.data?.goal }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || '创建目标失败' }
+    }
+  }
+
+  /** 目标生命周期操作（PUT /sessions/:id/goal）：action = edit|pause|resume|complete|blocked|clear|disarm。 */
+  public async updateGoal(target: DshTarget, sessionId: string, body: Record<string, unknown>): Promise<{ ok: boolean; supported?: boolean; data?: any; error?: string }> {
+    try {
+      const res = await fetch(`${clean(target.baseUrl)}/sessions/${encodeURIComponent(sessionId)}/goal`, {
+        method: 'PUT',
+        headers: this.headers(target.apiKey),
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(12_000),
+      })
+      const json: any = await res.json().catch(() => ({}))
+      if (res.status === 404 || res.status === 501) return { ok: false, supported: false, error: '远端 dsh-web-service 版本过低，不含目标接口（需 ≥ 0.3.9）' }
+      if (!res.ok || !json?.ok) return { ok: false, supported: true, error: json?.error || `HTTP ${res.status}` }
+      return { ok: true, supported: true, data: json.data }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || '目标操作失败' }
+    }
+  }
+
+  /** 查询计划模式状态（GET /sessions/:id/plan）。 */
+  public async getPlan(target: DshTarget, sessionId: string): Promise<{ ok: boolean; supported?: boolean; active?: boolean; pending?: boolean; error?: string }> {
+    try {
+      const res = await fetch(`${clean(target.baseUrl)}/sessions/${encodeURIComponent(sessionId)}/plan`, {
+        headers: this.headers(target.apiKey),
+        signal: AbortSignal.timeout(12_000),
+      })
+      const json: any = await res.json().catch(() => ({}))
+      if (res.status === 404 || res.status === 501) return { ok: false, supported: false, error: '远端 dsh-web-service 版本过低，不含计划模式接口（需 ≥ 0.3.9）' }
+      if (!res.ok || !json?.ok) return { ok: false, supported: res.status !== 409, error: json?.error || `HTTP ${res.status}` }
+      return { ok: true, supported: true, active: !!json.data?.active, pending: !!json.data?.pending }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || '查询计划模式失败' }
+    }
+  }
+
+  /** 进入/退出计划模式（PUT /sessions/:id/plan）。 */
+  public async setPlan(target: DshTarget, sessionId: string, active: boolean): Promise<{ ok: boolean; supported?: boolean; active?: boolean; pending?: boolean; transition?: string; error?: string }> {
+    try {
+      const res = await fetch(`${clean(target.baseUrl)}/sessions/${encodeURIComponent(sessionId)}/plan`, {
+        method: 'PUT',
+        headers: this.headers(target.apiKey),
+        body: JSON.stringify({ active }),
+        signal: AbortSignal.timeout(12_000),
+      })
+      const json: any = await res.json().catch(() => ({}))
+      if (res.status === 404 || res.status === 501) return { ok: false, supported: false, error: '远端 dsh-web-service 版本过低，不含计划模式接口（需 ≥ 0.3.9）' }
+      if (!res.ok || !json?.ok) return { ok: false, supported: true, error: json?.error || `HTTP ${res.status}` }
+      return { ok: true, supported: true, active: !!json.data?.active, pending: !!json.data?.pending, transition: String(json.data?.transition || '') }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || '切换计划模式失败' }
+    }
+  }
+
+  /** 手动压缩会话历史（POST /sessions/:id/compact，等价 /compact 命令；要求会话空闲）。 */
+  public async compactSession(target: DshTarget, sessionId: string): Promise<{ ok: boolean; supported?: boolean; compacted?: boolean; message?: string; error?: string }> {
+    try {
+      const res = await fetch(`${clean(target.baseUrl)}/sessions/${encodeURIComponent(sessionId)}/compact`, {
+        method: 'POST',
+        headers: this.headers(target.apiKey),
+        signal: AbortSignal.timeout(120_000),
+      })
+      const json: any = await res.json().catch(() => ({}))
+      if (res.status === 404 || res.status === 501) return { ok: false, supported: false, error: '远端 dsh-web-service 版本过低，不含压缩接口（需 ≥ 0.3.9）' }
+      if (!res.ok || !json?.ok) return { ok: false, supported: true, error: json?.error || `HTTP ${res.status}` }
+      return { ok: true, supported: true, compacted: !!json.data?.compacted, message: json.data?.message }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || '压缩会话失败' }
+    }
+  }
+
   /**
    * 提交 ask_user_question 挂起问题的答复（远端宿主 waterfall 桥）。
    * 需要 dsh-web-service ≥ 0.1.6（POST /sessions/:id/answers）；旧版返回 supported=false。

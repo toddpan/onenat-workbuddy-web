@@ -2050,6 +2050,10 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <button class="side-toggle" id="btn-side-toggle" title="会话列表"><span class="st-hamb">☰</span></button>
           <span class="title" id="chat-title" title="双击重命名">选择或新建任务</span>
           <button class="mini-btn" id="btn-rename-task" style="display:none" title="重命名会话">✏️</button>
+          <button class="mini-btn" id="btn-goal" style="display:none" title="长期目标（/goal）">🎯</button>
+          <button class="mini-btn" id="btn-plan" style="display:none" title="计划模式（/plan）">📋</button>
+          <button class="mini-btn" id="btn-compact" style="display:none" title="压缩以上对话（/compact，降低上下文占用）">🗜️</button>
+          <span class="badge mode" id="chat-goal-badge" style="display:none" title="当前长期目标"></span>
           <span class="badge mode" id="chat-mode" style="display:none"></span>
           <span class="hspacer"></span>
           <div class="main-agent-picker" id="node-picker">
@@ -4831,6 +4835,9 @@ async function openTask(taskId) {
     if ($('chat-title')) $('chat-title').textContent = taskSummary.title || '加载中…';
     if ($('btn-add-member')) $('btn-add-member').style.display = '';
     if ($('btn-rename-task')) $('btn-rename-task').style.display = '';
+    if ($('btn-goal')) $('btn-goal').style.display = '';
+    if ($('btn-plan')) $('btn-plan').style.display = '';
+    if ($('btn-compact')) $('btn-compact').style.display = '';
     setSending(!!(taskSummary.running || taskSummary.status === 'running'));
     const scroll = $('chat-scroll');
     if (scroll) scroll.innerHTML = '<div class="chat-loading"><span>⏳</span><span>正在加载会话内容…</span></div>';
@@ -4853,6 +4860,7 @@ async function openTask(taskId) {
   startTaskTodosPolling();
   ensureSkillList(); // "/" 技能候选预热（对齐 harness warm 钩子：打开会话即拉目录）
   loadSessionModelInfo(); // 会话模型选择/推理等级/模式预设回显（失败静默）
+  refreshCollab(); // 目标徽标 + 计划模式状态回显（失败静默）
 }
 
 /** 对话内容列（DSH ChatView .column）：所有流节点的挂载点，惰性创建 */
@@ -4875,6 +4883,9 @@ function applyTaskToView(task, isInitialRender) {
   if ($('chat-title')) $('chat-title').textContent = task.title || '未命名任务';
   if ($('btn-add-member')) $('btn-add-member').style.display = '';
   if ($('btn-rename-task')) $('btn-rename-task').style.display = '';
+  if ($('btn-goal')) $('btn-goal').style.display = '';
+  if ($('btn-plan')) $('btn-plan').style.display = '';
+  if ($('btn-compact')) $('btn-compact').style.display = '';
   refreshChatHead(task);
   setSending(task.status === 'running');
 
@@ -4934,6 +4945,11 @@ function resetChatView() {
   $('chat-title').textContent = '选择或新建任务';
   if ($('btn-add-member')) $('btn-add-member').style.display = 'none';
   if ($('btn-rename-task')) $('btn-rename-task').style.display = 'none';
+  if ($('btn-goal')) $('btn-goal').style.display = 'none';
+  if ($('btn-plan')) $('btn-plan').style.display = 'none';
+  if ($('btn-compact')) $('btn-compact').style.display = 'none';
+  var gb = $('chat-goal-badge'); if (gb) { gb.style.display = 'none'; gb.textContent = ''; }
+  if ($('btn-plan')) { $('btn-plan').textContent = '📋'; $('btn-plan').style.background = ''; $('btn-plan').style.borderColor = ''; }
   if ($('chat-mode')) $('chat-mode').style.display = 'none';
   const mc = $('member-chips'); if (mc) mc.innerHTML = '';
   removeTurnStatus();
@@ -7008,6 +7024,174 @@ $('btn-stop').addEventListener('click', async () => {
     }
   }
 });
+
+// ---------- 会话协作（goal / plan / compact，对应 GUI /goal /plan /compact）----------
+var collab = { goal: null, planActive: false, planPending: false };
+
+async function refreshCollab() {
+  var tid = state.currentTaskId;
+  if (!tid) return;
+  var gr = api('/tasks/' + tid + '/goal');
+  var pr = api('/tasks/' + tid + '/plan');
+  var grv = await gr, prv = await pr;
+  if (state.currentTaskId !== tid) return; // 已切换会话，丢弃旧响应
+  collab.goal = (grv && grv.ok && grv.data) ? (grv.data.goal || null) : null;
+  collab.planActive = !!(prv && prv.ok && prv.data && prv.data.active);
+  collab.planPending = !!(prv && prv.ok && prv.data && prv.data.pending);
+  renderCollabState();
+}
+
+var GOAL_PHASE_TXT = { active: '', paused: ' · 已暂停', blocked: ' · 受阻', complete: ' · 已完成' };
+function renderCollabState() {
+  var badge = document.getElementById('chat-goal-badge');
+  var planBtn = document.getElementById('btn-plan');
+  if (badge) {
+    var g = collab.goal;
+    if (g && g.objective) {
+      var obj = String(g.objective);
+      badge.textContent = '🎯 ' + (obj.length > 26 ? obj.slice(0, 26) + '…' : obj) + (GOAL_PHASE_TXT[g.phase] || '');
+      badge.title = '当前长期目标：' + obj;
+      badge.style.display = '';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+  if (planBtn) {
+    planBtn.textContent = collab.planActive ? (collab.planPending ? '📋 计划中…' : '📋 计划中') : '📋';
+    planBtn.title = collab.planActive ? '计划模式开启中（点击退出 /plan off）' : '计划模式（点击进入）';
+    planBtn.style.background = collab.planActive ? 'var(--acc-light)' : '';
+    planBtn.style.borderColor = collab.planActive ? 'rgba(111,123,247,.4)' : '';
+  }
+}
+
+$('btn-goal').addEventListener('click', openGoalDialog);
+$('btn-plan').addEventListener('click', togglePlanMode);
+$('btn-compact').addEventListener('click', compactTaskSession);
+
+async function openGoalDialog() {
+  var tid = state.currentTaskId;
+  if (!tid) return;
+  var r = await api('/tasks/' + tid + '/goal');
+  if (r && r.supported === false) { toast(r.error || '远端 dsh-web-service 版本过低（需 ≥ 0.3.9）', true); return; }
+  var goal = r && r.ok ? (r.data && r.data.goal) || null : null;
+  collab.goal = goal; renderCollabState();
+  var body = '';
+  var actions = [];
+  if (!goal) {
+    body = '<div style="margin-bottom:10px"><label style="display:block;font-size:12.5px;color:var(--tx3);margin-bottom:5px">目标描述</label>' +
+      '<textarea id="gl-obj" rows="3" style="width:100%;box-sizing:border-box" placeholder="例如：修复登录超时 Bug 并完成发版"></textarea></div>' +
+      '<div style="margin-bottom:10px"><label style="display:block;font-size:12.5px;color:var(--tx3);margin-bottom:5px">自动续跑轮数上限（可选）</label>' +
+      '<input id="gl-rounds" type="number" min="1" style="width:100%;box-sizing:border-box" placeholder="缺省用宿主默认" /></div>' +
+      '<div style="font-size:12px;color:var(--tx3);line-height:1.6">创建后，会话每轮结束都会围绕该目标自动继续推进，直到完成、受阻或轮数用尽。</div>';
+    actions.push({ label: '创建目标', cls: 'pri', act: function () { submitGoalCreate(); } });
+  } else {
+    var phaseTxt = { active: '进行中', paused: '已暂停', blocked: '受阻', complete: '已完成' }[goal.phase] || String(goal.phase || '');
+    body = '<div style="margin-bottom:12px;padding:10px;border:1px solid var(--line);border-radius:10px">' +
+      '<div style="font-weight:600;margin-bottom:4px">🎯 ' + esc(goal.objective) + '</div>' +
+      '<div style="font-size:12px;color:var(--tx3)">状态：' + esc(phaseTxt) +
+      ' · 已推进 ' + (goal.roundsStarted || 0) + '/' + (goal.maxGoalRounds || '∞') + ' 轮' +
+      (goal.blockedReason ? ' · ' + esc(goal.blockedReason.message || goal.blockedReason.code || '') : '') +
+      '</div></div>' +
+      '<div style="margin-bottom:10px"><label style="display:block;font-size:12.5px;color:var(--tx3);margin-bottom:5px">修改目标描述（可选）</label>' +
+      '<textarea id="gl-obj" rows="2" style="width:100%;box-sizing:border-box" placeholder="留空则不修改">' + esc(goal.objective) + '</textarea></div>' +
+      '<div style="margin-bottom:10px"><label style="display:block;font-size:12.5px;color:var(--tx3);margin-bottom:5px">轮数上限（可选修改）</label>' +
+      '<input id="gl-rounds" type="number" min="1" style="width:100%;box-sizing:border-box" placeholder="' + (goal.maxGoalRounds || '') + '" /></div>';
+    if (goal.phase === 'active') {
+      actions.push({ label: '✅ 标记完成', cls: 'pri', act: function () { goalAct('complete'); } });
+      actions.push({ label: '⏸ 暂停', act: function () { goalAct('pause'); } });
+      actions.push({ label: '🚫 标记受阻', act: function () { goalMarkBlocked(); } });
+      actions.push({ label: '⛔ 停止自动续跑', act: function () { goalAct('disarm'); } });
+    } else if (goal.phase === 'paused' || goal.phase === 'blocked') {
+      actions.push({ label: '▶️ 恢复推进', cls: 'pri', act: function () { goalAct('resume'); } });
+      actions.push({ label: '🗑 清除目标', act: function () { goalAct('clear'); } });
+    } else if (goal.phase === 'complete') {
+      actions.push({ label: '🗑 清除目标', cls: 'pri', act: function () { goalAct('clear'); } });
+    }
+    actions.push({ label: '💾 保存修改', act: function () { goalAct('edit'); } });
+  }
+  actions.push({ label: '关闭', act: function () { closeModal(); } });
+  openModal('长期目标（/goal）', body, actions);
+  setTimeout(function () { var el = document.getElementById('gl-obj'); if (el) el.focus(); }, 30);
+}
+
+async function submitGoalCreate() {
+  var tid = state.currentTaskId; if (!tid) return;
+  var objEl = document.getElementById('gl-obj');
+  var obj = ((objEl && objEl.value) || '').trim();
+  if (!obj) { toast('请填写目标描述', true); return; }
+  var payload = { objective: obj };
+  var roundsRaw = (document.getElementById('gl-rounds') || {}).value || '';
+  if (roundsRaw) payload.maxGoalRounds = parseInt(roundsRaw, 10);
+  var r = await api('/tasks/' + tid + '/goal', { method: 'POST', body: JSON.stringify(payload) });
+  if (r.ok) {
+    toast('✓ 目标已创建，会话将自动推进');
+    closeModal();
+    collab.goal = (r.data && r.data.goal) || null;
+    renderCollabState();
+  } else {
+    toast(r.error || '创建失败', true);
+  }
+}
+
+async function goalAct(action, extra) {
+  var tid = state.currentTaskId; if (!tid) return;
+  var payload = Object.assign({ action: action }, extra || {});
+  if (action === 'edit') {
+    var obj = ((document.getElementById('gl-obj') || {}).value || '').trim();
+    var roundsRaw = (document.getElementById('gl-rounds') || {}).value || '';
+    if (obj) payload.objective = obj;
+    if (roundsRaw) payload.maxGoalRounds = parseInt(roundsRaw, 10);
+    if (!obj && !roundsRaw) { toast('没有需要保存的修改'); return; }
+  }
+  var r = await api('/tasks/' + tid + '/goal', { method: 'PUT', body: JSON.stringify(payload) });
+  if (r.ok) {
+    var acts = { pause: '已暂停', resume: '已恢复推进', complete: '已完成', clear: '已清除', disarm: '已停止自动续跑（目标保留）', blocked: '已标记受阻', edit: '已保存' };
+    toast('✓ 目标' + (acts[action] || '已更新'));
+    closeModal();
+    await refreshCollab();
+  } else {
+    toast(r.error || '操作失败', true);
+  }
+}
+
+function goalMarkBlocked() {
+  var msg = window.prompt('受阻原因：');
+  if (msg === null) return;
+  goalAct('blocked', { blockedReason: { code: 'user', message: msg || '用户标记受阻' } });
+}
+
+async function togglePlanMode() {
+  var tid = state.currentTaskId; if (!tid) return;
+  var next = !collab.planActive;
+  var r = await api('/tasks/' + tid + '/plan', { method: 'PUT', body: JSON.stringify({ active: next }) });
+  if (r.ok) {
+    var d = (r.data || {});
+    collab.planActive = !!d.active;
+    collab.planPending = !!d.pending;
+    renderCollabState();
+    var msg = d.transition === 'queued' ? '将在下个步边界生效' : d.transition === 'committed' ? '已生效' : d.transition === 'noop' ? '状态未变化' : d.transition === 'cancelled' ? '已取消' : d.transition || '';
+    toast(next ? '📋 计划模式：' + msg : '已退出计划模式' + (msg ? '：' + msg : ''));
+  } else {
+    toast(r.error || '切换失败', true);
+  }
+}
+
+async function compactTaskSession() {
+  var tid = state.currentTaskId; if (!tid) return;
+  if (!window.confirm('压缩以上对话内容？\\n\\n历史将被替换为摘要节点，上下文占用显著下降，早期细节不再逐条可见。建议在任务空闲时执行（运行中会失败）。')) return;
+  var btn = document.getElementById('btn-compact');
+  if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; }
+  try {
+    var r = await api('/tasks/' + tid + '/compact', { method: 'POST' });
+    if (r.ok) {
+      toast((r.data && r.data.compacted) ? '✓ 压缩完成，上下文已瘦身' : '暂无可压缩的历史');
+    } else {
+      toast(r.error || '压缩失败', true);
+    }
+  } finally {
+    if (btn) { btn.disabled = false; btn.style.opacity = ''; }
+  }
+}
 
 // ---------- 附件上传 ----------
 $('btn-attach').addEventListener('click', () => {

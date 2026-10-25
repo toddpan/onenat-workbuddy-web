@@ -28,7 +28,7 @@ import type { SshResourceStore } from './ssh-store.js'
 import type { ScheduleRunner } from './scheduler.js'
 import { normalizeRule, nextRun, ruleText } from './scheduler.js'
 import { SCHEDULE_TEMPLATES } from './schedule-templates.js'
-import { expertPersona } from './expert-registry.js'
+import { expertPersona, buildExpertSource } from './expert-registry.js'
 import { ExpertRegistry } from './expert-registry.js'
 import { UserExpertStore } from './expert-store.js'
 import { parseTeamInput, BUILTIN_TEAMS } from './expert-teams.js'
@@ -38,7 +38,7 @@ import type { AuditLog } from './audit.js'
 import { UsageService } from './usage.js'
 import type { XiaozhiMcpClient } from './xiaozhi-mcp.js'
 import type { DshRef, Project, SubAgent, WorkTask, ScheduledTask } from './types.js'
-import { NODE_AGENT_ID, MAIN_AGENT_LABEL } from './types.js'
+import { NODE_AGENT_ID, MAIN_AGENT_LABEL, projectDefaultAgentIds, projectDefaultAgentIdsFromInput } from './types.js'
 import type { MonitorService } from './monitor.js'
 import { SkillPluginLibrary, buildSkillInstallPrompt, buildPluginInstallPrompt, buildPluginExportPrompt, buildProjectImportPrompt, extractExportedPaths } from './library.js'
 import type { LibKind } from './library.js'
@@ -172,11 +172,11 @@ export class WorkBuddyRouter {
     at: number
   }>()
 
-  /** DSH 节点展示名（映射节点取隧道名/应用名；直连取 baseUrl） */
+  /** DSH 节点展示名（映射节点取应用名（含端口后缀）；直连取 baseUrl） */
   private nodeLabelOf(ref: DshRef): string {
     if (ref.kind === 'mapping') {
       const m = this.directory.resolveMapping(ref.mappingId)
-      return m?.tunnelName || m?.appName || ref.mappingId
+      return m?.appName || ref.mappingId
     }
     if (ref.kind === 'app') {
       const a = this.directory.resolveApp(ref.appId)
@@ -338,7 +338,7 @@ export class WorkBuddyRouter {
     const nodeTitle = proj.dshRef.kind === 'direct'
       ? proj.dshRef.apiBaseUrl
       : (proj.dshRef.kind === 'mapping'
-        ? (this.directory.resolveMapping(proj.dshRef.mappingId)?.tunnelName || proj.dshRef.mappingId)
+        ? (this.directory.resolveMapping(proj.dshRef.mappingId)?.appName || proj.dshRef.mappingId)
         : (this.directory.resolveApp(proj.dshRef.appId)?.appName || proj.dshRef.appId))
     return {
       id: proj.id,
@@ -349,7 +349,8 @@ export class WorkBuddyRouter {
       instruction: proj.instruction || '',
       instructionPreview: (proj.instruction || '').slice(0, 120),
       expertIds: proj.expertIds,
-      experts: proj.expertIds.map((id) => ({ id, name: this.store.getAgent(id)?.name || id })),
+      defaultAgentIds: projectDefaultAgentIds(proj),
+      experts: projectDefaultAgentIds(proj).map((id) => ({ id, name: this.store.getAgent(id)?.name || id })),
       connectorIds: proj.connectorIds,
       skillNames: proj.skillNames,
       owner: proj.owner,
@@ -364,7 +365,7 @@ export class WorkBuddyRouter {
     }
   }
 
-  /** 创建/更新项目（校验名称与节点；专家必须存在） */
+  /** 创建/更新项目（校验名称与节点；默认协作成员必须存在；defaultAgentIds 为 canonical，expertIds 兼容别名） */
   private upsertProjectFromInput(body: any): Project {
     const name = String(body?.name || '').trim()
     if (!name) throw new Error('缺少项目名称')
@@ -372,9 +373,10 @@ export class WorkBuddyRouter {
     const existing = body?.id ? this.store.getProject(String(body.id)) : undefined
     const finalRef = dshRef || existing?.dshRef
     if (!finalRef) throw new Error('缺少项目 DSH 节点（dshRef）')
-    const expertIds = Array.isArray(body?.expertIds) ? body.expertIds.map(String) : (existing?.expertIds || [])
-    for (const eid of expertIds) {
-      if (!this.store.getAgent(eid)) throw new Error(`专家不存在: ${eid}`)
+    // 显式传入（含 []）即生效并写 canonical；未传时保留既有值。expertIds 传入时视为同一字段的旧写法。
+    const defaultAgentIds = projectDefaultAgentIdsFromInput(body)
+    for (const eid of defaultAgentIds || []) {
+      if (!this.store.getAgent(eid)) throw new Error(`默认协作成员不存在: ${eid}`)
     }
     return this.store.upsertProject({
       id: body?.id ? String(body.id) : undefined,
@@ -383,7 +385,7 @@ export class WorkBuddyRouter {
       apiKey: body?.apiKey !== undefined ? String(body.apiKey) : undefined,
       workspace: body?.workspace !== undefined ? String(body.workspace) : undefined,
       instruction: body?.instruction !== undefined ? String(body.instruction) : undefined,
-      expertIds,
+      ...(defaultAgentIds !== undefined ? { defaultAgentIds } : {}),
       connectorIds: Array.isArray(body?.connectorIds) ? body.connectorIds.map(String) : (existing?.connectorIds || []),
       skillNames: Array.isArray(body?.skillNames) ? body.skillNames.map(String) : (existing?.skillNames || []),
     })
@@ -467,7 +469,7 @@ export class WorkBuddyRouter {
   /** 列表摘要：剔除 runs（历史走详情） */
   private scheduleSummary(s: ScheduledTask) {
     const agents = s.agentIds.map((aid) => this.store.getAgent(aid)).filter(Boolean) as SubAgent[]
-    const nodeTitle = s.nodeMappingId ? (this.directory.resolveMapping(s.nodeMappingId)?.tunnelName || s.nodeMappingId) : ''
+    const nodeTitle = s.nodeMappingId ? (this.directory.resolveMapping(s.nodeMappingId)?.appName || s.nodeMappingId) : ''
     return {
       id: s.id,
       name: s.name,
@@ -602,6 +604,103 @@ export class WorkBuddyRouter {
   /** 任务清单缓存：taskId → { at, result }；2s TTL（清单随 todo_write 步进变化，需要更灵敏） */
   private todosCache = new Map<string, { at: number; result: { httpStatus: number; payload: any } }>()
   private todosInflight = new Map<string, Promise<{ httpStatus: number; payload: any }>>()
+
+  /**
+   * 解析任务「主会话」的远端定位：主智能体优先，其次按绑定顺序首个已建会话的成员。
+   * 返回 { error } 表示任务不存在或尚无可用远端会话。
+   */
+  private async resolveTaskMainSession(taskId: string): Promise<{
+    target?: any; remoteSessionId?: string; agentId?: string; error?: string; httpStatus?: number
+  }> {
+    const task = this.store.getTask(taskId)
+    if (!task) return { error: 'Task not found', httpStatus: 404 }
+    const memberIds = Object.keys(task.sessions || {})
+    const mainAgent = this.planner.pickMainAgent()
+    const mainId = mainAgent && memberIds.includes(mainAgent.id) ? mainAgent.id : ''
+    const ordered = [...(mainId ? [mainId] : []), ...memberIds.filter((id) => id !== mainId)]
+    for (const agentId of ordered) {
+      const binding = task.sessions[agentId]
+      if (!binding?.remoteSessionId) continue
+      const agent = this.store.getAgent(agentId)
+      try {
+        let target = agent
+          ? await this.resolver.resolve(agent).catch(() => undefined)
+          : await this.engine.resolveExecTarget(task, agentId).catch(() => undefined)
+        if (!target || !target.online || !target.baseUrl) {
+          // 回退（与 cancelTask 同款）：会话绑定自带节点直连地址时直接使用，
+          // ONENAT 解析不可达（离线/配置漂移）也能对节点直发协作指令
+          if (binding.baseUrl) {
+            target = { baseUrl: binding.baseUrl, apiKey: this.engine.taskExec(task).apiKey, agentId, online: true } as any
+          }
+        }
+        if (!target || !target.online || !target.baseUrl) continue
+        return { target, remoteSessionId: binding.remoteSessionId, agentId }
+      } catch { /* 下一个成员 */ }
+    }
+    return { error: '任务尚无可用的远端会话（先发一条消息建立会话后重试）', httpStatus: 409 }
+  }
+
+  /**
+   * 任务级会话协作接口（goal / plan / compact）：等价 GUI 斜杠命令的远程入口。
+   * 操作任务主会话（见 resolveTaskMainSession）；远端需要 dsh-web-service ≥ 0.3.9。
+   */
+  private async handleTaskCollab(
+    taskId: string,
+    kind: 'goal' | 'plan' | 'compact',
+    method: string,
+    body: any,
+  ): Promise<{ httpStatus: number; payload: any }> {
+    const main = await this.resolveTaskMainSession(taskId)
+    if (main.error || !main.target || !main.remoteSessionId) {
+      return { httpStatus: main.httpStatus || 404, payload: { ok: false, error: main.error } }
+    }
+    const target = main.target
+    const sid = main.remoteSessionId
+    try {
+      if (kind === 'goal') {
+        if (method === 'GET') {
+          const r = await this.client.getGoal(target, sid)
+          return { httpStatus: r.ok ? 200 : r.supported === false ? 501 : 409, payload: r.ok ? { ok: true, data: { ...r, goal: r.goal ?? null } } : { ok: false, error: r.error, supported: r.supported } }
+        }
+        if (method === 'POST') {
+          const objective = typeof body?.objective === 'string' ? body.objective.trim() : ''
+          if (!objective) return { httpStatus: 400, payload: { ok: false, error: 'objective 不能为空' } }
+          const r = await this.client.createGoal(target, sid, objective, typeof body?.maxGoalRounds === 'number' ? body.maxGoalRounds : undefined)
+          return { httpStatus: r.ok ? 200 : r.supported === false ? 501 : 409, payload: r.ok ? { ok: true, data: { goal: r.goal } } : { ok: false, error: r.error, supported: r.supported } }
+        }
+        // PUT：生命周期操作
+        const action = String(body?.action || '')
+        if (!['edit', 'pause', 'resume', 'complete', 'blocked', 'clear', 'disarm'].includes(action)) {
+          return { httpStatus: 400, payload: { ok: false, error: 'action 必须是 edit | pause | resume | complete | blocked | clear | disarm' } }
+        }
+        const req: Record<string, unknown> = { action }
+        if (action === 'edit' || action === 'blocked' || body?.ref) {
+          if (body?.objective !== undefined) req.objective = body.objective
+          if (body?.maxGoalRounds !== undefined) req.maxGoalRounds = body.maxGoalRounds
+          if (body?.blockedReason !== undefined) req.blockedReason = body.blockedReason
+          if (body?.ref !== undefined) req.ref = body.ref
+        }
+        const r = await this.client.updateGoal(target, sid, req)
+        return { httpStatus: r.ok ? 200 : r.supported === false ? 501 : 409, payload: r.ok ? { ok: true, data: r.data } : { ok: false, error: r.error, supported: r.supported } }
+      }
+      if (kind === 'plan') {
+        if (method === 'GET') {
+          const r = await this.client.getPlan(target, sid)
+          return { httpStatus: r.ok ? 200 : r.supported === false ? 501 : 409, payload: r.ok ? { ok: true, data: { active: !!r.active, pending: !!r.pending } } : { ok: false, error: r.error, supported: r.supported } }
+        }
+        if (typeof body?.active !== 'boolean') {
+          return { httpStatus: 400, payload: { ok: false, error: 'active (boolean) 必填' } }
+        }
+        const r = await this.client.setPlan(target, sid, body.active)
+        return { httpStatus: r.ok ? 200 : r.supported === false ? 501 : 409, payload: r.ok ? { ok: true, data: { active: r.active, pending: r.pending, transition: r.transition } } : { ok: false, error: r.error, supported: r.supported } }
+      }
+      // compact
+      const r = await this.client.compactSession(target, sid)
+      return { httpStatus: r.ok ? 200 : r.supported === false ? 501 : 409, payload: r.ok ? { ok: true, data: { compacted: !!r.compacted, message: r.message } } : { ok: false, error: r.error, supported: r.supported } }
+    } catch (err: any) {
+      return { httpStatus: 502, payload: { ok: false, error: err?.message || '远端调用失败' } }
+    }
+  }
 
   /**
    * 任务的「任务清单 + 运行时长」：读远端 DSH 会话的 todo_write 投影
@@ -998,7 +1097,7 @@ export class WorkBuddyRouter {
       }
       // 候选白名单过滤：节点智能体可能推断出不存在的 ID，宁缺毋滥（截断时在响应里告知）
       const agentIds = new Set(this.store.getAgents().map((a) => a.id))
-      const expertIds = (Array.isArray(body.expertIds) ? body.expertIds : []).map(String).filter((id: string) => agentIds.has(id))
+      const expertIds = (Array.isArray(body.defaultAgentIds) ? body.defaultAgentIds : Array.isArray(body.expertIds) ? body.expertIds : []).map(String).filter((id: string) => agentIds.has(id))
       const validConns = new Set<string>()
       for (const s of this.sshStore.list()) validConns.add(`ssh:${s.id}`)
       for (const e of this.directory.listEndpoints()) {
@@ -1029,7 +1128,7 @@ export class WorkBuddyRouter {
         dshRef: pending.nodeRef,
         workspace: pending.path,
         instruction,
-        expertIds,
+        defaultAgentIds: expertIds,
         connectorIds,
         skillNames,
         importedFrom: { sourceNode: pending.nodeLabel, sourcePath: pending.path, taskId: pending.taskId, at: Date.now() },
@@ -1506,14 +1605,14 @@ export class WorkBuddyRouter {
         return true
       }
       if (!ep.online || !ep.baseUrl) {
-        this.sendJson(res, 200, { ok: false, error: `节点「${ep.tunnelName || mappingId}」当前离线` })
+        this.sendJson(res, 200, { ok: false, error: `节点「${ep.appName || mappingId}」当前离线` })
         return true
       }
       const cred = await this.directory.fetchMappingCredentials(mappingId).catch(() => undefined)
       const key = cred?.ok ? (cred.apiKey || cred.token || undefined) : undefined
       const client = new DshClient()
       const r = await client.getModels({ baseUrl: ep.baseUrl, apiKey: key })
-      this.sendJson(res, 200, { ok: r.ok, nodeTitle: ep.tunnelName || mappingId, models: r.models, defaultModel: r.defaultModel, error: r.error })
+      this.sendJson(res, 200, { ok: r.ok, nodeTitle: ep.appName || mappingId, models: r.models, defaultModel: r.defaultModel, error: r.error })
       return true
     }
     // ---------- 按节点拉取远端工作区列表（项目「从远程 DSH 导入」的数据源） ----------
@@ -1525,7 +1624,7 @@ export class WorkBuddyRouter {
         return true
       }
       if (!ep.online || !ep.baseUrl) {
-        this.sendJson(res, 200, { ok: false, error: `节点「${ep.tunnelName || mappingId}」当前离线` })
+        this.sendJson(res, 200, { ok: false, error: `节点「${ep.appName || mappingId}」当前离线` })
         return true
       }
       const cred = await this.directory.fetchMappingCredentials(mappingId).catch(() => undefined)
@@ -1534,7 +1633,7 @@ export class WorkBuddyRouter {
       const r = await client.listWorkspaces({ baseUrl: ep.baseUrl, apiKey: key })
       this.sendJson(res, 200, {
         ok: r.ok,
-        nodeTitle: ep.tunnelName || mappingId,
+        nodeTitle: ep.appName || mappingId,
         workspaces: r.workspaces,
         error: r.error,
       })
@@ -1569,7 +1668,7 @@ export class WorkBuddyRouter {
       const out: { nodeTitle?: string; nodePing?: PingResult; agents: Array<{ id: string; name: string; ping: PingResult }> } = { agents: [] }
       if (nodeMappingId) {
         const ep = this.directory.resolveMapping(nodeMappingId)
-        out.nodeTitle = ep?.tunnelName || nodeMappingId
+        out.nodeTitle = ep?.appName || nodeMappingId
         const target = await this.resolver.resolveRef({ kind: 'mapping', mappingId: nodeMappingId }, undefined, 'schedule-node')
         out.nodePing = target.online && target.baseUrl
           ? await this.client.ping(target)
@@ -1639,7 +1738,7 @@ export class WorkBuddyRouter {
         ok: true,
         data: {
           message,
-          nodeTitle: nodeMappingId ? (this.directory.resolveMapping(nodeMappingId)?.tunnelName || nodeMappingId) : '',
+          nodeTitle: nodeMappingId ? (this.directory.resolveMapping(nodeMappingId)?.appName || nodeMappingId) : '',
           model,
           workDir,
           skills,
@@ -1756,6 +1855,14 @@ export class WorkBuddyRouter {
       }
       if (body.planner) patch.planner = body.planner
       if (body.xiaozhi) patch.xiaozhi = body.xiaozhi
+      if (body.archive) {
+        const days = Math.floor(Number(body.archive?.taskArchiveDays))
+        if (!Number.isFinite(days) || days < 0 || days > 36_500) {
+          this.sendJson(res, 400, { ok: false, error: '自动归档天数需为 0–36500 的整数（0 = 关闭自动归档）' })
+          return true
+        }
+        patch.archive = { taskArchiveDays: days }
+      }
       const updated = this.store.updateSettings(patch)
       this.directory.configure(updated.onenat.baseUrl, updated.onenat.apiKey)
       this.directory.startAutoRefresh(updated.onenat.autoRefreshMs)
@@ -1768,6 +1875,8 @@ export class WorkBuddyRouter {
               : [])
         this.xiaozhi?.configureAll(list as any)
       }
+      // 归档天数变更即时生效：不等下一轮 30 分钟周期扫描（天数收窄时立刻归档超期任务；0 = sweep 直接跳过）
+      if (patch.archive) void this.store.archiveSweep()
       this.sendJson(res, 200, { ok: true, data: { ...updated, onenat: { ...updated.onenat, apiKey: updated.onenat.apiKey ? updated.onenat.apiKey.slice(0, 8) + '…' : '' } } })
       return true
     }
@@ -1861,9 +1970,15 @@ export class WorkBuddyRouter {
       this.sendJson(res, deleted ? 200 : 404, deleted ? { ok: true, data: { deleted: true } } : { ok: false, error: '专家不存在' })
       return true
     }
-    // POST /api/experts —— 双语义分发：
-    // ① body 带 systemPrompt（或 kind==='expert'）→ 创建/更新「用户自建专家」（source=user，存 user-experts.json）；
-    // ② 其余 → 旧语义：由专家档案一键创建/更新子智能体（body 必带 { id, dshRef }，upsert 落 store.upsertAgent）。
+    // POST /api/experts/:id/instantiate —— 显式语义：由专家档案实例化/更新子智能体
+    // （id 来自 URL，body 不携带 systemPrompt，不会被误路由到「创建专家」分支）
+    const expertInstantiateMatch = /^\/api\/experts\/([^/]+)\/instantiate$/.exec(p)
+    if (expertInstantiateMatch && method === 'POST') {
+      return this.instantiateExpertFromRequest(req, res, decodeURIComponent(expertInstantiateMatch[1]))
+    }
+    // POST /api/experts —— 双语义分发（旧客户端兼容）：
+    // ① body 带 systemPrompt（或 kind==='expert'）→ 创建「用户自建专家」（source=user，存 user-experts.json）；
+    // ② 其余 → 由专家档案一键创建/更新子智能体（body 必带 { id, dshRef }；来源快照服务端权威记录）
     if (p === '/api/experts' && method === 'POST') {
       const body = await this.parseBody(req)
       if (body?.kind === 'expert' || typeof body?.systemPrompt === 'string') {
@@ -1888,43 +2003,7 @@ export class WorkBuddyRouter {
         }
         return true
       }
-      const expertId = String(body?.id ?? body?.expertId ?? '').trim()
-      if (!expertId) {
-        this.sendJson(res, 400, { ok: false, error: '缺少 id（专家标识）' })
-        return true
-      }
-      let profile
-      try {
-        profile = await this.registry.getProfile(expertId)
-      } catch (err: any) {
-        this.sendJson(res, 404, { ok: false, error: err?.message || '专家不存在' })
-        return true
-      }
-      const fallback = body?.agentId ? this.store.getAgent(String(body.agentId)) : undefined
-      const dshRef = normalizeDshRef(body.dshRef ?? fallback?.dshRef)
-      if ('error' in dshRef) {
-        this.sendJson(res, 400, { ok: false, error: dshRef.error })
-        return true
-      }
-      const workDir = String(body?.workDir ?? '').trim()
-      if (workDir && !workDir.startsWith('/')) {
-        this.sendJson(res, 400, { ok: false, error: '工作目录必须是绝对路径（以 / 开头）' })
-        return true
-      }
-      const saved = this.store.upsertAgent({
-        ...(fallback ?? {}),
-        ...(body ?? {}),
-        id: body?.agentId || `expert-${profile.id}`,
-        name: String(body?.name ?? profile.name),
-        role: profile.role || profile.name,
-        systemPrompt: profile.systemPrompt,
-        executionPrompt: profile.executionPrompt,
-        dshRef: dshRef as DshRef,
-        workDir: workDir || undefined,
-        enabled: body?.enabled ?? true,
-      })
-      this.sendJson(res, 200, { ok: true, data: { agent: saved, expert: profile } })
-      return true
+      return this.instantiateExpertFromRequest(req, res, String(body?.id ?? body?.expertId ?? '').trim(), body)
     }
     // ---------- 子智能体 ----------
     if (p === '/api/agents' && method === 'GET') {
@@ -1984,6 +2063,26 @@ export class WorkBuddyRouter {
       if (workDir && !workDir.startsWith('/')) {
         this.sendJson(res, 400, { ok: false, error: '工作目录必须是绝对路径（以 / 开头）' })
         return true
+      }
+      // expertSource 是服务端权威打的来源快照：① 客户端显式带时校验专家存在才保留（防伪造来源）；
+      // ② fromExpertId（由子智能体页「专家名册预填」流程携带）→ 复制人格并权威记录来源
+      if (body?.expertSource) {
+        const sid = String(body.expertSource.expertId ?? '').trim()
+        const ex = sid ? await this.expertRegistry.get(sid).catch(() => undefined) : undefined
+        if (!ex) delete body.expertSource
+      }
+      const fromExpertId = String(body?.fromExpertId ?? '').trim()
+      if (fromExpertId) {
+        const profile = await this.expertRegistry.getProfile(fromExpertId).catch(() => undefined)
+        if (profile) {
+          body.systemPrompt = profile.systemPrompt
+          body.executionPrompt = profile.executionPrompt
+          body.expertSource = buildExpertSource({ id: profile.id, name: profile.name, role: profile.role, systemPrompt: profile.systemPrompt, executionPrompt: profile.executionPrompt })
+        } else {
+          this.sendJson(res, 404, { ok: false, error: `专家不存在: ${fromExpertId}` })
+          return true
+        }
+        delete body.fromExpertId
       }
       const saved = this.store.upsertAgent({ ...(body as any), dshRef: dshRef as DshRef })
       this.sendJson(res, 200, { ok: true, data: saved })
@@ -2776,8 +2875,8 @@ export class WorkBuddyRouter {
           id: pr.id,
           name: pr.name,
           kind: 'project',
-          detail: `项目 · ${pr.workspace || '未设工作目录'}${pr.expertIds.length ? ` · ${pr.expertIds.length} 名专家` : ''}`,
-          meta: { projectId: pr.id, workspace: pr.workspace, expertCount: pr.expertIds.length },
+          detail: `项目 · ${pr.workspace || '未设工作目录'}${projectDefaultAgentIds(pr).length ? ` · ${projectDefaultAgentIds(pr).length} 名默认协作成员` : ''}`,
+          meta: { projectId: pr.id, workspace: pr.workspace, expertCount: projectDefaultAgentIds(pr).length },
         })
       }
 
@@ -2978,7 +3077,9 @@ export class WorkBuddyRouter {
         this.sendJson(res, 404, { ok: false, error: 'Task not found' })
         return true
       }
-      const agentId = String(body?.agentId || '')
+      // agentId 兜底：前端 turnMeta 缺失时依次回退挂起提问记录的成员、节点主会话（__node__），
+      // 避免直通对话下因空 agentId 直接 400 卡死答复链路
+      const agentId = String(body?.agentId || '') || task.pendingAsk?.agentId || '__node__'
       const binding = task.sessions?.[agentId]
       if (!binding?.remoteSessionId) {
         this.sendJson(res, 400, { ok: false, error: '该成员在任务中没有远端会话绑定', code: 'NO_SESSION' })
@@ -2996,9 +3097,51 @@ export class WorkBuddyRouter {
       const answers = Array.isArray(body?.answers) ? body.answers : []
       const r = await this.client.answerQuestion(target, binding.remoteSessionId, answers)
       if (!r.ok) {
+        // 提交失败 → 先对账：若远端批次已消失（超时/会话结束），清理残留 pendingAsk 并收敛提问卡，而不是永远挂着
+        const reaped = await this.engine.reapStalePendingAsk(taskId).catch(() => false)
+        if (reaped) {
+          this.sendJson(res, 200, { ok: true, data: { answered: 0, stale: true } })
+          return true
+        }
         this.sendJson(res, 502, { ok: false, error: r.error || '答复提交失败', supported: r.supported })
         return true
       }
+      // 本地落账（与 engine.answerPendingAndResume 对齐）：把挂起的 ask 工具落 done 并清除 pendingAsk，
+      // 否则任务刷新后问题卡回退为「等待答复」态、可被重复作答（线上"假答复卡/卡死"缺陷的配套修复）
+      const task0 = this.store.getTask(taskId)
+      if (task0) {
+        const summary = answers
+          .map((a: any) => [Array.isArray(a?.selected) ? a.selected.join(' / ') : '', String(a?.custom || '')].filter(Boolean).join('｜'))
+          .filter(Boolean)
+          .join('；')
+          .slice(0, 480)
+        const settleAskTool = (turnId: string) => {
+          if (!turnId) return
+          this.store.updateTurn(taskId, turnId, (tt) => {
+            const t = [...(tt.tools || [])].reverse().find((x) => (x.name === 'ask_user_question' || x.name === 'ask-user-question') && x.status === 'running')
+            if (t) {
+              t.status = 'done'
+              t.result = '✅ 已答复: ' + (summary || '（用户已在问题卡片作答）')
+              t.awaiting = false
+            }
+          })
+        }
+        if (task0.pendingAsk?.turnId) {
+          settleAskTool(task0.pendingAsk.turnId)
+        } else {
+          const turns = [...(this.store.getTask(taskId)?.turns || [])].reverse()
+          for (const tn of turns) {
+            if ((tn.tools || []).some((x) => (x.name === 'ask_user_question' || x.name === 'ask-user-question') && x.status === 'running')) {
+              settleAskTool(tn.id)
+              break
+            }
+          }
+        }
+        if (task0.pendingAsk) this.store.mutateTask(taskId, (t) => { delete t.pendingAsk })
+      }
+      // 续跑追踪：卡片答复回传成功后，远端 run 从挂起点继续 —— 必须有人接收续跑产出，
+      // 否则任务直接「完成」却没有最终结果（与自由文本答复桥同一套追踪/对账）
+      this.engine.trackAskResumeAfterCardAnswer(taskId, agentId, target, binding.remoteSessionId)
       this.sendJson(res, 200, { ok: true, data: { answered: answers.length } })
       return true
     }
@@ -3199,6 +3342,22 @@ export class WorkBuddyRouter {
       this.sendJson(res, out.ok ? 200 : 400, out)
       return true
     }
+    // 队列「编辑」：更新排队消息文本（排队条目 + 对应排队轮次）
+    const queueUpdateMatch = /^\/api\/tasks\/([^/]+)\/queue\/update$/.exec(p)
+    if (queueUpdateMatch && method === 'POST') {
+      const body = await this.parseBody(req)
+      const out = this.engine.updateQueuedMessage(decodeURIComponent(queueUpdateMatch[1]), String(body?.turnId || ''), String(body?.text || ''))
+      this.sendJson(res, out.ok ? 200 : 400, out)
+      return true
+    }
+    // 队列「删除」：移出队列并删除该排队轮次
+    const queueDeleteMatch = /^\/api\/tasks\/([^/]+)\/queue\/delete$/.exec(p)
+    if (queueDeleteMatch && method === 'POST') {
+      const body = await this.parseBody(req)
+      const out = this.engine.deleteQueuedMessage(decodeURIComponent(queueDeleteMatch[1]), String(body?.turnId || ''))
+      this.sendJson(res, out.ok ? 200 : 400, out)
+      return true
+    }
     // 重命名会话（对齐 DSH web 的 session.rename 动词）
     const renameMatch = /^\/api\/tasks\/([^/]+)\/rename$/.exec(p)
     if (renameMatch && method === 'POST') {
@@ -3358,6 +3517,21 @@ export class WorkBuddyRouter {
       await this.engine.cancelTask(decodeURIComponent(cancelMatch[1]))
       this.sendJson(res, 200, { ok: true })
       return true
+    }
+    // ---- 会话协作状态：goal / plan / compact（需要远端 dsh-web-service ≥ 0.3.9）----
+    const collabMatch = /^\/api\/tasks\/([^/]+)\/(goal|plan|compact)$/.exec(p)
+    if (collabMatch) {
+      const taskId = decodeURIComponent(collabMatch[1])
+      const kind = collabMatch[2]
+      const allowed = (kind === 'goal' && (method === 'GET' || method === 'POST' || method === 'PUT'))
+        || (kind === 'plan' && (method === 'GET' || method === 'PUT'))
+        || (kind === 'compact' && method === 'POST')
+      if (allowed) {
+        const body = method === 'GET' ? {} : await this.parseBody(req).catch(() => ({}))
+        const out = await this.handleTaskCollab(taskId, kind, method, body)
+        this.sendJson(res, out.httpStatus, out.payload)
+        return true
+      }
     }
     // 主调度（Planner）配置：指定子智能体（默认自动挑本地）+ 主调度模型（聊天窗可选）
     if (p === '/api/planner/options' && method === 'GET') {
@@ -3642,6 +3816,61 @@ export class WorkBuddyRouter {
     const res = await this.client.prompt(target, remoteSessionId, message, { timeoutMs: 120_000 })
     if (res.ok) return { ok: true, reply: res.content }
     return { ok: false, error: res.error }
+  }
+
+  /**
+   * 由专家档案实例化子智能体（POST /api/experts 旧语义 + POST /api/experts/:id/instantiate 共用）：
+   * persona（role/systemPrompt/executionPrompt）从档案复制为快照——之后用户在子智能体上独立编辑，
+   * 不会随档案自动同步；expertSource 由服务端权威生成（revision = 本次写入人格内容哈希），
+   * 供 UI/排查识别「已落后于源档案」。
+   */
+  private async instantiateExpertFromRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+    expertIdFromUrl: string,
+    legacyBody?: { id?: string; expertId?: string },
+  ): Promise<boolean> {
+    const body = legacyBody ?? await this.parseBody(req)
+    const expertId = String(expertIdFromUrl || ((body?.id ?? body?.expertId) ?? '')).trim()
+    if (!expertId) {
+      this.sendJson(res, 400, { ok: false, error: '缺少专家标识（URL /:id 或 body.id）' })
+      return true
+    }
+    let profile
+    try {
+      profile = await this.registry.getProfile(expertId)
+    } catch (err: any) {
+      this.sendJson(res, 404, { ok: false, error: err?.message || '专家不存在' })
+      return true
+    }
+    const fallback = body?.agentId ? this.store.getAgent(String(body.agentId)) : undefined
+    const dshRef = normalizeDshRef(body.dshRef ?? fallback?.dshRef)
+    if ('error' in dshRef) {
+      this.sendJson(res, 400, { ok: false, error: dshRef.error })
+      return true
+    }
+    const workDir = String(body?.workDir ?? '').trim()
+    if (workDir && !workDir.startsWith('/')) {
+      this.sendJson(res, 400, { ok: false, error: '工作目录必须是绝对路径（以 / 开头）' })
+      return true
+    }
+    const saved = this.store.upsertAgent({
+      ...(fallback ?? {}),
+      ...(body ?? {}),
+      // 兜底 id 仅为 upsertAgent 的内部提示（新实体 id 由 store 随机生成 agent-…），避免持久实体占用
+      // expert- 前缀命名空间（该前缀是存量动态专家伪 id 域；新伪 id 前缀见 types.ts EXPERT_AGENT_ID_PREFIX）
+      id: body?.agentId || `agent-${expertId}`,
+      name: String(body?.name ?? profile.name),
+      role: profile.role || profile.name,
+      systemPrompt: profile.systemPrompt,
+      executionPrompt: profile.executionPrompt,
+      expertSource: buildExpertSource({ id: profile.id, name: profile.name, role: profile.role, systemPrompt: profile.systemPrompt, executionPrompt: profile.executionPrompt }),
+      dshRef: dshRef as DshRef,
+      workDir: workDir || undefined,
+      enabled: body?.enabled ?? true,
+    } as Partial<SubAgent>)
+    this.sendJson(res, 200, { ok: true, data: { agent: saved, expert: profile } })
+    return true
   }
 }
 
