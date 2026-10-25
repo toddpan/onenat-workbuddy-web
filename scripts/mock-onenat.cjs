@@ -9,6 +9,12 @@ const PORT = Number(process.env.MOCK_ONENAT_PORT || 18080)
 const KEY = process.env.MOCK_ONENAT_KEY || 'onk-mock-key-000'
 /** 真实本地 DSH Web Service 端口（用于独立服务端到端冒烟；可用 DSH_WEB_PORT 覆盖） */
 const DSH_WEB_PORT = Number(process.env.DSH_WEB_PORT || 3080)
+/**
+ * 本地 DSH 开启 API Key 鉴权时（dsh-web-service 0.5.0 默认 authEnabled=true），
+ * 把该 Key 作为 DSH 映射的实例凭证下发，WorkBuddy 才能在没有子智能体 apiKey 的
+ * 节点直发路径（任务主会话）上通过鉴权。不设置则保持旧的「无凭证」形状。
+ */
+const DSH_WEB_API_KEY = process.env.DSH_WEB_API_KEY || ''
 const auth = (req) => {
   const h = req.headers.authorization || ''
   return h === 'Bearer ' + KEY || (req.url || '').includes('key=' + KEY)
@@ -104,7 +110,11 @@ const server = http.createServer((req, res) => {
   m = /^\/api\/v1\/mappings\/([^/]+)\/credentials/.exec(url)
   if (m) {
     if (m[1] === 'map-ssh-01') return json(200, { auth_type: 'basic', username: 'tsbj', password: 'mock-pass-not-real', resolved_from: 'mapping-override' })
-    return json(200, { auth_type: 'bearer', resolved_from: 'app-default' })
+    return json(200, {
+      auth_type: 'bearer',
+      resolved_from: 'app-default',
+      ...(DSH_WEB_API_KEY ? { apiKey: DSH_WEB_API_KEY, token: DSH_WEB_API_KEY } : {}),
+    })
   }
   m = /^\/api\/v1\/apps\/([^/]+)\/credentials/.exec(url)
   if (m) return json(200, { auth_type: 'bearer', resolved_from: 'app-default' })

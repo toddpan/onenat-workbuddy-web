@@ -100,6 +100,14 @@ GET  /api/tasks/:id/skills?q=      聚合各成员会话作用域技能目录（
 GET  /api/tasks/:id/todos          任务清单 + 运行时长：主智能体会话的 todo_write 投影（todos/counts）+ 本轮 running/elapsedMs（输入框上方「任务」坞；需远端 dsh-web-service ≥ 0.1.8，旧版自动隐藏）
                                    渲染语义：running=true → 蓝色转圈「N 进行中」+「运行时长」每秒递增；running=false → 模型遗留的 in_progress 条目降级为琥珀静态环「N 未完成」+「上轮时长」（避免任务已结束却显示仍在运行）
 POST /api/tasks/:id/ask-answer     ask_user_question 交互卡答复回传（经成员会话提交到远端宿主 waterfall 桥；需远端 dsh-web-service ≥ 0.1.7）
+GET|PUT /api/tasks/:id/permission     运行权限（沙箱/审批）回读 / 切换：GET 返回 {preset,sandbox,approval,available[]}；PUT body {permission} 即时下发到该任务全部已建会话（需远端 dsh-web-service ≥ 0.3.1；旧版 supported:false 时聊天窗「🔒」入口自动隐藏）
+PUT  /api/tasks/:id/session-model    切换主会话模型 {provider,model,reasoningEffort?,agentPreset?}；model:"" = 恢复节点默认（服务端解析远端 /models 默认 provider/model 后显式下发，空值不会再被静默忽略）
+GET  /api/tasks/:id/goal             长期目标回读（探测语义：**始终 200**；data.supported=false + data.reason 表示该节点未启用目标服务）
+POST|PUT /api/tasks/:id/goal         创建 / 生命周期操作（动作语义：节点不支持时 501 supported:false）
+GET  /api/tasks/:id/plan             计划模式能力探测（探测语义：**始终 200**；data.supported=false + data.reason + data.engine。dsh-web-service 0.5.0 对「宿主未装载 planMode」返回 501 SERVICE_UNAVAILABLE，此时 reason 明示“不是版本问题”，并附节点实际版本）
+PUT  /api/tasks/:id/plan             进入/退出计划模式（动作语义：节点不支持时 501 supported:false）
+POST /api/tasks/:id/compact          手动压缩会话历史（动作语义：节点不支持时 501 supported:false）
+                                     约定：GET 是能力探测，不支持不代表请求失败；只有真正执行动作（PUT/POST）才返回 501。客户端/监控请读 data.supported，不要以 HTTP 501 判定部署故障。
 GET  /api/tasks/:id/files/download ?agent&path    — 代理下载成员工作区文件（AI 回复中的路径可直接用）
 POST /api/tasks/:id/messages|cancel|summary
 GET  /api/planner/options         规划器子智能体列表 + 其节点模型可选项 + 当前生效配置

@@ -114,7 +114,13 @@ async function main() {
   const dataDir = mkdtempSync(join(tmpdir(), 'workbuddy-smoke-'))
   console.log(`\n== OneNat WorkBuddy 独立部署冒烟 ==\n   数据目录 ${dataDir}\n   服务 ${BASE}${PREFIX}\n   模式 ${E2E ? '含真实派发 E2E' : '常规（不含 LLM 派发）'}\n`)
 
-  spawnJob('mock-onenat', process.execPath, [join(ROOT, 'scripts', 'mock-onenat.cjs')], { MOCK_ONENAT_PORT: String(MOCK_PORT) })
+  // 透传 DSH 端口/Key：本机 dsh-web-service 默认开鉴权（0.5.0 authEnabled=true），
+  // mock 需把 Key 作为映射实例凭证下发，E2E 的节点直发/子智能体派发才能通过鉴权。
+  spawnJob('mock-onenat', process.execPath, [join(ROOT, 'scripts', 'mock-onenat.cjs')], {
+    MOCK_ONENAT_PORT: String(MOCK_PORT),
+    DSH_WEB_PORT: String(process.env.DSH_WEB_PORT || 3080),
+    DSH_WEB_API_KEY: String(process.env.DSH_WEB_API_KEY || ''),
+  })
   await waitFor(async () => (await fetch(`http://127.0.0.1:${MOCK_PORT}/api/v1/resources`, { headers: { Authorization: 'Bearer onk-mock-key-000' } })).ok, 'mock ONENAT 就绪')
 
   const server = spawnJob('server', process.execPath, [
@@ -203,6 +209,14 @@ async function main() {
   check('任务归档', archived.status === 200)
   const tasks = await req('GET', `${PREFIX}/api/tasks`)
   check('任务列表可读', (tasks.json?.data || []).some((t) => t.id === taskId))
+
+  // ---------- 5.5 队列管理接口（编辑/删除/立即发送：不存在条目走 400 分支，验证路由与引擎接线） ----------
+  const qSendMiss = await req('POST', `${PREFIX}/api/tasks/${taskId}/queue/send`, { turnId: 'turn-nope' })
+  check('队列立即发送：不存在条目 400', qSendMiss.status === 400 && String(qSendMiss.json?.error || '').includes('排队消息不存在'))
+  const qUpdMiss = await req('POST', `${PREFIX}/api/tasks/${taskId}/queue/update`, { turnId: 'turn-nope', text: '改文' })
+  check('队列编辑：不存在条目 400', qUpdMiss.status === 400 && String(qUpdMiss.json?.error || '').includes('排队消息不存在'))
+  const qDelMiss = await req('POST', `${PREFIX}/api/tasks/${taskId}/queue/delete`, { turnId: 'turn-nope' })
+  check('队列删除：不存在条目 400', qDelMiss.status === 400 && String(qDelMiss.json?.error || '').includes('排队消息不存在'))
 
   // ---------- 6. 工具 HTTP 通道 ----------
   const toolList = await req('GET', `${PREFIX}/api/tools`)
