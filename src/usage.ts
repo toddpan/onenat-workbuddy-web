@@ -13,7 +13,8 @@
  */
 
 import type { WorkStore } from './store.js'
-import type { WorkTask, TaskTurn } from './types.js'
+import type { WorkTask } from './types.js'
+import { usageOf, turnUsageAt } from './token-stats.js'
 
 export type UsageSource = 'schedule' | 'chat' | 'orchestrate' | 'console' | 'tool'
 
@@ -68,21 +69,7 @@ export const SOURCE_LABELS: Record<UsageSource, string> = {
   tool: 'AI 工具通道',
 }
 
-/** token 账本求和：兼容多种字段命名（inputTokens/prompt_tokens/…），与 monitor.usageOf 同源逻辑 */
-function usageOf(usage: Record<string, number> | undefined): { input: number; output: number; cacheRead: number } {
-  const u = usage || {}
-  let input = 0
-  let output = 0
-  let cacheRead = 0
-  for (const [k, v] of Object.entries(u)) {
-    if (typeof v !== 'number') continue
-    const key = k.toLowerCase()
-    if (key.includes('cache') && (key.includes('read') || key.includes('hit'))) cacheRead += v
-    else if (key.includes('input') || key.includes('prompt')) input += v
-    else if (key.includes('output') || key.includes('completion')) output += v
-  }
-  return { input, output, cacheRead }
-}
+/** token 账本求和（usageOf）与回合归属时刻（turnUsageAt）统一在 token-stats.ts，与监控大屏同口径 */
 
 function sourceOf(t: WorkTask): UsageSource {
   if (t.scheduleId) return 'schedule'
@@ -105,12 +92,14 @@ export class UsageService {
       const project = t.projectId ? projects.get(t.projectId) : undefined
       const fallbackAgent = t.memberAgentIds?.[0] ? agents.get(t.memberAgentIds[0]) : undefined
       for (const turn of t.turns || []) {
-        if (turn.at < from || turn.at > to) continue
+        // 归属时刻 = 回合收尾（endedAt）优先回退开始（at）：跨日回合归完成日，与监控大屏一致
+        const turnAt = turnUsageAt(turn)
+        if (turnAt < from || turnAt > to) continue
         const u = usageOf(turn.usage)
         if (u.input === 0 && u.output === 0 && u.cacheRead === 0) continue
         const agent = (turn.agentId ? agents.get(turn.agentId) : undefined) || fallbackAgent
         out.push({
-          at: turn.at,
+          at: turnAt,
           taskId: t.id,
           taskTitle: t.title || t.id,
           turnId: turn.id,

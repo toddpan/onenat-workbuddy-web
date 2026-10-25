@@ -322,6 +322,8 @@ export interface TaskTurn {
   streaming?: boolean
   subtaskIds?: string[]
   at: number
+  /** 回合收尾时刻：token 消耗归属日按它算（跨日回合归完成日）；缺失时统计口径回退 at（开始时刻） */
+  endedAt?: number
 }
 
 export interface TurnToolCall {

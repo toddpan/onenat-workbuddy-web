@@ -25,6 +25,7 @@ import type { SshResourceStore } from './ssh-store.js'
 import type { Orchestrator } from './orchestrator.js'
 import { DshClient } from './remote-client.js'
 import type { PlanSubtask, ResolvedEndpoint, ScheduledTask, SubAgent, TaskEvent, WorkTask } from './types.js'
+import { sumUsageSince } from './token-stats.js'
 
 // ---------------------------------------------------------------- 数据形状
 
@@ -477,26 +478,16 @@ export class MonitorService {
     let running = 0
     let completedToday = 0
     let failedToday = 0
-    let tokensIn = 0
-    let tokensOut = 0
-    let cacheRead = 0
-    let toolCalls = 0
     for (const t of tasks) {
       if (this.engine.isRunning(t.id)) running += 1
       if (t.updatedAt >= dayStart.getTime()) {
         if (t.status === 'completed' || t.status === 'success') completedToday += 1
         else if (t.status === 'failed') failedToday += 1
       }
-      for (const turn of t.turns || []) {
-        if (turn.at >= dayStart.getTime()) {
-          const u = usageOf(turn.usage)
-          tokensIn += u.input
-          tokensOut += u.output
-          cacheRead += u.cacheRead
-          toolCalls += (turn.tools || []).length
-        }
-      }
     }
+    // Token/工具量按【回合】归属（endedAt 优先回退 at），与消耗报表（UsageService）同口径；
+    // 不按任务归属——任务级口径会把长生命周期任务的历史消耗在每个活跃日重复累计
+    const usage = sumUsageSince(tasks, dayStart.getTime())
     return {
       at: now,
       agentsTotal: agents.length,
@@ -505,10 +496,10 @@ export class MonitorService {
       tasksCompletedToday: completedToday,
       tasksFailedToday: failedToday,
       schedulesEnabled: this.store.getSchedules().filter((s) => s.enabled).length,
-      tokensInputToday: tokensIn,
-      tokensOutputToday: tokensOut,
-      cacheReadToday: cacheRead,
-      toolCallsToday: toolCalls,
+      tokensInputToday: usage.tokensIn,
+      tokensOutputToday: usage.tokensOut,
+      cacheReadToday: usage.cacheRead,
+      toolCallsToday: usage.toolCalls,
     }
   }
 
@@ -784,25 +775,14 @@ export class MonitorService {
     // KPI
     let tasksCompletedToday = 0
     let tasksFailedToday = 0
-    let tokensIn = 0
-    let tokensOut = 0
-    let cacheRead = 0
-    let toolCalls = 0
     for (const t of tasks) {
       if (t.updatedAt >= dayStart.getTime()) {
         if (t.status === 'completed' || t.status === 'success') tasksCompletedToday += 1
         else if (t.status === 'failed') tasksFailedToday += 1
       }
-      for (const turn of t.turns || []) {
-        if (turn.at >= dayStart.getTime()) {
-          const u = usageOf(turn.usage)
-          tokensIn += u.input
-          tokensOut += u.output
-          cacheRead += u.cacheRead
-          toolCalls += (turn.tools || []).length
-        }
-      }
     }
+    // Token/工具量按【回合】归属（endedAt 优先回退 at），与消耗报表（UsageService）同口径
+    const usage = sumUsageSince(tasks, dayStart.getTime())
     const nextSchedules = schedules
       .filter((s) => s.enabled && typeof s.nextRunAt === 'number')
       .sort((a, b) => (a.nextRunAt || 0) - (b.nextRunAt || 0))
@@ -849,10 +829,10 @@ export class MonitorService {
       tasksRunning: runningTasks.length,
       tasksCompletedToday,
       tasksFailedToday,
-      tokensInputToday: tokensIn,
-      tokensOutputToday: tokensOut,
-      cacheReadToday: cacheRead,
-      toolCallsToday: toolCalls,
+      tokensInputToday: usage.tokensIn,
+      tokensOutputToday: usage.tokensOut,
+      cacheReadToday: usage.cacheRead,
+      toolCallsToday: usage.toolCalls,
       schedulesTotal: schedules.length,
       schedulesEnabled: schedules.filter((s) => s.enabled).length,
       ...(nextSchedules[0] ? { nextScheduleAt: nextSchedules[0].nextRunAt, nextScheduleName: nextSchedules[0].name } : {}),
@@ -1108,21 +1088,7 @@ function firstUserText(t: WorkTask): string {
   return first.text.replace(/\s+/g, ' ').trim().slice(0, 80)
 }
 
-/** token 账本求和：兼容多种字段命名（inputTokens/prompt_tokens/…） */
-function usageOf(usage: Record<string, number> | undefined): { input: number; output: number; cacheRead: number } {
-  const u = usage || {}
-  let input = 0
-  let output = 0
-  let cacheRead = 0
-  for (const [k, v] of Object.entries(u)) {
-    if (typeof v !== 'number') continue
-    const key = k.toLowerCase()
-    if (key.includes('cache') && (key.includes('read') || key.includes('hit'))) cacheRead += v
-    else if (key.includes('input') || key.includes('prompt')) input += v
-    else if (key.includes('output') || key.includes('completion')) output += v
-  }
-  return { input, output, cacheRead }
-}
+// token 账本求和（usageOf）与逐轮归属口径统一收口在 token-stats.ts，监控大屏与消耗报表共用
 
 /** 资源匹配关键词：host、host:port、别名/备注/隧道名/应用名（小写，≥4 字符才参与匹配） */
 function resourceNeedles(ep: ResolvedEndpoint | undefined, name: string): string[] {
