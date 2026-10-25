@@ -8,3 +8,12 @@ dist/
 .video_agent/
 dist-test/
 .env
+
+# 运行产物与工具目录（不入库）
+.dsh-uploads/
+out/
+.zcode/
+qa-accept-*/
+qa-screenshots-*/
+e2e-artifacts/ego-*/
+.DS_Store
