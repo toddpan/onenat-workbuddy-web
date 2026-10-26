@@ -3244,7 +3244,7 @@ async function libImportPluginModal() {
       var p = items[i];
       var applicable = p.applicable !== false;
       var dup = inLib[p.name + '@' + (p.version || '')];
-      var row = '<label' + (applicable ? '' : ' style="opacity:.45"') + '><input type="checkbox" data-item="' + esc(JSON.stringify(p).replace(/"/g, '&quot;')) + '"' + (applicable && !dup ? ' checked' : ' disabled') + '><b>' + esc(p.name) + '</b>' + libFamilyBadge(p.family) +
+      var row = '<label' + (applicable ? '' : ' style="opacity:.45"') + '><input type="checkbox" data-item="' + esc(JSON.stringify(p)) + '"' + (applicable && !dup ? ' checked' : ' disabled') + '><b>' + esc(p.name) + '</b>' + libFamilyBadge(p.family) +
         '<span class="sub">' + (p.version ? 'v' + esc(p.version) + ' · ' : '') + (p.bundled ? '内置捆绑 · ' : '') + (dup ? '已入库（同名同版本）' : esc((p.description || '').slice(0, 70))) + (applicable ? '' : ' · ⚠ 与目标 AGENT 家族不匹配') + '</span></label>';
       html += row;
       if (applicable) applicableCount++;
