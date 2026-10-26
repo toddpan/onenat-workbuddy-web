@@ -2336,7 +2336,8 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
       </div>
       <div class="panel">
         <div class="lib-head"><b>插件列表</b><span class="cnt" id="lib-plugin-cnt"></span><span class="lib-hspacer"></span>
-          <button class="mini-btn" id="lib-plugin-import" title="向选中的 DSH 主节点发起导出任务（npm pack），完成后自动拉回入库">⬇ 从节点导入</button>
+          <button class="mini-btn" id="lib-plugin-import" title="先读节点 /plugins 插件清单（DSH/ZCODE 家族标注 + 目标 AGENT 适用过滤），勾选后按清单导出导入">⬇ 从节点导入</button>
+          <button class="mini-btn" id="lib-plugin-import-full" title="兜底：节点未升级 /plugins 接口时的全量导出旧流程">⬇ 全量导出（兜底）</button>
           <button class="mini-btn" id="lib-plugin-upload">＋ 上传</button>
           <input type="file" id="lib-plugin-file" multiple accept=".tgz,.tar.gz,.zip" style="display:none">
         </div>
@@ -3014,6 +3015,7 @@ function libRenderList(kind) {
     meta.push(libFmtSize(e.size));
     meta.push(fmtTime(e.uploadedAt));
     meta.push(e.source === 'import' ? '导入自 ' + esc(e.sourceNode || '节点') : '手动上传');
+    if (e.family) meta.push('<span class="lib-st ' + (e.family === 'dsh' ? 'ok' : e.family === 'zcode' ? 'run' : '') + '" title="插件家族（AGENT 引擎形态）">' + esc(e.family.toUpperCase()) + '</span>');
     html += '<div class="lib-item" data-id="' + esc(e.id) + '">' +
       '<div class="lib-main"><div class="lib-nm">' + esc(e.name) + (e.version ? '<span class="lib-ver">v' + esc(e.version) + '</span>' : '') + '</div>' +
       '<div class="lib-meta">' + meta.join('<span class="sep">·</span>') + '</div></div>' +
@@ -3182,12 +3184,136 @@ async function libImportSkillModal() {
   });
 }
 
+const LIB_PLUGIN_AUDIT_NOTE = '导出任务默认对来源节点在该会话内执行 npm pack / tar 打包，不改动节点文件。';
+
+function libFamilyBadge(f) {
+  var label = f === 'dsh' ? 'DSH' : f === 'zcode' ? 'ZCODE' : (f || '其他').toUpperCase();
+  return '<span class="lib-st ' + (f === 'dsh' ? 'ok' : f === 'zcode' ? 'run' : '') + '">' + esc(label) + '</span>';
+}
+
+/** 从节点导入插件（新版两段式）：选节点/目标 AGENT → 读插件清单 → 勾选（家族不适用者禁选）→
+ *  平台按清单向节点派发导出任务并经 /fs 回拉入库（同旧导出链路，poll 每 5 秒、最长 6 分钟）。 */
 async function libImportPluginModal() {
   var nodes = libNodeOptions();
   var m = libModal('从节点导入插件');
-  if (!nodes.length) { m.body.innerHTML = '<div class="lib-empty">没有可用的 DSH 主节点 —— 请到「资源目录」确认 ONENAT 映射已同步</div>'; return; }
+  if (!nodes.length) {
+    m.body.innerHTML = '<div class="lib-empty">没有可用的 DSH 主节点 —— 请到「资源目录」确认 ONENAT 映射已同步</div>';
+    return;
+  }
   var opts = nodes.map(function(n, i) { return '<option value="' + i + '">' + esc(n.label) + '</option>'; }).join('');
-  m.body.innerHTML = '<div class="lib-tip">将向选中的 <b>DSH 主节点</b>发起一个<b>主会话导出任务</b>：节点对每个已安装插件执行 npm pack，平台随后自动拉回入库。耗时通常 1~3 分钟，期间请勿删除该任务。</div>' +
+  var agents = [];
+  try {
+    if (!state.agents.length) await loadAgents();
+    agents = state.agents.slice();
+  } catch (e) { agents = []; }
+  var agentOpts = '<option value="">不限（仅看节点插件）</option>' + agents.map(function(a) {
+    return '<option value="' + esc(a.id) + '">🤖 ' + esc(a.name) + '</option>';
+  }).join('');
+  m.body.innerHTML = '<div class="lib-tip">Step1 选择来源节点与目标 AGENT（目标 AGENT 决定插件的<b>适用家族</b>：DSH / ZCODE / 未来扩展，家族不匹配的插件会被禁选）。' + esc(LIB_PLUGIN_AUDIT_NOTE) + '</div>' +
+    '<div style="display:flex;gap:8px;margin-top:8px">' +
+    '<select id="lib-imp-node" style="flex:2">' + opts + '</select>' +
+    '<select id="lib-imp-agent" style="flex:2">' + agentOpts + '</select></div>' +
+    '<div id="lib-imp-plug" class="lib-tip" style="margin-top:8px">点下方「读取插件清单」拉取该节点已装插件（需节点 web-service 已升级 /plugins 接口）。</div>';
+  m.foot.style.display = 'flex';
+  m.foot.innerHTML = '<button class="mini-btn" id="lib-imp-read">读取插件清单</button><span class="lib-tip" id="lib-imp-msg"></span><button class="mini-btn" id="lib-imp-go" style="display:none">⬇ 导入勾选项</button>';
+  m.foot.querySelector('#lib-imp-read').addEventListener('click', async function() {
+    var idx = +m.body.querySelector('#lib-imp-node').value || 0;
+    var node = nodes[idx];
+    var agentId = m.body.querySelector('#lib-imp-agent').value || '';
+    var box = m.body.querySelector('#lib-imp-plug');
+    box.innerHTML = '读取中…';
+    var q = '?node=' + encodeURIComponent(JSON.stringify(node.ref)) + (agentId ? '&agentId=' + encodeURIComponent(agentId) : '');
+    var r = await api('/library/nodes/plugins' + q);
+    var items = (r.ok && r.data && r.data.plugins) || [];
+    if (!items.length) {
+      var tip = (r.ok ? '该节点未返回任何插件清单' : (r.error || '读取失败'));
+      if (!r.ok && r.data && r.data.unsupported) tip = (r.error || '远端节点缺少 /plugins 接口') + '（需升级该节点 web-service 后重试；旧节点仍可用「从节点全量导出」兜底入口）';
+      box.innerHTML = '<span style="color:var(--err)">' + esc(tip) + '</span>';
+      m.foot.querySelector('#lib-imp-go').style.display = 'none';
+      return;
+    }
+    var agentName = (r.data && r.data.agentName) || '';
+    var agentEngine = (r.data && r.data.agentEngine) || '';
+    var inLib = {};
+    ((libState.data || {}).plugins || []).forEach(function(e) { inLib[e.name + '@' + (e.version || '')] = true; });
+    var html = '';
+    if (agentName && agentEngine) html = '<div class="lib-tip">✅ 已按目标 AGENT「' + esc(agentName) + '」（引擎家族 ' + esc(agentEngine.toUpperCase()) + '）过滤适用插件</div>';
+    html += '<div class="lib-check">';
+    var applicableCount = 0;
+    for (var i = 0; i < items.length; i++) {
+      var p = items[i];
+      var applicable = p.applicable !== false;
+      var dup = inLib[p.name + '@' + (p.version || '')];
+      var row = '<label' + (applicable ? '' : ' style="opacity:.45"') + '><input type="checkbox" data-item="' + esc(JSON.stringify(p).replace(/"/g, '&quot;')) + '"' + (applicable && !dup ? ' checked' : ' disabled') + '><b>' + esc(p.name) + '</b>' + libFamilyBadge(p.family) +
+        '<span class="sub">' + (p.version ? 'v' + esc(p.version) + ' · ' : '') + (p.bundled ? '内置捆绑 · ' : '') + (dup ? '已入库（同名同版本）' : esc((p.description || '').slice(0, 70))) + (applicable ? '' : ' · ⚠ 与目标 AGENT 家族不匹配') + '</span></label>';
+      html += row;
+      if (applicable) applicableCount++;
+    }
+    box.innerHTML = html + '</div>';
+    if (!applicableCount) {
+      m.foot.querySelector('#lib-imp-msg').textContent = '⚠ 该清单中没有适用于所选 AGENT 的插件';
+      return;
+    }
+    m.foot.querySelector('#lib-imp-msg').textContent = '';
+    m.foot.querySelector('#lib-imp-go').style.display = '';
+  });
+  m.foot.querySelector('#lib-imp-go').addEventListener('click', async function() {
+    var btn = this;
+    var idx = +m.body.querySelector('#lib-imp-node').value || 0;
+    var node = nodes[idx];
+    var agentId = m.body.querySelector('#lib-imp-agent').value || '';
+    var items = [];
+    m.body.querySelectorAll('#lib-imp-plug input:checked').forEach(function(cb) {
+      try { items.push(JSON.parse(cb.dataset.item)); } catch (e) { /* skip */ }
+    });
+    if (!items.length) { toast('请先勾选要导入的插件', true); return; }
+    btn.disabled = true;
+    m.foot.querySelector('#lib-imp-msg').textContent = '发起中…';
+    var r = await api('/library/import/plugins/list', { method: 'POST', body: JSON.stringify({ nodeRef: node.ref, agentId: agentId, family: agentId ? (items[0] || {}).family : undefined, items: items }) });
+    if (!r.ok) { m.foot.querySelector('#lib-imp-msg').textContent = r.error || '发起失败'; btn.disabled = false; return; }
+    var taskId = (r.data || {}).taskId;
+    var family = (r.data || {}).family || '';
+    m.body.querySelector('#lib-imp-plug').innerHTML = '导出任务 <b>' + esc(taskId) + '</b> 已发往节点 <b>' + esc(node.label) + '</b>（家族 ' + libFamilyBadge(family) + '，' + items.length + ' 项）——每 5 秒自动查询，最长等 6 分钟…';
+    var tries = 0;
+    var timer = setInterval(async function() {
+      tries++;
+      if (tries > 72) {
+        clearInterval(timer);
+        m.body.querySelector('#lib-imp-plug').innerHTML = '<span style="color:var(--err)">等待超时：任务可能仍在执行，可稍后在安装记录/任务会话确认后重试（重复导入会自动按同名同大小去重）。</span>';
+        btn.disabled = false;
+        return;
+      }
+      var pr = await api('/library/import/plugins/poll?taskId=' + encodeURIComponent(taskId));
+      if (!pr.ok) return;
+      var d = pr.data || {};
+      if (!d.done) return;
+      clearInterval(timer);
+      if (d.error) {
+        m.body.querySelector('#lib-imp-plug').innerHTML = '<span style="color:var(--err)">' + esc(d.error) + '</span>';
+        btn.disabled = false;
+        return;
+      }
+      var imported = d.imported || [];
+      var failed = d.failed || [];
+      var html2 = imported.length ? '<div class="lib-check">' + imported.map(function(e) {
+        return '<label>✔ <b>' + esc(e.name) + '</b>' + libFamilyBadge(e.family) + '<span class="sub">' + (e.version ? 'v' + esc(e.version) + ' · ' : '') + libFmtSize(e.size) + '</span></label>';
+      }).join('') + '</div>' : '';
+      var tip = '导入完成：' + imported.length + ' 个插件入库' + (failed.length ? '，' + failed.length + ' 个失败（' + failed.map(function(f) { return f.file + '：' + f.error; }).join('；') + '）' : '');
+      m.body.querySelector('#lib-imp-plug').innerHTML = '<div>' + esc(tip) + '</div>' + html2;
+      btn.disabled = false;
+      btn.textContent = '再次导入';
+      if (imported.length) { toast('已导入 ' + imported.length + ' 个插件'); libLoad(); }
+    }, 5000);
+  });
+}
+
+/** 兜底入口（节点未升级 /plugins 接口时可用）：按节点全量导出（npm pack 全部 DSH 插件），家族记为 dsh */
+async function libImportPluginFullModal() {
+  var nodes = libNodeOptions();
+  var m = libModal('从节点全量导出插件（旧流程兜底）');
+  if (!nodes.length) { m.body.innerHTML = '<div class="lib-empty">没有可用的 DSH 主节点</div>'; return; }
+  var opts = nodes.map(function(n, i) { return '<option value="' + i + '">' + esc(n.label) + '</option>'; }).join('');
+  m.body.innerHTML = '<div class="lib-tip">向选中的 <b>DSH 主节点</b>发起主会话导出任务：节点对每个已安装 DSH 插件执行 npm pack，平台随后自动拉回入库（家族记为 DSH）。耗时 1~3 分钟。</div>' +
     '<select id="lib-imp-node" style="margin-top:8px">' + opts + '</select><div id="lib-imp-prog" class="lib-tip" style="margin-top:8px"></div>';
   m.foot.style.display = 'flex';
   m.foot.innerHTML = '<span class="lib-tip" id="lib-imp-msg"></span><button class="mini-btn" id="lib-imp-go">📤 发起导出任务</button>';
@@ -3206,7 +3332,7 @@ async function libImportPluginModal() {
       tries++;
       if (tries > 72) {
         clearInterval(timer);
-        m.body.querySelector('#lib-imp-prog').innerHTML = '<span style="color:var(--err)">等待超时：任务可能仍在执行，可稍后在安装记录/任务会话确认后重试（重复导入会自动按同名同大小去重）。</span>';
+        m.body.querySelector('#lib-imp-prog').innerHTML = '<span style="color:var(--err)">等待超时：任务可能仍在执行，可稍后在安装记录/任务会话确认后重试。</span>';
         btn.disabled = false;
         return;
       }
@@ -3227,7 +3353,6 @@ async function libImportPluginModal() {
       }).join('') + '</div>' : '';
       var tip = '导入完成：' + imported.length + ' 个插件入库' + (failed.length ? '，' + failed.length + ' 个失败（' + failed.map(function(f) { return f.file + '：' + f.error; }).join('；') + '）' : '');
       m.body.querySelector('#lib-imp-prog').innerHTML = '<div>' + esc(tip) + '</div>' + html;
-      m.foot.querySelector('#lib-imp-msg').textContent = '';
       btn.disabled = false;
       btn.textContent = '再次导出';
       if (imported.length) { toast('已导入 ' + imported.length + ' 个插件'); libLoad(); }
@@ -3258,6 +3383,7 @@ async function libImportPluginModal() {
   $('lib-plugin-file').addEventListener('change', function() { libUpload('plugin', this); });
   $('lib-skill-import').addEventListener('click', libImportSkillModal);
   $('lib-plugin-import').addEventListener('click', libImportPluginModal);
+  $('lib-plugin-import-full').addEventListener('click', libImportPluginFullModal);
   $('lib-installs-refresh').addEventListener('click', libLoad);
   $('lib-installs-refresh-p').addEventListener('click', libLoad);
   async function libSaveBase(inputId) {

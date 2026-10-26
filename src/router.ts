@@ -40,7 +40,7 @@ import type { XiaozhiMcpClient } from './xiaozhi-mcp.js'
 import type { DshRef, Project, SubAgent, WorkTask, ScheduledTask } from './types.js'
 import { NODE_AGENT_ID, MAIN_AGENT_LABEL, projectDefaultAgentIds, projectDefaultAgentIdsFromInput } from './types.js'
 import type { MonitorService } from './monitor.js'
-import { SkillPluginLibrary, buildSkillInstallPrompt, buildPluginInstallPrompt, buildPluginExportPrompt, buildProjectImportPrompt, extractExportedPaths } from './library.js'
+import { SkillPluginLibrary, buildSkillInstallPrompt, buildPluginInstallPrompt, buildPluginExportPrompt, buildPluginListExportPrompt, buildProjectImportPrompt, extractExportedPaths } from './library.js'
 import type { LibKind } from './library.js'
 import { renderWebUi } from './web-ui.js'
 import { renderMonitorUi } from './monitor-ui.js'
@@ -158,8 +158,8 @@ export class WorkBuddyRouter {
     if (!this.usageSvc) this.usageSvc = new UsageService(this.store)
     return this.usageSvc
   }
-  /** 插件导出任务的来源节点（taskId → dshRef + 展示名）：poll 回拉时按节点取 /fs，不再依赖子智能体 */
-  private pluginImportRefs = new Map<string, { ref: DshRef; label: string }>()
+  /** 插件导出任务的来源节点（taskId → dshRef + 展示名 + 插件家族）：poll 回拉时按节点取 /fs，不再依赖子智能体 */
+  private pluginImportRefs = new Map<string, { ref: DshRef; label: string; family?: string }>()
 
   /** 项目导入上传令牌（token → 待入库信息）；2 小时未收到上传自动作废 */
   private pendingProjectImports = new Map<string, {
@@ -171,6 +171,25 @@ export class WorkBuddyRouter {
     taskId: string
     at: number
   }>()
+
+  /** 引擎家族探测汇总（dsh/zcode；探测失败或不可判=unknown，调用方按「不设限」处理） */
+  private async engineFamilyOfRef(ref: DshRef | undefined): Promise<string> {
+    let ep: any = undefined
+    try {
+      if (!ref) return 'unknown'
+      if (ref.kind === 'mapping') ep = this.directory.resolveMapping(ref.mappingId)
+      else if (ref.kind === 'app') ep = this.directory.resolveApp(ref.appId)
+      else return 'unknown'
+    } catch {
+      return 'unknown'
+    }
+    if (!ep || !ep.baseUrl || !ep.online) return 'unknown'
+    let info = this.directory.engineInfoOf(ep.mappingId)
+    if (!info || Date.now() - info.probedAt > 90_000 || info.engine === 'unknown') {
+      try { info = await this.directory.probeEngine(ep, { force: true }) } catch { info = undefined }
+    }
+    return info?.engine && info.engine !== 'unknown' ? info.engine : 'unknown'
+  }
 
   /** DSH 节点展示名（映射节点取应用名（含端口后缀）；直连取 baseUrl） */
   private nodeLabelOf(ref: DshRef): string {
@@ -212,14 +231,15 @@ export class WorkBuddyRouter {
   }
 
   /** nodeRef 直发路径的回拉：按发起时记录的来源节点取 /fs，不依赖子智能体 */
-  private async pullExportedPluginsByRef(taskId: string, ref: DshRef, label: string): Promise<{ ok: boolean; imported?: any[]; failed?: Array<{ file: string; error: string }>; error?: string }> {
-    return this.pullExportedPluginsInner(taskId, () => this.resolver.resolveRef(ref, undefined, 'library-node'), label)
+  private async pullExportedPluginsByRef(taskId: string, ref: DshRef, label: string, family?: string): Promise<{ ok: boolean; imported?: any[]; failed?: Array<{ file: string; error: string }>; error?: string }> {
+    return this.pullExportedPluginsInner(taskId, () => this.resolver.resolveRef(ref, undefined, 'library-node'), label, family)
   }
 
   private async pullExportedPluginsInner(
     taskId: string,
     resolveTarget: () => Promise<any>,
     sourceLabel: string,
+    family?: string,
   ): Promise<{ ok: boolean; imported?: any[]; failed?: Array<{ file: string; error: string }>; error?: string }> {
     if (!this.library) return { ok: false, error: '库未启用' }
     const task = this.store.getTask(taskId)
@@ -242,7 +262,7 @@ export class WorkBuddyRouter {
         const buf = Buffer.from(await dl.res.arrayBuffer())
         const filename = p.split('/').pop() || 'plugin.tgz'
         if (seen.has(`${filename}:${buf.length}`)) continue
-        imported.push(await this.library.add('plugin', { filename, data: buf }, 'import', sourceLabel))
+        imported.push(await this.library.add('plugin', { filename, data: buf }, 'import', sourceLabel, family))
         seen.add(`${filename}:${buf.length}`)
       } catch (err: any) {
         failed.push({ file: p, error: err?.message || String(err) })
@@ -2772,7 +2792,7 @@ export class WorkBuddyRouter {
             message: buildPluginExportPrompt(),
             creator: 'console',
           })
-        if (nodeRef) this.pluginImportRefs.set(task.id, { ref: nodeRef, label: nodeLabel })
+        if (nodeRef) this.pluginImportRefs.set(task.id, { ref: nodeRef, label: nodeLabel, family: 'dsh' })
         this.sendJson(res, 200, {
           ok: true,
           data: { taskId: task.id, ...(nodeRef ? { nodeLabel } : { agentId: legacyAgent!.id }) },
@@ -2806,7 +2826,7 @@ export class WorkBuddyRouter {
           return true
         }
         const result = stashed
-          ? await this.pullExportedPluginsByRef(taskId, stashed.ref, stashed.label)
+          ? await this.pullExportedPluginsByRef(taskId, stashed.ref, stashed.label, stashed.family)
           : await this.pullExportedPlugins(taskId, legacyAgent!)
         // 只缓存成功结果；失败（如路径解析为空、节点瞬时不可达）不缓存，下次 poll 可重试
         if (result.ok) this.pluginImportDone.set(taskId, result)
@@ -2837,6 +2857,106 @@ export class WorkBuddyRouter {
           return true
         }
         this.sendJson(res, 200, { ok: true, data: { skills: r.skills, count: r.count, root: r.root } })
+        return true
+      }
+
+      // 节点已装插件清单（从节点导入插件的选择来源；node = dshRef JSON，agentId = 目标 AGENT（适用性匹配））
+      // 家族匹配：插件 family 必须等于目标 AGENT 引擎家族（dsh/zcode），否则该条标 applicable=false（UI 禁选）。
+      // agentId 缺省=不适用过滤（全部返回，applicable=true）。
+      const libNodePluginsMatch = /^\/api\/library\/nodes\/plugins$/.exec(p)
+      if (libNodePluginsMatch && method === 'GET') {
+        const url = new URL(req.url || '/', 'http://localhost')
+        let nref: any
+        try { nref = JSON.parse(url.searchParams.get('node') || '') } catch { /* below */ }
+        if (!nref || typeof nref !== 'object') {
+          this.sendJson(res, 400, { ok: false, error: 'node 参数非法（需 dshRef JSON）' })
+          return true
+        }
+        const nodeRef = nref as DshRef
+        const target = await this.resolver.resolveRef(nodeRef, undefined, 'library-node')
+        if (!target.online) {
+          this.sendJson(res, 200, { ok: false, error: target.error || '节点不可达', data: { plugins: [] } })
+          return true
+        }
+        const r = await this.client.listPlugins(target)
+        if (r.unsupported) {
+          this.sendJson(res, 200, { ok: false, error: r.error, data: { plugins: [], unsupported: true } })
+          return true
+        }
+        if (!r.ok || !r.plugins) {
+          this.sendJson(res, 200, { ok: false, error: r.error || '读取插件清单失败', data: { plugins: [] } })
+          return true
+        }
+        // 目标 AGENT 引擎家族（缺省不限）
+        const agent = this.store.getAgent(url.searchParams.get('agentId') || '')
+        const agentRef = (agent as any)?.dshRef as DshRef | undefined
+        const agentEngine = url.searchParams.get('agentId') ? await this.engineFamilyOfRef(agentRef && agentRef.kind ? agentRef : nodeRef) : ''
+        const items = (r.plugins || []).map((pl) => {
+          const family = pl.family || r.family || 'unknown'
+          const convertible = agentEngine && agentEngine !== 'unknown'
+            ? family === agentEngine || family === 'unknown'
+            : true
+          return { ...pl, family, applicable: convertible }
+        })
+        this.sendJson(res, 200, {
+          ok: true,
+          data: {
+            plugins: items,
+            count: items.length,
+            family: r.family,
+            profile: r.profile,
+            agentId: agent?.id,
+            agentName: agent?.name,
+            agentEngine: agentEngine || undefined,
+          },
+        })
+        return true
+      }
+
+      // 按清单从节点导入插件（新版流程：节点 /plugins 清单 → 勾选 → 节点对 sourcePath 打包 → /fs 回拉入库）
+      const libImpListMatch = /^\/api\/library\/import\/plugins\/list$/.exec(p)
+      if (libImpListMatch && method === 'POST') {
+        const body = await this.parseBody(req)
+        const nodeRef = body?.nodeRef && typeof body.nodeRef === 'object' ? (body.nodeRef as DshRef) : undefined
+        if (!nodeRef) {
+          this.sendJson(res, 400, { ok: false, error: '缺少 nodeRef（来源节点）' })
+          return true
+        }
+        const items: Array<{ name: string; sourcePath: string; version?: string }> =
+          Array.isArray(body?.items)
+            ? body.items
+              .map((it: any) => ({ name: String(it?.name || ''), sourcePath: String(it?.sourcePath || ''), version: it?.version ? String(it.version) : undefined }))
+              .filter((it: any) => it.name && it.sourcePath)
+            : []
+        if (!items.length) {
+          this.sendJson(res, 400, { ok: false, error: '缺少 items（需从 /library/nodes/plugins 清单中读取，含 name+sourcePath）' })
+          return true
+        }
+        // 适用性兜底校验：指定目标 AGENT 时其引擎家族必须与请求家族一致（家族缺省时以 agent 引擎家族为准）
+        const agent = this.store.getAgent(String(body?.agentId || ''))
+        const requestedFamily = String(body?.family || '').toLowerCase() || undefined
+        const agentRef = (agent as any)?.dshRef as DshRef | undefined
+        const agentEngine = agent ? await this.engineFamilyOfRef(agentRef && agentRef.kind ? agentRef : nodeRef) : 'unknown'
+        if (agent && agentEngine !== 'unknown' && requestedFamily && requestedFamily !== agentEngine) {
+          this.sendJson(res, 400, {
+            ok: false,
+            error: `插件家族 ${requestedFamily} 与目标 AGENT 引擎家族 ${agentEngine} 不匹配（请按该 AGENT 重新读取适用清单）`,
+          })
+          return true
+        }
+        const family = (agentEngine && agentEngine !== 'unknown' ? agentEngine : requestedFamily) || (await this.engineFamilyOfRef(nodeRef)) || 'dsh'
+        const nodeLabel = this.nodeLabelOf(nodeRef)
+        const task = await this.engine.createTask({
+          title: `导出插件 ← ${nodeLabel}（${items.length} 项）`,
+          nodeRef,
+          message: buildPluginListExportPrompt(items),
+          creator: 'console',
+        })
+        this.pluginImportRefs.set(task.id, { ref: nodeRef, label: nodeLabel, family })
+        this.sendJson(res, 200, {
+          ok: true,
+          data: { taskId: task.id, nodeLabel, family, count: items.length },
+        })
         return true
       }
     }

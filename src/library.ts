@@ -33,6 +33,8 @@ export interface LibEntry {
   source: 'upload' | 'import'
   /** source=import 时的来源子智能体名（其所在节点） */
   sourceNode?: string
+  /** 插件家族（引擎形态）：dsh / zcode / 未来扩展的其它 AGENT 家族；技能不设。导入时随来源节点/目标 agent 匹配校验 */
+  family?: string
 }
 
 export interface LibInstallTarget {
@@ -132,6 +134,7 @@ export class SkillPluginLibrary {
     file: { filename: string; data: Buffer },
     source: 'upload' | 'import',
     sourceNode?: string,
+    family?: string,
   ): Promise<LibEntry> {
     if (file.data.length === 0) throw new Error('文件为空')
     if (file.data.length > MAX_ARCHIVE_BYTES) throw new Error(`文件超过 ${Math.round(MAX_ARCHIVE_BYTES / 1024 / 1024)}MB 上限`)
@@ -151,6 +154,7 @@ export class SkillPluginLibrary {
       uploadedAt: Date.now(),
       source,
       ...(sourceNode ? { sourceNode } : {}),
+      ...(family ? { family } : {}),
     }
     this.index.entries.push(entry)
     this.save()
@@ -385,6 +389,35 @@ export function buildPluginExportPrompt(): string {
     '4. 最后汇报：每个 tgz 文件的【绝对路径】及对应插件名与版本、跳过清单。绝对路径务必单独一行、原样输出（不要加粗、不要用括号/书名号包裹，也不要改写成 ~ 开头）。绝对路径清单是平台回收的依据，务必逐行列出。',
     '不要做与本任务无关的其他操作。',
   ].join('\n')
+}
+
+/** 按清单导出提示词（从节点导入插件·新版）：节点对每个 sourcePath 打包，汇报 tgz 绝对路径清单 */
+export interface PluginPackItem {
+  name: string
+  /** node 上的绝对目录（含 package.json / .zcode-plugin 的插件目录） */
+  sourcePath: string
+  version?: string
+}
+
+export function buildPluginListExportPrompt(items: PluginPackItem[]): string {
+  const lines: string[] = [
+    '【平台下发任务】把本节点已安装的插件按平台给定清单打包导出，供平台回收存档。请严格按以下步骤执行：',
+    '',
+    '1. 先建立导出目录：mkdir -p "$HOME/wb-lib-export"',
+    '2. 对下方每个【插件目录】逐个执行（目录即插件所在位置，无需 cd 之外的操作）：',
+    '   npm pack --json --pack-destination "$HOME/wb-lib-export" "目录"', '',
+  ]
+  for (const it of items) {
+    lines.push(`  - 目录 ${it.sourcePath}${it.version ? `（${it.name}@${it.version}）` : `（${it.name}）`}`)
+  }
+  lines.push(
+    '',
+    '3. 若某个目录 npm 不可用或打包失败，改用 tar 兜底：tar czf "$HOME/wb-lib-export/<插件名>-<版本>.tgz" -C "目录" .',
+    '4. 全部完成后执行：ls -la "$HOME/wb-lib-export/"',
+    '5. 最后汇报：每个 tgz 文件的【绝对路径】及对应插件名与版本、失败/跳过清单。绝对路径务必单独一行、原样输出（不要加粗、不要用括号/书名号包裹，也不要改写成 ~ 开头）。绝对路径清单是平台回收的依据，务必逐行列出。',
+    '不要做与本任务无关的其他操作。禁止执行目录内 npm scripts（仅打包，不 build）。',
+  )
+  return lines.join('\n')
 }
 
 /** 从任务轮次文本中提取导出的 tgz 绝对路径清单 */

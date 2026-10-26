@@ -586,6 +586,42 @@ export class DshClient {
     }
   }
 
+  /**
+   * 已装插件清单（GET /plugins，dsh/zcode 两族 web-service 同名接口；旧构建 404 → unsupported）。
+   * 返回的每条插件含 family（dsh/zcode/其它）与 sourcePath（node 上的绝对目录，供导出打包）。
+   */
+  public async listPlugins(target: DshTarget): Promise<{
+    ok: boolean
+    family?: string
+    profile?: string
+    count?: number
+    plugins?: Array<{ name: string; family?: string; version?: string; description?: string; sourcePath?: string; bundled?: boolean }>
+    error?: string
+    unsupported?: boolean
+  }> {
+    try {
+      const res = await fetch(`${clean(target.baseUrl)}/plugins`, {
+        headers: this.headers(target.apiKey),
+        signal: AbortSignal.timeout(20_000),
+      })
+      if (res.status === 404 || res.status === 501) {
+        return { ok: false, plugins: [], unsupported: true, error: '远端 web-service 未装 /plugins 端点（需升级 dsh-web-service ≥0.5.1 / zcode-web-service ≥0.3.1）' }
+      }
+      const json: any = await res.json().catch(() => ({}))
+      if (!res.ok || !json?.ok) return { ok: false, plugins: [], error: json?.error || `HTTP ${res.status}` }
+      const data = json.data || {}
+      return {
+        ok: true,
+        family: data.family,
+        profile: data.profile,
+        count: data.count,
+        plugins: Array.isArray(data.plugins) ? data.plugins : [],
+      }
+    } catch (err: any) {
+      return { ok: false, plugins: [], error: err?.message || '获取插件清单失败' }
+    }
+  }
+
   /** 单技能详情（含正文 content 与全文 raw） */
   public async getSkill(
     target: DshTarget,
