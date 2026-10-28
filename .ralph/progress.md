@@ -72,3 +72,10 @@
 - 离线状态记在 `body.node-offline` 上：`setSending` 据此决定发送键是否禁用，`send()` 遇到离线直接返回；重试中的状态记在 `#node-offline` 的 `data-retrying`。
 - 注意（P4-2）：「在其他节点继续 →」按钮是 `[data-op="fork"]`，目前写死为 disabled，P4 接上续接入口时要把它启用并绑定事件。
 - 未验证：浏览器手测（离线条样式、禁用效果、重试流程）；没补 smoke 断言（mock 没有离线节点）。只改了 web-ui.ts，所以没跑 test:unit。
+
+## P2-1
+- web-ui.ts：从 `renderNodePop` 抽出 `dshNodeGroups(opts)` / `dshNodeItemHtml(n, isCur, extra)` / `probeNodesIfStale(opts)`，旧 node-pop 改用它们，行为不变。
+- 新增 `placeState`（place / pop / anchor / level / browse / onChange）和 `openPlacePop(anchor, place, onChange)` / `renderPlacePop` / `selectPlace` / `closePlacePop` / `normalizePlace` / `placeLabel` / `placeProjectNode` / `placeNodeProjects`。弹层动态挂在 body 上（`.main-agent-pop.place-pop`，fixed 定位，下方空间不够就向上弹）；外部点击或 Esc 关闭；`refreshNodeEngines` 在 changed 时会重绘它。
+- 第一层：选节点（副标题写「N 个项目 ›」或「单独任务 ›」）；第二层：「不使用项目」+ 该节点下的项目（按 dshRef.mappingId 匹配）。选项目时 `normalizePlace` 节点取项目节点。
+- 注意（P2-2）：组件没有接入页面，草稿页调用 `openPlacePop(btn, state.draft.place, cb)` 即可，按钮文字用 `placeLabel(place)`。dshRef 是 direct/app 的项目不会出现在任何节点下。
+- 未验证：浏览器手测（弹层定位、两层切换、离线灰显）；没补 smoke 断言（纯前端组件）。只改了 web-ui.ts，没跑 test:unit。

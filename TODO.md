@@ -109,12 +109,13 @@ UI 行为目前没有自动化浏览器测试：任务说明里的「验收」�
 
 ## P2 执行位置选择框 + 空白新任务页
 
-- [ ] **P2-1** 执行位置选择框组件
+- [x] **P2-1** 执行位置选择框组件
   - 依赖：P1-2
   - 两层菜单：节点（在线点 + 引擎徽标 + 默认模型）→ 该节点下的项目 + 「不使用项目（单独任务）」。离线节点灰显但可选。
   - 输出 `{ nodeMappingId, projectId|null }`；选项目时节点自动取项目节点。
   - 只实现组件和状态（`placeState`），这一步不接入页面；复用 `renderNodePop` 的分组和探测逻辑，旧 `node-pop` 先保留。
   - 验收：build / typecheck / smoke 通过。
+  - 完成：从 `renderNodePop` 抽出 `dshNodeGroups` / `dshNodeItemHtml` / `probeNodesIfStale` 共用，新增 `placeState` 和 `openPlacePop` / `renderPlacePop` / `selectPlace` / `closePlacePop` / `normalizePlace` / `placeLabel` 两层选择框（尚未接入页面）；跑过 `npm run build`、`npm run typecheck`、`npm run smoke`（64 项全过）；未做浏览器手测。
 
 - [ ] **P2-2** 空白新任务页 + 首条消息时才创建
   - 依赖：P2-1

@@ -368,6 +368,11 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
 .main-agent-item.on .ag-sub { color: rgba(77, 107, 254, 0.75); }
 .main-agent-item .ag-ck { flex: none; visibility: hidden; font-weight: 700; color: var(--pri); }
 .main-agent-item.on .ag-ck { visibility: visible; }
+/* 执行位置选择框（P2-1）：挂在 body 上，按触发按钮定位 */
+.main-agent-pop.place-pop { position: fixed; top: auto; right: auto; z-index: 90; }
+.place-back {
+  border: none; background: none; color: var(--pri); font-size: 11px; cursor: pointer; padding: 0;
+}
 
 .chat-scroll {
   flex: 1; overflow-y: auto; padding: 18px 24px 28px; scroll-behavior: auto;
@@ -8535,6 +8540,9 @@ function closeMainAgentPop() {
 
 // ---------- 任务节点切换（主 DSH：新模型下节点决定任务在哪台机器上执行） ----------
 const nodeState = { cur: '', userPicked: false }; // mappingId；'' = 未选（资源目录为空时）
+// 执行位置选择框（P2-1）：place = { nodeMappingId, projectId|null }；pop/anchor = 当前挂载的弹层与触发按钮；
+// level = 'node' | 'project'，browse = 第二层正在看的节点；onChange(place) 由调用方传入
+const placeState = { place: { nodeMappingId: '', projectId: null }, pop: null, anchor: null, level: 'node', browse: '', onChange: null };
 /** 当前打开的任务对象（完整缓存优先，列表摘要兜底）；无当前任务返回 null */
 function currentTaskObj() {
   if (!state.currentTaskId) return null;
@@ -8750,49 +8758,56 @@ function nodeBtnLabel() {
   const n = dshNodeOptions().find(function (x) { return x.mappingId === nodeState.cur; });
   return n ? (n.title || n.appName || n.note || n.mappingId) : '自动';
 }
+/** 按隧道分组：隧道=机器，组内每条映射=一个可执行引擎入口（同一台机器可并存 DSH 与 ZCode 引擎） */
+function dshNodeGroups(opts) {
+  const byTunnel = {};
+  const order = [];
+  for (const n of opts) {
+    const k = n.tunnelName || '未命名隧道';
+    if (!byTunnel[k]) { byTunnel[k] = []; order.push(k); }
+    byTunnel[k].push(n);
+  }
+  return order.map(function (k) { return { tunnel: k, list: byTunnel[k] }; });
+}
+/** 节点下拉行：引擎徽标 + 健康点（探测档案有则显示；未探测灰点 / 不可达红点，均可点选）；extra 追加到副标题 */
+function dshNodeItemHtml(n, isCur, extra) {
+  const label = n.title || n.appName || n.note || n.mappingId;
+  const eng = n.engine || null;
+  const engBadge = eng ? (eng.engine === 'zcode' ? 'ZCode' : eng.engine === 'dsh' ? 'DSH' : '引擎?') : '';
+  const dotCls = !eng ? 'np-dot' : eng.reachable ? 'np-dot ok' : 'np-dot err';
+  const subParts = [];
+  if (eng && eng.reachable && eng.defaultModel) subParts.push('默认 ' + eng.defaultModel);
+  if (!eng || !eng.reachable) subParts.push(eng && eng.error ? '⚠️ ' + eng.error : '探测中…');
+  if (extra) subParts.push(extra);
+  const sub = esc(n.baseUrl || '') + (subParts.length ? ' · ' + esc(subParts.join(' · ')) : '');
+  const style = eng && !eng.reachable ? ' style="opacity:.62"' : '';
+  return '<div class="main-agent-item' + (isCur ? ' on' : '') + '"' + style + ' data-mid="' + esc(n.mappingId) + '">' +
+    '<div class="ag-info"><div class="ag-title"><span class="' + dotCls + '" style="display:inline-block;margin-right:6px"></span>🖥 ' + esc(label) +
+    (engBadge ? ' <span class="ag-badge">' + esc(engBadge) + '</span>' : '') + '</div>' +
+    '<div class="ag-sub">' + sub + '</div></div>' +
+    '<span class="ag-ck">✓</span></div>';
+}
+/** 引擎档案缺失/临期 → 后台探测（TTL 门控），结果合并回 state.resources 后由 refreshNodeEngines 重绘 */
+function probeNodesIfStale(opts) {
+  const needProbe = opts.some(function (n) { return !n.engine || Date.now() - (n.engine.probedAt || 0) > 90000; });
+  if (needProbe) refreshNodeEngines(false);
+}
 function renderNodePop() {
   const pop = $('node-pop');
   if (!pop) return;
   const opts = dshNodeOptions();
   let html = '<div class="main-agent-pop-head"><span>任务节点（主 DSH）</span><span>新建任务在此执行</span></div>';
   if (!opts.length) html += '<div class="model-empty">暂无 DSH 节点（资源目录未同步）</div>';
-  // 按隧道分组：隧道=机器，组内每条映射=一个可执行引擎入口（同一台机器可并存 DSH 与 ZCode 引擎）
-  const byTunnel = {};
-  const tunnelOrder = [];
-  for (const n of opts) {
-    const k = n.tunnelName || '未命名隧道';
-    if (!byTunnel[k]) { byTunnel[k] = []; tunnelOrder.push(k); }
-    byTunnel[k].push(n);
-  }
-  for (const tn of tunnelOrder) {
-    const group = byTunnel[tn];
-    if (tunnelOrder.length > 1 || group.length > 1) html += '<div class="model-group">🖥 ' + esc(tn) + '</div>';
-    for (const n of group) {
-      const label = n.title || n.appName || n.note || n.mappingId;
-      const eng = n.engine || null;
-      const isCur = nodeState.cur === n.mappingId;
-      // 引擎徽标 + 健康点：探测档案有则显示；未探测（灰点）/不可达（红点）均可点选
-      const engBadge = eng ? (eng.engine === 'zcode' ? 'ZCode' : eng.engine === 'dsh' ? 'DSH' : '引擎?') : '';
-      const dotCls = !eng ? 'np-dot' : eng.reachable ? 'np-dot ok' : 'np-dot err';
-      const subParts = [];
-      if (eng && eng.reachable && eng.defaultModel) subParts.push('默认 ' + eng.defaultModel);
-      if (!eng || !eng.reachable) subParts.push(eng && eng.error ? '⚠️ ' + eng.error : '探测中…');
-      const sub = esc(n.baseUrl || '') + (subParts.length ? ' · ' + esc(subParts.join(' · ')) : '');
-      const style = eng && !eng.reachable ? ' style="opacity:.62"' : '';
-      html += '<div class="main-agent-item' + (isCur ? ' on' : '') + '"' + style + ' data-mid="' + esc(n.mappingId) + '">' +
-        '<div class="ag-info"><div class="ag-title"><span class="' + dotCls + '" style="display:inline-block;margin-right:6px"></span>🖥 ' + esc(label) +
-        (engBadge ? ' <span class="ag-badge">' + esc(engBadge) + '</span>' : '') + '</div>' +
-        '<div class="ag-sub">' + sub + '</div></div>' +
-        '<span class="ag-ck">✓</span></div>';
-    }
+  const groups = dshNodeGroups(opts);
+  for (const g of groups) {
+    if (groups.length > 1 || g.list.length > 1) html += '<div class="model-group">🖥 ' + esc(g.tunnel) + '</div>';
+    for (const n of g.list) html += dshNodeItemHtml(n, nodeState.cur === n.mappingId, '');
   }
   pop.innerHTML = html;
   pop.querySelectorAll('.main-agent-item').forEach(function (it) {
     it.addEventListener('click', function () { selectNode(it.dataset.mid); });
   });
-  // 引擎档案缺失/临期 → 后台探测（TTL 门控）后按 mappingId 合并回列表重绘
-  const needProbe = opts.some(function (n) { return !n.engine || Date.now() - (n.engine.probedAt || 0) > 90000; });
-  if (needProbe) refreshNodeEngines(false);
+  probeNodesIfStale(opts);
 }
 
 /** 探测全部 DSH 节点引擎档案并合并进 state.resources（force=true 绕过 TTL） */
@@ -8810,6 +8825,7 @@ async function refreshNodeEngines(force) {
       if (JSON.stringify(e.engine) !== before) changed = true;
     }
     if (changed && $('node-pop') && $('node-pop').classList.contains('on')) renderNodePop();
+    if (changed && placeState.pop) renderPlacePop();
     if (changed) renderChatPlace(currentTaskObj()); // 头部标签悬停里的在线状态 / 默认模型跟着刷新
   } catch (e) { /* 探测失败静默：下拉里已显示「探测中…」 */ }
 }
@@ -8838,6 +8854,126 @@ function setNodeBtnUi(label) {
   }
 }
 function closeNodePop() { const p = $('node-pop'); if (p) p.classList.remove('on'); }
+
+/** 项目绑定的节点 mappingId（dshRef 非 mapping 时返回 ''） */
+function placeProjectNode(pj) {
+  return pj && pj.dshRef && pj.dshRef.kind === 'mapping' && pj.dshRef.mappingId ? pj.dshRef.mappingId : '';
+}
+/** 规范化执行位置：选了项目时节点取项目节点；项目不存在则退回单独任务 */
+function normalizePlace(place) {
+  const p = place || {};
+  const pj = p.projectId ? (state.projects || []).find(function (x) { return x.id === p.projectId; }) : null;
+  if (pj) return { nodeMappingId: placeProjectNode(pj) || p.nodeMappingId || '', projectId: pj.id };
+  return { nodeMappingId: p.nodeMappingId || '', projectId: null };
+}
+/** 执行位置的展示文字「📦 项目 · 🖥 节点」/「🖥 节点 · 单独任务」 */
+function placeLabel(place) {
+  const p = normalizePlace(place);
+  const res = dshNodeOptions().find(function (x) { return x.mappingId === p.nodeMappingId; });
+  const node = res ? (res.title || res.appName || res.note || res.mappingId) : (p.nodeMappingId || '默认节点');
+  const pj = p.projectId ? (state.projects || []).find(function (x) { return x.id === p.projectId; }) : null;
+  return pj ? '📦 ' + (pj.name || pj.id) + ' · 🖥 ' + node : '🖥 ' + node + ' · 单独任务';
+}
+function placeNodeProjects(mid) {
+  return (state.projects || []).filter(function (pj) { return placeProjectNode(pj) === mid; });
+}
+/**
+ * 打开执行位置选择框（P2-1）：第一层选节点（在线点 + 引擎徽标 + 默认模型，离线灰显仍可选），
+ * 第二层选该节点下的项目或「不使用项目（单独任务）」；选定后回调 onChange({ nodeMappingId, projectId|null })。
+ */
+function openPlacePop(anchor, place, onChange) {
+  closePlacePop();
+  placeState.place = normalizePlace(place);
+  placeState.anchor = anchor || null;
+  placeState.onChange = onChange || null;
+  placeState.level = 'node';
+  placeState.browse = '';
+  const pop = document.createElement('div');
+  pop.className = 'main-agent-pop place-pop on';
+  pop.addEventListener('click', function (e) { e.stopPropagation(); });
+  document.body.appendChild(pop);
+  placeState.pop = pop;
+  renderPlacePop();
+  if (anchor && anchor.getBoundingClientRect) {
+    const r = anchor.getBoundingClientRect();
+    const w = pop.offsetWidth || 350;
+    pop.style.left = Math.max(12, Math.min(r.left, window.innerWidth - w - 12)) + 'px';
+    const below = window.innerHeight - r.bottom;
+    if (below < 260 && r.top > below) pop.style.bottom = (window.innerHeight - r.top + 6) + 'px';
+    else pop.style.top = (r.bottom + 6) + 'px';
+  }
+}
+function closePlacePop() {
+  if (placeState.pop) placeState.pop.remove();
+  placeState.pop = null;
+  placeState.anchor = null;
+}
+function selectPlace(place) {
+  placeState.place = normalizePlace(place);
+  const cb = placeState.onChange;
+  closePlacePop();
+  if (cb) cb(placeState.place);
+}
+function renderPlacePop() {
+  const pop = placeState.pop;
+  if (!pop) return;
+  const opts = dshNodeOptions();
+  const cur = placeState.place;
+  let html = '';
+  if (placeState.level === 'node') {
+    html += '<div class="main-agent-pop-head"><span>执行位置 · 选择节点</span><span>离线节点也可选</span></div>';
+    if (!opts.length) html += '<div class="model-empty">暂无 DSH 节点（资源目录未同步）</div>';
+    const groups = dshNodeGroups(opts);
+    for (const g of groups) {
+      if (groups.length > 1 || g.list.length > 1) html += '<div class="model-group">🖥 ' + esc(g.tunnel) + '</div>';
+      for (const n of g.list) {
+        const cnt = placeNodeProjects(n.mappingId).length;
+        html += dshNodeItemHtml(n, cur.nodeMappingId === n.mappingId, cnt ? cnt + ' 个项目 ›' : '单独任务 ›');
+      }
+    }
+  } else {
+    const mid = placeState.browse;
+    const n = opts.find(function (x) { return x.mappingId === mid; });
+    html += '<div class="main-agent-pop-head"><button type="button" class="place-back" data-op="back">‹ 节点</button>' +
+      '<span>' + esc(n ? (n.title || n.appName || n.note || n.mappingId) : mid) + '</span></div>';
+    const solo = cur.nodeMappingId === mid && !cur.projectId;
+    html += '<div class="main-agent-item' + (solo ? ' on' : '') + '" data-pid="">' +
+      '<div class="ag-info"><div class="ag-title">💬 不使用项目（单独任务）</div>' +
+      '<div class="ag-sub">在节点默认工作目录执行</div></div><span class="ag-ck">✓</span></div>';
+    const list = placeNodeProjects(mid);
+    if (list.length) html += '<div class="model-group">📦 项目</div>';
+    for (const pj of list) {
+      html += '<div class="main-agent-item' + (cur.projectId === pj.id ? ' on' : '') + '" data-pid="' + esc(pj.id) + '">' +
+        '<div class="ag-info"><div class="ag-title">📦 ' + esc(pj.name || pj.id) + '</div>' +
+        '<div class="ag-sub">' + esc(pj.workspace || '远端默认目录') + '</div></div><span class="ag-ck">✓</span></div>';
+    }
+  }
+  pop.innerHTML = html;
+  if (placeState.level === 'node') {
+    pop.querySelectorAll('.main-agent-item[data-mid]').forEach(function (it) {
+      it.addEventListener('click', function () {
+        placeState.level = 'project';
+        placeState.browse = it.dataset.mid;
+        renderPlacePop();
+      });
+    });
+    probeNodesIfStale(opts);
+  } else {
+    const back = pop.querySelector('[data-op="back"]');
+    if (back) back.addEventListener('click', function () { placeState.level = 'node'; renderPlacePop(); });
+    pop.querySelectorAll('.main-agent-item[data-pid]').forEach(function (it) {
+      it.addEventListener('click', function () {
+        selectPlace({ nodeMappingId: placeState.browse, projectId: it.dataset.pid || null });
+      });
+    });
+  }
+}
+document.addEventListener('click', function (e) {
+  if (placeState.pop && !(placeState.anchor && placeState.anchor.contains(e.target))) closePlacePop();
+});
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape' && placeState.pop) { e.stopPropagation(); closePlacePop(); }
+});
 if ($('node-btn')) {
   $('node-btn').addEventListener('click', function (e) {
     e.stopPropagation();
