@@ -1591,6 +1591,12 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .ws-chg-name { flex: none; font-size: 12.5px; color: var(--tx); }
 .ws-chg-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--tx3); }
 .ws-mod { flex: none; font-size: 10px; color: var(--warn); background: var(--warn-light); border-radius: 999px; padding: 1px 6px; }
+.file-tags { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 22px 0; max-width: var(--dsh-composer-card-max-width, 920px); margin: 0 auto; }
+.file-tag { display: inline-flex; align-items: center; gap: 5px; max-width: 220px; font-size: 12px; line-height: 1; color: var(--tx2); background: var(--bg2); border: 1px solid var(--line2); border-radius: 999px; padding: 4px 8px; }
+.file-tag span.nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-tag .ft-x { cursor: pointer; opacity: .55; font-size: 10px; padding: 1px 2px; border-radius: 4px; }
+.file-tag .ft-x:hover { opacity: 1; color: var(--err); background: var(--bg-hover); }
+.ws-row.drop-into { outline: 1.5px dashed var(--pri); background: var(--pri-light); border-radius: 6px; }
 @media (max-width: 768px) {
   .ws-side { position: absolute; inset: 0; width: 100% !important; z-index: 30; }
   .ws-resizer { display: none; }
@@ -2360,6 +2366,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           </div>
           <button class="jump-bottom" id="btn-jump-bottom" title="回到底部">⬇<span class="jb-t"> 回到底部</span></button>
           <div class="composer-hint" id="composer-hint"></div>
+          <div class="file-tags" id="file-tags" style="display:none"></div>
           <div class="node-offline" id="node-offline" style="display:none"></div>
           <div class="chat-input">
             <div class="dsh-cscroll">
@@ -5279,6 +5286,7 @@ async function openTask(taskId) {
 
   const isSwitching = state.currentTaskId !== taskId;
   state.currentTaskId = taskId;
+  clearFileTags(); // 引用标签属于输入草稿，切会话不带走（F3-1）
   // 打开已有任务 = 放弃草稿（P2-2）：草稿只是前端态，没有服务端记录
   if (state.draft) { state.draft = null; closePlacePop(); }
   hideDraftView();
@@ -7556,8 +7564,16 @@ function safeJsonParse(s) {
 // ---------- 发送消息与附件 ----------
 $('btn-send').addEventListener('click', send);
 
+/** 引用标签（F3-1）：发送时展开为相对工作区的路径并入正文 */
+function composeOutgoingText(text) {
+  const tags = state.fileTags || [];
+  if (!tags.length) return text;
+  const refs = tags.map(function (t) { return wsRelPath(t.path) || String(t.path).split('/').pop(); });
+  return text ? (text + '\\n' + refs.join(' ')) : refs.join(' ');
+}
+function clearFileTags() { state.fileTags = []; renderFileTags(); }
 async function send() {
-  const text = $('input').value.trim();
+  const text = composeOutgoingText($('input').value.trim());
   if (!text || document.body.classList.contains('node-offline')) return;
   if (!state.currentTaskId) {
     // 草稿 / 欢迎页的首条消息：POST /tasks 带 message 一次完成「创建 + 发送」（P2-2），
@@ -7569,7 +7585,7 @@ async function send() {
     if (!createdId) {
       const input = $('input');
       if (input && !input.value.trim()) input.value = text;
-    }
+    } else clearFileTags();
     return;
   }
   const sendTaskId = state.currentTaskId;
@@ -7586,6 +7602,7 @@ async function send() {
     if (state.currentTaskId === sendTaskId) setSending(wasRunning);
     return;
   }
+  if (state.currentTaskId === sendTaskId) clearFileTags();
   // 运行中的补充意见 → 服务端已经落账为排队轮：立即渲染该轮（⏳ 排队气泡 + ⚡ 立即发送），
   // 不能只留一句 composer 提示——否则用户以为消息丢了，刷新后又看到「补发 + 原排队」两条重复。
   if (r.queued && r.turn && state.currentTaskId === sendTaskId) {
@@ -10041,15 +10058,33 @@ function wsRelPath(p) {
 }
 function wsRefToChat(p) {
   switchView('work');
-  const inp = $('input');
-  if (!inp) return;
-  const rel = wsRelPath(p) || String(p).split('/').pop();
-  const ins = rel + ' ';
-  const v = inp.value || '';
-  inp.value = v ? (v.endsWith(' ') ? v + ins : v + ' ' + ins) : ins;
-  inp.focus();
+  if (!state.fileTags) state.fileTags = [];
+  if (state.fileTags.some(function (t) { return t.path === p; })) { hintComposer('该文件已在引用列表'); return; }
+  state.fileTags.push({ path: p });
+  renderFileTags();
   pulseComposer();
-  hintComposer('已引用工作区文件 ' + rel);
+  hintComposer('已引用 ' + (wsRelPath(p) || String(p).split('/').pop()) + '（发送时并入正文）');
+}
+function addFileTag(p) {
+  switchView('work');
+  if (!state.fileTags) state.fileTags = [];
+  if (state.fileTags.some(function (t) { return t.path === p; })) { hintComposer('该文件已在引用列表'); return; }
+  state.fileTags.push({ path: p });
+  renderFileTags();
+  pulseComposer();
+  hintComposer('已引用 ' + (String(p).split('/').pop() || p) + '（发送时并入正文）');
+}
+function renderFileTags() {
+  const row = $('file-tags');
+  if (!row) return;
+  const tags = state.fileTags || [];
+  row.style.display = tags.length ? '' : 'none';
+  row.innerHTML = tags.map(function (t, i) {
+    return '<span class="file-tag" title="' + esc(t.path) + '">📎 ' + esc(String(t.path).split('/').pop() || t.path) + '<span class="ft-x" data-i="' + i + '" title="移除">✕</span></span>';
+  }).join('');
+  row.querySelectorAll('.ft-x').forEach(function (x) {
+    x.addEventListener('click', function (e) { e.stopPropagation(); state.fileTags.splice(Number(x.dataset.i), 1); renderFileTags(); });
+  });
 }
 function wsLevelHtml(dir, depth, kw) {
   const lv = wsFiles.levels[dir];
@@ -10097,18 +10132,15 @@ function wsSyncBatchBar() {
   const q = function (id) { return bar.querySelector(id); };
   if (q('#wsf-bat-clear')) q('#wsf-bat-clear').addEventListener('click', function () { wsFiles.selected.clear(); wsFilesRenderTree(); });
   if (q('#wsf-bat-at')) q('#wsf-bat-at').addEventListener('click', function () {
-    const refs = Array.from(wsFiles.selected).map(function (p) { return wsRelPath(p) || p.split('/').pop(); });
+    const paths = Array.from(wsFiles.selected);
     closeWsSide();
     switchView('work');
-    const inp = $('input');
-    if (inp) {
-      const ins = refs.join(' ') + ' ';
-      const v = inp.value || '';
-      inp.value = v ? (v.endsWith(' ') ? v + ins : v + ' ' + ins) : ins;
-      inp.focus(); pulseComposer();
-    }
+    if (!state.fileTags) state.fileTags = [];
+    for (const p of paths) if (!state.fileTags.some(function (t) { return t.path === p; })) state.fileTags.push({ path: p });
+    renderFileTags();
+    pulseComposer();
     wsFiles.selected.clear(); wsFilesRenderTree();
-    hintComposer('已引用 ' + refs.length + ' 个工作区文件');
+    hintComposer('已引用 ' + paths.length + ' 个工作区文件（发送时并入正文）');
   });
   if (q('#wsf-bat-dl')) q('#wsf-bat-dl').addEventListener('click', async function () {
     const items = Array.from(wsFiles.selected).map(wsFindEntry).filter(function (e) { return e && e.type !== 'dir'; });
@@ -10209,6 +10241,25 @@ function wsFilesRenderTree() {
   };
   wsSyncBatchBar();
 }
+/** 上传文件到指定目录（工具栏按钮与目录树拖放共用，F3-1） */
+async function wsFilesUpload(files, destDir) {
+  if (!files || !files.length) return;
+  if (!destDir) { toast('未解析到目标目录', true); return; }
+  if (!wsFiles.node) { toast('当前任务没有可用的执行节点', true); return; }
+  toast('正在上传 ' + files.length + ' 个文件…');
+  let ok = 0;
+  for (const f of files) {
+    try {
+      const fd = new FormData();
+      fd.append('files', f, f.name);
+      const res = await fetch(API + '/agents/fs/upload?node=' + encodeURIComponent(JSON.stringify(wsFiles.node)) + '&path=' + encodeURIComponent(destDir), { method: 'POST', body: fd });
+      const json = await res.json().catch(function () { return {}; });
+      if (res.ok && json.ok) ok++;
+      else toast('「' + f.name + '」上传失败: ' + (json.error || 'HTTP ' + res.status), true);
+    } catch (e) { toast('「' + f.name + '」上传网络错误', true); }
+  }
+  if (ok) { toast('✓ 已上传 ' + ok + '/' + files.length + ' 个文件'); wsFilesLoadLevel(destDir); }
+}
 function wsFilesRenderAll() {
   const el = $('ws-files-root');
   if (!el) return;
@@ -10234,22 +10285,33 @@ function wsFilesRenderAll() {
   if (fi) fi.addEventListener('change', async function () {
     const files = Array.from(this.files || []);
     this.value = '';
+    await wsFilesUpload(files, wsFiles.lastDir || wsFiles.root);
+  });
+  // 拖放上传（F3-1）：文件拖到目录行 = 上传到该目录；拖到空白处 = 最近浏览的目录
+  tree.addEventListener('dragover', function (e) {
+    if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    const row = e.target.closest('.ws-row');
+    tree.querySelectorAll('.drop-into').forEach(function (x) { x.classList.remove('drop-into'); });
+    if (row) row.classList.add('drop-into');
+  });
+  tree.addEventListener('dragleave', function () {
+    tree.querySelectorAll('.drop-into').forEach(function (x) { x.classList.remove('drop-into'); });
+  });
+  tree.addEventListener('drop', async function (e) {
+    const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
     if (!files.length) return;
-    const dest = wsFiles.lastDir || wsFiles.root;
-    if (!dest) { toast('未解析到根目录', true); return; }
-    toast('正在上传 ' + files.length + ' 个文件…');
-    let ok = 0;
-    for (const f of files) {
-      try {
-        const fd = new FormData();
-        fd.append('files', f, f.name);
-        const res = await fetch(API + '/agents/fs/upload?node=' + encodeURIComponent(JSON.stringify(wsFiles.node)) + '&path=' + encodeURIComponent(dest), { method: 'POST', body: fd });
-        const json = await res.json().catch(function () { return {}; });
-        if (res.ok && json.ok) ok++;
-        else toast('「' + f.name + '」上传失败: ' + (json.error || 'HTTP ' + res.status), true);
-      } catch (e) { toast('「' + f.name + '」上传网络错误', true); }
+    e.preventDefault();
+    e.stopPropagation();
+    tree.querySelectorAll('.drop-into').forEach(function (x) { x.classList.remove('drop-into'); });
+    const row = e.target.closest('.ws-row');
+    let dir = wsFiles.lastDir || wsFiles.root;
+    if (row && row.dataset.path) {
+      dir = row.dataset.type === 'dir' ? row.dataset.path : String(row.dataset.path).split('/').slice(0, -1).join('/');
     }
-    if (ok) { toast('✓ 已上传 ' + ok + '/' + files.length + ' 个文件'); wsFilesLoadLevel(dest); }
+    wsFiles.lastDir = dir;
+    await wsFilesUpload(files, dir);
   });
   const rf = $('wsf-refresh');
   if (rf) rf.addEventListener('click', function () {
@@ -12661,20 +12723,7 @@ function pjWithinWs(p) {
 
 /** 项目工作区文件引用到对话：插入相对工作区的路径（项目会话 cwd=工作区，可直接使用） */
 function pjRefToChat(filePath, ws) {
-  switchView('work');
-  const inp = $('input');
-  if (!inp) return;
-  let rel = String(filePath || '');
-  const nws = pjTrimSlash(ws);
-  if (nws && rel.startsWith(nws + '/')) rel = rel.slice(nws.length + 1);
-  else if (nws && rel === nws) rel = '';
-  const name = rel || (filePath.split('/').pop() || filePath);
-  const val = inp.value || '';
-  const insertText = name + ' ';
-  inp.value = val ? (val.endsWith(' ') ? val + insertText : val + ' ' + insertText) : insertText;
-  inp.focus();
-  pulseComposer();
-  hintComposer('已引用工作区文件 ' + name + '（相对项目工作区）');
+  addFileTag(filePath);
 }
 
 /** 打开项目工作区文件抽屉（头部 ⋯ 菜单「📁 工作区文件」入口；pid 缺省取项目工作台当前项目） */
@@ -13050,23 +13099,13 @@ function pjOpenPreview(filePath, fileName) {
 function pjBatchAt() {
   const items = pjGetSelected();
   if (!items.length) { toast('请先选择文件', true); return; }
-  const nws = pjTrimSlash(pjFilesState.ws);
-  const refs = items.map(it => {
-    let rel = it.path;
-    if (nws && rel.startsWith(nws + '/')) rel = rel.slice(nws.length + 1);
-    return rel || it.name;
-  });
   closeDrawer();
   switchView('work');
-  const inp = $('input');
-  if (inp) {
-    const val = inp.value || '';
-    const insertText = refs.join(' ') + ' ';
-    inp.value = val ? (val.endsWith(' ') ? val + insertText : val + ' ' + insertText) : insertText;
-    inp.focus();
-    pulseComposer();
-    hintComposer('已引用 ' + refs.length + ' 个工作区文件（相对项目工作区）');
-  }
+  if (!state.fileTags) state.fileTags = [];
+  for (const it of items) if (!state.fileTags.some(function (t) { return t.path === it.path; })) state.fileTags.push({ path: it.path });
+  renderFileTags();
+  pulseComposer();
+  hintComposer('已引用 ' + items.length + ' 个工作区文件（发送时并入正文）');
   pjFilesState.selected.clear();
 }
 
