@@ -118,3 +118,7 @@
 - getTaskStats：bindings.map 出 members（agent.dshRef||task.nodeRef||proj.dshRef → nodeLabelOf），stats 只在 ok 时带；payload.stats 原样。
 - 前端 statsState.members；Token 面板「按成员」区 + sp-foot「查看本任务明细」→ openTaskUsageReport（openModal 表格，records?taskId=&limit=200）。
 - 注意：路由改动若再动 getTaskStats，payload 里已有 reasonCode/reason（S1-2 加的）别弄丢。
+
+## S2-2（ZCode 主会话）
+- applyUsageBadge(el, usage, turn)：button 化 + fmtStatsTokens 压缩 + durMs=turn.endedAt-at（流式中 turn 未收尾无 ⏱，turn_end 重渲染后出现）；openTurnUsageDetail 弹层。4 个调用点补 turn。
+- 远端 usage 事件字段（remote-client 透传）：uncachedInputTokens/inputTokens/cacheReadTokens/cacheWriteTokens/outputTokens；ttftMs 只在 session stats。别在逐轮明细承诺首 token 一定有。

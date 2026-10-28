@@ -178,7 +178,8 @@ UI 行为目前没有自动化浏览器测试：任务说明里的「验收」�
   - Token 面板列出「主会话 / 🤖 成员 · 🖥 节点 · 模型 · token · 缓存命中」，底部「查看本任务明细 →」跳到 Token 报表并按 `taskId` 筛选（现有 `/api/usage/tokens/records?taskId=`）。
   - 验收：build / typecheck / smoke / test:unit 通过；smoke 断言 `/stats` 返回 `members` 字段（mock 下可以是空数组）。
 
-- [ ] **S2-2** 逐轮用量胶囊
+- [x] **S2-2** 逐轮用量胶囊
+  - 完成：胶囊 🗄 K/M · ⏱ 时长（endedAt-at 推导；usage 事件无 ttft，明细里 ttftMs 有则显示）；点击弹明细。验证：build/typecheck/smoke(67) 全过；未做浏览器手测
   - 依赖：S2-1
   - agent 轮的操作行右侧显示 `🗄 8.2K`、`⏱ 34秒`，点开看这一轮的输入 / 输出 / 缓存 / 首 token。数据来自 `TaskTurn.usage`（先核对字段）；没有数据就不显示。
   - 验收：build / typecheck / smoke 通过。
