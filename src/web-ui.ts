@@ -2475,6 +2475,11 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
         </div>
       </div>
       <div class="card">
+        <h3 style="margin-bottom:12px">全局默认模型</h3>
+        <div class="field"><label>未单独指定模型的任务使用此模型（聊天窗模型按钮只改当前任务）</label><select id="set-default-model" class="cfg-sel"></select></div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="btn" id="btn-save-default-model">保存默认模型</button><span id="set-default-model-hint" style="font-size:11.5px;color:var(--tx3)"></span></div>
+      </div>
+      <div class="card">
         <h3 style="margin-bottom:12px">任务归档</h3>
         <div style="font-size:11.5px;color:var(--tx3)">自动归档开关、归档保留时长与已归档会话的搜索 / 批量恢复 / 批量删除，已整合到「归档管理」页。</div>
         <div style="margin-top:10px"><button class="btn" id="btn-goto-archive">🗄 前往归档管理</button></div>
@@ -4683,7 +4688,7 @@ async function openRunConfig(focus) {
     ? '<div class="rc-row" style="margin-top:8px"><span class="rc-k">技能</span><div class="pj-chips">' + ((proj.skillNames || []).map(function (n) { return '<span class="tag" style="font-family:var(--mono)">/' + esc(n) + '</span>'; }).join(' ') || '<span class="sub">未配置</span>') + '</div></div><div class="hint" style="margin-top:8px">修改请点项目横幅「⚙ 项目配置」</div>'
     : '<div class="field"><label>技能（逗号分隔，/名 手势加载，仅对新任务生效）</label><input id="rc-skills" style="font-family:var(--mono)" value="' + esc((state.taskEnv.skillNames || []).join(',')) + '" placeholder="lark-cli, kb-log"></div>';
 
-  const modelSection = '<div class="rc-row"><span class="rc-k">调度模型</span><span class="tag">' + esc((state.settings && state.settings.planner && state.settings.planner.model) || '默认模型') + '</span></div><div class="hint" style="margin-top:8px">切换用输入区下方模型按钮（全局生效，含项目任务）</div>';
+  const modelSection = '<div class="rc-row"><span class="rc-k">调度模型</span><span class="tag">' + esc((state.settings && state.settings.planner && state.settings.planner.model) || '默认模型') + '</span></div><div class="hint" style="margin-top:8px">输入区下方模型按钮只改当前任务；这里显示的是全局默认模型（在设置页修改）</div>';
 
   const bodyHtml =
     '<div class="rc-section" id="rc-sec-expert"><b>① 默认协作成员（不限制 @）</b>' + expertSection + '</div>' +
@@ -8329,9 +8334,10 @@ function applyTaskSummaries(summaries) {
   if (list.some(s => s.id === state.currentTaskId)) refreshChatHead();
 }
 
-/** 主智能体当前生效的模型（模型列表选中值；未选中时回退其自身配置） */
+/** 主会话当前生效的模型（任务级选择 → 全局默认模型 → 主智能体自身配置） */
 function mainAgentEffectiveModel() {
-  if (modelState.cur) return String(modelState.cur).split('/').pop();
+  const eff = modelState.cur || modelState.globalDefault;
+  if (eff) return String(eff).split('/').pop();
   const mainId = mainAgentState.cur || mainAgentState.resolvedAgentId || '';
   const a = state.agents.find(x => x.id === mainId);
   return a && a.model ? String(a.model).split('/').pop() : '';
@@ -8635,9 +8641,10 @@ async function selectMainAgent(agentId) {
 
   if (r.ok) {
     // 2) 服务端权威结果覆盖本地（自动模式解析出的真实主智能体、成员账本同步后的任务摘要）；
-    //    模型选中保持用户所选（d.model = settings.planner.model，切主智能体不重置）
+    //    d.model = settings.planner.model 只是全局默认模型；按钮仍显示当前任务的任务级选择
     const d = r.data || {};
-    modelState.cur = d.model || '';
+    modelState.globalDefault = d.model || '';
+    modelState.cur = currentTaskModelChoice();
     if (modelBtnEl) modelBtnEl.textContent = modelBtnLabel(modelState.cur);
     applyMainAgentSelection({
       agentId: d.agentId || '',
@@ -8659,8 +8666,9 @@ async function selectMainAgent(agentId) {
 
 // ---------- 主调度模型选择（自定义弹层：原生 select 的移动端全屏弹窗字大折行且样式失控） ----------
 // curEffort/curPreset：当前执行会话的推理强度与模式预设（任务内才有意义；打开会话时回读回显）
-const modelState = { groups: {}, cur: '', loaded: false, error: '', presets: [], curEffort: '', curPreset: '', presetsLoaded: false, loadedForNode: '' };
-function modelBtnTitle() { return '主调度模型 + 执行会话模型（点选即生效）'; }
+// cur = 当前任务的任务级模型（空 = 跟随默认）；globalDefault = 全局默认模型（settings.planner.model，只在设置页改）
+const modelState = { groups: {}, cur: '', globalDefault: '', loaded: false, error: '', presets: [], curEffort: '', curPreset: '', presetsLoaded: false, loadedForNode: '' };
+function modelBtnTitle() { return '本任务模型（只影响当前任务的主会话；全局默认模型在设置页修改）'; }
 function curModelEntry() {
   if (!modelState.cur) return null;
   for (const pv of Object.keys(modelState.groups)) {
@@ -8673,8 +8681,18 @@ function effortName(id) {
   const e = (curModelEntry()?.reasoning?.efforts || []).find(x => x.id === id);
   return e ? (e.name || e.id) : (id || '');
 }
+/** 「跟随默认」时实际使用的模型名：全局默认模型，未设置则为节点默认 */
+function followDefaultName() {
+  return modelState.globalDefault || '节点默认';
+}
+/** 当前任务的任务级模型（空 = 跟随默认）；无当前任务时取新任务环境里选好的模型 */
+function currentTaskModelChoice() {
+  if (!state.currentTaskId) return (state.taskEnv && state.taskEnv.model) || '';
+  const t = state.taskCache.get(state.currentTaskId) || state.tasks.find(function (x) { return x.id === state.currentTaskId; });
+  return (t && t.model) || '';
+}
 function modelBtnLabel(v) {
-  let t = '⚙ ' + (v || '主调度默认模型');
+  let t = '⚙ ' + (v || ('跟随默认 · ' + followDefaultName()));
   if (modelState.curEffort) t += ' ' + effortName(modelState.curEffort);
   if (modelState.curPreset) t += ' · ' + modelState.curPreset;
   return t;
@@ -8683,8 +8701,8 @@ function renderModelPop() {
   const pop = $('model-pop');
   const cur = modelState.cur;
   const known = Object.keys(modelState.groups).some(pv => (modelState.groups[pv] || []).some(m => pv + '/' + m.id === cur));
-  let html = '<div class="model-pop-head"><span>主调度 + 执行会话模型</span><span>点选即生效</span></div>';
-  html += '<div class="model-item' + (!cur ? ' on' : '') + '" data-v=""><span class="n">主调度默认模型</span><span class="ck">✓</span></div>';
+  let html = '<div class="model-pop-head"><span>' + (state.currentTaskId ? '本任务模型' : '新任务模型') + '</span><span>只影响主会话 · @ 子智能体用各自模型</span></div>';
+  html += '<div class="model-item' + (!cur ? ' on' : '') + '" data-v=""><span class="n">跟随默认（' + esc(followDefaultName()) + '）</span><span class="ck">✓</span></div>';
   if (cur && !known) {
     // 目录按所选任务节点拉取：已保存模型不在目录里 = 该节点引擎没有这个模型（跨引擎配置的典型症状）
     const mismatchNote = Object.keys(modelState.groups).length ? '（已保存 · 当前节点目录不存在）' : '（已保存）';
@@ -8763,8 +8781,9 @@ async function loadPlannerOptions() {
     renderMainAgentPop();
   }
 
-  // 2. 更新模型状态
-  modelState.cur = (d.current || {}).model || '';
+  // 2. 更新模型状态：planner.model 只是「全局默认模型」；按钮显示的是当前任务（或新任务环境）的任务级选择
+  modelState.globalDefault = (d.current || {}).model || '';
+  modelState.cur = currentTaskModelChoice();
   modelState.groups = {};
   modelState.error = d.modelError || '';
   for (const m of d.models || []) { (modelState.groups[m.provider] = modelState.groups[m.provider] || []).push(m); }
@@ -8814,6 +8833,11 @@ function setModelStatus(text) {
   el.className = 'model-status on ok';
   el._h = setTimeout(() => { el.className = 'model-status'; el.textContent = ''; el._h = null; }, 8000);
 }
+/**
+ * 模型选择是任务级的：只写当前任务（task.model），不改全局默认模型（全局默认只在设置页维护），
+ * 因此在 A 任务里切模型不会让 B 任务下一轮跟着换。v 为空串 = 跟随默认（全局默认模型，未设置则节点默认）。
+ * 无当前任务时记入新任务环境，创建任务时随 body.model 下发。
+ */
 async function selectModel(v) {
   const prevModel = modelState.cur;
   modelState.cur = v;
@@ -8822,56 +8846,45 @@ async function selectModel(v) {
   const btn = $('chat-model-btn');
   btn.textContent = modelBtnLabel(v);
   closeModelPop();
-  const shortModel = v ? (v.indexOf('/') >= 0 ? v.slice(v.indexOf('/') + 1).trim() : v) : '默认';
-  // 1) 更新主调度模型（只写 planner 设置，不改写主智能体自身 provider/model 配置：
-  //    「选中的模型」与「智能体默认模型」是两个概念，@ 子智能体仍按各自配置执行）
-  const r = await api('/planner/config', { method: 'POST', body: JSON.stringify({ model: v || '' }) });
-  // 气泡模型标签就地与新选中值对齐（主智能体 = 列表选中；其余 = 各自配置）
-  if (r.ok) { refreshMainAgentModelBadges(); }
-  // 2) 同步更新当前任务里主智能体执行会话的模型（不传 agentId，服务端默认作用于当前主智能体；PUT /sessions/:id 透传到远端 DSH）
-  if (state.currentTaskId) {
-    const slashIdx = v.indexOf('/');
-    const provider = slashIdx >= 0 ? v.slice(0, slashIdx).trim() : '';
-    const modelId = slashIdx >= 0 ? v.slice(slashIdx + 1).trim() : v;
-    const sr = await api('/tasks/' + state.currentTaskId + '/session-model', {
-      method: 'PUT',
-      body: JSON.stringify({ provider: provider || undefined, model: modelId }),
-    });
-    if (sr.ok) {
-      // v 为空串 = 恢复节点默认：服务端会解析默认 provider/model 显式下发，用实际值回执
-      const sel = (sr.data && sr.data.selected) || {};
-      const fallback = (sr.data && sr.data.defaultModel && sr.data.defaultModel.model) || sel.model || '';
-      const actual = v ? modelId : fallback;
-      flashBtnOk(btn, '✓ ' + (v ? '已切换「' + actual + '」' : '已恢复节点默认「' + (actual || '默认') + '」'), modelBtnLabel(v));
-      setModelStatus('✓ 主智能体会话已切到「' + (actual || '默认') + '」· 主调度「' + (v || '默认') + '」');
-      return;
-    }
-    // 无会话（草稿/首轮未建立）：主调度模型已持久化，落到下方成功提示；其余失败必须中止，
-    // 否则会同时出现红色失败 toast + 绿色「已切换」闪烁（0.5.0 默认模型清除场景实测）
-    if (sr.code === 'NO_SESSION') {
-      // fall through
-    } else {
-      // 跨引擎/跨节点的目录外选择：服务端本地拦截（不再透传远端吃天书报错），
-      // 主调度模型已先行落盘 → 就地回滚到点击前的值，按钮/弹层状态与实际生效保持一致
-      if (sr.code === 'MODEL_NOT_IN_CATALOG' && r.ok) {
-        const rr = await api('/planner/config', { method: 'POST', body: JSON.stringify({ model: prevModel || '' }) });
-        if (rr.ok) {
-          modelState.cur = prevModel;
-          modelState.curEffort = '';
-          btn.textContent = modelBtnLabel(prevModel);
-          refreshMainAgentModelBadges();
-        }
-      }
-      toast(sr.error || '执行会话模型更新失败', true);
-      return;
-    }
+  const taskId = state.currentTaskId;
+  if (!taskId) {
+    state.taskEnv.model = v || '';
+    setModelStatus('✓ 新任务将使用「' + (v || followDefaultName()) + '」');
+    return;
   }
-  if (r.ok) {
-    flashBtnOk(btn, '✓ 已切换「' + shortModel + '」', modelBtnLabel(v));
-    setModelStatus('✓ 主调度模型已切到「' + (v || '默认') + '」');
-  } else {
-    toast(r.error || '保存失败', true);
+  const rollback = function () {
+    if (state.currentTaskId !== taskId) return;
+    modelState.cur = prevModel;
+    btn.textContent = modelBtnLabel(prevModel);
+  };
+  // 1) 先对已建立的主会话即时生效：目标 = 任务指定值；跟随默认时 = 全局默认模型（空 = 恢复节点默认）。
+  //    会话拒绝（如 MODEL_NOT_IN_CATALOG）时任务级模型尚未写入，只回滚本地显示即可。
+  const effective = v || modelState.globalDefault || '';
+  const slashIdx = effective.indexOf('/');
+  const provider = slashIdx >= 0 ? effective.slice(0, slashIdx).trim() : '';
+  const modelId = slashIdx >= 0 ? effective.slice(slashIdx + 1).trim() : effective;
+  const sr = await api('/tasks/' + taskId + '/session-model', {
+    method: 'PUT',
+    body: JSON.stringify({ provider: provider || undefined, model: modelId }),
+  });
+  if (!sr.ok && sr.code !== 'NO_SESSION') {
+    rollback();
+    toast(sr.error || '执行会话模型更新失败', true);
+    return;
   }
+  // 2) 持久化为任务级模型（engine 取模型：task.model 优先于全局默认）
+  const r = await api('/tasks/' + taskId + '/model', { method: 'PUT', body: JSON.stringify({ model: v || '' }) });
+  if (!r.ok) {
+    rollback();
+    toast(r.error || '任务模型保存失败', true);
+    return;
+  }
+  const cached = state.taskCache.get(taskId);
+  if (cached) { if (v) cached.model = v; else delete cached.model; }
+  const nodeDefault = (sr.ok && sr.data && sr.data.defaultModel && sr.data.defaultModel.model) || '';
+  const actual = v ? modelId : (modelState.globalDefault || nodeDefault || '节点默认');
+  flashBtnOk(btn, '✓ ' + (v ? '已切换「' + modelId + '」' : '已跟随默认「' + actual + '」'), modelBtnLabel(v));
+  setModelStatus('✓ 本任务已切到「' + actual + '」' + (sr.ok ? '' : '（首轮建会话时生效）') + '，其他任务不受影响');
 }
 /** 会话当前模型选择/模式预设回读（打开会话时调用；失败静默——弹层仍可用，只是不回显） */
 async function loadSessionModelInfo() {
@@ -8882,6 +8895,8 @@ async function loadSessionModelInfo() {
   if (!r.ok || !r.data || state.currentTaskId !== taskId) return;
   const d = r.data || {};
   const sess = d.session || null;
+  // 模型按钮回显任务级模型（空 = 跟随默认）；不再显示全局 planner.model
+  modelState.cur = d.taskModel || '';
   modelState.curEffort = (sess && sess.model && sess.model.reasoningEffort) || d.taskReasoningEffort || '';
   modelState.curPreset = (sess && sess.agentPreset) || d.taskAgentPreset || '';
   const btn = $('chat-model-btn');
@@ -9191,6 +9206,8 @@ async function createNewTaskDirectly() {
     if (proj.connectorIds.length) body.connectorIds = proj.connectorIds;
   }
   if (env.nodeRef) body.nodeRef = env.nodeRef;
+  // 无任务时在模型按钮选好的模型 → 任务级模型（engine.createTask 透传 input.model）
+  if (env.model) body.model = env.model;
   if (env.connectorIds && env.connectorIds.length) body.connectorIds = env.connectorIds;
   if (env.skillNames && env.skillNames.length) body.skillNames = env.skillNames;
   const r = await api('/tasks', {
@@ -11882,6 +11899,7 @@ function renderSettings() {
   $('set-key').value = s.onenat.apiKey || '';
   $('set-refresh').value = s.onenat.autoRefreshMs || 60000;
   $('set-ai-token').value = s.aiToken || '';
+  renderDefaultModelSetting();
   renderAiInstall();
   // SSH 池卡随设置页打开刷新（管理员卡；未登录 me 时静默跳过）
   if (document.getElementById('ssh-pool-card')?.style.display !== 'none') loadSshResources();
@@ -12057,6 +12075,38 @@ $('btn-reset-ai-token').addEventListener('click', async () => {
     renderAiInstall();
     toast('✓ 新 APIKEY 已生成（无需重启）');
   } else toast(r.error || '生成失败', true);
+});
+/** 设置页「全局默认模型」：候选取当前节点模型目录（modelState.groups），已保存但不在目录里的值保留显示 */
+function renderDefaultModelSetting() {
+  const sel = $('set-default-model');
+  if (!sel) return;
+  const cur = modelState.globalDefault || '';
+  let html = '<option value="">节点默认（不指定）</option>';
+  let known = false;
+  for (const pv of Object.keys(modelState.groups)) {
+    html += '<optgroup label="' + esc(pv) + '">';
+    for (const m of modelState.groups[pv]) {
+      const v = pv + '/' + m.id;
+      if (v === cur) known = true;
+      html += '<option value="' + esc(v) + '"' + (v === cur ? ' selected' : '') + '>' + esc(m.id + (m.isDefault ? ' ★' : '')) + '</option>';
+    }
+    html += '</optgroup>';
+  }
+  if (cur && !known) html += '<option value="' + esc(cur) + '" selected>' + esc(cur + '（已保存 · 当前节点目录不存在）') + '</option>';
+  sel.innerHTML = html;
+  const hint = $('set-default-model-hint');
+  if (hint) hint.textContent = Object.keys(modelState.groups).length ? '' : (modelState.error ? '⚠️ 模型目录获取失败: ' + modelState.error : '模型目录加载中…');
+}
+$('btn-save-default-model').addEventListener('click', async () => {
+  const v = $('set-default-model').value || '';
+  const r = await api('/planner/config', { method: 'POST', body: JSON.stringify({ model: v }) });
+  if (!r.ok) { toast(r.error || '保存失败', true); return; }
+  modelState.globalDefault = v;
+  // 跟随默认的任务按钮文字随之更新
+  const btn = $('chat-model-btn');
+  if (btn) btn.textContent = modelBtnLabel(modelState.cur);
+  refreshMainAgentModelBadges();
+  toast('✓ 全局默认模型已设为「' + (v || '节点默认') + '」');
 });
 $('btn-save-settings').addEventListener('click', async () => {
   // 归档设置已迁至「归档管理」页（不随本卡提交，避免误改；POST /settings 分段合并保持原值）

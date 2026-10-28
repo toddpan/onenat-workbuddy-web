@@ -205,6 +205,25 @@ async function main() {
   const renamed = await req('POST', `${PREFIX}/api/tasks/${taskId}/rename`, { title: '冒烟任务-改名' })
   check('任务重命名', renamed.status === 200 && renamed.json?.data?.title === '冒烟任务-改名')
 
+  // ---------- 5.1 模型按任务保存（P0-1）：改任务 A 的模型不影响全局默认，也不影响任务 B ----------
+  const settingsBefore = await req('GET', `${PREFIX}/api/settings`)
+  const plannerModelBefore = settingsBefore.json?.data?.planner?.model || ''
+  const taskB = await req('POST', `${PREFIX}/api/tasks`, { title: '冒烟任务-B', memberAgentIds: [agentId], mode: 'chat' })
+  const taskBId = taskB.json?.data?.id
+  const setModelA = await req('PUT', `${PREFIX}/api/tasks/${taskId}/model`, { model: 'smoke-provider/smoke-model-a' })
+  check('任务级模型写入', setModelA.status === 200 && setModelA.json?.data?.model === 'smoke-provider/smoke-model-a')
+  const settingsAfter = await req('GET', `${PREFIX}/api/settings`)
+  const readA = await req('GET', `${PREFIX}/api/tasks/${taskId}`)
+  const readB = await req('GET', `${PREFIX}/api/tasks/${taskBId}`)
+  check('任务级模型不改全局默认模型', (settingsAfter.json?.data?.planner?.model || '') === plannerModelBefore, `before=${plannerModelBefore || '(空)'} after=${settingsAfter.json?.data?.planner?.model || '(空)'}`)
+  check('任务级模型不影响其他任务', readA.json?.data?.model === 'smoke-provider/smoke-model-a' && !readB.json?.data?.model, `B.model=${readB.json?.data?.model || '(空)'}`)
+  const createWithModel = await req('POST', `${PREFIX}/api/tasks`, { title: '冒烟任务-带模型', mode: 'chat', model: 'smoke-provider/smoke-model-c' })
+  check('创建任务时可指定任务级模型', [200, 201].includes(createWithModel.status) && createWithModel.json?.data?.model === 'smoke-provider/smoke-model-c')
+  const clearA = await req('PUT', `${PREFIX}/api/tasks/${taskId}/model`, { model: '' })
+  check('任务级模型可清除（跟随默认）', clearA.status === 200 && clearA.json?.data?.model === '')
+  if (taskBId) await req('DELETE', `${PREFIX}/api/tasks/${taskBId}`)
+  if (createWithModel.json?.data?.id) await req('DELETE', `${PREFIX}/api/tasks/${createWithModel.json.data.id}`)
+
   const archived = await req('POST', `${PREFIX}/api/tasks/${taskId}/archive`, { archived: true })
   check('任务归档', archived.status === 200)
   const tasks = await req('GET', `${PREFIX}/api/tasks`)
