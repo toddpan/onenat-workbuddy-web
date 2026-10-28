@@ -3255,6 +3255,22 @@ export class WorkBuddyRouter {
       this.sendJson(res, out.ok ? 202 : 400, out)
       return true
     }
+    // 跨节点续接（P4-1）：新任务带最近对话原文草稿（不调用 LLM），双向链接原任务
+    const forkMatch = /^\/api\/tasks\/([^/]+)\/fork$/.exec(p)
+    if (forkMatch && method === 'POST') {
+      const taskId = decodeURIComponent(forkMatch[1])
+      const body = await this.parseBody(req)
+      try {
+        const out = await this.engine.forkTask(taskId, {
+          nodeRef: body?.nodeRef && typeof body.nodeRef === 'object' ? (body.nodeRef as DshRef) : undefined,
+          projectId: body?.projectId ? String(body.projectId) : undefined,
+        })
+        this.sendJson(res, 200, { ok: true, data: out })
+      } catch (err: any) {
+        this.sendJson(res, 400, { ok: false, error: err?.message || String(err) })
+      }
+      return true
+    }
     // 任务实时统计：聚合各成员远端会话的轮/步/耗时/吞吐/token 账本（3s 缓存 + 并发去重）
     const statsMatch = /^\/api\/tasks\/([^/]+)\/stats$/.exec(p)
     if (statsMatch && method === 'GET') {

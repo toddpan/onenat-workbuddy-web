@@ -259,6 +259,18 @@ async function main() {
   if (projTaskId) await req('DELETE', `${PREFIX}/api/tasks/${projTaskId}`)
   if (projId) await req('DELETE', `${PREFIX}/api/projects/${projId}`)
 
+  // ---------- 5.3 跨节点续接 fork（P4-1）：新任务带草稿、双向链接、原任务插 system 轮 ----------
+  const forkOrigin = await req('POST', `${PREFIX}/api/tasks`, { title: '冒烟原任务', nodeRef: { kind: 'mapping', mappingId: 'map-dsh-01' }, mode: 'chat' })
+  const forkOriginId = forkOrigin.json?.data?.id
+  const forkRes = await req('POST', `${PREFIX}/api/tasks/${forkOriginId}/fork`, { nodeRef: { kind: 'mapping', mappingId: 'map-not-this-one' } })
+  const forkTaskId = forkRes.json?.data?.task?.id
+  check('fork 创建续接任务（↪ 标题 + forkedFrom）', forkRes.status === 200 && String(forkRes.json?.data?.task?.title || '').startsWith('↪') && forkRes.json?.data?.task?.forkedFrom?.taskId === forkOriginId, `title=${forkRes.json?.data?.task?.title}`)
+  check('fork 草稿带说明头（不调用 LLM）', typeof forkRes.json?.data?.draft === 'string' && forkRes.json?.data?.draft.includes('最近对话'))
+  const forkOriginRead = await req('GET', `${PREFIX}/api/tasks/${forkOriginId}`)
+  check('原任务 forks 双向链接 + system 续接轮', (forkOriginRead.json?.data?.forks || []).some((x) => x.taskId === forkTaskId) && (forkOriginRead.json?.data?.turns || []).some((t) => t.role === 'system' && String(t.text || '').includes(forkTaskId)))
+  if (forkTaskId) await req('DELETE', `${PREFIX}/api/tasks/${forkTaskId}`)
+  if (forkOriginId) await req('DELETE', `${PREFIX}/api/tasks/${forkOriginId}`)
+
   // ---------- 5.5 队列管理接口（编辑/删除/立即发送：不存在条目走 400 分支，验证路由与引擎接线） ----------
   const qSendMiss = await req('POST', `${PREFIX}/api/tasks/${taskId}/queue/send`, { turnId: 'turn-nope' })
   check('队列立即发送：不存在条目 400', qSendMiss.status === 400 && String(qSendMiss.json?.error || '').includes('排队消息不存在'))

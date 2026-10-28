@@ -664,6 +664,65 @@ export class TaskEngine {
     })
   }
 
+  /**
+   * 跨节点续接（P4-1）：在新节点/项目上开新任务，携带最近对话原文草稿（不调用 LLM）。
+   * 新任务记录 forkedFrom，原任务追加 forks[]（双向链接），并插入一条 system 轮提示。
+   */
+  public async forkTask(taskId: string, opts: { nodeRef?: DshRef; projectId?: string } = {}): Promise<{ task: WorkTask; draft: string }> {
+    const origin = this.store.getTask(taskId)
+    if (!origin) throw new Error(`任务不存在: ${taskId}`)
+    const projectId = opts.projectId || origin.projectId || undefined
+    // 项目任务节点以项目为准（P0-3 同规则）：带 projectId 时忽略 nodeRef
+    const nodeRef = projectId ? undefined : opts.nodeRef
+    const draft = this.forkDraftOf(origin)
+    const created = await this.createTask({
+      title: `↪ ${origin.title}`,
+      projectId: projectId || undefined,
+      nodeRef,
+      memberAgentIds: origin.memberAgentIds?.length ? [...origin.memberAgentIds] : undefined,
+    })
+    const now = Date.now()
+    this.store.mutateTask(created.id, (t) => {
+      t.forkedFrom = { taskId: origin.id, at: now }
+      return t
+    })
+    const nodeLabel = projectId
+      ? (this.store.getProject(projectId)?.name || projectId)
+      : (nodeRef?.kind === 'direct' ? String(nodeRef.apiBaseUrl) : String((nodeRef as { mappingId?: string })?.mappingId || '原节点'))
+    this.store.mutateTask(origin.id, (t) => {
+      t.forks = [...(t.forks || []), { taskId: created.id, at: now }]
+      t.turns = [...(t.turns || []), {
+        id: `turn-${randomUUID().slice(0, 8)}`,
+        seq: (t.turns || []).length + 1,
+        role: 'system',
+        text: `已在 🖥 ${nodeLabel} 继续 → ${created.id}`,
+        at: now,
+      }]
+      return t
+    })
+    return { task: this.store.getTask(created.id)!, draft }
+  }
+  /** 续接草稿：最近 N（默认 6）轮已完成对话原文，总长上限 8000 字，超长截断前面的部分 */
+  private forkDraftOf(task: WorkTask): string {
+    const done = (task.turns || []).filter((t) => (t.role === 'user' || t.role === 'agent') && (t.text || '').trim() && !t.streaming)
+    const recent = done.slice(-6)
+    const body = recent.map((t) => {
+      const who = t.role === 'user' ? '【用户】' : `【智能体${t.agentName ? ' ' + t.agentName : ''}】`
+      return who + String(t.text || '').trim()
+    }).join('\n\n')
+    const header = `以下是在 ${this.forkOriginNodeLabel(task)} 上进行的任务《${task.title}》的最近对话：`
+    const CAP = 8000
+    let b = body
+    if ((header + b).length > CAP) b = '…（更早内容已截断）\n' + b.slice(Math.max(0, b.length - CAP))
+    return header + (b ? '\n\n' + b : '')
+  }
+  private forkOriginNodeLabel(task: WorkTask): string {
+    const proj = task.projectId ? this.store.getProject(task.projectId) : undefined
+    const ref = task.nodeRef || proj?.dshRef
+    if (ref?.kind === 'direct') return String(ref.apiBaseUrl)
+    if (ref?.kind === 'mapping') return String(ref.mappingId)
+    return '原节点'
+  }
   public async deleteTask(taskId: string): Promise<boolean> {
     await this.cancelTask(taskId, '任务已删除')
     for (const k of [...this.blockCache.keys()]) {
