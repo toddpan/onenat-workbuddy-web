@@ -141,3 +141,8 @@
 - 抽屉：#ag-place 按钮 → ag-dsh= mapping:mid + dispatch change（保留 direct 手工通道）；filterAgentModelsByNode 用 /dsh-models?node=（顶层 {models,nodeTitle}，非 data 包裹）建 datalist。
 - 定时任务：#sc-place → sc-node.value + dispatch change（已有 change 联动模型/技能）；空模型 option 文案统一「跟随节点默认（无人值守任务建议固定模型）」。
 - 保留 deviations：sc-node/ag-dsh 下拉保留（直连与存量编辑需要），选择框是可视化增强。
+
+## P5-3（ZCode 主会话）—— TODO 全部完成
+- 死代码：renderNodePop/setNodeBtnUi/closeNodePop/#node-btn 点击绑定/文档级 closeNodePop/Esc 列表 node-pop 项/refreshNodeEngines 的 node-pop 刷新分支全删；selectNode 仅剩状态+目录重载；nodeState.userPicked 保留（applyReachableNodeDefault 护栏）。
+- README 使用流 3/4 步 + 移动端段落重写；docs/feat-exec-place-ux.md 新增（决策表 + 已知限制）。
+- 全部 23 任务完成：grep 无 state.projectId 过滤 / node-pop 残留。四件套全绿（70+79）。

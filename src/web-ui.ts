@@ -4841,7 +4841,7 @@ if (navMoreBtn && navMore) {
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     var anyPop = false;
-    ['model-pop', 'main-agent-pop', 'node-pop'].forEach(function (id) {
+    ['model-pop', 'main-agent-pop'].forEach(function (id) {
       var el = document.getElementById(id);
       if (el && el.classList.contains('on')) { el.classList.remove('on'); anyPop = true; }
     });
@@ -8795,17 +8795,14 @@ function syncNodeChipToTask(task) {
         if (nodeState.cur !== pref.mappingId) {
           nodeState.cur = pref.mappingId;
           state.taskEnv.nodeRef = { kind: 'mapping', mappingId: pref.mappingId };
-          setNodeBtnUi('节点: ' + nodeBtnLabel());
         }
         return true;
       }
       if (pref.kind === 'direct' && pref.apiBaseUrl) {
-        setNodeBtnUi('节点: 直连 ' + String(pref.apiBaseUrl).replace('https://', '').replace('http://', ''));
         return true;
       }
       // app 型项目节点（或映射不在当前资源快照里）：回显目录解析出的节点名
       if (pj.nodeTitle) {
-        setNodeBtnUi('节点: ' + pj.nodeTitle);
         return true;
       }
     }
@@ -8815,12 +8812,10 @@ function syncNodeChipToTask(task) {
       if (nodeState.cur !== ref.mappingId) {
         nodeState.cur = ref.mappingId;
         state.taskEnv.nodeRef = { kind: 'mapping', mappingId: ref.mappingId };
-        setNodeBtnUi('节点: ' + nodeBtnLabel());
       }
       return true;
     }
     if (ref.kind === 'direct' && ref.apiBaseUrl) {
-      setNodeBtnUi('节点: 直连 ' + String(ref.apiBaseUrl).replace('https://', '').replace('http://', ''));
       return true;
     }
   } catch (e) { /* 回显失败不阻断渲染 */ }
@@ -8963,7 +8958,6 @@ function applyReachableNodeDefault() {
   if (!healthy) return;
   nodeState.cur = healthy.mappingId;
   state.taskEnv.nodeRef = { kind: 'mapping', mappingId: healthy.mappingId };
-  setNodeBtnUi('节点: ' + nodeBtnLabel());
   // 节点换了 → 模型目录/规划器选项需按新节点重拉；否则模型弹层一直显示旧（挂掉）节点的
   // 「⚠️ 模型目录获取失败: fetch failed」，且可选模型列表为空
   loadPlannerOptions();
@@ -9010,23 +9004,6 @@ function probeNodesIfStale(opts) {
   const needProbe = opts.some(function (n) { return !n.engine || Date.now() - (n.engine.probedAt || 0) > 90000; });
   if (needProbe) refreshNodeEngines(false);
 }
-function renderNodePop() {
-  const pop = $('node-pop');
-  if (!pop) return;
-  const opts = dshNodeOptions();
-  let html = '<div class="main-agent-pop-head"><span>任务节点（主 DSH）</span><span>新建任务在此执行</span></div>';
-  if (!opts.length) html += '<div class="model-empty">暂无 DSH 节点（资源目录未同步）</div>';
-  const groups = dshNodeGroups(opts);
-  for (const g of groups) {
-    if (groups.length > 1 || g.list.length > 1) html += '<div class="model-group">🖥 ' + esc(g.tunnel) + '</div>';
-    for (const n of g.list) html += dshNodeItemHtml(n, nodeState.cur === n.mappingId, '');
-  }
-  pop.innerHTML = html;
-  pop.querySelectorAll('.main-agent-item').forEach(function (it) {
-    it.addEventListener('click', function () { selectNode(it.dataset.mid); });
-  });
-  probeNodesIfStale(opts);
-}
 
 /** 探测全部 DSH 节点引擎档案并合并进 state.resources（force=true 绕过 TTL） */
 async function refreshNodeEngines(force) {
@@ -9042,7 +9019,6 @@ async function refreshNodeEngines(force) {
       res.engine = e.engine;
       if (JSON.stringify(e.engine) !== before) changed = true;
     }
-    if (changed && $('node-pop') && $('node-pop').classList.contains('on')) renderNodePop();
     if (changed && placeState.pop) renderPlacePop();
     if (changed) renderChatPlace(currentTaskObj()); // 头部标签悬停里的在线状态 / 默认模型跟着刷新
   } catch (e) { /* 探测失败静默：下拉里已显示「探测中…」 */ }
@@ -9054,24 +9030,11 @@ function selectNode(mappingId) {
   try { localStorage.setItem('wb-node-id', nodeState.cur); } catch (e) { /* ignore */ }
   // 与新任务环境同步（创建任务时随 body.nodeRef 下发，engine 按 task.nodeRef 路由主会话）
   state.taskEnv.nodeRef = nodeState.cur ? { kind: 'mapping', mappingId: nodeState.cur } : null;
-  closeNodePop();
-  setNodeBtnUi('节点: ' + nodeBtnLabel());
   hintComposer('✓ 新建任务将在「' + nodeBtnLabel() + '」上执行；@子智能体 回到其绑定节点远程执行');
   // 节点换了 → 模型目录跟着换（不同引擎注册表互不相通），当前选中模型可能不再适用；
   // 已打开任务时目录跟随任务实际执行节点（taskExecNodeId），选择框不得改变它
   if (prev !== nodeState.cur && !state.currentTaskId) loadPlannerOptions();
 }
-function setNodeBtnUi(label) {
-  const btn = $('node-btn');
-  if (!btn) return;
-  btn.innerHTML = '<span class="ag-ico">🖥</span><span class="ag-name"></span><span class="ag-arr">▾</span>';
-  const nameEl = btn.querySelector('.ag-name');
-  if (nameEl) {
-    nameEl.id = 'node-btn-name'; // 保留 id：重建 innerHTML 会丢掉原节点名元素的标识
-    nameEl.textContent = label;
-  }
-}
-function closeNodePop() { const p = $('node-pop'); if (p) p.classList.remove('on'); }
 
 /** 项目绑定的节点 mappingId（dshRef 非 mapping 时返回 ''） */
 function placeProjectNode(pj) {
@@ -9195,18 +9158,6 @@ document.addEventListener('click', function (e) {
 document.addEventListener('keydown', function (e) {
   if (e.key === 'Escape' && placeState.pop) { e.stopPropagation(); closePlacePop(); }
 });
-if ($('node-btn')) {
-  $('node-btn').addEventListener('click', function (e) {
-    e.stopPropagation();
-    closeModelPop();
-    closeMainAgentPop();
-    const pop = $('node-pop');
-    if (!pop) return;
-    if (pop.classList.contains('on')) { closeNodePop(); return; }
-    renderNodePop();
-    pop.classList.add('on');
-  });
-}
 function initNodeState() {
   const opts = dshNodeOptions();
   var saved = '';
@@ -9215,7 +9166,6 @@ function initNodeState() {
   if (!opts.some(function (x) { return x.mappingId === cur; })) cur = opts[0] ? opts[0].mappingId : '';
   nodeState.cur = cur;
   state.taskEnv.nodeRef = cur ? { kind: 'mapping', mappingId: cur } : null;
-  setNodeBtnUi('节点: ' + nodeBtnLabel());
   // 首屏 loadPlannerOptions 先于本函数执行（boot Promise.all 顺序），那次目录走的是
   // 「主智能体节点」回退；这里就绪后若与选中节点不一致，补一次按节点联动拉取
   reloadCatalogIfExecNodeChanged();
@@ -9434,10 +9384,6 @@ document.addEventListener('click', (e) => {
   const agentPop = $('main-agent-pop');
   if (agentPop && agentPop.classList.contains('on') && !agentPop.contains(e.target) && e.target !== $('main-agent-btn') && !($('main-agent-btn') && $('main-agent-btn').contains(e.target))) {
     closeMainAgentPop();
-  }
-  const nodePop = $('node-pop');
-  if (nodePop && nodePop.classList.contains('on') && !nodePop.contains(e.target) && e.target !== $('node-btn') && !($('node-btn') && $('node-btn').contains(e.target))) {
-    closeNodePop();
   }
 });
 /** 模型切换结果就地展示在 composer 工具条（替代底部 toast，不遮挡输入区），8s 后自动隐去 */

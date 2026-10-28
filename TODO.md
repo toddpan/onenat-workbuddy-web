@@ -215,7 +215,8 @@ UI 行为目前没有自动化浏览器测试：任务说明里的「验收」�
   - 子智能体抽屉：节点用执行位置选择框（只有节点层），模型下拉按所选节点的目录过滤。定时任务表单：执行位置 + 模型；模型为空时显示「跟随节点默认（无人值守任务建议固定模型）」。
   - 验收：build / typecheck / smoke / smoke:schedules 通过。
 
-- [ ] **P5-3** 清理与文档
+- [x] **P5-3** 清理与文档
+  - 完成：node-pop 时代死代码清零（renderNodePop/setNodeBtnUi/closeNodePop/#node-btn 绑定/Esc 列表；userPicked 仍被可达性校正用故保留）；README 使用流（草稿建任务/统计胶囊/右侧栏/引用标签）与移动端段落更新；docs/feat-exec-place-ux.md 全案记录。验证：build/typecheck/smoke(70)/test:unit(79) 全过
   - 依赖：P5-2
   - 删除没人用的 `node-pop`、`nodeState.userPicked` 等旧逻辑；README「使用流」和移动端适配段落按新交互更新；在 `docs/` 新增 `feat-exec-place-ux.md` 记录本次改造（决策和变更点）。
   - 验收：build / typecheck / smoke / test:unit 全部通过。
