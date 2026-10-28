@@ -51,3 +51,9 @@
 - web-ui.ts：新增 `turnChangedPaths(turn)`（跳过 status=error，去重）/ `renderTurnChanges(foot, turn, taskId)`（插在 `.dsh-actions-foot` 前，≤6 + `+N`，title=完整路径，href=/tasks/:id/files/download?agent&path）；调用点：`buildTurnElement` 非流式分支、`finalizeTurnBlocks` 末尾。CSS `.dsh-changes` / `.dsh-change-chip`。
 - 注意（F2-2）：可直接复用 `turnChangedPaths(turn)` 作为变更列表；`withFileLinks` 会先把行内代码 stash 掉，F2-2 需在 md 渲染后或 stash 还原时处理。存量历史轮没有 paths，不显示变更。
 - 未验证：浏览器手测（标签样式、流式结束后出现、点击下载相对路径是否能被节点解析）；没有补 smoke 断言（mock 流不产生写类工具）。
+
+## F2-2
+- web-ui.ts：新增 `changedPathForCode(code, paths)`（精确路径命中 → 否则文件名唯一命中，同名>1 返回空）/ `linkChangedPathsInBody(body, paths, turn, taskId)`（遍历 `.dsh-body code`，跳过 pre 内和已在 a 内的，外包 `a.dsh-change-link`，href 同 F2-1 下载地址）。
+- 调用点：`renderTurnChanges` 渲染完变更标签后调用，历史回放与 `finalizeTurnBlocks` 收尾两条路径都覆盖；变更列表为空时不处理。CSS `a.dsh-change-link code` 点状下划线。
+- 注意（F1）：右侧栏预览上线后，变更标签与正文链接的 href 要一起改。
+- 未验证：浏览器手测（链接样式、点击下载）；没有补 smoke 断言（mock 流不产生写类工具，与 F2-1 相同）。

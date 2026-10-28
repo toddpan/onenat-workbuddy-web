@@ -510,6 +510,8 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
 }
 a.dsh-change-chip:hover { color: var(--dsw-alias-label-primary, inherit); text-decoration: underline; }
 .dsh-change-chip.more { cursor: default; color: var(--dsw-alias-label-tertiary); }
+a.dsh-change-link { text-decoration: none; }
+a.dsh-change-link code { text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; cursor: pointer; }
 
 /* 排队消息（运行中补充意见）：⏳ 排队中 pill + ⚡ 立即发送按钮（对齐移动端） */
 .dsh-queued-pill {
@@ -6075,6 +6077,31 @@ function renderTurnChanges(foot, turn, taskId) {
   }
   box.innerHTML = html;
   foot.parentNode.insertBefore(box, foot);
+  linkChangedPathsInBody(foot.parentNode.querySelector('.dsh-body'), paths, turn, taskId);
+}
+/** 行内代码 → 变更文件：精确等于某个变更路径，或等于唯一一个变更文件的文件名；同名多于一个返回空 */
+function changedPathForCode(code, paths) {
+  if (!code) return '';
+  if (paths.indexOf(code) >= 0) return code;
+  const hits = paths.filter(p => (p.split('/').pop() || p) === code);
+  return hits.length === 1 ? hits[0] : '';
+}
+/** AI 回复正文里的行内代码若对应本轮变更文件，渲染为下载链接（代码块 pre 内不处理） */
+function linkChangedPathsInBody(body, paths, turn, taskId) {
+  if (!body || !paths.length) return;
+  for (const c of Array.prototype.slice.call(body.querySelectorAll('code'))) {
+    if (c.closest('pre') || c.closest('a')) continue;
+    const p = changedPathForCode((c.textContent || '').trim(), paths);
+    if (!p) continue;
+    const a = document.createElement('a');
+    a.className = 'dsh-change-link';
+    a.href = API + '/tasks/' + encodeURIComponent(taskId) + '/files/download?agent=' + encodeURIComponent(turn.agentId || '') + '&path=' + encodeURIComponent(p);
+    a.title = p;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    c.parentNode.insertBefore(a, c);
+    a.appendChild(c);
+  }
 }
 
 /** 流式轮次的活动状态行（DSH TurnStatus：深度求索中...，15s 后出现计时钟；插入到流式轮上方） */

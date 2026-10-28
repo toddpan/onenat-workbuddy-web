@@ -84,10 +84,11 @@ UI 行为目前没有自动化浏览器测试：任务说明里的「验收」�
   - 验收：build / typecheck / smoke（改了 engine 时加 test:unit）通过。
   - 完成：args 摘要截断 400 字符会丢路径，视为未落盘 → engine 新增 `extractToolPaths` 落 `tool.paths`（只存路径）+ 单测；前端 agent 轮脚注上方渲染「本轮变更」标签（≤6 + `+N`，点击下载）；已跑 npm run build / typecheck / smoke（64 项）/ test:unit（78 项）全过，未做浏览器手测。
 
-- [ ] **F2-2** 回复里的文件路径可点击
+- [x] **F2-2** 回复里的文件路径可点击
   - 依赖：F2-1
   - AI 回复中的行内代码，若精确等于变更列表中的某个路径，或等于唯一一个变更文件的文件名，就渲染为链接；同名文件多于一个时不加链接。
   - 验收：build / typecheck / smoke 通过。
+  - 完成：`renderTurnChanges` 末尾对正文 `.dsh-body` 内非 pre 的行内 code 做匹配（精确路径或唯一同名文件名），包成下载链接；已跑 npm run build / typecheck / smoke（64 项）全过，未改 engine/router 未跑 test:unit，未做浏览器手测。
 
 ## P1 头部只读 + 节点离线
 
