@@ -66,7 +66,8 @@ UI 行为目前没有自动化浏览器测试：任务说明里的「验收」�
   - 运行时长从 `renderTodoDock` 的 `#todo-elapsed` 移到时间胶囊（继续用 `todoState.running / baseElapsed / anchorAt` 作数据源），todo 坞只显示任务清单。
   - 验收：build / typecheck / smoke 通过。
 
-- [ ] **S1-2** 事件驱动刷新 + 不支持时如实显示
+- [x] **S1-2** 事件驱动刷新 + 不支持时如实显示
+  - 完成：turn_end / subtask_status / task_end 即时拉 stats+todos，新增 syncLivePolling 由 setSending 驱动（仅运行中轮询 5s/3s），getTaskStats 不支持时补 reasonCode/reason（no_session/offline/unsupported），非 no_session 时显示灰色虚线「统计不可用」胶囊（title=原因）；smoke 新增 1 项断言。验证：npm run build / typecheck / smoke（64 项）/ test:unit（77 项）全过；未做浏览器手测
   - 依赖：S1-1
   - SSE 的 `turn_end` / `subtask_status` / `task_end` 到达时立即 `loadTaskStats()`、`loadTaskTodos()`；轮询只在任务运行中保持（统计 5s、todos 3s），空闲时停止。
   - `/stats` 返回 `supported:false` 时显示灰色胶囊「统计不可用」，`title` 写原因。核对 router `getTaskStats` 的返回字段，没有原因就补上（如节点版本过低）。

@@ -240,6 +240,9 @@ async function main() {
   check('项目任务回读仍无 nodeRef', projTaskRead.status === 200 && !projTaskRead.json?.data?.nodeRef)
   const soloTask = await req('POST', `${PREFIX}/api/tasks`, { title: '冒烟单独任务', nodeRef: { kind: 'mapping', mappingId: 'map-dsh-01' }, mode: 'chat' })
   check('单独任务保留 nodeRef（不误伤）', [200, 201].includes(soloTask.status) && soloTask.json?.data?.nodeRef?.mappingId === 'map-dsh-01')
+  // S1-2：统计不支持时如实给出原因（新任务尚无远端会话 → no_session）
+  const soloStats = await req('GET', `${PREFIX}/api/tasks/${soloTask.json?.data?.id}/stats`)
+  check('任务统计不支持时带原因（无会话 → no_session）', soloStats.status === 200 && soloStats.json?.data?.supported === false && soloStats.json?.data?.reasonCode === 'no_session' && Boolean(soloStats.json?.data?.reason), JSON.stringify(soloStats.json?.data ?? null))
   if (soloTask.json?.data?.id) await req('DELETE', `${PREFIX}/api/tasks/${soloTask.json.data.id}`)
   if (projTaskId) await req('DELETE', `${PREFIX}/api/tasks/${projTaskId}`)
   if (projId) await req('DELETE', `${PREFIX}/api/projects/${projId}`)

@@ -585,6 +585,7 @@ export class WorkBuddyRouter {
       let sessionsOk = 0
       let sessionsTotal = 0
       let supported = false
+      let unsupportedError = ''
       for (const r of results) {
         if (!r) continue
         sessionsTotal += 1
@@ -599,10 +600,27 @@ export class WorkBuddyRouter {
           }
         } else if (r.supported) {
           supported = true
+        } else if (!unsupportedError) {
+          unsupportedError = r.error || ''
         }
       }
       // 无绑定（纯本地 DSH 任务）或全部成员远端过旧时不支持
       if (bindings.length === 0) supported = false
+      // 不支持时给出准确原因：no_session = 还没有远端会话（前端不提示）；offline = 成员节点全部离线；unsupported = 远端版本过低
+      let reasonCode: 'no_session' | 'offline' | 'unsupported' | undefined
+      let reason: string | undefined
+      if (!supported) {
+        if (bindings.length === 0) {
+          reasonCode = 'no_session'
+          reason = '任务尚未在远端节点建立会话'
+        } else if (sessionsTotal === 0) {
+          reasonCode = 'offline'
+          reason = '成员所在节点离线，暂时无法读取统计'
+        } else {
+          reasonCode = 'unsupported'
+          reason = unsupportedError || '远端 dsh-web-service 版本过低，不含统计接口'
+        }
+      }
       const payload = {
         ok: true,
         data: {
@@ -611,6 +629,7 @@ export class WorkBuddyRouter {
           sessionsOk,
           sessionsTotal,
           stats: supported ? totals : undefined,
+          ...(reasonCode ? { reasonCode, reason } : {}),
         },
       }
       const result = { httpStatus: 200, payload }

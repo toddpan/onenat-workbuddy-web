@@ -37,3 +37,10 @@
 - 关闭面板：胶囊外点击 + document Esc（stopPropagation）；`resetTaskStats` 会关闭面板。
 - 注意（S1-2）：轮询仍是 statsState.timer 5s / todoState.timer 3s 常驻；`supported:false` 时 renderTaskStats(null)，胶囊直接隐藏，还没有「统计不可用」灰胶囊。
 - 未验证：浏览器手测（胶囊样式、面板定位、手机端横滑、运行中每秒递增）。
+
+## S1-2
+- router.ts `getTaskStats`：supported=false 时附 `reasonCode`（no_session 无绑定 / offline 成员节点全离线 / unsupported 远端过旧，reason 取 client 返回的 error）+ `reason`。
+- web-ui.ts：新增 `syncLivePolling(running)`（setSending 末尾调用；startTaskStats/TodosPolling 改为拉一次 + 按 body.task-running 决定）；subtask_status / task_end 监听补 `loadTaskStats()` + `loadTaskTodos()`。
+- `statsState.unsupported` 存原因；`renderStatPills` 无数据且有原因时时间胶囊显示「统计不可用」（`.stat-pill.off` 灰虚线，title=原因，点击不开面板）；no_session 不提示。
+- 注意：todo 的 1s tick 仍常驻（只在 running 时渲染）；/todos 不支持时尚无提示（不在本任务范围）。
+- smoke 新增 1 项（新任务 /stats → reasonCode=no_session）。未验证：浏览器手测（灰胶囊样式、空闲时 Network 无轮询、运行结束轮询停止）。

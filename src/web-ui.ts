@@ -1004,6 +1004,7 @@ body.task-running .dsh-sysRow.sys-planning .markdown::after {
 }
 .stat-pill:hover { color: var(--tx2); border-color: var(--line2); }
 .stat-pill.run { color: var(--pri); border-color: rgba(77, 107, 254, 0.35); }
+.stat-pill.off, .stat-pill.off:hover { color: var(--tx3); border-style: dashed; border-color: var(--line); opacity: .75; cursor: help; }
 .stat-pill[aria-expanded="true"] { color: var(--pri); background: var(--pri-light); border-color: rgba(77, 107, 254, 0.35); }
 .stat-panel {
   position: absolute; bottom: calc(100% + 4px); left: 50%; transform: translateX(-50%); z-index: 60;
@@ -5502,6 +5503,8 @@ function connectStream(taskId) {
       updatePlanRow(ev.subtask);
       markTrajDirty();
       loadTasksQuiet();
+      loadTaskStats();
+      loadTaskTodos();
     } catch {}
   });
 
@@ -5544,6 +5547,8 @@ function connectStream(taskId) {
     // 迟到的旧会话 task_end 不能关掉新会话的停止键（切会话瞬间的竞态）；ev 解析失败视作本会话结束
     if (!(ev && ev.task) || ev.task.id === state.currentTaskId) setSending(false);
     markTrajDirty();
+    loadTaskStats();
+    loadTaskTodos();
   });
 
   // 重连补齐：EventSource 首次连接成功不算重连；此后每次 onopen 都意味着中间丢过帧，
@@ -6606,6 +6611,7 @@ function setSending(on) {
   $('btn-send').title = on ? '发送（运行中：先排队，气泡上可 ⚡ 立即发送插话）' : '发送';
   $('btn-stop').style.display = on ? 'grid' : 'none';
   document.body.classList.toggle('task-running', on);
+  syncLivePolling(on);
 }
 
 // ====================================================================
@@ -9031,7 +9037,7 @@ async function selectPreset(id) {
 loadPlannerOptions();
 
 // ---------- 任务实时统计条（对齐 DSH web StatsLine：轮/步 · LLM/工具耗时 · 首 token/吞吐 · 缓存命中 · token 账本） ----------
-const statsState = { timer: null, inFlight: false, lastRendered: '', stats: null, panel: null };
+const statsState = { timer: null, inFlight: false, lastRendered: '', stats: null, panel: null, unsupported: '' };
 function fmtStatsDuration(ms) {
   const s = ms / 1000;
   if (s < 60) return (Math.round(s * 10) / 10) + '秒';
@@ -9115,13 +9121,16 @@ function renderStatPills() {
       tokText = '🗄 ' + fmtStatsTokens(total) + ' tok' + (hit !== null ? ' · 缓存命中 ' + hit + '%' : '');
     }
   }
-  const key = timeText + '|' + tokText + '|' + (todoState.running ? 1 : 0);
+  // 节点不支持统计：没有可显示的数据时，用灰色胶囊如实说明（title 为服务端给出的原因）
+  const off = !timeText && !tokText && !!statsState.unsupported;
+  if (off) timeText = '统计不可用';
+  const key = timeText + '|' + tokText + '|' + (todoState.running ? 1 : 0) + '|' + (off ? statsState.unsupported : '');
   if (key !== statsState.lastRendered) {
     statsState.lastRendered = key;
     tBtn.textContent = timeText;
     tBtn.style.display = timeText ? '' : 'none';
-    tBtn.className = 'stat-pill' + (todoState.running ? ' run' : '');
-    tBtn.title = todoState.running ? '本轮运行中（本地每秒递增）· 点击查看耗时明细' : '点击查看耗时明细';
+    tBtn.className = 'stat-pill' + (off ? ' off' : (todoState.running ? ' run' : ''));
+    tBtn.title = off ? statsState.unsupported : (todoState.running ? '本轮运行中（本地每秒递增）· 点击查看耗时明细' : '点击查看耗时明细');
     kBtn.textContent = tokText;
     kBtn.style.display = tokText ? '' : 'none';
     kBtn.title = '点击查看 token 明细';
@@ -9132,6 +9141,7 @@ function renderStatPills() {
     return;
   }
   el.style.display = '';
+  if (off) closeStatPanel();
   if (statsState.panel) renderStatPanel();
 }
 function renderTaskStats(stats) {
@@ -9145,7 +9155,12 @@ async function loadTaskStats() {
   try {
     const r = await api('/tasks/' + taskId + '/stats');
     // 期间切走了会话则丢弃
-    if (r.ok && state.currentTaskId === taskId) renderTaskStats(r.data && r.data.supported ? r.data.stats : null);
+    if (r.ok && state.currentTaskId === taskId) {
+      const d = r.data || {};
+      // no_session（尚未建立远端会话）不算「不可用」：首轮跑起来后自然有数据，不提示
+      statsState.unsupported = !d.supported && d.reasonCode && d.reasonCode !== 'no_session' ? (d.reason || '当前节点不支持会话统计') : '';
+      renderTaskStats(d.supported ? d.stats : null);
+    }
   } catch {}
   statsState.inFlight = false;
 }
@@ -9153,6 +9168,7 @@ function resetTaskStats() {
   if (statsState.timer) { clearInterval(statsState.timer); statsState.timer = null; }
   statsState.lastRendered = '';
   statsState.stats = null;
+  statsState.unsupported = '';
   closeStatPanel();
   const el = $('task-stats');
   if (el) el.style.display = 'none';
@@ -9160,6 +9176,7 @@ function resetTaskStats() {
 document.querySelectorAll('#task-stats .stat-pill').forEach(function (btn) {
   btn.addEventListener('click', function (e) {
     e.stopPropagation();
+    if (btn.classList.contains('off')) return; // 「统计不可用」灰胶囊没有明细
     const k = btn.getAttribute('data-k');
     statsState.panel = statsState.panel === k ? null : k;
     renderStatPanel();
@@ -9171,11 +9188,22 @@ document.addEventListener('click', function (e) {
 document.addEventListener('keydown', function (e) {
   if (e.key === 'Escape' && statsState.panel) { closeStatPanel(); e.stopPropagation(); }
 });
-// 打开会话时启动轮询（5s），关闭/切换时重置；SSE turn_end 处也会即时刷新
+// 打开会话时拉一次，按运行态决定是否轮询（运行中 5s，空闲停止）；SSE turn_end / subtask_status / task_end 即时刷新
 function startTaskStatsPolling() {
   resetTaskStats();
   loadTaskStats();
-  statsState.timer = setInterval(loadTaskStats, 5000);
+  syncLivePolling(document.body.classList.contains('task-running'));
+}
+// 统计 / 清单轮询只在任务运行中保持：setSending 切换运行态时调用
+function syncLivePolling(running) {
+  const on = !!(running && state.currentTaskId);
+  if (on) {
+    if (!statsState.timer) statsState.timer = setInterval(loadTaskStats, 5000);
+    if (!todoState.timer) todoState.timer = setInterval(loadTaskTodos, 3000);
+  } else {
+    if (statsState.timer) { clearInterval(statsState.timer); statsState.timer = null; }
+    if (todoState.timer) { clearInterval(todoState.timer); todoState.timer = null; }
+  }
 }
 
 // ---------- 任务清单坞（远端 DSH 会话的 todo_write 投影 + 运行时长，对齐 DSH web TodoPanel） ----------
@@ -9286,11 +9314,11 @@ function resetTaskTodos() {
   const dock = $('todo-dock');
   if (dock) dock.style.display = 'none';
 }
-// 打开会话时启动轮询（3s，清单随 todo_write 步进变化）+ 运行时长 1s 本地递增；SSE turn_end 处即时刷新
+// 打开会话时拉一次；运行中轮询（3s，清单随 todo_write 步进变化，见 syncLivePolling）+ 运行时长 1s 本地递增；SSE 事件即时刷新
 function startTaskTodosPolling() {
   resetTaskTodos();
   loadTaskTodos();
-  todoState.timer = setInterval(loadTaskTodos, 3000);
+  syncLivePolling(document.body.classList.contains('task-running'));
   todoState.tick = setInterval(tickTodoElapsed, 1000);
 }
 $('todo-head').addEventListener('click', () => {
