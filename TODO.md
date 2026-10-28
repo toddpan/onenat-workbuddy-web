@@ -186,7 +186,8 @@ UI 行为目前没有自动化浏览器测试：任务说明里的「验收」�
 
 ## P4 跨节点续接
 
-- [ ] **P4-1** 后端 `POST /api/tasks/:id/fork`
+- [x] **P4-1** 后端 `POST /api/tasks/:id/fork`
+  - 完成：engine.forkTask（↪ 标题/forkedFrom/forks/system 续接轮/项目续接忽略 nodeRef）+ 草稿 6 轮 8000 字截尾；单测覆盖截断与双向链接，smoke 覆盖接口（70 项/79 项全过）。验证：build/typecheck/smoke/test:unit
   - 依赖：S2-2
   - body `{ nodeRef?, projectId? }`：创建新任务 `↪ 原标题`，记录 `forkedFrom: { taskId, at }`，原任务追加 `forks[]`（types.ts 加可选字段，store 向后兼容）。
   - 返回 `draft`：最近 N 轮已完成对话的原文（默认 6 轮，总长上限 8000 字，超长截断前面的部分），开头写「以下是在 <原节点> 上进行的任务《标题》的最近对话：」。不调用 LLM。

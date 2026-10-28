@@ -122,3 +122,8 @@
 ## S2-2（ZCode 主会话）
 - applyUsageBadge(el, usage, turn)：button 化 + fmtStatsTokens 压缩 + durMs=turn.endedAt-at（流式中 turn 未收尾无 ⏱，turn_end 重渲染后出现）；openTurnUsageDetail 弹层。4 个调用点补 turn。
 - 远端 usage 事件字段（remote-client 透传）：uncachedInputTokens/inputTokens/cacheReadTokens/cacheWriteTokens/outputTokens；ttftMs 只在 session stats。别在逐轮明细承诺首 token 一定有。
+
+## P4-1（ZCode 主会话）
+- engine.forkTask：projectId=body||origin.projectId；nodeRef 仅在无 projectId 时生效；继承 origin.memberAgentIds；system 轮文本「已在 🖥 X 继续 → <新任务ID>」（X=项目名/mappingId/apiBaseUrl，引擎无目录名解析，前端展示时再美化）。
+- forkDraftOf：role user/agent 且有 text 且非 streaming；join '\n\n'（引擎真实代码，无模板转义坑）；CAP=8000 保尾。
+- 注意：fork 新任务未发消息（draft 由 P4-2 填输入框）；origin 运行中也可 fork（append turn）。
