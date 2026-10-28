@@ -429,6 +429,7 @@ export class WorkBuddyRouter {
       nodeRef: t.nodeRef,
       lastRoute: t.lastRoute,
       scheduleId: t.scheduleId || undefined,
+      workDir: t.workDir || undefined,
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,
       archivedAt: t.archivedAt,

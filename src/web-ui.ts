@@ -1558,6 +1558,31 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .ws-hint { padding: 28px 16px; text-align: center; color: var(--tx3); font-size: 12.5px; line-height: 1.8; }
 .ws-resizer { position: absolute; top: 0; bottom: 0; left: -3px; width: 6px; cursor: col-resize; z-index: 5; }
 .ws-resizer:hover, .ws-resizer.drag { background: var(--pri-light); }
+.ws-files-head { padding: 8px 10px 6px; border-bottom: 1px solid var(--line); }
+.ws-root-line { font-size: 12px; color: var(--tx2); word-break: break-all; }
+.ws-root-line .mono { font-family: var(--mono); }
+.ws-src { color: var(--tx3); font-size: 11px; }
+.ws-tools { display: flex; align-items: center; gap: 5px; margin-top: 6px; flex-wrap: wrap; }
+.wsf-kw { flex: 1; min-width: 90px; max-width: 160px; font-size: 12px; padding: 4px 8px; border: 1px solid var(--line2); border-radius: 7px; background: var(--bg); color: var(--tx); }
+.ws-batchbar { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 12px; color: var(--tx2); flex-wrap: wrap; }
+.ws-tree { padding: 4px 4px 20px; }
+.ws-row { display: flex; align-items: center; gap: 5px; padding: 3px 6px; border-radius: 6px; font-size: 12.5px; line-height: 1.5; cursor: default; }
+.ws-row:hover { background: var(--bg-hover); }
+.ws-caret { flex: none; width: 14px; }
+.ws-caret-btn { border: none; background: none; color: var(--tx3); cursor: pointer; padding: 0 2px; font-size: 10px; }
+.ws-chk { flex: none; }
+.ws-ic { flex: none; }
+.ws-nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.ws-nm.dim { opacity: .6; }
+.ws-acts { flex: none; display: none; align-items: center; gap: 2px; }
+.ws-row:hover .ws-acts { display: inline-flex; }
+.ws-act { padding: 1px 4px; font-size: 11px; }
+.ws-tree-hint { color: var(--tx3); font-size: 12px; padding: 4px 6px; }
+.ws-tree-hint.err { color: var(--err); }
+.ws-pv-head { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.ws-pv-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--tx3); }
+.ws-preview { padding-bottom: 20px; }
+.ws-preview .dsh-md { padding: 10px 12px; font-size: 13px; }
 @media (max-width: 768px) {
   .ws-side { position: absolute; inset: 0; width: 100% !important; z-index: 30; }
   .ws-resizer { display: none; }
@@ -8825,7 +8850,7 @@ if ($('btn-head-more')) {
     pop.querySelectorAll('.main-agent-item').forEach(function (it) {
       it.addEventListener('click', function () {
         closeHeadMore();
-        if (it.dataset.op === 'files') openProjectFiles(pid);
+        if (it.dataset.op === 'files') openWsSide({ kind: 'files' });
         else if (it.dataset.op === 'cfg') openProjectDrawer(pid);
       });
     });
@@ -9809,9 +9834,9 @@ function wsTaskState() {
 }
 function wsTabBodyHtml(tab) {
   if (!tab) return '<div class="ws-hint">从页签打开「文件 / 变更」；点目录树中的文件可在此预览。</div>';
-  if (tab.kind === 'files') return '<div class="ws-hint">📁 工作区目录树加载中…</div>';
-  if (tab.kind === 'changes') return '<div class="ws-hint">变更文件列表（后续任务接入）</div>';
-  if (tab.kind === 'preview') return '<div class="ws-hint">📄 ' + esc(tab.path || '') + '<br/>预览渲染（后续任务接入）</div>';
+  if (tab.kind === 'files') return '<div id="ws-files-root" class="ws-files"></div>';
+  if (tab.kind === 'changes') return '<div id="ws-changes-root" class="ws-hint">变更文件列表（后续任务接入）</div>';
+  if (tab.kind === 'preview') return '<div id="ws-preview-root" class="ws-preview"><div class="ws-hint">正在加载文件内容…</div></div>';
   return '';
 }
 function renderWsSide() {
@@ -9838,6 +9863,8 @@ function renderWsSide() {
   });
   const tab = st.tabs.find(function (t) { return t.key === st.active; }) || null;
   $('ws-body').innerHTML = wsTabBodyHtml(tab);
+  if (tab && tab.kind === 'files') wsFilesMount();
+  else if (tab && tab.kind === 'preview') wsPreviewRender(tab);
 }
 function openWsTab(kind, extra) {
   const st = wsTaskState();
@@ -9909,6 +9936,360 @@ function wsRestoreForTask(task) {
     });
   }
 })();
+
+// ---------- F1-2 文件页签：逐层展开目录树（所有任务可用；接口与 pjFiles 同源 /agents/fs/*?node=） ----------
+const wsFiles = { node: null, root: '', rootSrc: '', loaded: false, levels: {}, showHidden: false, kw: '', selected: new Set(), lastDir: '' };
+/** 任务执行节点的 dshRef：项目 dshRef → task.nodeRef → 所选节点（与 taskExecNodeId 同口径，含 direct 形态） */
+function wsTaskDshRef(task) {
+  const t = task || currentTaskObj();
+  if (!t) return null;
+  const p = t.projectId ? (state.projects || []).find(function (x) { return x.id === t.projectId; }) : null;
+  if (p && p.dshRef && typeof p.dshRef === 'object') return p.dshRef;
+  if (t.nodeRef && typeof t.nodeRef === 'object' && (t.nodeRef.kind === 'mapping' || t.nodeRef.kind === 'direct')) return t.nodeRef;
+  if (nodeState.cur) return { kind: 'mapping', mappingId: nodeState.cur };
+  return null;
+}
+/** 目录树根：task.workDir → 项目 workspace → 节点默认（列表接口不传 path 时返回节点默认 cwd） */
+async function wsTaskFileCtx() {
+  const t = currentTaskObj();
+  const node = wsTaskDshRef(t);
+  if (!node) return null;
+  let root = (t && t.workDir) || '';
+  let src = root ? '任务工作目录' : '';
+  if (!root) {
+    const p = t && t.projectId ? (state.projects || []).find(function (x) { return x.id === t.projectId; }) : null;
+    if (p && p.workspace) { root = p.workspace; src = '项目工作区'; }
+  }
+  if (!root) {
+    try {
+      const r = await api('/agents/fs/list?node=' + encodeURIComponent(JSON.stringify(node)) + '&all=1');
+      if (r.ok && r.data && r.data.path) { root = r.data.path; src = '节点默认目录'; }
+    } catch (e) { /* ignore */ }
+  }
+  return { node: node, root: pjTrimSlash(root), rootSrc: src };
+}
+function wsFilesLevel(dir) {
+  return wsFiles.levels[dir] || (wsFiles.levels[dir] = { open: dir === wsFiles.root, entries: [], loading: false, error: '' });
+}
+async function wsFilesLoadLevel(dir) {
+  if (!wsFiles.node) return;
+  const lv = wsFilesLevel(dir);
+  lv.open = true; lv.loading = true; lv.error = '';
+  wsFilesRenderTree();
+  const r = await api('/agents/fs/list?node=' + encodeURIComponent(JSON.stringify(wsFiles.node)) + (dir ? '&path=' + encodeURIComponent(dir) : '') + '&all=1');
+  lv.loading = false;
+  if (!r.ok) { lv.error = r.error || '读取目录失败'; wsFilesRenderTree(); return; }
+  lv.entries = (r.data.entries || []).slice().sort(function (a, b) {
+    const ad = a.type === 'dir' ? 0 : 1, bd = b.type === 'dir' ? 0 : 1;
+    return ad !== bd ? ad - bd : String(a.name).localeCompare(String(b.name));
+  });
+  wsFilesRenderTree();
+}
+function wsFilesReset(node, root, rootSrc) {
+  wsFiles.node = node; wsFiles.root = root || ''; wsFiles.rootSrc = rootSrc || '';
+  wsFiles.levels = {}; wsFiles.selected = new Set(); wsFiles.showHidden = false; wsFiles.kw = '';
+  wsFiles.loaded = Boolean(node); wsFiles.lastDir = root || '';
+  if (wsFiles.loaded && wsFiles.root) wsFilesLoadLevel(wsFiles.root);
+}
+async function wsFilesMount() {
+  const ctx = await wsTaskFileCtx();
+  const el = $('ws-files-root');
+  if (!el) return;
+  if (!ctx || !ctx.node) { el.innerHTML = '<div class="ws-hint">当前任务没有可用的执行节点，无法浏览工作区。</div>'; return; }
+  const same = wsFiles.loaded && JSON.stringify(wsFiles.node) === JSON.stringify(ctx.node) && wsFiles.root === ctx.root;
+  if (!same) wsFilesReset(ctx.node, ctx.root, ctx.rootSrc);
+  wsFilesRenderAll();
+}
+function wsFilesHeaderHtml() {
+  return '<div class="ws-files-head">' +
+    '<div class="ws-root-line">📁 <span class="mono">' + esc(wsFiles.root || '(未解析到根目录)') + '</span>' +
+    (wsFiles.rootSrc ? ' <span class="ws-src">来源：' + esc(wsFiles.rootSrc) + '</span>' : '') + '</div>' +
+    '<div class="ws-tools">' +
+    '<input id="wsf-kw" class="wsf-kw" placeholder="过滤文件名…" value="' + esc(wsFiles.kw) + '" />' +
+    '<button class="mini-btn" id="wsf-hidden" title="显示/隐藏 dot 开头的隐藏项">' + (wsFiles.showHidden ? '✓ 隐藏项' : '隐藏项') + '</button>' +
+    '<button class="mini-btn" id="wsf-mkdir" title="在最近浏览的目录下新建文件夹">＋文件夹</button>' +
+    '<button class="mini-btn" id="wsf-upload" title="上传到最近浏览的目录">⬆️ 上传</button>' +
+    '<button class="mini-btn" id="wsf-refresh" title="重新加载已展开目录">⟳</button>' +
+    '<input type="file" id="wsf-file" multiple style="display:none" />' +
+    '</div><div class="ws-batchbar" id="ws-batchbar"></div></div>';
+}
+function wsFindEntry(path) {
+  for (const k of Object.keys(wsFiles.levels)) {
+    const hit = (wsFiles.levels[k].entries || []).find(function (e) { return e.path === path; });
+    if (hit) return hit;
+  }
+  return null;
+}
+function wsRelPath(p) {
+  const r = pjTrimSlash(wsFiles.root), t = pjTrimSlash(p);
+  if (r && (t === r || t.startsWith(r + '/'))) return t === r ? '' : t.slice(r.length + 1);
+  return t;
+}
+function wsRefToChat(p) {
+  switchView('work');
+  const inp = $('input');
+  if (!inp) return;
+  const rel = wsRelPath(p) || String(p).split('/').pop();
+  const ins = rel + ' ';
+  const v = inp.value || '';
+  inp.value = v ? (v.endsWith(' ') ? v + ins : v + ' ' + ins) : ins;
+  inp.focus();
+  pulseComposer();
+  hintComposer('已引用工作区文件 ' + rel);
+}
+function wsLevelHtml(dir, depth, kw) {
+  const lv = wsFiles.levels[dir];
+  if (!lv) return '';
+  const pad = ' style="padding-left:' + (depth * 14 + 4) + 'px"';
+  let html = '';
+  if (lv.loading && !(lv.entries || []).length) html += '<div class="ws-tree-hint"' + pad + '>读取中…</div>';
+  else if (lv.error) html += '<div class="ws-tree-hint err"' + pad + '>⚠️ ' + esc(lv.error) + '</div>';
+  else if (!(lv.entries || []).length && depth === 0) html += '<div class="ws-tree-hint"' + pad + '>（空目录）</div>';
+  for (const it of (lv.entries || [])) {
+    if (!wsFiles.showHidden && it.hidden) continue;
+    if (kw && !String(it.name).toLowerCase().includes(kw)) continue;
+    const isDir = it.type === 'dir';
+    const child = wsFiles.levels[it.path];
+    const sel = wsFiles.selected.has(it.path);
+    html += '<div class="ws-row" data-path="' + esc(it.path) + '" data-name="' + esc(it.name) + '" data-type="' + (isDir ? 'dir' : 'file') + '"' + pad + '>' +
+      '<span class="ws-caret">' + (isDir ? '<button class="ws-caret-btn" data-dir="' + esc(it.path) + '" title="展开/收起">' + (child && child.open ? '▾' : '▸') + '</button>' : '') + '</span>' +
+      '<input type="checkbox" class="ws-chk" data-p="' + esc(it.path) + '"' + (sel ? ' checked' : '') + ' title="选择" />' +
+      '<span class="ws-ic">' + classifyFileIcon(it.name, it.type) + '</span>' +
+      '<span class="ws-nm' + (it.hidden ? ' dim' : '') + '" title="' + esc(it.path) + '">' + esc(it.name) + '</span>' +
+      '<span class="ws-acts">' +
+      '<button class="mini-btn ws-act" data-op="at" title="引用到对话（相对路径）">@</button>' +
+      (!isDir ? '<button class="mini-btn ws-act" data-op="prev" title="预览">👁</button>' : '') +
+      (!isDir ? '<button class="mini-btn ws-act" data-op="dl" title="下载">⬇</button>' : '') +
+      '<button class="mini-btn ws-act" data-op="cp" title="复制路径">⧉</button>' +
+      '<button class="mini-btn danger ws-act" data-op="del" title="删除">🗑</button>' +
+      '</span></div>';
+    if (isDir && child && child.open) html += wsLevelHtml(it.path, depth + 1, kw);
+  }
+  return html;
+}
+function wsSyncBatchBar() {
+  const bar = $('ws-batchbar');
+  if (!bar) return;
+  const n = wsFiles.selected.size;
+  bar.innerHTML = n
+    ? '<span>已选 ' + n + ' 项</span>' +
+    '<button class="mini-btn" id="wsf-bat-at" title="以相对路径引用到对话">@ 引用</button>' +
+    '<button class="mini-btn" id="wsf-bat-dl" title="批量下载（不含文件夹）">⬇ 下载</button>' +
+    '<button class="mini-btn danger" id="wsf-bat-del" title="批量删除">🗑 删除</button>' +
+    '<button class="mini-btn" id="wsf-bat-clear">清空选择</button>'
+    : '';
+  if (!n) return;
+  const q = function (id) { return bar.querySelector(id); };
+  if (q('#wsf-bat-clear')) q('#wsf-bat-clear').addEventListener('click', function () { wsFiles.selected.clear(); wsFilesRenderTree(); });
+  if (q('#wsf-bat-at')) q('#wsf-bat-at').addEventListener('click', function () {
+    const refs = Array.from(wsFiles.selected).map(function (p) { return wsRelPath(p) || p.split('/').pop(); });
+    closeWsSide();
+    switchView('work');
+    const inp = $('input');
+    if (inp) {
+      const ins = refs.join(' ') + ' ';
+      const v = inp.value || '';
+      inp.value = v ? (v.endsWith(' ') ? v + ins : v + ' ' + ins) : ins;
+      inp.focus(); pulseComposer();
+    }
+    wsFiles.selected.clear(); wsFilesRenderTree();
+    hintComposer('已引用 ' + refs.length + ' 个工作区文件');
+  });
+  if (q('#wsf-bat-dl')) q('#wsf-bat-dl').addEventListener('click', async function () {
+    const items = Array.from(wsFiles.selected).map(wsFindEntry).filter(function (e) { return e && e.type !== 'dir'; });
+    if (!items.length) { toast('请选择要下载的文件（不含文件夹）', true); return; }
+    toast('正在下载 ' + items.length + ' 个文件…');
+    let ok = 0;
+    for (const it of items) {
+      try {
+        const res = await fetch(API + '/agents/fs/download?node=' + encodeURIComponent(JSON.stringify(wsFiles.node)) + '&path=' + encodeURIComponent(it.path));
+        if (!res.ok) { toast('「' + it.name + '」下载失败 (HTTP ' + res.status + ')', true); continue; }
+        const blob = new Blob([await res.arrayBuffer()], { type: 'application/octet-stream' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = it.name;
+        a.click();
+        setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+        ok++;
+      } catch (e) { toast('「' + it.name + '」下载网络错误', true); }
+    }
+    if (ok) toast('✓ 已下载 ' + ok + '/' + items.length + ' 个文件');
+  });
+  if (q('#wsf-bat-del')) q('#wsf-bat-del').addEventListener('click', async function () {
+    const paths = Array.from(wsFiles.selected);
+    if (!paths.length) return;
+    if (!confirm('确定在执行节点上删除选中的 ' + paths.length + ' 项？此操作不可恢复。')) return;
+    let ok = 0;
+    for (const p of paths) {
+      const r = await api('/agents/fs/remove?node=' + encodeURIComponent(JSON.stringify(wsFiles.node)) + '&path=' + encodeURIComponent(p), { method: 'DELETE' });
+      if (r.ok) { ok++; wsFiles.selected.delete(p); const parent = String(p).split('/').slice(0, -1).join('/'); if (wsFiles.levels[p]) delete wsFiles.levels[p]; if (wsFiles.levels[parent]) wsFilesLoadLevel(parent); }
+      else toast('「' + p.split('/').pop() + '」删除失败：' + (r.error || ''), true);
+    }
+    if (ok) toast('✓ 已删除 ' + ok + ' 项');
+    wsFilesRenderTree();
+  });
+}
+function wsFilesRenderTree() {
+  const tree = $('ws-tree');
+  if (!tree) return;
+  const kw = String(wsFiles.kw || '').toLowerCase().trim();
+  tree.innerHTML = wsLevelHtml(wsFiles.root, 0, kw);
+  tree.onclick = async function (e) {
+    const tg = e.target;
+    const caret = tg.closest('.ws-caret-btn');
+    if (caret) {
+      const dir = caret.dataset.dir;
+      const lv = wsFilesLevel(dir);
+      wsFiles.lastDir = dir;
+      if (lv.open && lv.entries.length) { lv.open = false; wsFilesRenderTree(); }
+      else wsFilesLoadLevel(dir);
+      return;
+    }
+    const chk = tg.closest('.ws-chk');
+    if (chk) {
+      if (chk.checked) wsFiles.selected.add(chk.dataset.p); else wsFiles.selected.delete(chk.dataset.p);
+      wsSyncBatchBar();
+      return;
+    }
+    const act = tg.closest('.ws-act');
+    const row = tg.closest('.ws-row');
+    if (!row) return;
+    const p = row.dataset.path, name = row.dataset.name, type = row.dataset.type;
+    if (act) {
+      const op = act.dataset.op;
+      if (op === 'at') { wsRefToChat(p); return; }
+      if (op === 'prev') { openWsTab('preview', { path: p, title: name }); return; }
+      if (op === 'dl') {
+        const a = document.createElement('a');
+        a.href = API + '/agents/fs/download?node=' + encodeURIComponent(JSON.stringify(wsFiles.node)) + '&path=' + encodeURIComponent(p);
+        a.download = name;
+        a.click();
+        return;
+      }
+      if (op === 'cp') {
+        try { await navigator.clipboard.writeText(p); toast('✓ 已复制路径'); }
+        catch (err) { prompt('复制路径：', p); }
+        return;
+      }
+      if (op === 'del') {
+        if (!confirm('确定在执行节点上删除「' + name + '」？此操作不可恢复。')) return;
+        const r = await api('/agents/fs/remove?node=' + encodeURIComponent(JSON.stringify(wsFiles.node)) + '&path=' + encodeURIComponent(p), { method: 'DELETE' });
+        if (!r.ok) { toast(r.error || '删除失败', true); return; }
+        toast('✓ 已删除 ' + name);
+        const parent = String(p).split('/').slice(0, -1).join('/');
+        if (wsFiles.levels[p]) delete wsFiles.levels[p];
+        if (wsFiles.levels[parent]) wsFilesLoadLevel(parent); else wsFilesRenderTree();
+        return;
+      }
+      return;
+    }
+    if (type === 'dir') {
+      const lv = wsFilesLevel(p);
+      wsFiles.lastDir = p;
+      if (lv.open && (lv.entries || []).length) { lv.open = false; wsFilesRenderTree(); }
+      else wsFilesLoadLevel(p);
+    } else {
+      openWsTab('preview', { path: p, title: name });
+    }
+  };
+  wsSyncBatchBar();
+}
+function wsFilesRenderAll() {
+  const el = $('ws-files-root');
+  if (!el) return;
+  el.innerHTML = wsFilesHeaderHtml() + '<div class="ws-tree" id="ws-tree"></div>';
+  const kw = $('wsf-kw');
+  if (kw) kw.addEventListener('input', function () { wsFiles.kw = this.value; wsFilesRenderTree(); });
+  const hid = $('wsf-hidden');
+  if (hid) hid.addEventListener('click', function () { wsFiles.showHidden = !wsFiles.showHidden; wsFilesRenderAll(); });
+  const mk = $('wsf-mkdir');
+  if (mk) mk.addEventListener('click', async function () {
+    const dir = wsFiles.lastDir || wsFiles.root;
+    if (!dir) { toast('未解析到根目录', true); return; }
+    const name = prompt('在目录下新建文件夹：\\n' + dir, '');
+    if (!name || !name.trim()) return;
+    const r = await api('/agents/fs/mkdir', { method: 'POST', body: JSON.stringify({ node: wsFiles.node, path: dir, name: name.trim() }) });
+    if (!r.ok) { toast(r.error || '创建文件夹失败', true); return; }
+    toast('✓ 已创建文件夹「' + name.trim() + '」');
+    wsFilesLoadLevel(dir);
+  });
+  const up = $('wsf-upload');
+  if (up) up.addEventListener('click', function () { const f = $('wsf-file'); if (f) f.click(); });
+  const fi = $('wsf-file');
+  if (fi) fi.addEventListener('change', async function () {
+    const files = Array.from(this.files || []);
+    this.value = '';
+    if (!files.length) return;
+    const dest = wsFiles.lastDir || wsFiles.root;
+    if (!dest) { toast('未解析到根目录', true); return; }
+    toast('正在上传 ' + files.length + ' 个文件…');
+    let ok = 0;
+    for (const f of files) {
+      try {
+        const fd = new FormData();
+        fd.append('files', f, f.name);
+        const res = await fetch(API + '/agents/fs/upload?node=' + encodeURIComponent(JSON.stringify(wsFiles.node)) + '&path=' + encodeURIComponent(dest), { method: 'POST', body: fd });
+        const json = await res.json().catch(function () { return {}; });
+        if (res.ok && json.ok) ok++;
+        else toast('「' + f.name + '」上传失败: ' + (json.error || 'HTTP ' + res.status), true);
+      } catch (e) { toast('「' + f.name + '」上传网络错误', true); }
+    }
+    if (ok) { toast('✓ 已上传 ' + ok + '/' + files.length + ' 个文件'); wsFilesLoadLevel(dest); }
+  });
+  const rf = $('wsf-refresh');
+  if (rf) rf.addEventListener('click', function () {
+    for (const k of Object.keys(wsFiles.levels)) if (wsFiles.levels[k].open || k === wsFiles.root) wsFilesLoadLevel(k);
+  });
+  wsFilesRenderTree();
+}
+/** 预览页签：图片 / Markdown（渲染+源码切换）/ 文本代码 / 其它（提示下载） */
+async function wsPreviewRender(tab) {
+  const root = $('ws-preview-root');
+  if (!root || !tab) return;
+  const p = tab.path || '';
+  const name = tab.title || String(p).split('/').pop() || '';
+  const node = wsFiles.node || wsTaskDshRef(currentTaskObj());
+  if (!node || !p) { root.innerHTML = '<div class="ws-hint">无法解析文件位置</div>'; return; }
+  const downloadUrl = API + '/agents/fs/download?node=' + encodeURIComponent(JSON.stringify(node)) + '&path=' + encodeURIComponent(p);
+  const inlineUrl = downloadUrl + '&inline=1';
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico'].includes(ext);
+  const isMarkdown = ['md', 'markdown'].includes(ext);
+  const head = '<div class="ws-pv-head"><span class="mono ws-pv-path" title="' + esc(p) + '">' + esc(p) + '</span>' +
+    '<button class="mini-btn" id="wspv-cp" title="复制路径">⧉</button>' +
+    '<a class="mini-btn" href="' + esc(downloadUrl) + '" download="' + esc(name) + '" title="下载" style="text-decoration:none">⬇</a></div>';
+  try {
+    if (isImage) {
+      root.innerHTML = head + '<div style="text-align:center;padding:12px"><img src="' + esc(inlineUrl) + '" style="max-width:100%;max-height:60vh;border-radius:6px" alt="' + esc(name) + '"></div>';
+    } else {
+      const res = await fetch(inlineUrl);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const text = await res.text();
+      if (isMarkdown) {
+        root.innerHTML = head +
+          '<div style="display:flex;gap:8px;margin-bottom:8px"><button class="mini-btn pri" id="wspv-r">渲染视图</button><button class="mini-btn" id="wspv-s">源码视图</button></div>' +
+          '<div id="wspv-md" class="dsh-md markdown"></div><pre id="wspv-src" class="code-preview-box" style="display:none;max-height:70vh;overflow:auto"></pre>';
+        $('wspv-md').innerHTML = md(text);
+        $('wspv-src').textContent = text;
+        const setV = function (rendered) {
+          $('wspv-md').style.display = rendered ? '' : 'none';
+          $('wspv-src').style.display = rendered ? 'none' : '';
+          $('wspv-r').classList.toggle('pri', rendered);
+          $('wspv-s').classList.toggle('pri', !rendered);
+        };
+        $('wspv-r').addEventListener('click', function () { setV(true); });
+        $('wspv-s').addEventListener('click', function () { setV(false); });
+        setV(true);
+      } else {
+        root.innerHTML = head + '<pre class="code-preview-box" style="max-height:70vh;overflow:auto;margin:0">' + esc(text.slice(0, 400000)) + (text.length > 400000 ? '\\n…（已截断）' : '') + '</pre>';
+      }
+    }
+  } catch (err) {
+    root.innerHTML = head + '<div class="ws-hint">⚠️ 预览失败（' + esc(String(err && err.message || err)) + '），可尝试下载查看。</div>';
+  }
+  const cp = $('wspv-cp');
+  if (cp) cp.addEventListener('click', async function () { try { await navigator.clipboard.writeText(p); toast('✓ 已复制路径'); } catch (e) { prompt('复制路径：', p); } });
+}
 
 function renderDraftPlaceBtn() {
   const btn = $('draft-place-btn');
