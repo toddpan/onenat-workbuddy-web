@@ -351,6 +351,8 @@ export interface TurnToolCall {
   args?: string
   /** 结果摘要（字符串，截断） */
   result?: string
+  /** 写入/编辑类工具的目标路径（只存路径不存内容；args 摘要会截断，路径须单独落盘） */
+  paths?: string[]
   status: 'running' | 'done' | 'error'
   at: number
   /** 耗时 ms（结果到达时计算） */

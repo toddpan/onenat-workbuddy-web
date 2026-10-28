@@ -75,13 +75,14 @@ UI 行为目前没有自动化浏览器测试：任务说明里的「验收」�
 
 ## F2 本轮变更文件（前端为主）
 
-- [ ] **F2-1** 每轮回复末尾显示「本轮变更」
+- [x] **F2-1** 每轮回复末尾显示「本轮变更」
   - 依赖：S1-2
   - 先读 `types.ts` 的 `TurnToolCall` 和 engine 记录工具调用的位置，确认工具参数是否落盘。
     - 已落盘：前端从每轮工具调用里提取写入 / 编辑类工具（按实际工具名单，如 write / edit / str_replace_editor / apply_patch）的路径参数，去重。
     - 未落盘：在 engine 记录工具调用时额外保存路径类字段（只存路径，不存内容），并补单元测试。
   - agent 轮末尾渲染变更标签：最多 6 个，多出的显示 `+N`，`title` 为完整路径；点击走现有 `/tasks/:id/files/download?agent&path`（F1 完成后改为右侧栏预览）。
   - 验收：build / typecheck / smoke（改了 engine 时加 test:unit）通过。
+  - 完成：args 摘要截断 400 字符会丢路径，视为未落盘 → engine 新增 `extractToolPaths` 落 `tool.paths`（只存路径）+ 单测；前端 agent 轮脚注上方渲染「本轮变更」标签（≤6 + `+N`，点击下载）；已跑 npm run build / typecheck / smoke（64 项）/ test:unit（78 项）全过，未做浏览器手测。
 
 - [ ] **F2-2** 回复里的文件路径可点击
   - 依赖：F2-1

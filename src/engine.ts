@@ -87,6 +87,37 @@ function pathEquivalent(a?: string, b?: string): boolean {
   return aa.some((x) => bb.includes(x))
 }
 
+/**
+ * 写入/编辑类工具调用的目标路径（「本轮变更」数据源）。
+ * 只认写类工具（命名口径与前端 toolMeta 的「编辑文件」一致）；str_replace_editor 的 view/只读命令不算。
+ * 参数可能是 JSON 字符串或对象；apply_patch 从补丁头（*** Add/Update/Delete File、+++ b/）解析。
+ */
+export function extractToolPaths(name: unknown, args: unknown): string[] | undefined {
+  const n = String(name || '').toLowerCase()
+  if (!/^(write|edit|apply|str_replace|multiedit|notebook)/.test(n) && !/_write$|_edit$/.test(n)) return undefined
+  let o: any = args
+  if (typeof o === 'string') {
+    try { o = JSON.parse(o) } catch { o = { patch: o } }
+  }
+  if (!o || typeof o !== 'object') return undefined
+  if (typeof o.command === 'string' && /^(view|read|list)$/i.test(o.command)) return undefined
+  const out: string[] = []
+  const add = (v: unknown) => {
+    const s = typeof v === 'string' ? v.trim() : ''
+    if (s && s.length <= 1024 && !s.includes('\n') && !out.includes(s)) out.push(s)
+  }
+  for (const k of ['path', 'file_path', 'filePath', 'notebook_path', 'file', 'filename']) add(o[k])
+  if (Array.isArray(o.edits)) for (const e of o.edits) if (e && typeof e === 'object') add(e.file_path ?? e.path)
+  for (const k of ['patch', 'input', 'diff']) {
+    if (typeof o[k] !== 'string') continue
+    for (const line of o[k].split('\n')) {
+      const m = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/.exec(line) || /^\*\*\* Move to: (.+)$/.exec(line) || /^\+\+\+ (?:b\/)?(.+)$/.exec(line)
+      if (m && m[1].trim() !== '/dev/null') add(m[1])
+    }
+  }
+  return out.length ? out.slice(0, 50) : undefined
+}
+
 /** 给控制面紧急操作（停止）加时限：ONENAT 抖动时不能让"停止"按钮等十几秒才返回 */
 function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
   return Promise.race([
@@ -1573,6 +1604,8 @@ export class TaskEngine {
         const isAskTool = info.name === 'ask_user_question' || info.name === 'ask-user-question'
         // ask_user_question 的 args 必须完整：截断的 JSON 会让前端交互卡解析失败，用户无法答复
         const tool: TurnToolCall = { id, name: String(info.name || 'unknown'), args: summarize(info.arguments, isAskTool ? 65_536 : 400), status: 'running', at: Date.now() }
+        const paths = extractToolPaths(info.name, info.arguments)
+        if (paths) tool.paths = paths
         this.store.updateTurn(taskId, turn.id, (tt) => {
           tt.tools = tt.tools || []
           tt.tools.push(tool)

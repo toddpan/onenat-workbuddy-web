@@ -19,7 +19,7 @@ import { join } from 'node:path'
 // 测试进程内禁止构造函数自带的 30s 启动归档扫描（对齐 store.test 做法）
 process.env.WORKBUDDY_ARCHIVE_BOOT_DELAY_MS = '3600000'
 
-import { TaskEngine } from './engine.js'
+import { TaskEngine, extractToolPaths } from './engine.js'
 import { WorkStore } from './store.js'
 import type { AgentResolver } from './resolver.js'
 import type { PromptComposer, ComposeContext, ComposeResult } from './prompt-composer.js'
@@ -306,6 +306,22 @@ test('项目任务节点以项目为准：createTask 带 projectId 时忽略 nod
     f.store.flush()
     rmSync(f.dir, { recursive: true, force: true })
   }
+})
+
+test('本轮变更：extractToolPaths 只取写入/编辑类工具的路径参数，不含内容', () => {
+  assert.deepEqual(extractToolPaths('write', JSON.stringify({ content: 'x'.repeat(5000), path: 'src/a.ts' })), ['src/a.ts'])
+  assert.deepEqual(extractToolPaths('edit', { file_path: '/abs/b.md', old_string: 'a', new_string: 'b' }), ['/abs/b.md'])
+  assert.deepEqual(extractToolPaths('str_replace_editor', { command: 'str_replace', path: 'c.py' }), ['c.py'])
+  assert.equal(extractToolPaths('str_replace_editor', { command: 'view', path: 'c.py' }), undefined, 'view 命令不算变更')
+  assert.deepEqual(extractToolPaths('MultiEdit', { edits: [{ file_path: 'd.ts' }, { file_path: 'd.ts' }, { path: 'e.ts' }] }), ['d.ts', 'e.ts'])
+  assert.deepEqual(
+    extractToolPaths('apply_patch', { input: '*** Begin Patch\n*** Update File: f.ts\n@@\n-a\n+b\n*** Add File: g.ts\n+x\n*** End Patch' }),
+    ['f.ts', 'g.ts'],
+  )
+  assert.deepEqual(extractToolPaths('apply_patch', '--- a/h.ts\n+++ b/h.ts\n@@\n-a\n+b'), ['h.ts'])
+  assert.equal(extractToolPaths('read', { path: 'a.ts' }), undefined, '读类工具不算变更')
+  assert.equal(extractToolPaths('bash', { command: 'echo > a.ts' }), undefined)
+  assert.equal(extractToolPaths('write', { content: 'no path' }), undefined)
 })
 
 test('团队任务：首轮消息触发团队合同（plan.scope.team 快照）；无 @ 追问回主会话并携带上一轮汇总', async () => {

@@ -44,3 +44,10 @@
 - `statsState.unsupported` 存原因；`renderStatPills` 无数据且有原因时时间胶囊显示「统计不可用」（`.stat-pill.off` 灰虚线，title=原因，点击不开面板）；no_session 不提示。
 - 注意：todo 的 1s tick 仍常驻（只在 running 时渲染）；/todos 不支持时尚无提示（不在本任务范围）。
 - smoke 新增 1 项（新任务 /stats → reasonCode=no_session）。未验证：浏览器手测（灰胶囊样式、空闲时 Network 无轮询、运行结束轮询停止）。
+
+## F2-1
+- 结论：`TurnToolCall.args` 是截断到 400 字符的摘要，write 类工具 content 在前时路径会丢 → 按「未落盘」处理。
+- types.ts `TurnToolCall.paths?: string[]`；engine.ts 新增导出 `extractToolPaths(name, args)`（写类工具名口径同前端 toolMeta；str_replace_editor 的 view 排除；支持 path/file_path/notebook_path/edits[]/apply_patch 补丁头），`onToolCall` 落 `tool.paths`；engine.test.ts 新增 1 个单测。
+- web-ui.ts：新增 `turnChangedPaths(turn)`（跳过 status=error，去重）/ `renderTurnChanges(foot, turn, taskId)`（插在 `.dsh-actions-foot` 前，≤6 + `+N`，title=完整路径，href=/tasks/:id/files/download?agent&path）；调用点：`buildTurnElement` 非流式分支、`finalizeTurnBlocks` 末尾。CSS `.dsh-changes` / `.dsh-change-chip`。
+- 注意（F2-2）：可直接复用 `turnChangedPaths(turn)` 作为变更列表；`withFileLinks` 会先把行内代码 stash 掉，F2-2 需在 md 渲染后或 stash 还原时处理。存量历史轮没有 paths，不显示变更。
+- 未验证：浏览器手测（标签样式、流式结束后出现、点击下载相对路径是否能被节点解析）；没有补 smoke 断言（mock 流不产生写类工具）。

@@ -499,6 +499,18 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
 }
 .dsh-usage-pill b { font-weight: 500; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
 
+/* 本轮变更文件标签（写入/编辑类工具的目标路径，点击下载） */
+.dsh-changes { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 12px; font-size: 11px; }
+.dsh-changes-label { color: var(--dsw-alias-label-tertiary); }
+.dsh-change-chip {
+  display: inline-flex; align-items: center; height: 20px; padding: 0 8px; max-width: 220px;
+  border-radius: 999px; background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary); text-decoration: none; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+a.dsh-change-chip:hover { color: var(--dsw-alias-label-primary, inherit); text-decoration: underline; }
+.dsh-change-chip.more { cursor: default; color: var(--dsw-alias-label-tertiary); }
+
 /* 排队消息（运行中补充意见）：⏳ 排队中 pill + ⚡ 立即发送按钮（对齐移动端） */
 .dsh-queued-pill {
   display: inline-flex; align-items: center; height: 20px; padding: 0 8px;
@@ -6033,6 +6045,38 @@ function applyUsageBadge(el, usage) {
   if (anchor) el.foot.insertBefore(pill, anchor); else el.foot.appendChild(pill);
 }
 
+/** 本轮变更文件：写入/编辑类工具的路径（engine 落盘的 tool.paths），失败的调用不算，按出现顺序去重 */
+function turnChangedPaths(turn) {
+  const out = [];
+  for (const t of (turn && turn.tools) || []) {
+    if (!t || t.status === 'error' || !Array.isArray(t.paths)) continue;
+    for (const p of t.paths) if (p && out.indexOf(p) < 0) out.push(p);
+  }
+  return out;
+}
+/** agent 轮末尾的「本轮变更」标签：最多 6 个，多出的显示 +N；点击走任务文件下载（F1 完成后改为右侧栏预览） */
+function renderTurnChanges(foot, turn, taskId) {
+  if (!foot || !foot.parentNode) return;
+  const old = foot.parentNode.querySelector('.dsh-changes');
+  if (old) old.remove();
+  if (!turn || turn.role !== 'agent') return;
+  const paths = turnChangedPaths(turn);
+  if (!paths.length) return;
+  const MAX = 6;
+  const box = document.createElement('div');
+  box.className = 'dsh-changes';
+  let html = '<span class="dsh-changes-label">本轮变更</span>';
+  for (const p of paths.slice(0, MAX)) {
+    const href = API + '/tasks/' + encodeURIComponent(taskId) + '/files/download?agent=' + encodeURIComponent(turn.agentId || '') + '&path=' + encodeURIComponent(p);
+    html += '<a class="dsh-change-chip" href="' + esc(href) + '" title="' + esc(p) + '" target="_blank" rel="noopener">' + esc(p.split('/').pop() || p) + '</a>';
+  }
+  if (paths.length > MAX) {
+    html += '<span class="dsh-change-chip more" title="' + esc(paths.slice(MAX).join('\\n')) + '">+' + (paths.length - MAX) + '</span>';
+  }
+  box.innerHTML = html;
+  foot.parentNode.insertBefore(box, foot);
+}
+
 /** 流式轮次的活动状态行（DSH TurnStatus：深度求索中...，15s 后出现计时钟；插入到流式轮上方） */
 function showTurnStatus(taskId, turnId, beforeEl) {
   removeTurnStatus();
@@ -6138,6 +6182,7 @@ function buildTurnElement(taskId, turn) {
       blocks.appendChild(te.el);
     }
     if (turn.usage) applyUsageBadge({ foot }, turn.usage);
+    renderTurnChanges(foot, turn, taskId);
   } else if (blocks && turn.streaming && turn.text) {
     const te = createBlock('text'); te.el.textContent = turn.text || ''; blocks.appendChild(te.el);
   }
@@ -6388,6 +6433,7 @@ function finalizeTurnBlocks(el, turn, taskId) {
   }
 
   if (turn.usage) applyUsageBadge(el, turn.usage);
+  renderTurnChanges(el.foot, turn, taskId);
 
   markTrajDirty();
 }
