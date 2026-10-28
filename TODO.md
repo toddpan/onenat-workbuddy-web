@@ -171,7 +171,8 @@ UI 行为目前没有自动化浏览器测试：任务说明里的「验收」�
 
 ## S2 按成员拆分 Token + 逐轮胶囊
 
-- [ ] **S2-1** Token 面板按成员拆分
+- [x] **S2-1** Token 面板按成员拆分
+  - 完成：/stats 增 members[]（agentId/name/nodeLabel/model/stats，合并口径不变）；Token 面板「按成员」分行 + 底部明细弹层（records?taskId=）；smoke 断言 members 字段（67 项）。验证：build/typecheck/smoke/test:unit(78) 全过；未做浏览器手测
   - 依赖：F3-1
   - 先读 router `getTaskStats`：在合并各成员统计之前保留每个成员的数据，返回 `data.members[] = { agentId, name, nodeLabel, model, stats }`，合并后的 `data.stats` 保持不变（向后兼容）。
   - Token 面板列出「主会话 / 🤖 成员 · 🖥 节点 · 模型 · token · 缓存命中」，底部「查看本任务明细 →」跳到 Token 报表并按 `taskId` 筛选（现有 `/api/usage/tokens/records?taskId=`）。

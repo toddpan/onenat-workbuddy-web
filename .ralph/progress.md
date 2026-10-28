@@ -113,3 +113,8 @@
 - state.fileTags + composeOutgoingText/clearFileTags/renderFileTags；引用入口（wsRefToChat/addFileTag/批量×2/pjRefToChat）全改标签；send() 两分支成功后清；openTask 切换清。
 - 目录树 drop：wsFilesRenderAll 里委托 dragover/drop（行→该目录/文件→父目录/空白→lastDir），wsFilesUpload(files,dest) 共用。
 - 第三次踩模板转义坑（'\\n'）：python heredoc 写源码级反斜杠一律用 4 写法；以后任何含 \n 的 JS 字符串进 web-ui.ts 都先想这步。
+
+## S2-1（ZCode 主会话）
+- getTaskStats：bindings.map 出 members（agent.dshRef||task.nodeRef||proj.dshRef → nodeLabelOf），stats 只在 ok 时带；payload.stats 原样。
+- 前端 statsState.members；Token 面板「按成员」区 + sp-foot「查看本任务明细」→ openTaskUsageReport（openModal 表格，records?taskId=&limit=200）。
+- 注意：路由改动若再动 getTaskStats，payload 里已有 reasonCode/reason（S1-2 加的）别弄丢。
