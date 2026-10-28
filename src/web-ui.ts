@@ -305,6 +305,9 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
 }
 .badge.mode { color: var(--acc); border-color: rgba(111,123,247,.4); background: var(--acc-light); }
 .badge.mode.chat { color: var(--pri); border-color: rgba(77,107,254,.4); background: var(--pri-light); }
+/* 头部只读执行位置标签（📦 项目 · 🖥 节点），悬停看工作区 / 在线状态 / 默认模型 */
+.badge.place { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--bg3); cursor: default; }
+#head-more-pop { width: 180px; }
 .badge.mode.chat.direct { color: var(--ok); border-color: rgba(43,164,113,.4); background: var(--ok-light); font-weight: 600; }
 .member-chips { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .mchip {
@@ -2167,13 +2170,10 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <span class="badge mode" id="chat-goal-badge" style="display:none" title="当前长期目标"></span>
           <span class="badge mode" id="chat-mode" style="display:none"></span>
           <span class="hspacer"></span>
-          <div class="main-agent-picker" id="node-picker">
-            <button class="main-agent-btn" id="node-btn" title="任务节点（主 DSH）：无 @ 的主会话在该节点上执行；@子智能体 作为 sub agent 回到其绑定节点远程执行">
-              <span class="ag-ico">🖥</span>
-              <span class="ag-name" id="node-btn-name">节点: 加载中…</span>
-              <span class="ag-arr">▾</span>
-            </button>
-            <div class="main-agent-pop" id="node-pop"></div>
+          <span class="badge place" id="chat-place" style="display:none"></span>
+          <div class="main-agent-picker" id="head-more" style="display:none">
+            <button class="mini-btn" id="btn-head-more" title="更多：工作区文件 / 项目配置">⋯</button>
+            <div class="main-agent-pop" id="head-more-pop"></div>
           </div>
         </div>
         <div class="conv-tabs" id="conv-tabs" style="display:none">
@@ -4465,33 +4465,16 @@ function exitProject() {
   loadTasks();
   renderTaskList();
   updateProjectBanner();
-  const picker = document.getElementById('node-picker');
-  if (picker) picker.style.display = '';
 }
 
+/**
+ * 项目上下文变化后刷新头部（P1-1：项目横幅已撤掉，「工作区文件 / 项目配置」挪进头部 ⋯ 菜单；
+ * 节点随任务锁定，头部不再提供节点切换）。函数名沿用：enterProject / exitProject / 项目保存仍调用它。
+ */
 function updateProjectBanner() {
   var el = document.getElementById('pj-banner');
-  const p = state.projectId ? state.projects.find((x) => x.id === state.projectId) : null;
-  if (!p) { if (el) el.remove(); return; }
-  if (!el) {
-    el = document.createElement('div');
-    el.id = 'pj-banner';
-    el.className = 'pj-banner';
-    const head = document.querySelector('.chat-head');
-    head.insertAdjacentElement('afterend', el);
-  }
-  el.innerHTML = '📦 项目工作台：<b>' + esc(p.name || p.id) + '</b>' +
-    '<span style="color:var(--tx3)">（任务在项目节点执行 · 工作区 / 指令 / 连接器 / 技能随项目继承 · @子智能体 按需调用）</span>' +
-    '<span style="flex:1"></span>' +
-    '<button class="mini-btn" id="pj-files">📁 工作区文件</button>' +
-    '<button class="mini-btn" id="pj-cfg">⚙ 项目配置</button>' +
-    '<button class="mini-btn" id="pj-exit">退出项目</button>';
-  document.getElementById('pj-exit').addEventListener('click', function () { exitProject(); });
-  document.getElementById('pj-cfg').addEventListener('click', function () { openProjectDrawer(p.id); });
-  document.getElementById('pj-files').addEventListener('click', function () { openProjectFiles(); });
-  // 项目工作台隐藏节点切换器（节点随项目锁定）；子智能体均为可 @ 的 sub agent
-  const picker = document.getElementById('node-picker');
-  if (picker) picker.style.display = 'none';
+  if (el) el.remove();
+  renderChatPlace(currentTaskObj());
 }
 
 async function openProjectDrawer(projectId, preset) {
@@ -4707,17 +4690,14 @@ async function openRunConfig(focus) {
     ? '<div class="pj-chips">' + chipsOf(proj.expertIds) + '</div>' +
       '<div class="hint" style="margin-top:8px">上述为项目默认协作成员（创建任务时自动继承）。主会话在项目节点执行（不绑定身份）；仍可 @ 任意 sub agent/专家库角色在其绑定节点执行专项任务（发飞书、发邮件…）——不受这份清单限制。集合在「⚙ 项目配置」维护。</div>'
     : '<div class="pj-chips">' + state.agents.map(function (a) { return '<span class="tag">🤖 ' + esc(a.name) + '</span>'; }).join(' ') + '</div>' +
-      '<div class="hint" style="margin-top:8px">主会话在当前节点执行（右上角切换节点）；消息里输入 @ 调用 sub agent，在其绑定的节点上远程执行专项任务（发飞书、发邮件…）。</div>';
+      '<div class="hint" style="margin-top:8px">主会话在任务的执行节点上运行（执行位置随任务锁定）；消息里输入 @ 调用 sub agent，在其绑定的节点上远程执行专项任务（发飞书、发邮件…）。</div>';
 
+  // 主会话节点不在这里改（P1-1）：执行位置随任务锁定，新任务的节点由执行位置选择框决定
   const nodeSection = isProject
     ? '<div class="rc-row"><span class="rc-k">节点</span><span class="tag">🔒 ' + esc(proj.nodeTitle || '(默认)') + '</span></div>' +
       '<div class="rc-row" style="margin-top:6px"><span class="rc-k">工作区</span><span class="tag" style="font-family:var(--mono)">📁 ' + esc(proj.workspace || '(默认)') + '</span></div>' +
-      '<div class="hint" style="margin-top:8px">随项目锁定，修改请点项目横幅「⚙ 项目配置」</div>'
-    : '<div class="field"><label>主会话节点（主 DSH，仅对新任务生效；与右上角节点切换器联动）</label><select id="rc-node" class="cfg-sel"><option value="">（跟随右上角节点选择）</option>' +
-      state.resources.filter(function (r) { return r.kind === 'dsh' && r.mappingId; }).map(function (r) {
-        const sel = state.taskEnv.nodeRef && state.taskEnv.nodeRef.mappingId === r.mappingId ? ' selected' : '';
-        return '<option value="' + esc(r.mappingId) + '"' + sel + '>' + esc(r.note || r.appName || r.mappingId) + '</option>';
-      }).join('') + '</select></div>';
+      '<div class="hint" style="margin-top:8px">随项目锁定，修改请点头部「⋯ → ⚙ 项目配置」</div>'
+    : '';
 
   const connSection = isProject
     ? '<div class="rc-row"><span class="rc-k">连接器</span><div class="pj-chips">' + ((proj.connectorIds || []).map(function (cid) { return '<span class="tag">' + esc(connLabel(cid)) + '</span>'; }).join(' ') || '<span class="sub">未绑定</span>') + '</div></div>'
@@ -4727,30 +4707,23 @@ async function openRunConfig(focus) {
       }).join('') : '<div class="mon-empty">暂无候选连接器</div>') + '</div>';
 
   const skillSection = isProject
-    ? '<div class="rc-row" style="margin-top:8px"><span class="rc-k">技能</span><div class="pj-chips">' + ((proj.skillNames || []).map(function (n) { return '<span class="tag" style="font-family:var(--mono)">/' + esc(n) + '</span>'; }).join(' ') || '<span class="sub">未配置</span>') + '</div></div><div class="hint" style="margin-top:8px">修改请点项目横幅「⚙ 项目配置」</div>'
+    ? '<div class="rc-row" style="margin-top:8px"><span class="rc-k">技能</span><div class="pj-chips">' + ((proj.skillNames || []).map(function (n) { return '<span class="tag" style="font-family:var(--mono)">/' + esc(n) + '</span>'; }).join(' ') || '<span class="sub">未配置</span>') + '</div></div><div class="hint" style="margin-top:8px">修改请点头部「⋯ → ⚙ 项目配置」</div>'
     : '<div class="field"><label>技能（逗号分隔，/名 手势加载，仅对新任务生效）</label><input id="rc-skills" style="font-family:var(--mono)" value="' + esc((state.taskEnv.skillNames || []).join(',')) + '" placeholder="lark-cli, kb-log"></div>';
 
   const modelSection = '<div class="rc-row"><span class="rc-k">调度模型</span><span class="tag">' + esc((state.settings && state.settings.planner && state.settings.planner.model) || '默认模型') + '</span></div><div class="hint" style="margin-top:8px">输入区下方模型按钮只改当前任务；这里显示的是全局默认模型（在设置页修改）</div>';
 
   const bodyHtml =
     '<div class="rc-section" id="rc-sec-expert"><b>① 默认协作成员（不限制 @）</b>' + expertSection + '</div>' +
-    '<div class="rc-section"><b>② 执行节点 与 工作区</b>' + nodeSection + '</div>' +
-    '<div class="rc-section"><b>③ 连接器 / 技能</b>' + connSection + skillSection + '</div>' +
-    '<div class="rc-section"><b>④ 模型</b>' + modelSection + '</div>';
+    (nodeSection ? '<div class="rc-section"><b>② 执行节点 与 工作区</b>' + nodeSection + '</div>' : '') +
+    '<div class="rc-section"><b>' + (nodeSection ? '③' : '②') + ' 连接器 / 技能</b>' + connSection + skillSection + '</div>' +
+    '<div class="rc-section"><b>' + (nodeSection ? '④' : '③') + ' 模型</b>' + modelSection + '</div>';
 
   const actions = [];
-  // 单独任务：保存节点/连接器/技能到新任务环境
+  // 单独任务：保存连接器/技能到新任务环境（节点不在这里改）
   if (!isProject) {
     actions.push({ label: '保存为新任务环境', cls: 'pri', act: function () {
-      const node = document.getElementById('rc-node');
-      state.taskEnv.nodeRef = node && node.value ? { kind: 'mapping', mappingId: node.value } : null;
       state.taskEnv.connectorIds = Array.prototype.map.call(document.querySelectorAll('.rc-conn:checked'), function (x) { return x.value; });
       state.taskEnv.skillNames = (document.getElementById('rc-skills') || { value: '' }).value.split(',').map(function (x) { return x.trim(); }).filter(Boolean);
-      if (state.taskEnv.nodeRef) {
-        nodeState.cur = state.taskEnv.nodeRef.mappingId;
-        try { localStorage.setItem('wb-node-id', nodeState.cur); } catch (e) { /* ignore */ }
-        setNodeBtnUi('节点: ' + nodeBtnLabel());
-      }
       closeModal();
       toast('✓ 运行配置已保存（作用于新任务）');
     } });
@@ -5332,6 +5305,7 @@ function resetChatView() {
   resetTaskStats();
   resetTaskTodos();
   resetTrajView();
+  renderChatPlace(null);
   reloadCatalogIfExecNodeChanged(); // 回到无任务视图：目录回到所选执行位置
 }
 
@@ -5340,6 +5314,7 @@ function refreshChatHead(taskMaybe) {
   if (nameEl && mainAgentState.loaded) nameEl.textContent = mainAgentBtnLabel();
   const task = taskMaybe || state.taskCache.get(state.currentTaskId) || state.tasks.find(t => t.id === state.currentTaskId);
   if (!task) return;
+  renderChatPlace(task); // 首轮建立会话后（task 更新事件走这里）标签才出现
   const modeEl = $('chat-mode');
   modeEl.style.display = '';
   const isOrch = task.mode === 'orchestrate';
@@ -8617,6 +8592,86 @@ function syncNodeChipToTask(task) {
   return false;
 }
 /**
+ * 任务执行位置（只读展示用）：项目 dshRef 优先，其次 task.nodeRef（与 taskExecNodeId 同口径）。
+ * 返回 { project, nodeLabel, res（DSH 资源，含 engine 探测档案）, workspace }。
+ */
+function taskPlaceInfo(task) {
+  const pj = task && task.projectId ? (state.projects || []).find(function (x) { return x.id === task.projectId; }) : null;
+  const ref = (pj && pj.dshRef) || (task && task.nodeRef) || null;
+  let nodeLabel = '';
+  let res = null;
+  if (ref && ref.kind === 'mapping' && ref.mappingId) {
+    res = dshNodeOptions().find(function (x) { return x.mappingId === ref.mappingId; }) || null;
+    nodeLabel = res ? (res.title || res.appName || res.note || res.mappingId) : ((pj && pj.nodeTitle) || ref.mappingId);
+  } else if (ref && ref.kind === 'direct' && ref.apiBaseUrl) {
+    nodeLabel = '直连 ' + String(ref.apiBaseUrl).replace('https://', '').replace('http://', '');
+  } else if (pj && pj.nodeTitle) {
+    nodeLabel = pj.nodeTitle;
+  }
+  return { project: pj, nodeLabel: nodeLabel || '默认节点', res: res, workspace: (task && task.workDir) || (pj && pj.workspace) || '' };
+}
+/**
+ * 头部只读执行位置标签「📦 项目 · 🖥 节点」+ ⋯ 菜单（P1-1）。项目和节点在首条消息后锁定在任务上，
+ * 头部只显示不切换；草稿（还没有远端会话）不显示标签，留给 P2 的执行位置选择框。
+ */
+function renderChatPlace(task) {
+  const chip = $('chat-place');
+  const more = $('head-more');
+  const info = task ? taskPlaceInfo(task) : null;
+  if (chip) {
+    if (!task || !task.sessions || !Object.keys(task.sessions).length) {
+      chip.style.display = 'none';
+      chip.textContent = '';
+      chip.removeAttribute('title');
+    } else {
+      chip.style.display = '';
+      chip.textContent = (info.project ? '📦 ' + (info.project.name || info.project.id) + ' · ' : '') + '🖥 ' + info.nodeLabel;
+      const eng = info.res && info.res.engine;
+      const status = !info.res ? '' : !eng ? '未探测' : eng.reachable ? '在线' : '离线' + (eng.error ? '（' + eng.error + '）' : '');
+      const lines = [
+        '工作区：' + (info.workspace || '远端默认目录'),
+        '节点：' + info.nodeLabel + (status ? ' · ' + status : ''),
+      ];
+      if (eng && eng.defaultModel) lines.push('默认模型：' + eng.defaultModel);
+      lines.push('执行位置随任务锁定');
+      chip.title = lines.join('\\n');
+    }
+  }
+  // ⋯ 菜单：任务所属项目，未打开任务时取项目工作台当前项目（原横幅的入口）
+  const pj = (info && info.project) || (state.projectId ? state.projects.find(function (x) { return x.id === state.projectId; }) : null);
+  if (more) {
+    more.style.display = pj ? '' : 'none';
+    more.dataset.pid = pj ? pj.id : '';
+    if (!pj) closeHeadMore();
+  }
+}
+function closeHeadMore() { const p = $('head-more-pop'); if (p) p.classList.remove('on'); }
+if ($('btn-head-more')) {
+  $('btn-head-more').addEventListener('click', function (e) {
+    e.stopPropagation();
+    const pop = $('head-more-pop');
+    const pid = ($('head-more') && $('head-more').dataset.pid) || '';
+    if (!pop || !pid) return;
+    if (pop.classList.contains('on')) { closeHeadMore(); return; }
+    pop.innerHTML =
+      '<div class="main-agent-item" data-op="files"><div class="ag-info"><div class="ag-title">📁 工作区文件</div></div></div>' +
+      '<div class="main-agent-item" data-op="cfg"><div class="ag-info"><div class="ag-title">⚙ 项目配置</div></div></div>' +
+      (state.projectId ? '<div class="main-agent-item" data-op="exit"><div class="ag-info"><div class="ag-title">↩ 退出项目</div></div></div>' : '');
+    pop.querySelectorAll('.main-agent-item').forEach(function (it) {
+      it.addEventListener('click', function () {
+        closeHeadMore();
+        if (it.dataset.op === 'files') openProjectFiles(pid);
+        else if (it.dataset.op === 'cfg') openProjectDrawer(pid);
+        else if (it.dataset.op === 'exit') exitProject();
+      });
+    });
+    pop.classList.add('on');
+  });
+  document.addEventListener('click', function (e) {
+    if (!(e.target instanceof Element) || !e.target.closest('#head-more')) closeHeadMore();
+  });
+}
+/**
  * 默认节点可达性校正：探测结果显示当前默认节点不可达、且存在健康节点时，
  * 自动切到健康节点（避免新任务默认落在挂掉的节点上，随后只看到 "fetch failed"）。
  * 只在不属于任何已打开会话、且用户未手动选过节点时生效。
@@ -8703,6 +8758,7 @@ async function refreshNodeEngines(force) {
       if (JSON.stringify(e.engine) !== before) changed = true;
     }
     if (changed && $('node-pop') && $('node-pop').classList.contains('on')) renderNodePop();
+    if (changed) renderChatPlace(currentTaskObj()); // 头部标签悬停里的在线状态 / 默认模型跟着刷新
   } catch (e) { /* 探测失败静默：下拉里已显示「探测中…」 */ }
 }
 function selectNode(mappingId) {
@@ -11642,9 +11698,10 @@ function pjRefToChat(filePath, ws) {
   hintComposer('已引用工作区文件 ' + name + '（相对项目工作区）');
 }
 
-/** 打开项目工作区文件抽屉（项目工作台横幅「📁 工作区文件」入口） */
-async function openProjectFiles() {
-  const p = state.projectId ? state.projects.find(x => x.id === state.projectId) : null;
+/** 打开项目工作区文件抽屉（头部 ⋯ 菜单「📁 工作区文件」入口；pid 缺省取项目工作台当前项目） */
+async function openProjectFiles(pid) {
+  const id = pid || state.projectId;
+  const p = id ? state.projects.find(x => x.id === id) : null;
   if (!p) { toast('请先进入项目工作台', true); return; }
   pjFilesState.projectId = p.id;
   pjFilesState.node = p.dshRef || null;

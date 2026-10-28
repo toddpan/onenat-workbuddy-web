@@ -57,3 +57,11 @@
 - 调用点：`renderTurnChanges` 渲染完变更标签后调用，历史回放与 `finalizeTurnBlocks` 收尾两条路径都覆盖；变更列表为空时不处理。CSS `a.dsh-change-link code` 点状下划线。
 - 注意（F1）：右侧栏预览上线后，变更标签与正文链接的 href 要一起改。
 - 未验证：浏览器手测（链接样式、点击下载）；没有补 smoke 断言（mock 流不产生写类工具，与 F2-1 相同）。
+
+## P1-1
+- web-ui.ts：头部 `#node-picker` 换成 `#chat-place`（.badge.place）+ `#head-more`/`#head-more-pop`；新增 `taskPlaceInfo(task)` / `renderChatPlace(task)` / `closeHeadMore()`；调用点：`refreshChatHead`、`resetChatView`、`refreshNodeEngines`（changed 时）、`updateProjectBanner`。
+- `updateProjectBanner` 只删旧横幅并调 `renderChatPlace`；`exitProject` 去掉 picker 显示逻辑；`openProjectFiles(pid)` 支持传项目 id（⋯ 菜单按任务所属项目）。
+- `openRunConfig`：单独任务不再有 `#rc-node` 下拉，保存只写连接器/技能；项目任务仍显示锁定节点和工作区。
+- 注意（P1-2/P2）：`#node-btn`/`#node-pop` DOM 已删，`setNodeBtnUi`/`renderNodePop`/`selectNode` 仍在（都判空），`nodeState.cur` 仍是新任务的默认节点；P2 选择框可复用 `renderNodePop` 的分组探测逻辑。标签悬停在线状态读 `res.engine`，P1-2 可复用 `taskPlaceInfo(task).res`。
+- 标签只在 task.sessions 非空时显示（草稿不显示）。
+- 验证：build / typecheck / smoke（64 项）全过；未跑 test:unit（只改了 web-ui.ts）；未做浏览器手测（标签样式、悬停 title、⋯ 菜单定位、手机端换行）。
