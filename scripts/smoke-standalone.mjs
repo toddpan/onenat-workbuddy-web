@@ -223,6 +223,16 @@ async function main() {
   check('任务级模型可清除（跟随默认）', clearA.status === 200 && clearA.json?.data?.model === '')
   if (taskBId) await req('DELETE', `${PREFIX}/api/tasks/${taskBId}`)
   if (createWithModel.json?.data?.id) await req('DELETE', `${PREFIX}/api/tasks/${createWithModel.json.data.id}`)
+  // P2-2：草稿页首条消息 = POST /tasks 带 message（创建即发送），任务里应恰好有 1 个 user 轮次
+  const createWithMsg = await req('POST', `${PREFIX}/api/tasks`, { mode: 'chat', model: 'smoke-provider/smoke-model-c', message: '冒烟草稿首条消息' })
+  const msgTaskId = createWithMsg.json?.data?.id
+  const msgUserTurns = (createWithMsg.json?.data?.turns || []).filter((t) => t.role === 'user')
+  check('带 message 创建任务：恰好 1 个 user 轮次', [200, 201].includes(createWithMsg.status) && msgUserTurns.length === 1 && msgUserTurns[0].text === '冒烟草稿首条消息', `userTurns=${msgUserTurns.length}`)
+  check('带 message 创建任务：标题取自首条消息、保留任务级模型', createWithMsg.json?.data?.title?.includes('冒烟草稿') && createWithMsg.json?.data?.model === 'smoke-provider/smoke-model-c', `title=${createWithMsg.json?.data?.title}`)
+  if (msgTaskId) {
+    await req('POST', `${PREFIX}/api/tasks/${msgTaskId}/cancel`)
+    await req('DELETE', `${PREFIX}/api/tasks/${msgTaskId}`)
+  }
 
   const archived = await req('POST', `${PREFIX}/api/tasks/${taskId}/archive`, { archived: true })
   check('任务归档', archived.status === 200)

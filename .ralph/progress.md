@@ -79,3 +79,8 @@
 - 第一层：选节点（副标题写「N 个项目 ›」或「单独任务 ›」）；第二层：「不使用项目」+ 该节点下的项目（按 dshRef.mappingId 匹配）。选项目时 `normalizePlace` 节点取项目节点。
 - 注意（P2-2）：组件没有接入页面，草稿页调用 `openPlacePop(btn, state.draft.place, cb)` 即可，按钮文字用 `placeLabel(place)`。dshRef 是 direct/app 的项目不会出现在任何节点下。
 - 未验证：浏览器手测（弹层定位、两层切换、离线灰显）；没补 smoke 断言（纯前端组件）。只改了 web-ui.ts，没跑 test:unit。
+
+## P2-2（ZCode 主会话接管收尾）
+- 第 9 轮工人跑到 70 轮时被上游 404（claude-haiku-5-5 不受账号组支持，aborted_streaming）打断，$26.86 沉没；循环按脏树守卫自动 PAUSE。产物检查：web-ui.ts +247/-36、smoke +2 断言，build/typecheck/smoke(66) 全绿，实现完整（draft 态/草稿行/commitDraft/兼容入口/附件先建后传），判定可直接收尾，主会话代为提交。
+- 用户指示改向：剩余任务由 ZCode 主会话直接完成，claude CLI 循环与监工停止，定时巡检自动化撤除。
+- 注意（后续任务）：createNewTaskDirectly 现签名 (message)，返回任务 id；草稿弹层复用 P2-1 placeState（renderPlacePop/closePlacePop）；P3-1 分组渲染里已有 draftOn 分支（draftTaskItemElement），改造 renderTaskList 时保留。

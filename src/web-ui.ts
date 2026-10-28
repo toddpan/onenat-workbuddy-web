@@ -381,6 +381,16 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
   height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
   color: var(--tx3); gap: 12px; user-select: none;
 }
+/* 草稿新任务页（P2-2）：输入框居中，下方是执行位置选择框 */
+body.draft-mode .dsh-chat { flex: 0 1 auto; min-height: 0; padding-top: 12vh; }
+body.draft-mode .dsh-chat-scroll { flex: none; overflow: visible; }
+body.draft-mode .chat-empty.draft-hero { height: auto; }
+.draft-place {
+  display: flex; align-items: center; justify-content: center; gap: 8px; margin: 8px auto 0;
+  font-size: 12px; color: var(--tx3);
+}
+.draft-place .dp-btn { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-item.draft-item .t { font-style: italic; }
 
 .qe-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 18px; width: min(620px, 92%); }
 .qe-card {
@@ -2305,6 +2315,10 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
               </div>
             </div>
           </div>
+          <div class="draft-place" id="draft-place" style="display:none">
+            <span class="dp-lb">执行位置</span>
+            <button type="button" class="cfg-sel dp-btn" id="draft-place-btn" aria-haspopup="menu" title="选择节点与项目（发送首条消息后锁定）"></button>
+          </div>
           <div class="task-stats" id="task-stats" style="display:none">
             <div class="stat-pills">
               <button type="button" class="stat-pill" id="stat-pill-time" data-k="time" aria-haspopup="dialog" aria-expanded="false" aria-controls="stat-panel"></button>
@@ -2690,6 +2704,7 @@ const state = {
   projects: [],
   projectId: null,   // 项目工作台：当前进入的项目（null = 全部/普通任务）
   taskEnv: { nodeRef: null, connectorIds: [], skillNames: [] },   // 单独任务环境（节点/连接器/技能）
+  draft: null,       // 新任务草稿（P2-2）：{ place: { nodeMappingId, projectId|null }, model }；发送首条消息时才 POST /tasks
   schedules: [],
   scheduleTemplates: null,
   taskCache: new Map(), // taskId -> WorkTask (完整缓存，支持 0ms 瞬间切换)
@@ -4983,7 +4998,11 @@ function renderTaskList() {
   const el = $('task-list');
   const prevScroll = el.scrollTop;
   el.innerHTML = '';
+  // 草稿（P2-2）：列表顶部临时一行「新任务（草稿）」，发送首条消息创建任务后消失
+  const draftOn = !!(state.draft && !state.currentTaskId);
   if (!visibleTasks.length) {
+    taskListSig = '';
+    if (draftOn) { el.appendChild(draftTaskItemElement()); return; }
     el.innerHTML = state.projectId
       ? '<div style="color:var(--tx3);font-size:12.5px;padding:16px 12px;text-align:center">本项目还没有任务，点击上方「＋ 新建任务」发起。</div>'
       : '<div style="color:var(--tx3);font-size:12.5px;padding:16px 12px;text-align:center">还没有任务，点击上方「新建任务」发起第一个会话。</div>';
@@ -5029,7 +5048,7 @@ function renderTaskList() {
   // 否则侧栏滚动位置归零、悬停中的 🗄/🗑 按钮消失、mousedown→mouseup 之间重建会吞掉点击。
   const sig = JSON.stringify({
     p: state.projectId || '', q: state.searchQuery || '', cur: state.currentTaskId || '',
-    gc: state.groupCollapsed || {},
+    gc: state.groupCollapsed || {}, d: draftOn ? JSON.stringify(state.draft.place) : '',
     items: filtered.map(function (t) {
       return [t.id, t.title, t.lastPreview, t.status, t.running ? 1 : 0, t.archivedAt ? 1 : 0, (t.memberAgentIds || []).join(','), t.updatedAt];
     }),
@@ -5040,6 +5059,7 @@ function renderTaskList() {
   }
   taskListSig = sig;
 
+  if (draftOn) el.appendChild(draftTaskItemElement());
   for (const [key, grp] of Object.entries(groups)) {
     if (!grp.items.length) continue;
     const isCollapsed = state.groupCollapsed[key] ?? (key === 'archived');
@@ -5070,6 +5090,19 @@ function renderTaskList() {
   el.scrollTop = prevScroll;
 }
 
+/** 侧栏顶部的临时草稿行（P2-2）：点击回到草稿页，✕ 放弃草稿 */
+function draftTaskItemElement() {
+  const div = document.createElement('div');
+  div.className = 'task-item on draft-item';
+  div.title = '新任务（草稿）· 发送第一条消息时创建';
+  div.innerHTML =
+    '<div class="row-top"><span class="s draft"></span><span class="t">新任务（草稿）</span></div>' +
+    '<div class="row-sub">' + esc(placeLabel(state.draft.place)) + '</div>' +
+    '<span class="acts"><button data-a="discard" title="放弃草稿">✕</button></span>';
+  div.addEventListener('click', function () { if (!state.currentTaskId) { const i = $('input'); if (i) i.focus(); } });
+  div.querySelector('[data-a=discard]').addEventListener('click', function (e) { e.stopPropagation(); discardDraft(); });
+  return div;
+}
 function createTaskItemElement(t, archived) {
   const div = document.createElement('div');
   const isSelected = t.id === state.currentTaskId;
@@ -5169,6 +5202,9 @@ async function openTask(taskId) {
 
   const isSwitching = state.currentTaskId !== taskId;
   state.currentTaskId = taskId;
+  // 打开已有任务 = 放弃草稿（P2-2）：草稿只是前端态，没有服务端记录
+  if (state.draft) { state.draft = null; closePlacePop(); }
+  hideDraftView();
   const seq = ++openTaskSeq;
   disconnectStream();
   renderTaskList();
@@ -5322,7 +5358,8 @@ function resetChatView() {
   resetTaskTodos();
   resetTrajView();
   renderChatPlace(null);
-  reloadCatalogIfExecNodeChanged(); // 回到无任务视图：目录回到所选执行位置
+  if (state.draft) renderDraftView(); else hideDraftView();
+  reloadCatalogIfExecNodeChanged(); // 回到无任务视图：目录回到所选执行位置（草稿 = 草稿位置的节点）
 }
 
 function refreshChatHead(taskMaybe) {
@@ -7437,11 +7474,17 @@ async function send() {
   const text = $('input').value.trim();
   if (!text || document.body.classList.contains('node-offline')) return;
   if (!state.currentTaskId) {
-    // 欢迎页直接输入即开新会话（对齐 DSH 体验）：不必先点「＋ 新建任务」再回来输入。
-    // 创建失败（或并发点击）时直接返回，错误已由创建流程 toast。
-    if (document.body.classList.contains('task-running')) return;
-    await createNewTaskDirectly();
-    if (!state.currentTaskId) return;
+    // 草稿 / 欢迎页的首条消息：POST /tasks 带 message 一次完成「创建 + 发送」（P2-2），
+    // 之后项目与节点锁定在任务上。创建失败（或并发点击）时回填输入框，错误已由创建流程 toast。
+    if (document.body.classList.contains('task-running') || draftCreating) return;
+    if (!state.draft) state.draft = { place: defaultDraftPlace(), model: (state.taskEnv && state.taskEnv.model) || '' };
+    $('input').value = '';
+    const createdId = await commitDraft(text);
+    if (!createdId) {
+      const input = $('input');
+      if (input && !input.value.trim()) input.value = text;
+    }
+    return;
   }
   const sendTaskId = state.currentTaskId;
   const wasRunning = document.body.classList.contains('task-running');
@@ -7759,16 +7802,28 @@ async function applyPermission() {
 
 // ---------- 附件上传 ----------
 $('btn-attach').addEventListener('click', () => {
-  if (!state.currentTaskId) { toast('请先选择或新建任务', true); return; }
+  if (!state.currentTaskId && !state.draft) { toast('请先选择或新建任务', true); return; }
   $('file-input').click();
 });
 $('file-input').addEventListener('change', () => {
   const input = $('file-input');
   const files = Array.from(input.files || []);
   input.value = '';
-  if (!files.length || !state.currentTaskId) return;
-  uploadAttachments(files);
+  if (!files.length) return;
+  uploadAttachmentsEnsuringTask(files);
 });
+/** 草稿态上传附件（P2-2）：先按草稿位置创建任务（不带 message，不执行），再上传到该任务工作区 */
+async function uploadAttachmentsEnsuringTask(files) {
+  if (!state.currentTaskId) {
+    if (!state.draft) { toast('请先选择或新建任务，再上传附件', true); return; }
+    const keep = $('input') ? $('input').value : '';
+    const id = await commitDraft('');
+    if (!id) return;
+    const input = $('input');
+    if (input && keep && !input.value) input.value = keep; // 草稿文字保留，用户上传后再发送
+  }
+  uploadAttachments(files);
+}
 
 function uploadAttachments(files) {
   const taskId = state.currentTaskId;
@@ -8029,8 +8084,8 @@ function appendAttachmentLine(line, taskId) {
     container.classList.remove('drop-hover');
     const files = Array.from(e.dataTransfer?.files || []);
     if (!files.length) return;
-    if (!state.currentTaskId) { toast('请先选择或新建任务，再拖入附件', true); return; }
-    uploadAttachments(files);
+    if (!state.currentTaskId && !state.draft) { toast('请先选择或新建任务，再拖入附件', true); return; }
+    uploadAttachmentsEnsuringTask(files);
   });
   // 拖拽被系统/浏览器取消时兜底清高亮
   document.addEventListener('dragend', () => { dragDepth = 0; container.classList.remove('drop-hover'); });
@@ -8040,8 +8095,8 @@ function appendAttachmentLine(line, taskId) {
     const files = Array.from(e.clipboardData?.files || []);
     if (!files.length) return;
     e.preventDefault();
-    if (!state.currentTaskId) { toast('请先选择或新建任务，再粘贴附件', true); return; }
-    uploadAttachments(files);
+    if (!state.currentTaskId && !state.draft) { toast('请先选择或新建任务，再粘贴附件', true); return; }
+    uploadAttachmentsEnsuringTask(files);
   });
 })();
 
@@ -8557,6 +8612,8 @@ function taskExecNodeId(task) {
   if (p && p.dshRef && p.dshRef.kind === 'mapping' && p.dshRef.mappingId) return p.dshRef.mappingId;
   const ref = task && task.nodeRef;
   if (ref && ref.kind === 'mapping' && ref.mappingId) return ref.mappingId;
+  // 草稿态（P2-2）：目录跟随草稿所选执行位置
+  if (!task && state.draft && state.draft.place && state.draft.place.nodeMappingId) return state.draft.place.nodeMappingId;
   return (nodeState && nodeState.cur) || '';
 }
 /** 执行节点与已加载目录的节点不一致时重拉模型目录（打开任务 / 首屏节点就绪后调用） */
@@ -9081,7 +9138,7 @@ function followDefaultName() {
 }
 /** 当前任务的任务级模型（空 = 跟随默认）；无当前任务时取新任务环境里选好的模型 */
 function currentTaskModelChoice() {
-  if (!state.currentTaskId) return (state.taskEnv && state.taskEnv.model) || '';
+  if (!state.currentTaskId) return state.draft ? (state.draft.model || '') : ((state.taskEnv && state.taskEnv.model) || '');
   const t = state.taskCache.get(state.currentTaskId) || state.tasks.find(function (x) { return x.id === state.currentTaskId; });
   return (t && t.model) || '';
 }
@@ -9245,6 +9302,7 @@ async function selectModel(v) {
   const taskId = state.currentTaskId;
   if (!taskId) {
     state.taskEnv.model = v || '';
+    if (state.draft) state.draft.model = v || '';
     setModelStatus('✓ 新任务将使用「' + (v || followDefaultName()) + '」');
     return;
   }
@@ -9654,17 +9712,112 @@ $('chat-title').addEventListener('dblclick', () => {
   if (t) promptRenameTask(t);
 });
 
-// ---------- 一键新建任务（免弹窗，自动生成会话并即刻开聊，参考 DSH 体验） ----------
-$('btn-new-task').addEventListener('click', createNewTaskDirectly);
-async function createNewTaskDirectly() {
+// ---------- 新建任务 = 草稿（P2-2）：「＋ 新建任务」只进入草稿态，发送首条消息时才 POST /tasks ----------
+$('btn-new-task').addEventListener('click', function () { startDraft(); });
+/** 草稿默认执行位置：显式传入（侧栏分组「＋」）→ 项目工作台 → 当前任务的位置 → 本地记录的最近一次位置 → 节点默认 */
+function defaultDraftPlace(explicit) {
+  if (explicit) return normalizePlace(explicit);
+  if (state.projectId) return normalizePlace({ projectId: state.projectId });
+  const t = currentTaskObj();
+  if (t) return normalizePlace({ nodeMappingId: taskExecNodeId(t), projectId: t.projectId || null });
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem('wb-last-place') || 'null'); } catch (e) { /* ignore */ }
+  if (saved && typeof saved === 'object') {
+    const p = normalizePlace(saved);
+    if (p.projectId || dshNodeOptions().some(function (x) { return x.mappingId === p.nodeMappingId; })) return p;
+  }
+  return normalizePlace({ nodeMappingId: nodeState.cur || '' });
+}
+function rememberPlace(place) {
+  try { localStorage.setItem('wb-last-place', JSON.stringify(normalizePlace(place))); } catch (e) { /* ignore */ }
+}
+function startDraft(place) {
+  const inDraft = !!state.draft && !state.currentTaskId;
+  const p = defaultDraftPlace(place || (inDraft ? state.draft.place : null));
+  state.draft = { place: p, model: inDraft ? (state.draft.model || '') : ((state.taskEnv && state.taskEnv.model) || '') };
+  if (state.currentTaskId) { state.currentTaskId = null; disconnectStream(); }
+  closePlacePop();
+  resetChatView(); // 末尾按 state.draft 渲染草稿页，并按草稿节点重拉模型目录
+  renderTaskList();
+  const input = $('input');
+  if (input) input.focus();
+}
+function discardDraft() {
+  state.draft = null;
+  closePlacePop();
+  if (!state.currentTaskId) resetChatView();
+  renderTaskList();
+}
+function renderDraftPlaceBtn() {
+  const btn = $('draft-place-btn');
+  if (btn && state.draft) btn.textContent = placeLabel(state.draft.place) + ' ▾';
+}
+function renderDraftView() {
+  document.body.classList.add('draft-mode');
+  const scroll = $('chat-scroll');
+  if (scroll) scroll.innerHTML = '<div class="chat-empty draft-hero" id="chat-empty"><div style="font-size:30px">⚡</div>' +
+    '<div style="font-weight:600;font-size:15px;color:var(--tx)">新任务</div>' +
+    '<div style="font-size:12.5px;max-width:420px;text-align:center;line-height:1.6">发送第一条消息时才创建任务。执行位置和模型在发送前都可修改，发送后锁定在任务上。</div></div>';
+  $('chat-title').textContent = '新任务（草稿）';
+  const bar = $('draft-place');
+  if (bar) bar.style.display = 'flex';
+  renderDraftPlaceBtn();
+  if (modelState.loaded) {
+    modelState.cur = currentTaskModelChoice();
+    const mb = $('chat-model-btn');
+    if (mb) mb.textContent = modelBtnLabel(modelState.cur);
+  }
+}
+function hideDraftView() {
+  document.body.classList.remove('draft-mode');
+  const bar = $('draft-place');
+  if (bar) bar.style.display = 'none';
+}
+/** 新节点的模型目录里没有草稿所选模型 → 回退为跟随默认（节点默认模型），提示一次 */
+function draftModelFallback() {
+  const d = state.draft;
+  if (!d || !d.model || !Object.keys(modelState.groups).length) return;
+  const known = Object.keys(modelState.groups).some(function (pv) { return (modelState.groups[pv] || []).some(function (m) { return pv + '/' + m.id === d.model; }); });
+  if (known) return;
+  const old = d.model;
+  d.model = '';
+  state.taskEnv.model = '';
+  modelState.cur = '';
+  const mb = $('chat-model-btn');
+  if (mb) mb.textContent = modelBtnLabel('');
+  renderModelPop();
+  hintComposer('⚠️ 新节点的模型目录里没有「' + old + '」，已改为跟随默认（' + followDefaultName() + '）', true);
+}
+async function onDraftPlaceChange(place) {
+  if (!state.draft || state.currentTaskId) return;
+  const prevNode = state.draft.place.nodeMappingId;
+  state.draft.place = place; // 只改位置：输入框里的草稿文字保持不动
+  rememberPlace(place);
+  renderDraftPlaceBtn();
+  renderTaskList();
+  if (place.nodeMappingId !== prevNode || modelState.loadedForNode !== taskExecNodeId(null)) {
+    await loadPlannerOptions();
+    if (state.draft && !state.currentTaskId) draftModelFallback();
+  }
+  const input = $('input');
+  if (input) input.focus();
+}
+$('draft-place-btn').addEventListener('click', function (e) {
+  e.stopPropagation();
+  if (!state.draft) return;
+  if (placeState.pop) { closePlacePop(); return; }
+  openPlacePop(this, state.draft.place, onDraftPlaceChange);
+});
+/** 草稿 → 创建请求体：项目任务带 projectId（节点以项目为准），单独任务带 nodeRef；有 message 时创建即发送 */
+function draftCreateBody(d, message) {
   // 不指定成员：由服务端按「主智能体」默认归属（engine.defaultMemberAgentIds，与无 @ 消息的路由判定同源）。
   // 历史实现传 state.agents.map(...) 全部子智能体，导致无 @ 的新任务被放大成全员编排，
   // 且上传附件时会向所有成员节点扇出（每个成员都被建远端会话）。
-  const proj = state.projectId ? state.projects.find(function (x) { return x.id === state.projectId; }) : null;
+  const place = normalizePlace(d.place);
+  const proj = place.projectId ? state.projects.find(function (x) { return x.id === place.projectId; }) : null;
   const env = state.taskEnv || {};
-  const body = {
-    title: '新任务',
-  };
+  // 带 message 时不传 title：engine 按首条消息生成标题
+  const body = message ? { message: message } : { title: '新任务' };
   if (proj) {
     body.projectId = proj.id;
     // 项目默认协作成员由服务端继承（defaultAgentIds）：客户端不再塞 memberAgentIds，
@@ -9672,24 +9825,46 @@ async function createNewTaskDirectly() {
     if (proj.skillNames.length) body.skillNames = proj.skillNames;
     if (proj.connectorIds.length) body.connectorIds = proj.connectorIds;
   }
-  // 项目任务节点以项目为准（P0-3）：不再下发 env.nodeRef，执行节点由 project.dshRef 决定
-  if (!proj && env.nodeRef) body.nodeRef = env.nodeRef;
-  // 无任务时在模型按钮选好的模型 → 任务级模型（engine.createTask 透传 input.model）
-  if (env.model) body.model = env.model;
+  // 项目任务节点以项目为准（P0-3）：不再下发 nodeRef，执行节点由 project.dshRef 决定
+  if (!proj && place.nodeMappingId) body.nodeRef = { kind: 'mapping', mappingId: place.nodeMappingId };
+  // 草稿里选好的模型 → 任务级模型（engine.createTask 透传 input.model）
+  if (d.model) body.model = d.model;
   if (env.connectorIds && env.connectorIds.length) body.connectorIds = env.connectorIds;
   if (env.skillNames && env.skillNames.length) body.skillNames = env.skillNames;
-  const r = await api('/tasks', {
-    method: 'POST',
-    body: JSON.stringify(body)
-  });
-  if (!r.ok) {
-    toast(r.error || '创建会话失败', true);
-    return;
+  return body;
+}
+let draftCreating = false;
+/**
+ * 把草稿落成任务：message 非空 = 创建即发送首条消息（POST /tasks 带 message，engine.createTask 内发送）；
+ * message 为空 = 只创建（附件上传前需要任务）。成功后清草稿并打开任务，返回任务 id；失败返回 ''。
+ */
+async function commitDraft(message) {
+  if (!state.draft || draftCreating) return '';
+  draftCreating = true;
+  const d = state.draft;
+  try {
+    const r = await api('/tasks', { method: 'POST', body: JSON.stringify(draftCreateBody(d, message)) });
+    if (!r.ok || !r.data) { toast(r.error || '创建会话失败', true); return ''; }
+    rememberPlace(d.place);
+    state.draft = null;
+    hideDraftView();
+    state.taskCache.set(r.data.id, r.data);
+    await loadTasks();
+    await openTask(r.data.id);
+    // 创建即发送：首轮在 SSE 连上前就已开跑（流不补发历史事件），连上后回源对账一次补齐空档
+    if (message && state.currentTaskId === r.data.id) resyncCurrentTask();
+    return r.data.id;
+  } finally {
+    draftCreating = false;
   }
-  await loadTasks();
-  await openTask(r.data.id);
+}
+/** 兼容旧入口：直接从默认位置建任务（不经草稿页），返回任务 id */
+async function createNewTaskDirectly(message) {
+  if (!state.draft) state.draft = { place: defaultDraftPlace(), model: (state.taskEnv && state.taskEnv.model) || '' };
+  const id = await commitDraft(message || '');
   const input = $('input');
   if (input) input.focus();
+  return id;
 }
 function closeModal() { $('modal-mask').classList.remove('on'); }
 
@@ -13399,7 +13574,7 @@ function cmdkErrToast(e) { var m = (e && e.message) ? e.message : String(e); toa
 function cmdkViewCmd(v, label, icon) { return { g: '视图', ic: icon, lb: label, kw: v, ord: 20, act: function () { switchView(v); } }; }
 function cmdkCommands(query) {
   var cmds = [];
-  cmds.push({ g: '操作', ic: '✚', lb: '新建任务（免弹窗，立即开聊）', kw: 'new task create 新建 会话 开聊', ord: 1, act: function () { createNewTaskDirectly(); } });
+  cmds.push({ g: '操作', ic: '✚', lb: '新建任务（草稿，发送首条消息时创建）', kw: 'new task create 新建 会话 开聊', ord: 1, act: function () { switchView('work'); startDraft(); } });
   cmds.push({ g: '操作', ic: '🎛', lb: '运行配置', kw: 'run config 专家 连接器 技能 节点 模型', ord: 2, act: function () { switchView('work'); openRunConfig('top'); } });
   cmds.push(cmdkViewCmd('work', '工作台 · 任务会话', '💬'));
   cmds.push(cmdkViewCmd('projects', '项目', '📦'));

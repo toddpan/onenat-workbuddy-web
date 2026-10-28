@@ -117,7 +117,8 @@ UI 行为目前没有自动化浏览器测试：任务说明里的「验收」�
   - 验收：build / typecheck / smoke 通过。
   - 完成：从 `renderNodePop` 抽出 `dshNodeGroups` / `dshNodeItemHtml` / `probeNodesIfStale` 共用，新增 `placeState` 和 `openPlacePop` / `renderPlacePop` / `selectPlace` / `closePlacePop` / `normalizePlace` / `placeLabel` 两层选择框（尚未接入页面）；跑过 `npm run build`、`npm run typecheck`、`npm run smoke`（64 项全过）；未做浏览器手测。
 
-- [ ] **P2-2** 空白新任务页 + 首条消息时才创建
+- [x] **P2-2** 空白新任务页 + 首条消息时才创建
+  - 完成：draft 态（state.draft={place,model}）+ 聊天区居中输入框 + 下方执行位置选择框（复用 P2-1 placeState 弹层）+ 侧栏分组顶部临时「新任务（草稿）」行（✕ 可放弃）；首条消息 commitDraft 一次 POST /tasks 带 projectId/nodeRef/model+message（创建即发送，SSE 连上后 resyncCurrentTask 对账），打开任务并 rememberPlace；欢迎页直接输入即走草稿发送；附件无任务先建再传；createNewTaskDirectly 改走 commitDraft 兼容旧入口；切换位置保留草稿文字。第 9 轮工人因上游 404 中断（非任务问题），ZCode 主会话接管收尾。验证：npm run build / typecheck / smoke（66 项，含新增 2 项带 message 创建断言）全过；未做浏览器手测
   - 依赖：P2-1
   - 「＋ 新建任务」不再调用 `POST /tasks`：进入草稿态（`state.draft = { place, model }`），聊天区居中显示输入框，下方放执行位置选择框，模型按钮可用；侧栏对应分组顶部加一行临时的「新任务（草稿）」。
   - 发送第一条消息时 `POST /tasks`，body 带 projectId / nodeRef / model 和 message（核对 router 是否支持带 message 创建即发送，engine `createTask` 有 `input.message`），然后打开任务。附件上传前若没有任务，先创建再上传。
