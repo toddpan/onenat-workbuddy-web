@@ -8756,7 +8756,7 @@ function closeMainAgentPop() {
 const nodeState = { cur: '', userPicked: false }; // mappingId；'' = 未选（资源目录为空时）
 // 执行位置选择框（P2-1）：place = { nodeMappingId, projectId|null }；pop/anchor = 当前挂载的弹层与触发按钮；
 // level = 'node' | 'project'，browse = 第二层正在看的节点；onChange(place) 由调用方传入
-const placeState = { place: { nodeMappingId: '', projectId: null }, pop: null, anchor: null, level: 'node', browse: '', onChange: null };
+const placeState = { place: { nodeMappingId: '', projectId: null }, pop: null, anchor: null, level: 'node', browse: '', onChange: null, nodeOnly: false };
 /** 当前打开的任务对象（完整缓存优先，列表摘要兜底）；无当前任务返回 null */
 function currentTaskObj() {
   if (!state.currentTaskId) return null;
@@ -9099,12 +9099,13 @@ function placeNodeProjects(mid) {
  * 打开执行位置选择框（P2-1）：第一层选节点（在线点 + 引擎徽标 + 默认模型，离线灰显仍可选），
  * 第二层选该节点下的项目或「不使用项目（单独任务）」；选定后回调 onChange({ nodeMappingId, projectId|null })。
  */
-function openPlacePop(anchor, place, onChange) {
+function openPlacePop(anchor, place, onChange, opts) {
   closePlacePop();
   placeState.place = normalizePlace(place);
   placeState.anchor = anchor || null;
   placeState.onChange = onChange || null;
   placeState.level = 'node';
+  placeState.nodeOnly = Boolean(opts && opts.nodeOnly); // 只有节点层（P5-2：抽屉/定时任务表单选节点用）
   placeState.browse = '';
   const pop = document.createElement('div');
   pop.className = 'main-agent-pop place-pop on';
@@ -9125,6 +9126,7 @@ function closePlacePop() {
   if (placeState.pop) placeState.pop.remove();
   placeState.pop = null;
   placeState.anchor = null;
+  placeState.nodeOnly = false;
 }
 function selectPlace(place) {
   placeState.place = normalizePlace(place);
@@ -9146,7 +9148,7 @@ function renderPlacePop() {
       if (groups.length > 1 || g.list.length > 1) html += '<div class="model-group">🖥 ' + esc(g.tunnel) + '</div>';
       for (const n of g.list) {
         const cnt = placeNodeProjects(n.mappingId).length;
-        html += dshNodeItemHtml(n, cur.nodeMappingId === n.mappingId, cnt ? cnt + ' 个项目 ›' : '单独任务 ›');
+        html += dshNodeItemHtml(n, cur.nodeMappingId === n.mappingId, placeState.nodeOnly ? '选定 ›' : (cnt ? cnt + ' 个项目 ›' : '单独任务 ›'));
       }
     }
   } else {
@@ -9170,6 +9172,7 @@ function renderPlacePop() {
   if (placeState.level === 'node') {
     pop.querySelectorAll('.main-agent-item[data-mid]').forEach(function (it) {
       it.addEventListener('click', function () {
+        if (placeState.nodeOnly) { selectPlace({ nodeMappingId: it.dataset.mid, projectId: null }); return; }
         placeState.level = 'project';
         placeState.browse = it.dataset.mid;
         renderPlacePop();
@@ -11170,6 +11173,26 @@ function skillRowHtml(s, bound, i) {
     '<button class="mini-btn danger" data-sk="del" data-name="' + esc(s.name) + '">删除</button></div></div>';
 }
 
+/** 模型下拉按所选节点目录过滤（P5-2）：/dsh-models?node= 建议列表；目录外当前值如实提示 */
+async function filterAgentModelsByNode(mid) {
+  const input = $('ag-model');
+  if (!input) return;
+  const r = await api('/dsh-models?node=' + encodeURIComponent(mid || ''));
+  const models = (r.ok && r.models) || [];
+  if (!models.length) return;
+  const values = models.map(function (m) { return (m.provider ? m.provider + '/' : '') + m.id; }).filter(Boolean);
+  let dl = $('ag-model-dl');
+  if (!dl) {
+    dl = document.createElement('datalist');
+    dl.id = 'ag-model-dl';
+    input.setAttribute('list', 'ag-model-dl');
+    input.parentNode.appendChild(dl);
+  }
+  dl.innerHTML = values.map(function (v) { return '<option value="' + esc(v) + '"></option>'; }).join('');
+  const cur = input.value.trim();
+  const hintEl = $('ag-place-hint');
+  if (cur && values.indexOf(cur) < 0 && hintEl) hintEl.textContent = '⚠️ 当前模型 ' + cur + ' 不在该节点目录内（下拉可选 ' + values.length + ' 个），保存后可能被节点拒绝';
+}
 function openAgentDrawer(agent, copyMode) {
   // copyMode: 传入了带完整配置的源对象但 id 已剥掉 —— 抽屉按「新建」保存（POST 无 id 即创建）
   const isEdit = Boolean(agent) && !copyMode;
@@ -11181,7 +11204,9 @@ function openAgentDrawer(agent, copyMode) {
   $('drawer-body').innerHTML =
     '<div class="field"><label>名称</label><input id="ag-name" value="' + esc(agent ? agent.name : '') + '" placeholder="如: 136-执行者 / 169-质检员"></div>' +
     '<div class="field"><label>专家名册库（321 位专业智能体 · 点选预填人格与提示词）</label><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="mini-btn" id="ag-roster">🎓 从专家库选择…</button><span class="hint" style="margin:0">按分类浏览或搜索 The Agency 名册，选中后自动预填，可再改</span></div></div>' +
-    '<div class="field"><label>DSH 实体（稳定 ID 绑定 · 端口漂移免疫）</label><select id="ag-dsh"><option value="">— 选择 ONENAT 上的 DSH 实例 —</option>' + dshOptions +
+    '<div class="field"><label>DSH 实体（稳定 ID 绑定 · 端口漂移免疫）</label>' +
+    '<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><button class="mini-btn" id="ag-place" type="button">🖥 执行位置选择…</button><span class="hint" id="ag-place-hint" style="margin:0">从资源目录可视化选节点（选定后模型下拉按该节点目录过滤）；下方下拉可手工改 / 直连</span></div>' +
+    '<select id="ag-dsh"><option value="">— 选择 ONENAT 上的 DSH 实例 —</option>' + dshOptions +
       '<option value="direct:">直连地址（手工输入）…</option></select>' +
       '<input id="ag-direct" placeholder="http://host:port/api/v1" style="display:none;margin-top:8px">' +
       '<div class="hint">列表来自资源目录中 type=http-api 且带 dsh-web-service 技能的映射。</div></div>' +
@@ -11278,6 +11303,24 @@ function openAgentDrawer(agent, copyMode) {
     }
     if (!nref) { toast('请先选择 DSH 实体', true); return; }
     openDirBrowser({ nodeJson: JSON.stringify(nref) }, p => { const inp = $('ag-workdir'); if (inp) inp.value = p; });
+  });
+  // P5-2：执行位置选择框（只有节点层）→ 选定后写回 ag-dsh 并按该节点目录过滤模型下拉
+  const placeBtn = $('ag-place');
+  if (placeBtn) placeBtn.addEventListener('click', function () {
+    openPlacePop(placeBtn, null, function (pl) {
+      if (!pl || !pl.nodeMappingId) return;
+      const sel = $('ag-dsh');
+      if (sel) {
+        sel.value = 'mapping:' + pl.nodeMappingId;
+        sel.dispatchEvent(new Event('change'));
+      }
+      const dir = $('ag-direct');
+      if (dir) dir.style.display = 'none';
+      const res = dshNodeOptions().find(function (x) { return x.mappingId === pl.nodeMappingId; });
+      const hintEl = $('ag-place-hint');
+      if (hintEl) hintEl.textContent = '✓ 已选节点：' + (res ? (res.title || res.appName || res.note || res.mappingId) : pl.nodeMappingId);
+      filterAgentModelsByNode(pl.nodeMappingId);
+    }, { nodeOnly: true });
   });
   $('ag-sync').addEventListener('click', async () => {
     const btn = $('ag-sync'), hint = $('ag-opts-hint');
@@ -11771,7 +11814,8 @@ async function openScheduleDrawer(s, tpl, copyMode) {
   openDrawer(copyMode ? '复制定时任务（另存为新任务）' : (isEdit ? '编辑定时任务' : (prefill.id ? '新建定时任务（模板: ' + prefill.name + '）' : '新建定时任务')));
   $('drawer-body').innerHTML =
     '<div class="field"><label>任务标题</label><input id="sc-name" value="' + esc(s ? s.name : (prefill.name || '')) + '" placeholder="如: 每日站会摘要"></div>' +
-    '<div class="field"><label>执行节点（主 DSH：主会话在该节点上直发，@ sub agent 回其绑定节点远程执行）</label>' +
+    '<div class="field"><label>执行位置（主 DSH：主会话在该节点上直发，@ sub agent 回其绑定节点远程执行）</label>' +
+    '<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px"><button class="mini-btn" id="sc-place" type="button">🖥 执行位置选择…</button><span class="hint" id="sc-node-label" style="margin:0">也可用下方下拉直接切换</span></div>' +
     '<select id="sc-node">' +
     dshNodeOptions().map(function (n) {
       const label = n.title || n.appName || n.note || n.mappingId;
@@ -11838,7 +11882,7 @@ async function openScheduleDrawer(s, tpl, copyMode) {
   // 执行模型下拉：从所选 DSH 节点拉取可用模型（/api/dsh-models）
   const setModelOptions = function (models, current) {
     const sel = $('sc-model'); if (!sel) return
-    let opts = '<option value=""' + (!current ? ' selected' : '') + '>跟随全局调度模型</option>'
+    let opts = '<option value=""' + (!current ? ' selected' : '') + '>跟随节点默认（无人值守任务建议固定模型）</option>'
     let hasCurrent = !current
     for (const m of models) {
       const v = (m.provider ? m.provider + '/' : '') + m.id
@@ -11856,12 +11900,12 @@ async function openScheduleDrawer(s, tpl, copyMode) {
     // /api/dsh-models 响应为顶层结构（ok/models/nodeTitle），无 data 包裹
     const d = r.ok ? r : {}
     if (!r.ok) {
-      if (hintEl) hintEl.textContent = '⚠ 节点模型列表获取失败（' + (d.error || '未知') + '），已回退跟随全局调度模型'
+      if (hintEl) hintEl.textContent = '⚠ 节点模型列表获取失败（' + (d.error || '未知') + '），已回退跟随节点默认'
       setModelOptions([], current)
       return
     }
     setModelOptions(d.models || [], current)
-    if (hintEl) hintEl.textContent = '模型来自节点「' + (d.nodeTitle || mappingId) + '」的可用列表；主会话与编排汇总使用该模型，留空跟随全局调度模型。'
+    if (hintEl) hintEl.textContent = '模型来自节点「' + (d.nodeTitle || mappingId) + '」的可用列表；留空 = 跟随节点默认（无人值守任务建议固定模型）。'
   }
   // 工作目录浏览 / 技能绑定：目标节点 = 「执行节点」当前选中值（与项目工作目录同一 node= 通道，免保存直连）
   const scheduleNodeRef = function () {
@@ -11894,6 +11938,21 @@ async function openScheduleDrawer(s, tpl, copyMode) {
   $('sc-node').addEventListener('change', function () {
     loadNodeModels($('sc-node').value, '');
     loadScheduleNodeSkills($('sc-node').value, checkedScheduleSkills());
+  });
+  // P5-2：执行位置选择框（只有节点层）
+  const scPlaceBtn = $('sc-place');
+  if (scPlaceBtn) scPlaceBtn.addEventListener('click', function () {
+    openPlacePop(scPlaceBtn, { nodeMappingId: $('sc-node').value || '' }, function (pl) {
+      if (!pl || !pl.nodeMappingId) return;
+      const sel = $('sc-node');
+      if (sel && sel.value !== pl.nodeMappingId) {
+        sel.value = pl.nodeMappingId;
+        sel.dispatchEvent(new Event('change'));
+      }
+      const res = dshNodeOptions().find(function (x) { return x.mappingId === pl.nodeMappingId; });
+      const hintEl = $('sc-node-label');
+      if (hintEl) hintEl.textContent = '✓ 已选节点：' + (res ? (res.title || res.appName || res.note || res.mappingId) : pl.nodeMappingId);
+    }, { nodeOnly: true });
   });
   $('sc-browse').addEventListener('click', function () {
     const nref = scheduleNodeRef();
