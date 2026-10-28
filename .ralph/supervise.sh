@@ -37,14 +37,14 @@ while :; do
   idle=$((idle + 1)); [ -z "$reason" ] && [ "$idle" -ge "$FORCE_EVERY" ] && reason="定期巡检"
 
   if [ -z "$reason" ]; then
-    log "♡ 心跳：无新进展（循环存活=$loop_alive，距上次记录 ${since} 分钟），跳过 LLM"
+    log "♡ 心跳：无新进展（循环存活=${loop_alive}，距上次记录 ${since} 分钟），跳过 LLM"
   else
     idle=0; seen_rows=$rows; sup_iter=$((sup_iter + 1))
     out="$R/logs/supervisor-$(printf '%03d' "$sup_iter").json"
     ctx="## 本次唤醒上下文
 - 时间：$(date '+%F %T')；唤醒原因：$reason
-- 循环进程存活：$loop_alive；STOP 文件：$([ -f "$R/STOP" ] && echo 有 || echo 无)；PAUSE 文件：$([ -f "$R/PAUSE" ] && echo 有 || echo 无)
-- 预算：\$$BUDGET_USD；每任务成本告警线：\$$PER_TASK_WARN_USD"
+- 循环进程存活：${loop_alive}；STOP 文件：$([ -f "$R/STOP" ] && echo 有 || echo 无)；PAUSE 文件：$([ -f "$R/PAUSE" ] && echo 有 || echo 无)
+- 预算：\$${BUDGET_USD}；每任务成本告警线：\$${PER_TASK_WARN_USD}"
     start_sec=$(date +%s)
     claude -p "$(cat "$R/SUPERVISOR.md")
 
@@ -52,10 +52,10 @@ $ctx" --model "$SUP_MODEL" --output-format json --max-turns 25 \
       --allowedTools "$ALLOWED" > "$out" 2> "${out%.json}.err"
     res=$(node "$R/lib.mjs" record supervisor "$sup_iter" "$out" "$start_sec" "$(git rev-parse --short HEAD)")
     verdict=$(node -e "try{const r=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).result||'';console.log((r.trim().split('\n').pop()||'').trim())}catch{console.log('SUPERVISOR_ERROR')}" "$out")
-    log "◎ 巡检（$reason）：$verdict"
+    log "◎ 巡检（${reason}）：${verdict}"
     case "$verdict" in
       SUPERVISOR_OK) ;;
-      *) notify "$verdict：$(tail -n 6 "$R/supervisor/reports.md" 2>/dev/null | grep '问题' | head -c 120)" ;;
+      *) notify "${verdict}：$(tail -n 6 "$R/supervisor/reports.md" 2>/dev/null | grep '问题' | head -c 120)" ;;
     esac
   fi
 

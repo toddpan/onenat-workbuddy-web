@@ -23,7 +23,8 @@ notify() { command -v osascript >/dev/null && osascript -e "display notification
 stop() { log "■ 停止：$1"; [ -f "$R/STOP" ] || echo "$1" > "$R/STOP"; notify "停止：$1"; rm -f "$R/loop.pid"; exit "${2:-0}"; }
 
 command -v claude >/dev/null || stop "找不到 claude CLI" 1
-[ "$(git branch --show-current)" = "$BRANCH" ] || stop "当前分支不是 $BRANCH（先运行 .ralph/start.sh）" 1
+# 注意：macOS bash 3.2 会把紧跟在 $var 后的全角字符并入变量名（set -u 下直接崩溃），这类位置一律写 ${var}
+[ "$(git branch --show-current)" = "$BRANCH" ] || stop "当前分支不是 ${BRANCH}（先运行 .ralph/start.sh）" 1
 echo $$ > "$R/loop.pid"
 trap 'rm -f "$R/loop.pid"' EXIT
 # 启动时已存在的未跟踪文件记为基线：每轮的脏检查只关心「已跟踪文件的改动 + 新出现的未跟踪文件」
@@ -53,7 +54,7 @@ while :; do
   iter=$((iter + 1))
   out="$R/logs/iter-$(printf '%03d' "$iter").json"
   start_sec=$(date +%s); head_before=$(git rev-parse --short HEAD)
-  log "→ 第 $iter 轮开始（待做 $pending · 已花 \$$cost）"
+  log "→ 第 ${iter} 轮开始（待做 ${pending} · 已花 \$${cost}）"
 
   claude -p "$(cat "$R/PROMPT.md")" \
     --model "$WORKER_MODEL" --output-format json --max-turns "$WORKER_MAX_TURNS" \
