@@ -135,3 +135,9 @@
 
 ## P5-1（ZCode 主会话）
 - /mentions/candidates：agent detail=`🖥 ${nodeLabelOf(a.dshRef)} · 模型`；expert detail 追加「在本任务节点执行」；前端降级聚合用 memberNodeLabel 同口径。
+
+## P5-2（ZCode 主会话）
+- openPlacePop 第四参 {nodeOnly}：节点层点击直接 selectPlace；dshNodeItemHtml 提示文案「选定 ›」。
+- 抽屉：#ag-place 按钮 → ag-dsh= mapping:mid + dispatch change（保留 direct 手工通道）；filterAgentModelsByNode 用 /dsh-models?node=（顶层 {models,nodeTitle}，非 data 包裹）建 datalist。
+- 定时任务：#sc-place → sc-node.value + dispatch change（已有 change 联动模型/技能）；空模型 option 文案统一「跟随节点默认（无人值守任务建议固定模型）」。
+- 保留 deviations：sc-node/ag-dsh 下拉保留（直连与存量编辑需要），选择框是可视化增强。
