@@ -1583,6 +1583,14 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .ws-pv-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--tx3); }
 .ws-preview { padding-bottom: 20px; }
 .ws-preview .dsh-md { padding: 10px 12px; font-size: 13px; }
+.ws-changes { padding: 6px 8px 20px; }
+.ws-chg-turn { font-size: 11.5px; color: var(--tx3); margin: 10px 2px 4px; }
+.ws-chg-row { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+.ws-chg-row:hover { background: var(--bg-hover); }
+.ws-mod-dot { flex: none; color: var(--warn); font-size: 10px; }
+.ws-chg-name { flex: none; font-size: 12.5px; color: var(--tx); }
+.ws-chg-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--tx3); }
+.ws-mod { flex: none; font-size: 10px; color: var(--warn); background: var(--warn-light); border-radius: 999px; padding: 1px 6px; }
 @media (max-width: 768px) {
   .ws-side { position: absolute; inset: 0; width: 100% !important; z-index: 30; }
   .ws-resizer { display: none; }
@@ -6170,13 +6178,17 @@ function renderTurnChanges(foot, turn, taskId) {
   box.className = 'dsh-changes';
   let html = '<span class="dsh-changes-label">本轮变更</span>';
   for (const p of paths.slice(0, MAX)) {
-    const href = API + '/tasks/' + encodeURIComponent(taskId) + '/files/download?agent=' + encodeURIComponent(turn.agentId || '') + '&path=' + encodeURIComponent(p);
-    html += '<a class="dsh-change-chip" href="' + esc(href) + '" title="' + esc(p) + '" target="_blank" rel="noopener">' + esc(p.split('/').pop() || p) + '</a>';
+    html += '<span class="dsh-change-chip" role="button" tabindex="0" data-cp="' + esc(p) + '" title="' + esc(p) + '（点击在右侧栏预览）">' + esc(p.split('/').pop() || p) + '</span>';
   }
   if (paths.length > MAX) {
     html += '<span class="dsh-change-chip more" title="' + esc(paths.slice(MAX).join('\\n')) + '">+' + (paths.length - MAX) + '</span>';
   }
   box.innerHTML = html;
+  box.querySelectorAll('.dsh-change-chip[data-cp]').forEach(function (chip) {
+    const open = function () { openWsSide({ kind: 'preview', path: chip.dataset.cp, title: String(chip.dataset.cp).split('/').pop(), agentId: turn.agentId || '', viaTask: true }); };
+    chip.addEventListener('click', open);
+    chip.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+  });
   foot.parentNode.insertBefore(box, foot);
   linkChangedPathsInBody(foot.parentNode.querySelector('.dsh-body'), paths, turn, taskId);
 }
@@ -6196,10 +6208,11 @@ function linkChangedPathsInBody(body, paths, turn, taskId) {
     if (!p) continue;
     const a = document.createElement('a');
     a.className = 'dsh-change-link';
-    a.href = API + '/tasks/' + encodeURIComponent(taskId) + '/files/download?agent=' + encodeURIComponent(turn.agentId || '') + '&path=' + encodeURIComponent(p);
-    a.title = p;
-    a.target = '_blank';
-    a.rel = 'noopener';
+    a.title = p + '（点击在右侧栏预览）';
+    a.addEventListener('click', function (e) {
+      e.preventDefault();
+      openWsSide({ kind: 'preview', path: p, title: String(p).split('/').pop(), agentId: turn.agentId || '', viaTask: true });
+    });
     c.parentNode.insertBefore(a, c);
     a.appendChild(c);
   }
@@ -9835,7 +9848,7 @@ function wsTaskState() {
 function wsTabBodyHtml(tab) {
   if (!tab) return '<div class="ws-hint">从页签打开「文件 / 变更」；点目录树中的文件可在此预览。</div>';
   if (tab.kind === 'files') return '<div id="ws-files-root" class="ws-files"></div>';
-  if (tab.kind === 'changes') return '<div id="ws-changes-root" class="ws-hint">变更文件列表（后续任务接入）</div>';
+  if (tab.kind === 'changes') return '<div id="ws-changes-root" class="ws-changes"></div>';
   if (tab.kind === 'preview') return '<div id="ws-preview-root" class="ws-preview"><div class="ws-hint">正在加载文件内容…</div></div>';
   return '';
 }
@@ -9864,6 +9877,7 @@ function renderWsSide() {
   const tab = st.tabs.find(function (t) { return t.key === st.active; }) || null;
   $('ws-body').innerHTML = wsTabBodyHtml(tab);
   if (tab && tab.kind === 'files') wsFilesMount();
+  else if (tab && tab.kind === 'changes') wsChangesMount();
   else if (tab && tab.kind === 'preview') wsPreviewRender(tab);
 }
 function openWsTab(kind, extra) {
@@ -10056,6 +10070,7 @@ function wsLevelHtml(dir, depth, kw) {
       '<input type="checkbox" class="ws-chk" data-p="' + esc(it.path) + '"' + (sel ? ' checked' : '') + ' title="选择" />' +
       '<span class="ws-ic">' + classifyFileIcon(it.name, it.type) + '</span>' +
       '<span class="ws-nm' + (it.hidden ? ' dim' : '') + '" title="' + esc(it.path) + '">' + esc(it.name) + '</span>' +
+      (wsChangedSet().has(it.path) ? '<span class="ws-mod" title="本轮会话中有工具写入/编辑过">●已修改</span>' : '') +
       '<span class="ws-acts">' +
       '<button class="mini-btn ws-act" data-op="at" title="引用到对话（相对路径）">@</button>' +
       (!isDir ? '<button class="mini-btn ws-act" data-op="prev" title="预览">👁</button>' : '') +
@@ -10248,9 +10263,17 @@ async function wsPreviewRender(tab) {
   if (!root || !tab) return;
   const p = tab.path || '';
   const name = tab.title || String(p).split('/').pop() || '';
-  const node = wsFiles.node || wsTaskDshRef(currentTaskObj());
-  if (!node || !p) { root.innerHTML = '<div class="ws-hint">无法解析文件位置</div>'; return; }
-  const downloadUrl = API + '/agents/fs/download?node=' + encodeURIComponent(JSON.stringify(node)) + '&path=' + encodeURIComponent(p);
+  // viaTask = 文件属于某轮工具调用（可能在成员节点上）：走任务下载通道（服务端按 agent 解析节点）；
+  // 否则走目录树当前节点的 /agents/fs 通道
+  let downloadUrl;
+  if (tab.viaTask && state.currentTaskId) {
+    downloadUrl = API + '/tasks/' + encodeURIComponent(state.currentTaskId) + '/files/download?agent=' + encodeURIComponent(tab.agentId || '') + '&path=' + encodeURIComponent(p);
+  } else {
+    const node = wsFiles.node || wsTaskDshRef(currentTaskObj());
+    if (!node) { root.innerHTML = '<div class="ws-hint">无法解析文件位置</div>'; return; }
+    downloadUrl = API + '/agents/fs/download?node=' + encodeURIComponent(JSON.stringify(node)) + '&path=' + encodeURIComponent(p);
+  }
+  if (!p) { root.innerHTML = '<div class="ws-hint">无法解析文件位置</div>'; return; }
   const inlineUrl = downloadUrl + '&inline=1';
   const ext = (name.split('.').pop() || '').toLowerCase();
   const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico'].includes(ext);
@@ -10289,6 +10312,57 @@ async function wsPreviewRender(tab) {
   }
   const cp = $('wspv-cp');
   if (cp) cp.addEventListener('click', async function () { try { await navigator.clipboard.writeText(p); toast('✓ 已复制路径'); } catch (e) { prompt('复制路径：', p); } });
+}
+
+// ---------- F1-3 变更页签：按轮分组列出 F2 提取的变更文件；目录树标 ●已修改 ----------
+let wsChangedCache = { taskId: '', set: null };
+function wsChangedSet() {
+  const t = currentTaskObj();
+  if (!t) return new Set();
+  if (wsChangedCache.taskId !== t.id || !wsChangedCache.set) wsChangedCache = { taskId: t.id, set: wsChangesAllPaths(t) };
+  return wsChangedCache.set;
+}
+/** 全任务的变更轮清单（新→旧）：写入/编辑类工具落盘的路径（失败调用不计） */
+function wsTaskChanges(task) {
+  const out = [];
+  const t = task || currentTaskObj();
+  if (!t) return out;
+  for (const turn of (t.turns || [])) {
+    if (turn.role !== 'agent') continue;
+    const paths = turnChangedPaths(turn);
+    if (!paths.length) continue;
+    out.push({ turnId: turn.id, agentId: turn.agentId || '', agentName: turn.agentName || '', at: turn.at, paths: paths });
+  }
+  out.reverse();
+  return out;
+}
+function wsChangesAllPaths(task) {
+  const set = new Set();
+  for (const g of wsTaskChanges(task)) for (const p of g.paths) set.add(p);
+  return set;
+}
+function wsChangesMount() {
+  const el = $('ws-changes-root');
+  if (!el) return;
+  const groups = wsTaskChanges(currentTaskObj());
+  if (!groups.length) {
+    el.innerHTML = '<div class="ws-hint">本会话还没有写入/编辑过文件。子智能体跑完写入类工具后会在这里按轮列出，目录树中对应文件会标 ●。</div>';
+    return;
+  }
+  let html = '';
+  for (const g of groups) {
+    const nodeLabel = memberNodeLabel(g.agentId);
+    html += '<div class="ws-chg-turn">' + fmtTime(g.at) + (g.agentName ? ' · 🤖 ' + esc(g.agentName) : '') + (nodeLabel ? ' · 🖥 ' + esc(nodeLabel) : '') + '</div>';
+    for (const p of g.paths) {
+      html += '<div class="ws-chg-row" data-p="' + esc(p) + '" data-agent="' + esc(g.agentId) + '" title="' + esc(p) + '（点击预览）"><span class="ws-mod-dot">●</span><span class="ws-chg-name">' + esc(p.split('/').pop() || p) + '</span><span class="ws-chg-path mono">' + esc(p) + '</span></div>';
+    }
+  }
+  el.innerHTML = html;
+  el.querySelectorAll('.ws-chg-row').forEach(function (row) {
+    row.addEventListener('click', function () {
+      openWsSide({ kind: 'preview', path: row.dataset.p, title: String(row.dataset.p).split('/').pop(), agentId: row.dataset.agent || '', viaTask: true });
+    });
+  });
 }
 
 function renderDraftPlaceBtn() {
