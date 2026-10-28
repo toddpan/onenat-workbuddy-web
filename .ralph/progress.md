@@ -65,3 +65,10 @@
 - 注意（P1-2/P2）：`#node-btn`/`#node-pop` DOM 已删，`setNodeBtnUi`/`renderNodePop`/`selectNode` 仍在（都判空），`nodeState.cur` 仍是新任务的默认节点；P2 选择框可复用 `renderNodePop` 的分组探测逻辑。标签悬停在线状态读 `res.engine`，P1-2 可复用 `taskPlaceInfo(task).res`。
 - 标签只在 task.sessions 非空时显示（草稿不显示）。
 - 验证：build / typecheck / smoke（64 项）全过；未跑 test:unit（只改了 web-ui.ts）；未做浏览器手测（标签样式、悬停 title、⋯ 菜单定位、手机端换行）。
+
+## P1-2
+- web-ui.ts：新增 `renderNodeOffline(task)` / `retryNodeConnection()`，在 `renderChatPlace` 末尾调用（这样 refreshChatHead / resetChatView / refreshNodeEngines 三条路径都会覆盖）；HTML 在 `#composer-hint` 后加 `#node-offline`；新增 CSS `.node-offline` 和 `textarea:disabled`。
+- 判定条件：task.sessions 非空，且 `taskPlaceInfo(task).res.engine.reachable === false`。没探测过（engine 缺失）不算离线，草稿也不判断。
+- 离线状态记在 `body.node-offline` 上：`setSending` 据此决定发送键是否禁用，`send()` 遇到离线直接返回；重试中的状态记在 `#node-offline` 的 `data-retrying`。
+- 注意（P4-2）：「在其他节点继续 →」按钮是 `[data-op="fork"]`，目前写死为 disabled，P4 接上续接入口时要把它启用并绑定事件。
+- 未验证：浏览器手测（离线条样式、禁用效果、重试流程）；没补 smoke 断言（mock 没有离线节点）。只改了 web-ui.ts，所以没跑 test:unit。

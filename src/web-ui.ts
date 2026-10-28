@@ -974,6 +974,16 @@ body.task-running .dsh-sysRow.sys-planning .markdown::after {
   transition: opacity .18s ease, transform .18s ease, border-color .18s ease, color .18s ease;
 }
 .composer-hint.on { opacity: 1; transform: translate(-50%, 0); }
+/* 执行节点离线条（P1-2）：输入区上方，输入框同时禁用 */
+.node-offline {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  width: 100%; max-width: var(--dsh-composer-card-max-width, 920px); margin-bottom: 8px;
+  padding: 7px 12px; border-radius: 12px; border: 1px solid var(--err);
+  background: var(--bg2); color: var(--tx2); font-size: 12px; line-height: 1.5;
+}
+.node-offline .no-msg { flex: 1 1 240px; min-width: 0; }
+.node-offline .mini-btn[disabled] { opacity: .5; cursor: not-allowed; }
+.chat-input textarea:disabled { cursor: not-allowed; opacity: .6; }
 .composer-hint.ok { border-color: rgba(43,164,113,.45); color: #1f8f62; }
 .composer-hint.err { border-color: var(--err); color: #d33a41; }
 .model-pop {
@@ -2262,6 +2272,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           </div>
           <button class="jump-bottom" id="btn-jump-bottom" title="回到底部">⬇<span class="jb-t"> 回到底部</span></button>
           <div class="composer-hint" id="composer-hint"></div>
+          <div class="node-offline" id="node-offline" style="display:none"></div>
           <div class="chat-input">
             <div class="dsh-cscroll">
               <textarea id="input" placeholder="给 WorkBuddy 发送消息，@ 项目 / 智能体 / 资源，/ 装载技能…"></textarea>
@@ -6655,7 +6666,7 @@ function setSending(on) {
   // 发送键常驻：空闲 = 新轮次；运行中 = 补充意见排队（本轮结束自动补发，气泡上可「⚡ 立即发送」插话）。
   // 停止键仅运行中出现；body.task-running 同时驱动「规划中」系统消息的等待动效
   $('btn-send').style.display = '';
-  $('btn-send').disabled = false;
+  $('btn-send').disabled = document.body.classList.contains('node-offline'); // 执行节点离线时保持禁用（renderNodeOffline）
   $('btn-send').title = on ? '发送（运行中：先排队，气泡上可 ⚡ 立即发送插话）' : '发送';
   $('btn-stop').style.display = on ? 'grid' : 'none';
   document.body.classList.toggle('task-running', on);
@@ -7419,7 +7430,7 @@ $('btn-send').addEventListener('click', send);
 
 async function send() {
   const text = $('input').value.trim();
-  if (!text) return;
+  if (!text || document.body.classList.contains('node-offline')) return;
   if (!state.currentTaskId) {
     // 欢迎页直接输入即开新会话（对齐 DSH 体验）：不必先点「＋ 新建任务」再回来输入。
     // 创建失败（或并发点击）时直接返回，错误已由创建流程 toast。
@@ -8644,6 +8655,47 @@ function renderChatPlace(task) {
     more.dataset.pid = pj ? pj.id : '';
     if (!pj) closeHeadMore();
   }
+  renderNodeOffline(task);
+}
+/**
+ * 执行节点离线（P1-2）：任务已有远端会话且执行节点探测为不可达时，禁用输入框并在输入区上方给出
+ * 「重试连接 / 在其他节点继续」。未探测（engine 缺失）不算离线；草稿没有会话，留给 P2 选择框。
+ * 离线态记在 body.node-offline（setSending / send 读它），重试中记在离线条的 data-retrying。
+ */
+function renderNodeOffline(task) {
+  const bar = $('node-offline');
+  const input = $('input');
+  const info = task && task.sessions && Object.keys(task.sessions).length ? taskPlaceInfo(task) : null;
+  const eng = info && info.res && info.res.engine;
+  const off = !!(eng && eng.reachable === false);
+  document.body.classList.toggle('node-offline', off);
+  if (input) {
+    input.disabled = off;
+    if (off) input.title = '执行节点离线，暂时无法发送';
+    else input.removeAttribute('title');
+  }
+  if ($('btn-send')) $('btn-send').disabled = off;
+  if (!bar) return;
+  if (!off) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+  const retrying = bar.dataset.retrying === '1';
+  bar.style.display = '';
+  bar.innerHTML =
+    '<span class="no-msg">🖥 ' + esc(info.nodeLabel) + ' 当前离线，这个任务的会话保存在该节点上' +
+    (eng.error ? '（' + esc(eng.error) + '）' : '') + '</span>' +
+    '<button class="mini-btn" data-op="retry"' + (retrying ? ' disabled' : '') + '>' + (retrying ? '重试中…' : '重试连接') + '</button>' +
+    '<button class="mini-btn" data-op="fork" disabled title="即将支持">在其他节点继续 →</button>';
+  const retry = bar.querySelector('[data-op="retry"]');
+  if (retry) retry.addEventListener('click', retryNodeConnection);
+}
+async function retryNodeConnection() {
+  const bar = $('node-offline');
+  if (!bar || bar.dataset.retrying === '1') return;
+  bar.dataset.retrying = '1';
+  renderNodeOffline(currentTaskObj());
+  try { await refreshNodeEngines(true); } finally { bar.dataset.retrying = ''; }
+  renderNodeOffline(currentTaskObj());
+  if (document.body.classList.contains('node-offline')) hintComposer('节点仍然离线，请稍后再试', true);
+  else hintComposer('✓ 节点已恢复连接');
 }
 function closeHeadMore() { const p = $('head-more-pop'); if (p) p.classList.remove('on'); }
 if ($('btn-head-more')) {

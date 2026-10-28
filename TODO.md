@@ -100,11 +100,12 @@ UI 行为目前没有自动化浏览器测试：任务说明里的「验收」�
   - 验收：build / typecheck / smoke 通过；grep 不到 `node-picker` 的显示/隐藏逻辑残留。
   - 完成：头部去掉节点选择器，换成只读标签 `#chat-place` 和 `⋯` 菜单（工作区文件 / 项目配置 / 退出项目），项目横幅不再插入，运行配置弹窗删掉「主会话节点」下拉；跑过 `npm run build`、`npm run typecheck`、`npm run smoke`（64 项全过），`grep node-picker` 无结果；未做浏览器手测。
 
-- [ ] **P1-2** 节点离线时禁用输入框并给出操作
+- [x] **P1-2** 节点离线时禁用输入框并给出操作
   - 依赖：P1-1
   - 打开任务后按执行节点的引擎探测结果（`state.resources[].engine.reachable`）判断；离线时输入框禁用，输入区上方显示「🖥 X 当前离线，这个任务的会话保存在该节点上 · [重试连接] [在其他节点继续 →]」。
   - 「在其他节点继续」在 P4 完成前先显示为禁用，`title` 写「即将支持」。重试 = `refreshNodeEngines(true)` 后重新判断。
   - 验收：build / typecheck / smoke 通过。
+  - 完成：新增 `renderNodeOffline` / `retryNodeConnection` 和输入区上方的 `#node-offline` 离线条，执行节点探测为不可达时禁用输入框和发送键，「在其他节点继续」先禁用并标「即将支持」；跑过 `npm run build`、`npm run typecheck`、`npm run smoke`（64 项全过）；未做浏览器手测。
 
 ## P2 执行位置选择框 + 空白新任务页
 
