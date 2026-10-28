@@ -338,7 +338,16 @@ async function main() {
   // ---------- 7. 数据落盘（独立服务的数据目录） ----------
   const storeFile = join(dataDir, 'store.json')
   await waitFor(() => existsSync(storeFile), 'store.json 落盘', 5000)
-  const store = JSON.parse(readFileSync(storeFile, 'utf-8'))
+  // 落盘是防抖尾随写（~250ms）：前面刚删除过运行中的任务，读到中间态时等一拍再读，直到满足期望
+  let store = null
+  {
+    const deadline = Date.now() + 5000
+    while (Date.now() < deadline) {
+      store = JSON.parse(readFileSync(storeFile, 'utf-8'))
+      if (store.agents.length === 3 && store.tasks.length === 2 && store.teams?.length === 1) break
+      await sleep(300)
+    }
+  }
   check('数据落盘到 --data 目录（含专家团）', store.agents.length === 3 && store.tasks.length === 2 && store.teams?.length === 1, `agents=${store.agents.length} tasks=${store.tasks.length} teams=${store.teams?.length}`)
 
   // 团队删除（任务保留，仅摘除 teamId 标记）

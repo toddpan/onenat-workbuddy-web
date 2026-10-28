@@ -254,7 +254,8 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
 .task-item .s {
   width: 7px; height: 7px; border-radius: 50%; flex: none;
 }
-.s.running { background: var(--warn); box-shadow: 0 0 0 3px rgba(212,136,6,.14); animation: pulse 1.2s infinite; }
+.s.running { background: var(--pri); box-shadow: 0 0 0 3px var(--pri-light); animation: pulse 1.2s infinite; }
+.s.ask { background: var(--warn); box-shadow: 0 0 0 3px rgba(212,136,6,.14); animation: pulse 1.2s infinite; }
 .s.completed { background: var(--ok); }
 .s.failed { background: var(--err); }
 .s.partial_success { background: var(--warn); }
@@ -1523,6 +1524,11 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .arch-empty { color: var(--tx3); font-size: 12.5px; text-align: center; padding: 34px 12px; border: 1px dashed var(--line); border-radius: var(--rad); line-height: 1.8; }
 .gh-manage { margin-left: 8px; border: none; background: none; color: var(--pri); font-size: 11px; cursor: pointer; padding: 2px 7px; border-radius: 6px; flex: none; }
 .gh-manage:hover { background: var(--pri-light); }
+.gh-add { margin-left: 6px; border: none; background: none; color: var(--tx3); font-size: 13px; line-height: 1; cursor: pointer; padding: 1px 7px 3px; border-radius: 6px; flex: none; }
+.gh-add:hover { background: var(--pri-light); color: var(--pri); }
+.gh-sub { font-size: 10px; color: var(--tx3); font-weight: 400; margin-left: 4px; }
+.gh-more { display: block; width: 100%; border: none; background: none; color: var(--tx3); font-size: 11.5px; text-align: center; padding: 6px 0; cursor: pointer; }
+.gh-more:hover { color: var(--pri); background: var(--bg-hover); }
 @media (max-width: 768px) {
   .arch-set-row { flex-direction: column; align-items: stretch; gap: 10px; }
   .arch-sw, .arch-days-sel { align-self: flex-end; }
@@ -2702,7 +2708,6 @@ const state = {
   teams: [],
   tasks: [],
   projects: [],
-  projectId: null,   // 项目工作台：当前进入的项目（null = 全部/普通任务）
   taskEnv: { nodeRef: null, connectorIds: [], skillNames: [] },   // 单独任务环境（节点/连接器/技能）
   draft: null,       // 新任务草稿（P2-2）：{ place: { nodeMappingId, projectId|null }, model }；发送首条消息时才 POST /tasks
   schedules: [],
@@ -2711,7 +2716,8 @@ const state = {
   settings: null,
   currentTaskId: null,
   searchQuery: '',
-  groupCollapsed: { today: false, week: false, older: false, archived: true },
+  groupCollapsed: { archived: true }, // 分组折叠（localStorage 持久化；P3-1 键 = 执行位置）
+  groupMore: {}, // 分组「显示更多」展开态（localStorage 持久化）
   es: null,
   turnEls: {},
   renderedTurnsCount: 0,
@@ -4302,7 +4308,13 @@ function projectCardHtml(p) {
 }
 function wireProjectCard(card) {
   const pid = card.dataset.proj;
-  card.querySelector('.pj-enter').addEventListener('click', function () { enterProject(pid); });
+  card.querySelector('.pj-enter').addEventListener('click', function () {
+    // P3-1：项目不再是模式 —— 切到工作台、展开该项目分组、在组内新建草稿
+    switchView('work');
+    state.groupCollapsed['proj:' + pid] = false;
+    saveGroupPrefs();
+    startDraft({ projectId: pid });
+  });
   card.querySelector('.pj-edit').addEventListener('click', function () { openProjectDrawer(pid); });
   card.querySelector('.pj-copy').addEventListener('click', function () {
     // 复制：preset 通道进「新建」抽屉；只复制配置（节点/工作区/指令/专家/连接器/技能），任务历史不带走
@@ -4321,7 +4333,7 @@ function wireProjectCard(card) {
   card.querySelector('.pj-del').addEventListener('click', async function () {
     if (!confirm('删除项目「' + (state.projects.find(x => x.id === pid) || {}).name + '」？项目下的任务不会被删除。')) return;
     const r = await api('/projects/' + encodeURIComponent(pid), { method: 'DELETE' });
-    if (r.ok) { toast('✓ 项目已删除'); if (state.projectId === pid) exitProject(); loadProjects(); renderProjects(); }
+    if (r.ok) { toast('✓ 项目已删除'); loadProjects(); renderProjects(); }
     else toast(r.error || '删除失败', true);
   });
 }
@@ -4432,7 +4444,6 @@ async function openProjectImportModal() {
       switched = true;
       watchProjectImports(taskIds);
       m.close();
-      if (state.projectId) exitProject(); // 项目工作台只显示本项目任务，先退出避免导入任务被过滤
       switchView('work');
       loadTasks().then(function () { openTask(taskIds[0]); });
     }
@@ -4473,39 +4484,6 @@ async function openProjectImportModal() {
     }, 1000);
     setTimeout(goWorkspace, 3000);
   });
-}
-
-async function enterProject(projectId, silent) {
-  const p = state.projects.find((x) => x.id === projectId);
-  if (!p) { toast('项目不存在', true); return; }
-  state.projectId = projectId;
-  try { sessionStorage.setItem('wb-project-id', projectId); } catch (e) { /* ignore */ }
-  if (silent) { updateProjectBanner(); return; }
-  state.currentTaskId = null;
-  state.taskCache.clear();
-  await loadTasks();
-  switchView('work');
-  updateProjectBanner();
-  toast('已进入项目「' + p.name + '」');
-}
-
-function exitProject() {
-  state.projectId = null;
-  try { sessionStorage.removeItem('wb-project-id'); } catch (e) { /* ignore */ }
-  state.currentTaskId = null;
-  loadTasks();
-  renderTaskList();
-  updateProjectBanner();
-}
-
-/**
- * 项目上下文变化后刷新头部（P1-1：项目横幅已撤掉，「工作区文件 / 项目配置」挪进头部 ⋯ 菜单；
- * 节点随任务锁定，头部不再提供节点切换）。函数名沿用：enterProject / exitProject / 项目保存仍调用它。
- */
-function updateProjectBanner() {
-  var el = document.getElementById('pj-banner');
-  if (el) el.remove();
-  renderChatPlace(currentTaskObj());
 }
 
 async function openProjectDrawer(projectId, preset) {
@@ -4633,7 +4611,6 @@ async function openProjectDrawer(projectId, preset) {
       closeModal();
       toast('✓ 项目已保存');
       renderProjects();
-      if (isEdit && state.projectId === projectId) updateProjectBanner();
     } },
   ];
   // 归档/恢复（P-08）：编辑态追加（权限由服务端校验，非 owner 点击会得到明确报错）
@@ -4682,9 +4659,10 @@ if (document.getElementById('btn-run-config')) {
 
 /** 打开运行配置弹层。focus: 'expert' 时滚动定位到执行专家分区 */
 async function openRunConfig(focus) {
-  const proj = state.projectId ? state.projects.find(function (x) { return x.id === state.projectId; }) : null;
+  // 项目分区按「当前打开任务所属项目」显示（P3-1：项目不再是工作台模式）
+  const curTask = currentTaskObj();
+  const proj = curTask && curTask.projectId ? state.projects.find(function (x) { return x.id === curTask.projectId; }) : null;
   const isProject = Boolean(proj);
-  const inProject = isProject && state.projectId === proj.id; // 恒真，占位便于阅读
   // 采样智能体：项目首位专家 / 全局默认 / 第一个智能体（用于拉取节点技能清单）
   const sampleAgentId = (proj && proj.expertIds[0]) || (state.agents[0] && state.agents[0].id) || '';
   // 连接器候选
@@ -4706,9 +4684,6 @@ async function openRunConfig(focus) {
     const sr = await api('/agents/' + sampleAgentId + '/skills');
     if (sr.ok) nodeSkills = ((sr.data || {}).skills || []).map(function (x) { return x.name; });
   }
-  const curTask = state.currentTaskId ? state.tasks.find(function (t) { return t.id === state.currentTaskId; }) : null;
-  void curTask;
-
   // ① Sub Agent（@ 调用）：新模型下没有「执行者智能体」概念——主会话在任务节点直发，
   //    这里只展示可用 sub agent 集合（项目任务 = 项目配置勾选的集合，非项目 = 全部）
   const chipsOf = function (ids) {
@@ -4897,13 +4872,9 @@ async function boot() {
   });
   await Promise.all([loadResources(), loadAgents(), loadTasks(), loadSettings(), loadSchedules(), loadPlannerOptions(), loadProjects(), loadTeams()]);
   await refreshMentionCandidates();
-  // 刷新后恢复项目工作台（sessionStorage 记忆，项目不存在则忽略）
-  var savedPid = null;
-  try { savedPid = sessionStorage.getItem('wb-project-id'); } catch (e) { /* ignore */ }
-  if (savedPid && state.projects.some(function (x) { return x.id === savedPid; })) {
-    state.projectId = savedPid;
-    updateProjectBanner();
-  }
+  // 恢复侧栏分组折叠/展开偏好（localStorage，P3-1）
+  try { const gc = JSON.parse(localStorage.getItem('wb.groupCollapsed') || 'null'); if (gc && typeof gc === 'object') state.groupCollapsed = gc; } catch (e) { /* ignore */ }
+  try { const gm = JSON.parse(localStorage.getItem('wb.groupMore') || 'null'); if (gm && typeof gm === 'object') state.groupMore = gm; } catch (e) { /* ignore */ }
   initNodeState();
   // 后台探测节点健康（TTL 门控），拿到结果后校正默认节点：不可达的默认节点不应被新任务选中
   void refreshNodeEngines(false).then(applyReachableNodeDefault).catch(function () {});
@@ -4992,96 +4963,127 @@ $('side-search-clear').addEventListener('click', () => {
 });
 
 let taskListSig = '';
+function saveGroupPrefs() {
+  try {
+    localStorage.setItem('wb.groupCollapsed', JSON.stringify(state.groupCollapsed || {}));
+    localStorage.setItem('wb.groupMore', JSON.stringify(state.groupMore || {}));
+  } catch (e) { /* ignore */ }
+}
+/** 分组键（P3-1）：项目任务 proj:<id>；单独任务按执行节点 node:<mappingId>（与引擎 taskExec 同口径） */
+function taskPlaceKey(t) {
+  if (t.projectId) return 'proj:' + t.projectId;
+  const ref = t.nodeRef;
+  if (ref && ref.kind === 'mapping' && ref.mappingId) return 'node:' + ref.mappingId;
+  return 'node:';
+}
 function renderTaskList() {
-  // 项目工作台模式：只显示本项目任务
-  var visibleTasks = state.projectId ? state.tasks.filter(function (t) { return t.projectId === state.projectId; }) : state.tasks;
   const el = $('task-list');
   const prevScroll = el.scrollTop;
   el.innerHTML = '';
   // 草稿（P2-2）：列表顶部临时一行「新任务（草稿）」，发送首条消息创建任务后消失
   const draftOn = !!(state.draft && !state.currentTaskId);
-  if (!visibleTasks.length) {
+  if (!state.tasks.length) {
     taskListSig = '';
     if (draftOn) { el.appendChild(draftTaskItemElement()); return; }
-    el.innerHTML = state.projectId
-      ? '<div style="color:var(--tx3);font-size:12.5px;padding:16px 12px;text-align:center">本项目还没有任务，点击上方「＋ 新建任务」发起。</div>'
-      : '<div style="color:var(--tx3);font-size:12.5px;padding:16px 12px;text-align:center">还没有任务，点击上方「新建任务」发起第一个会话。</div>';
+    el.innerHTML = '<div style="color:var(--tx3);font-size:12.5px;padding:16px 12px;text-align:center">还没有任务，点击上方「新建任务」发起第一个会话。</div>';
     return;
   }
 
-  // 搜索过滤（在项目可见集内过滤）
+  // 搜索：平铺结果列表（归档命中仍归入归档组）
   const q = state.searchQuery;
   const filtered = q
-    ? visibleTasks.filter(t => (t.title && t.title.toLowerCase().includes(q)) || (t.lastPreview && t.lastPreview.toLowerCase().includes(q)))
-    : visibleTasks;
+    ? state.tasks.filter(t => (t.title && t.title.toLowerCase().includes(q)) || (t.lastPreview && t.lastPreview.toLowerCase().includes(q)))
+    : state.tasks;
 
   if (q && !filtered.length) {
     el.innerHTML = '<div style="color:var(--tx3);font-size:12px;padding:16px 12px;text-align:center">未找到匹配的会话</div>';
     return;
   }
 
-  // 时间维度分组：今天 / 前7天 / 更早 / 已归档
-  const now = Date.now();
-  const ONE_DAY = 24 * 3600 * 1000;
-  const SEVEN_DAYS = 7 * ONE_DAY;
-
-  const groups = {
-    today: { title: '今天', items: [] },
-    week: { title: '前 7 天', items: [] },
-    older: { title: '更早', items: [] },
-    archived: { title: '已归档会话', items: [] },
+  // 按执行位置分组：每个项目一组（📦 名称 · 🖥 节点）+ 每个节点一组「单独任务」；归档恒为最后一组
+  const nodeTitleOf = function (mid) {
+    const n = dshNodeOptions().find(x => x.mappingId === mid);
+    return n ? (n.title || n.appName || n.note || mid) : (mid || '未指定节点');
   };
-
+  const PLACE = 5; // 每组默认显示条数，「显示更多」展开（状态存 localStorage）
+  const groups = [];
+  const byKey = {};
+  const archivedGrp = { key: 'archived', title: '已归档会话', place: null, items: [], archived: true };
   for (const t of filtered) {
-    if (t.archivedAt) {
-      groups.archived.items.push(t);
-      continue;
+    if (t.archivedAt) { archivedGrp.items.push(t); continue; }
+    const key = taskPlaceKey(t);
+    let g = byKey[key];
+    if (!g) {
+      if (key.indexOf('proj:') === 0) {
+        const p = (state.projects || []).find(x => x.id === key.slice(5));
+        const nt = p && p.nodeTitle ? p.nodeTitle : '';
+        g = { key, title: '📦 ' + ((p && p.name) || '项目') + (nt ? ' · 🖥 ' + nt : ''), place: { projectId: key.slice(5) }, items: [] };
+      } else {
+        const mid = key.slice(5);
+        g = { key, title: '🖥 ' + nodeTitleOf(mid), sub: '单独任务', place: { nodeMappingId: mid, projectId: null }, items: [] };
+      }
+      byKey[key] = g;
+      groups.push(g);
     }
-    const tTime = t.updatedAt || t.createdAt || now;
-    const diff = now - tTime;
-    if (diff < ONE_DAY) groups.today.items.push(t);
-    else if (diff < SEVEN_DAYS) groups.week.items.push(t);
-    else groups.older.items.push(t);
+    g.items.push(t);
   }
+  const tsOf = (t) => t.updatedAt || t.createdAt || 0;
+  for (const g of groups) g.items.sort((a, b) => tsOf(b) - tsOf(a));
+  groups.sort((a, b) => tsOf(b.items[0]) - tsOf(a.items[0])); // 活跃分组靠前
+  if (archivedGrp.items.length) { archivedGrp.items.sort((a, b) => tsOf(b) - tsOf(a)); groups.push(archivedGrp); }
 
-  // 稳态轮询（每 4s / 每个 turn_end）不该整列重建：内容签名一致时直接跳过，
-  // 否则侧栏滚动位置归零、悬停中的 🗄/🗑 按钮消失、mousedown→mouseup 之间重建会吞掉点击。
+  // 稳态轮询不该整列重建：内容签名一致时跳过（保滚动位置与悬停按钮）
   const sig = JSON.stringify({
-    p: state.projectId || '', q: state.searchQuery || '', cur: state.currentTaskId || '',
-    gc: state.groupCollapsed || {}, d: draftOn ? JSON.stringify(state.draft.place) : '',
+    q: state.searchQuery || '', cur: state.currentTaskId || '',
+    gc: state.groupCollapsed || {}, gm: state.groupMore || {},
+    d: draftOn ? JSON.stringify(state.draft.place) : '',
     items: filtered.map(function (t) {
-      return [t.id, t.title, t.lastPreview, t.status, t.running ? 1 : 0, t.archivedAt ? 1 : 0, (t.memberAgentIds || []).join(','), t.updatedAt];
+      return [t.id, t.title, t.lastPreview, t.status, t.running ? 1 : 0, t.pendingAsk ? 1 : 0, t.scheduleId || '', t.archivedAt ? 1 : 0, (t.memberAgentIds || []).join(','), t.updatedAt];
     }),
   });
-  if (sig === taskListSig && el.childElementCount) {
-    el.scrollTop = prevScroll;
-    return;
-  }
+  if (sig === taskListSig && el.childElementCount) { el.scrollTop = prevScroll; return; }
   taskListSig = sig;
 
   if (draftOn) el.appendChild(draftTaskItemElement());
-  for (const [key, grp] of Object.entries(groups)) {
+  for (const grp of groups) {
     if (!grp.items.length) continue;
-    const isCollapsed = state.groupCollapsed[key] ?? (key === 'archived');
+    const isCollapsed = (state.groupCollapsed || {})[grp.key] ?? Boolean(grp.archived);
     const grpDiv = document.createElement('div');
     grpDiv.style.marginBottom = '6px';
 
     const head = document.createElement('div');
     head.className = 'group-header';
-    head.innerHTML = '<span class="gh-left"><span class="gh-chev">' + (isCollapsed ? '▸' : '▾') + '</span><span>' + esc(grp.title) + '</span></span><span style="display:flex;align-items:center;gap:2px"><span class="gh-cnt">' + grp.items.length + '</span>' +
-      (key === 'archived' ? '<button class="gh-manage" title="搜索 / 批量恢复 / 批量删除已归档会话">管理</button>' : '') + '</span>';
+    head.innerHTML = '<span class="gh-left"><span class="gh-chev">' + (isCollapsed ? '▸' : '▾') + '</span><span class="gh-title">' + esc(grp.title) +
+      (grp.sub ? ' <span class="gh-sub">' + esc(grp.sub) + '</span>' : '') + '</span></span>' +
+      '<span style="display:flex;align-items:center;gap:2px"><span class="gh-cnt">' + grp.items.length + '</span>' +
+      (grp.place ? '<button class="gh-add" title="在此位置新建草稿">＋</button>' : '') +
+      (grp.archived ? '<button class="gh-manage" title="搜索 / 批量恢复 / 批量删除已归档会话">管理</button>' : '') + '</span>';
     head.addEventListener('click', () => {
-      state.groupCollapsed[key] = !isCollapsed;
+      state.groupCollapsed[grp.key] = !isCollapsed;
+      saveGroupPrefs();
       renderTaskList();
     });
+    const addBtn = head.querySelector('.gh-add');
+    if (addBtn) addBtn.addEventListener('click', (e) => { e.stopPropagation(); startDraft(grp.place); });
     const manageBtn = head.querySelector('.gh-manage');
     if (manageBtn) manageBtn.addEventListener('click', (e) => { e.stopPropagation(); switchView('archive'); });
     grpDiv.appendChild(head);
 
     const body = document.createElement('div');
     body.className = 'group-body' + (isCollapsed ? ' collapsed' : '');
-    for (const t of grp.items) {
-      body.appendChild(createTaskItemElement(t, key === 'archived'));
+    const expanded = Boolean((state.groupMore || {})[grp.key]);
+    const shown = expanded ? grp.items : grp.items.slice(0, PLACE);
+    for (const t of shown) body.appendChild(createTaskItemElement(t, Boolean(grp.archived)));
+    if (grp.items.length > PLACE) {
+      const more = document.createElement('button');
+      more.className = 'gh-more';
+      more.textContent = expanded ? '收起' : ('显示更多（还有 ' + (grp.items.length - PLACE) + ' 条）');
+      more.addEventListener('click', () => {
+        state.groupMore[grp.key] = !expanded;
+        saveGroupPrefs();
+        renderTaskList();
+      });
+      body.appendChild(more);
     }
     grpDiv.appendChild(body);
     el.appendChild(grpDiv);
@@ -5119,8 +5121,8 @@ function createTaskItemElement(t, archived) {
 
   div.innerHTML =
     '<div class="row-top">' +
-    '<span class="s ' + statusColor(t.running ? 'running' : t.status) + '"></span>' +
-    '<span class="t">' + esc(t.title) + '</span>' +
+    '<span class="s ' + (t.pendingAsk ? 'ask' : statusColor(t.running ? 'running' : t.status)) + '"' + (t.pendingAsk ? ' title="等待用户回答（ask_user）"' : '') + '></span>' +
+    '<span class="t">' + (t.scheduleId ? '<span title="定时任务创建">⏰</span> ' : '') + esc(t.title) + '</span>' +
     '</div>' +
     '<div class="row-sub">' + subText + '</div>' +
     '<span class="acts">' +
@@ -8714,7 +8716,7 @@ function renderChatPlace(task) {
     }
   }
   // ⋯ 菜单：任务所属项目，未打开任务时取项目工作台当前项目（原横幅的入口）
-  const pj = (info && info.project) || (state.projectId ? state.projects.find(function (x) { return x.id === state.projectId; }) : null);
+  const pj = (info && info.project) || null;
   if (more) {
     more.style.display = pj ? '' : 'none';
     more.dataset.pid = pj ? pj.id : '';
@@ -8773,13 +8775,12 @@ if ($('btn-head-more')) {
     pop.innerHTML =
       '<div class="main-agent-item" data-op="files"><div class="ag-info"><div class="ag-title">📁 工作区文件</div></div></div>' +
       '<div class="main-agent-item" data-op="cfg"><div class="ag-info"><div class="ag-title">⚙ 项目配置</div></div></div>' +
-      (state.projectId ? '<div class="main-agent-item" data-op="exit"><div class="ag-info"><div class="ag-title">↩ 退出项目</div></div></div>' : '');
+      '';
     pop.querySelectorAll('.main-agent-item').forEach(function (it) {
       it.addEventListener('click', function () {
         closeHeadMore();
         if (it.dataset.op === 'files') openProjectFiles(pid);
         else if (it.dataset.op === 'cfg') openProjectDrawer(pid);
-        else if (it.dataset.op === 'exit') exitProject();
       });
     });
     pop.classList.add('on');
@@ -9717,7 +9718,6 @@ $('btn-new-task').addEventListener('click', function () { startDraft(); });
 /** 草稿默认执行位置：显式传入（侧栏分组「＋」）→ 项目工作台 → 当前任务的位置 → 本地记录的最近一次位置 → 节点默认 */
 function defaultDraftPlace(explicit) {
   if (explicit) return normalizePlace(explicit);
-  if (state.projectId) return normalizePlace({ projectId: state.projectId });
   const t = currentTaskObj();
   if (t) return normalizePlace({ nodeMappingId: taskExecNodeId(t), projectId: t.projectId || null });
   let saved = null;
@@ -10000,7 +10000,6 @@ function wireAgentCard(card) {
   if (!a) return;
   card.querySelector('[data-op=enter]').addEventListener('click', async () => {
     // 新模型：进入工作台并把任务节点切到该智能体绑定的节点（主 DSH 跟节点走）
-    if (state.projectId) exitProject();
     switchView('work');
     const mid = a.dshRef && a.dshRef.kind === 'mapping' ? a.dshRef.mappingId : '';
     if (mid && dshNodeOptions().some(x => x.mappingId === mid)) selectNode(mid);
@@ -12063,9 +12062,8 @@ function pjRefToChat(filePath, ws) {
 
 /** 打开项目工作区文件抽屉（头部 ⋯ 菜单「📁 工作区文件」入口；pid 缺省取项目工作台当前项目） */
 async function openProjectFiles(pid) {
-  const id = pid || state.projectId;
-  const p = id ? state.projects.find(x => x.id === id) : null;
-  if (!p) { toast('请先进入项目工作台', true); return; }
+  const p = pid ? state.projects.find(x => x.id === pid) : null;
+  if (!p) { toast('未找到项目', true); return; }
   pjFilesState.projectId = p.id;
   pjFilesState.node = p.dshRef || null;
   pjFilesState.ws = pjTrimSlash(p.workspace || '');
@@ -13598,7 +13596,7 @@ function cmdkCommands(query) {
     cmds.push({ g: '子智能体', ic: '🤖', lb: a.name || a.id, kw: describeDshRef(a), ord: 40, act: function () { switchView('agents'); openAgentDrawer(a); } });
   });
   state.projects.forEach(function (p) {
-    cmds.push({ g: '项目', ic: '📦', lb: p.name || p.id, sub: p.archived ? '已归档' : '', ord: 50, act: function () { enterProject(p.id); } });
+    cmds.push({ g: '项目', ic: '📦', lb: p.name || p.id, sub: p.archived ? '已归档' : '', ord: 50, act: function () { switchView('work'); state.groupCollapsed['proj:' + p.id] = false; saveGroupPrefs(); startDraft({ projectId: p.id }); } });
   });
   return cmds;
 }

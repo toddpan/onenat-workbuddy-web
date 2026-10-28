@@ -428,6 +428,7 @@ export class WorkBuddyRouter {
       // 任务节点：会话头部节点选择器按它回显（否则列表壳/E2E 下显示的是「新任务默认节点」，与实际执行节点不符）
       nodeRef: t.nodeRef,
       lastRoute: t.lastRoute,
+      scheduleId: t.scheduleId || undefined,
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,
       archivedAt: t.archivedAt,
