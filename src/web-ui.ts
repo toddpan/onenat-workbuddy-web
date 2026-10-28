@@ -1059,6 +1059,8 @@ body.task-running .dsh-sysRow.sys-planning .markdown::after {
 .stat-panel .sp-h { padding: 4px 10px 6px; font-size: 11px; font-weight: 600; color: var(--tx2); border-bottom: 1px solid var(--line); margin-bottom: 3px; }
 .stat-panel .sp-r { display: flex; justify-content: space-between; gap: 18px; padding: 3px 10px; font-size: 12px; color: var(--tx2); }
 .stat-panel .sp-r b { font-weight: 500; color: var(--tx); font-variant-numeric: tabular-nums; }
+.stat-panel .sp-foot { padding: 6px 10px 8px; border-top: 1px solid var(--line); margin-top: 3px; }
+.stat-panel .sp-foot a { color: var(--pri); font-size: 11.5px; cursor: pointer; }
 
 /* ---- 任务清单坞（对齐 DSH web TodoPanel：任务 + N 进行中 · M 待处理 + 运行时长） ---- */
 .todo-dock {
@@ -9514,7 +9516,7 @@ async function selectPreset(id) {
 loadPlannerOptions();
 
 // ---------- 任务实时统计条（对齐 DSH web StatsLine：轮/步 · LLM/工具耗时 · 首 token/吞吐 · 缓存命中 · token 账本） ----------
-const statsState = { timer: null, inFlight: false, lastRendered: '', stats: null, panel: null, unsupported: '' };
+const statsState = { timer: null, inFlight: false, lastRendered: '', stats: null, panel: null, unsupported: '', members: [] };
 function fmtStatsDuration(ms) {
   const s = ms / 1000;
   if (s < 60) return (Math.round(s * 10) / 10) + '秒';
@@ -9568,9 +9570,63 @@ function renderStatPanel() {
       + row('输出', n(s.outputTokens))
       + row('缓存读', n(s.cacheReadTokens))
       + row('缓存写', n(s.cacheWriteTokens));
+    // 按成员拆分（S2-1）：主会话 / 🤖 成员 · 🖥 节点 · 模型 · token · 缓存命中
+    const members = statsState.members || [];
+    if (members.length) {
+      html += '<div class="sp-h" style="margin-top:6px">按成员</div>';
+      for (const m of members) {
+        const ms = m.stats || null;
+        const billed = ms ? (ms.inputTokens || 0) + (ms.cacheReadTokens || 0) + (ms.cacheWriteTokens || 0) : 0;
+        const total = billed + (ms ? ms.outputTokens || 0 : 0);
+        const hit = ms ? fmtCacheHit(ms.cacheReadTokens || 0, billed) : null;
+        const label = (m.agentId === '__node__' ? '主会话' : '🤖 ' + (m.name || m.agentId))
+          + (m.nodeLabel ? ' · 🖥 ' + m.nodeLabel : '')
+          + (m.model ? ' · ' + String(m.model).split('/').pop() : '');
+        html += row(label, ms ? (fmtStatsTokens(total) + ' tok' + (hit !== null ? ' · 命中 ' + hit + '%' : '')) : '—');
+      }
+    }
+    html += '<div class="sp-foot"><a id="sp-task-usage" role="button" tabindex="0">查看本任务明细 →</a></div>';
   }
   panel.innerHTML = html;
   panel.classList.add('on');
+  const usageLink = panel.querySelector('#sp-task-usage');
+  if (usageLink) usageLink.addEventListener('click', openTaskUsageReport);
+}
+/** 本任务 Token 明细（S2-1）：/api/usage/tokens/records?taskId= 逐轮记录 */
+async function openTaskUsageReport() {
+  const taskId = state.currentTaskId;
+  if (!taskId) return;
+  const m = openModal('🗄 本任务 Token 明细', '<div style="padding:20px;text-align:center;color:var(--tx3)">加载中…</div>', [{ label: '关闭', cls: '', act: closeModal }]);
+  const r = await api('/usage/tokens/records?taskId=' + encodeURIComponent(taskId) + '&limit=200');
+  const rows = (r.ok && r.data) || [];
+  if (!rows.length) {
+    m.body.innerHTML = '<div style="padding:24px;text-align:center;color:var(--tx3)">本任务还没有 Token 消耗记录。</div>';
+    return;
+  }
+  const escN = function (v) { return esc(v == null ? '—' : String(v)); };
+  let html = '<div style="max-height:60vh;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px">' +
+    '<thead><tr style="color:var(--tx3);text-align:left">' +
+    '<th style="padding:6px 8px;border-bottom:1px solid var(--line);font-weight:500">时间</th>' +
+    '<th style="padding:6px 8px;border-bottom:1px solid var(--line);font-weight:500">成员</th>' +
+    '<th style="padding:6px 8px;border-bottom:1px solid var(--line);font-weight:500">模型</th>' +
+    '<th style="padding:6px 8px;border-bottom:1px solid var(--line);font-weight:500;text-align:right">输入</th>' +
+    '<th style="padding:6px 8px;border-bottom:1px solid var(--line);font-weight:500;text-align:right">输出</th>' +
+    '<th style="padding:6px 8px;border-bottom:1px solid var(--line);font-weight:500;text-align:right">缓存读</th>' +
+    '<th style="padding:6px 8px;border-bottom:1px solid var(--line);font-weight:500;text-align:right">合计</th>' +
+    '</tr></thead><tbody>';
+  for (const rec of rows) {
+    html += '<tr>' +
+      '<td style="padding:5px 8px;border-bottom:1px solid var(--line);white-space:nowrap;color:var(--tx3)">' + esc(fmtTime(rec.at)) + '</td>' +
+      '<td style="padding:5px 8px;border-bottom:1px solid var(--line)">' + escN(rec.agentName || (rec.agentId === '__node__' ? '主会话' : rec.agentId) || '—') + '</td>' +
+      '<td style="padding:5px 8px;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:11px">' + escN(rec.model ? String(rec.model).split('/').pop() : '') + '</td>' +
+      '<td style="padding:5px 8px;border-bottom:1px solid var(--line);text-align:right;font-variant-numeric:tabular-nums">' + escN(rec.input) + '</td>' +
+      '<td style="padding:5px 8px;border-bottom:1px solid var(--line);text-align:right;font-variant-numeric:tabular-nums">' + escN(rec.output) + '</td>' +
+      '<td style="padding:5px 8px;border-bottom:1px solid var(--line);text-align:right;font-variant-numeric:tabular-nums">' + escN(rec.cacheRead) + '</td>' +
+      '<td style="padding:5px 8px;border-bottom:1px solid var(--line);text-align:right;font-variant-numeric:tabular-nums"><b>' + escN(rec.total) + '</b></td>' +
+      '</tr>';
+  }
+  html += '</tbody></table></div>';
+  m.body.innerHTML = html;
 }
 function closeStatPanel() {
   if (!statsState.panel) return;
@@ -9636,6 +9692,7 @@ async function loadTaskStats() {
       const d = r.data || {};
       // no_session（尚未建立远端会话）不算「不可用」：首轮跑起来后自然有数据，不提示
       statsState.unsupported = !d.supported && d.reasonCode && d.reasonCode !== 'no_session' ? (d.reason || '当前节点不支持会话统计') : '';
+      statsState.members = Array.isArray(d.members) ? d.members : [];
       renderTaskStats(d.supported ? d.stats : null);
     }
   } catch {}
@@ -9645,6 +9702,7 @@ function resetTaskStats() {
   if (statsState.timer) { clearInterval(statsState.timer); statsState.timer = null; }
   statsState.lastRendered = '';
   statsState.stats = null;
+  statsState.members = [];
   statsState.unsupported = '';
   closeStatPanel();
   const el = $('task-stats');

@@ -623,6 +623,21 @@ export class WorkBuddyRouter {
           reason = unsupportedError || '远端 dsh-web-service 版本过低，不含统计接口'
         }
       }
+      // 按成员拆分（S2-1）：合并口径 stats 保持不变（向后兼容），另带 members[] 供 Token 面板分行展示
+      const okByAgent = new Map(results.filter((x): x is NonNullable<typeof x> => Boolean(x)).map((x) => [x.agentId, x]))
+      const projForLabel = task.projectId ? this.store.getProject(task.projectId) : undefined
+      const members = bindings.map(([agentId]) => {
+        const agent = this.store.getAgent(agentId)
+        const ref = agent?.dshRef || task.nodeRef || projForLabel?.dshRef
+        const hit = okByAgent.get(agentId)
+        return {
+          agentId,
+          name: agent?.name || '主会话',
+          nodeLabel: ref ? this.nodeLabelOf(ref) : '',
+          model: agent?.model || task.model || '',
+          stats: hit && hit.ok ? hit.stats : undefined,
+        }
+      })
       const payload = {
         ok: true,
         data: {
@@ -631,6 +646,7 @@ export class WorkBuddyRouter {
           sessionsOk,
           sessionsTotal,
           stats: supported ? totals : undefined,
+          members,
           ...(reasonCode ? { reasonCode, reason } : {}),
         },
       }

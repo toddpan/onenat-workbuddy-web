@@ -221,6 +221,8 @@ async function main() {
   check('创建任务时可指定任务级模型', [200, 201].includes(createWithModel.status) && createWithModel.json?.data?.model === 'smoke-provider/smoke-model-c')
   const clearA = await req('PUT', `${PREFIX}/api/tasks/${taskId}/model`, { model: '' })
   check('任务级模型可清除（跟随默认）', clearA.status === 200 && clearA.json?.data?.model === '')
+  const statsDraft = await req('GET', `${PREFIX}/api/tasks/${taskId}/stats`)
+  check('stats 返回 members 字段（S2-1，无会话时为空数组）', statsDraft.status === 200 && Array.isArray(statsDraft.json?.data?.members), `members=${JSON.stringify(statsDraft.json?.data?.members)}`)
   if (taskBId) await req('DELETE', `${PREFIX}/api/tasks/${taskBId}`)
   if (createWithModel.json?.data?.id) await req('DELETE', `${PREFIX}/api/tasks/${createWithModel.json.data.id}`)
   // P2-2：草稿页首条消息 = POST /tasks 带 message（创建即发送），任务里应恰好有 1 个 user 轮次
