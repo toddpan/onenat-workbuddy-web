@@ -1529,6 +1529,39 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .gh-sub { font-size: 10px; color: var(--tx3); font-weight: 400; margin-left: 4px; }
 .gh-more { display: block; width: 100%; border: none; background: none; color: var(--tx3); font-size: 11.5px; text-align: center; padding: 6px 0; cursor: pointer; }
 .gh-more:hover { color: var(--pri); background: var(--bg-hover); }
+
+/* ---- 工作区右侧栏（F1）：打开时聊天区让出宽度，不是遮罩；宽度可拖动 ---- */
+.ws-side {
+  flex: none; width: 420px; min-width: 280px; display: none; flex-direction: column;
+  border-left: 1px solid var(--line2); background: var(--bg2); overflow: hidden; position: relative;
+}
+.ws-tabs {
+  flex: none; display: flex; align-items: center; gap: 2px; height: 36px;
+  padding: 0 6px 0 8px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none;
+}
+.ws-tabs::-webkit-scrollbar { display: none; }
+.ws-tab-strip { display: flex; align-items: center; gap: 2px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.ws-tab-strip::-webkit-scrollbar { display: none; }
+.ws-tab {
+  flex: none; display: inline-flex; align-items: center; gap: 5px; max-width: 180px;
+  border: none; background: transparent; color: var(--tx3); font-size: 12px; line-height: 1;
+  padding: 6px 8px; border-radius: 7px 7px 0 0; cursor: pointer; white-space: nowrap;
+}
+.ws-tab:hover { color: var(--tx2); background: var(--bg-hover); }
+.ws-tab.on { color: var(--tx); background: var(--bg); box-shadow: inset 0 -2px 0 var(--pri); }
+.ws-tab .wt-x { font-size: 10px; opacity: .55; padding: 1px 2px; border-radius: 4px; }
+.ws-tab .wt-x:hover { opacity: 1; background: var(--bg-hover); color: var(--err); }
+.ws-tab-hint { font-size: 11.5px; color: var(--tx3); padding: 0 4px; }
+.ws-close { flex: none; border: none; background: none; color: var(--tx3); font-size: 12px; cursor: pointer; padding: 5px 8px; border-radius: 6px; }
+.ws-close:hover { color: var(--tx); background: var(--bg-hover); }
+.ws-body { flex: 1; min-height: 0; overflow: auto; background: var(--bg); }
+.ws-hint { padding: 28px 16px; text-align: center; color: var(--tx3); font-size: 12.5px; line-height: 1.8; }
+.ws-resizer { position: absolute; top: 0; bottom: 0; left: -3px; width: 6px; cursor: col-resize; z-index: 5; }
+.ws-resizer:hover, .ws-resizer.drag { background: var(--pri-light); }
+@media (max-width: 768px) {
+  .ws-side { position: absolute; inset: 0; width: 100% !important; z-index: 30; }
+  .ws-resizer { display: none; }
+}
 @media (max-width: 768px) {
   .arch-set-row { flex-direction: column; align-items: stretch; gap: 10px; }
   .arch-sw, .arch-days-sel { align-self: flex-end; }
@@ -2201,6 +2234,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <span class="badge mode" id="chat-goal-badge" style="display:none" title="当前长期目标"></span>
           <span class="badge mode" id="chat-mode" style="display:none"></span>
           <span class="hspacer"></span>
+          <button class="mini-btn" id="btn-ws-toggle" style="display:none" title="工作区文件 / 变更（右侧栏）">📁</button>
           <span class="badge place" id="chat-place" style="display:none"></span>
           <div class="main-agent-picker" id="head-more" style="display:none">
             <button class="mini-btn" id="btn-head-more" title="更多：工作区文件 / 项目配置">⋯</button>
@@ -2334,6 +2368,14 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           </div>
         </div>
       </section>
+      <aside class="ws-side" id="ws-side">
+        <div class="ws-tabs">
+          <div class="ws-tab-strip" id="ws-tab-strip"></div>
+          <button class="ws-close" id="btn-ws-close" title="收起侧栏">✕</button>
+        </div>
+        <div class="ws-body" id="ws-body"></div>
+        <div class="ws-resizer" id="ws-resizer" title="拖动调整宽度"></div>
+      </aside>
     </div>
     <div class="view" id="view-voice">
       <div class="panel">
@@ -5273,6 +5315,8 @@ function applyTaskToView(task, isInitialRender) {
   state.task = task; // 当前任务完整对象（teamId/expertMembers 供编排视图解析专家成员名）
   const ce = $('chat-empty'); if (ce) ce.style.display = 'none';
   if ($('chat-title')) $('chat-title').textContent = task.title || '未命名任务';
+  if ($('btn-ws-toggle')) $('btn-ws-toggle').style.display = '';
+  wsRestoreForTask(task);
   if ($('btn-add-member')) $('btn-add-member').style.display = '';
   if ($('btn-rename-task')) $('btn-rename-task').style.display = '';
   if ($('btn-goal')) $('btn-goal').style.display = '';
@@ -5350,6 +5394,8 @@ function resetChatView() {
   if ($('btn-plan')) $('btn-plan').style.display = 'none';
   if ($('btn-compact')) $('btn-compact').style.display = 'none';
   if ($('btn-permission')) $('btn-permission').style.display = 'none';
+  if ($('btn-ws-toggle')) $('btn-ws-toggle').style.display = 'none';
+  closeWsSide();
   var gb = $('chat-goal-badge'); if (gb) { gb.style.display = 'none'; gb.textContent = ''; }
   if ($('btn-plan')) { $('btn-plan').textContent = '📋'; $('btn-plan').style.background = ''; $('btn-plan').style.borderColor = ''; }
   if ($('chat-mode')) $('chat-mode').style.display = 'none';
@@ -9748,6 +9794,122 @@ function discardDraft() {
   if (!state.currentTaskId) resetChatView();
   renderTaskList();
 }
+// ---------- 工作区右侧栏（F1-1）：页签 = 文件 / 变更 / 预览*N；宽度入 localStorage，页签按任务记忆 ----------
+const wsState = {
+  open: false,
+  width: 420,
+  byTask: {}, // taskId -> { tabs: [{key,kind,title,path,agentId}], active }
+};
+try { const w = parseInt(localStorage.getItem('wb.wsWidth'), 10); if (w >= 280 && w <= 1200) wsState.width = w; } catch (e) { /* ignore */ }
+function wsTaskState() {
+  const id = state.currentTaskId;
+  if (!id) return { tabs: [], active: null };
+  if (!wsState.byTask[id]) wsState.byTask[id] = { tabs: [], active: null };
+  return wsState.byTask[id];
+}
+function wsTabBodyHtml(tab) {
+  if (!tab) return '<div class="ws-hint">从页签打开「文件 / 变更」；点目录树中的文件可在此预览。</div>';
+  if (tab.kind === 'files') return '<div class="ws-hint">📁 工作区目录树加载中…</div>';
+  if (tab.kind === 'changes') return '<div class="ws-hint">变更文件列表（后续任务接入）</div>';
+  if (tab.kind === 'preview') return '<div class="ws-hint">📄 ' + esc(tab.path || '') + '<br/>预览渲染（后续任务接入）</div>';
+  return '';
+}
+function renderWsSide() {
+  const side = $('ws-side');
+  if (!side || !wsState.open) return;
+  if (window.innerWidth > 768) side.style.width = wsState.width + 'px';
+  const st = wsTaskState();
+  const strip = $('ws-tab-strip');
+  strip.innerHTML = st.tabs.length
+    ? st.tabs.map(function (t) {
+      return '<button type="button" class="ws-tab' + (t.key === st.active ? ' on' : '') + '" data-k="' + esc(t.key) + '" title="' + esc(t.title) + '">' + esc(t.title) + '<span class="wt-x" data-x="' + esc(t.key) + '" title="关闭页签">✕</span></button>';
+    }).join('')
+    : '<span class="ws-tab-hint">文件 · 变更</span>';
+  strip.querySelectorAll('.ws-tab').forEach(function (b) {
+    b.addEventListener('click', function (e) {
+      if (e.target.closest('.wt-x')) return;
+      const st2 = wsTaskState();
+      st2.active = b.dataset.k;
+      renderWsSide();
+    });
+  });
+  strip.querySelectorAll('.wt-x').forEach(function (x) {
+    x.addEventListener('click', function (e) { e.stopPropagation(); closeWsTab(x.dataset.x); });
+  });
+  const tab = st.tabs.find(function (t) { return t.key === st.active; }) || null;
+  $('ws-body').innerHTML = wsTabBodyHtml(tab);
+}
+function openWsTab(kind, extra) {
+  const st = wsTaskState();
+  const key = kind === 'preview' ? 'preview:' + ((extra && extra.path) || '') : kind;
+  const title = kind === 'files' ? '文件' : kind === 'changes' ? '变更' : ((extra && extra.path) ? String(extra.path).split('/').pop() : '预览');
+  let tab = st.tabs.find(function (t) { return t.key === key; });
+  if (!tab) {
+    tab = Object.assign({ key: key, kind: kind, title: title }, extra || {});
+    st.tabs.push(tab);
+  }
+  st.active = key;
+  renderWsSide();
+}
+function closeWsTab(key) {
+  const st = wsTaskState();
+  const i = st.tabs.findIndex(function (t) { return t.key === key; });
+  if (i < 0) return;
+  st.tabs.splice(i, 1);
+  if (st.active === key) st.active = st.tabs.length ? st.tabs[Math.max(0, i - 1)].key : null;
+  renderWsSide();
+}
+function openWsSide(tab) {
+  const side = $('ws-side');
+  if (!side) return;
+  wsState.open = true;
+  side.classList.add('on');
+  const st = wsTaskState();
+  if (tab) openWsTab(tab.kind, tab);
+  else if (!st.tabs.length) openWsTab('files');
+  else if (!st.tabs.some(function (t) { return t.key === st.active; })) { st.active = st.tabs[0].key; renderWsSide(); }
+}
+function closeWsSide() {
+  const side = $('ws-side');
+  wsState.open = false;
+  if (side) side.classList.remove('on');
+}
+function wsRestoreForTask(task) {
+  if (!task || !wsState.open) return;
+  const st = wsTaskState();
+  if (!st.tabs.length) { openWsTab('files'); return; }
+  if (!st.tabs.some(function (t) { return t.key === st.active; })) st.active = st.tabs[0].key;
+  renderWsSide();
+}
+(function wireWsSide() {
+  const tgl = $('btn-ws-toggle');
+  if (tgl) tgl.addEventListener('click', function () { if (wsState.open) closeWsSide(); else openWsSide(); });
+  const close = $('btn-ws-close');
+  if (close) close.addEventListener('click', closeWsSide);
+  const rz = $('ws-resizer');
+  if (rz) {
+    rz.addEventListener('pointerdown', function (e) {
+      e.preventDefault();
+      rz.classList.add('drag');
+      rz.setPointerCapture(e.pointerId);
+      const move = function (ev) {
+        const maxW = Math.max(340, Math.floor(window.innerWidth * 0.7));
+        wsState.width = Math.min(maxW, Math.max(280, window.innerWidth - ev.clientX));
+        $('ws-side').style.width = wsState.width + 'px';
+      };
+      const up = function (ev) {
+        rz.classList.remove('drag');
+        try { rz.releasePointerCapture(ev.pointerId); } catch (err) { /* ignore */ }
+        rz.removeEventListener('pointermove', move);
+        rz.removeEventListener('pointerup', up);
+        try { localStorage.setItem('wb.wsWidth', String(wsState.width)); } catch (err) { /* ignore */ }
+      };
+      rz.addEventListener('pointermove', move);
+      rz.addEventListener('pointerup', up);
+    });
+  }
+})();
+
 function renderDraftPlaceBtn() {
   const btn = $('draft-place-btn');
   if (btn && state.draft) btn.textContent = placeLabel(state.draft.place) + ' ▾';
