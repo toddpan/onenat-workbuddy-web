@@ -97,3 +97,9 @@
 - JS：wsState{open,width,byTask}；wsTaskState()=byTask[currentTaskId]；openWsTab(kind,extra)/closeWsTab(key)/openWsSide(tab?)/closeWsSide/wsRestoreForTask；wireWsSide IIFE 绑 📁/✕/拖宽。preview 页签 key='preview:'+path。
 - 接线：applyTaskToView 显示 📁 + wsRestoreForTask；resetChatView 隐藏 📁 + closeWsSide。
 - 注意：openRunConfig 那次 curTask 重复声明的教训——同函数内加局部变量先 grep；锚点替换若 count!=1 先看上下文（S1-1 工人已改过 task-stats 区块）。
+
+## F1-2（ZCode 主会话）
+- wsFiles 状态 + wsTaskDshRef/wsTaskFileCtx（根目录三级优先）+ 懒加载 levels{dirPath:{open,entries,loading,error}} + 委托式 tree.onclick；wsPreviewRender 进 ws-body（复用 md()/code-preview-box）；wsRefToChat 相对路径引用。
+- 头部⋯「工作区文件」→ openWsSide({kind:'files'})；openProjectFiles 暂留（P5-3 清理）。renderWsSide 按 tab.kind 分发 mount。
+- 大坑（再犯就打脸）：web-ui.ts 是 TS 模板字面量——要写进内联脚本的 `\n` 必须在源码里写 `\\n`；python heredoc 里写 '\\\\n'（4 个）才落成源码 '\\n'（3 字符）。node --check 才能抓到，tsc 不查。
+- openRunConfig 的 curTask 重复声明教训同前：新增局部名先 grep。
