@@ -108,3 +108,8 @@
 - wsTaskChanges/wsChangesAllPaths（turnChangedPaths 复用 F2 提取）+ wsChangedCache 按 taskId 缓存（树标记用）；wsChangesMount 按轮分组渲染。
 - 预览双通道：tab.viaTask → /tasks/:id/files/download?agent=（成员节点）；否则 /agents/fs/download?node=。F2 chip 与行内代码链接的 click 都走 openWsSide preview。
 - 注意：dsh-change-chip 从 <a> 改成了 span[role=button]（保留键盘 Enter/Space）；F2 的 CSS 不用动。
+
+## F3-1（ZCode 主会话）
+- state.fileTags + composeOutgoingText/clearFileTags/renderFileTags；引用入口（wsRefToChat/addFileTag/批量×2/pjRefToChat）全改标签；send() 两分支成功后清；openTask 切换清。
+- 目录树 drop：wsFilesRenderAll 里委托 dragover/drop（行→该目录/文件→父目录/空白→lastDir），wsFilesUpload(files,dest) 共用。
+- 第三次踩模板转义坑（'\\n'）：python heredoc 写源码级反斜杠一律用 4 写法；以后任何含 \n 的 JS 字符串进 web-ui.ts 都先想这步。
