@@ -84,3 +84,10 @@
 - 第 9 轮工人跑到 70 轮时被上游 404（claude-haiku-5-5 不受账号组支持，aborted_streaming）打断，$26.86 沉没；循环按脏树守卫自动 PAUSE。产物检查：web-ui.ts +247/-36、smoke +2 断言，build/typecheck/smoke(66) 全绿，实现完整（draft 态/草稿行/commitDraft/兼容入口/附件先建后传），判定可直接收尾，主会话代为提交。
 - 用户指示改向：剩余任务由 ZCode 主会话直接完成，claude CLI 循环与监工停止，定时巡检自动化撤除。
 - 注意（后续任务）：createNewTaskDirectly 现签名 (message)，返回任务 id；草稿弹层复用 P2-1 placeState（renderPlacePop/closePlacePop）；P3-1 分组渲染里已有 draftOn 分支（draftTaskItemElement），改造 renderTaskList 时保留。
+
+## P3-1（ZCode 主会话）
+- renderTaskList 整体替换为执行位置分组（taskPlaceKey：proj:<id> / node:<mappingId>）；saveGroupPrefs + wb.groupCollapsed/wb.groupMore 持久化；分组「＋」→ startDraft(place)。
+- 项目模式删除面：state.projectId 字段、enterProject/exitProject/updateProjectBanner、wb-project-id、pj-enter/命令面板入口、openRunConfig（curTask 来源）、头部⋯菜单（去掉「退出项目」项）、openProjectFiles（pid 必传）；「进入工作台」统一 = switchView('work') + 展开分组 + startDraft({projectId})。
+- 行标记：createTaskItemElement 的点支持 t.pendingAsk（.s.ask 琥珀）、title 前缀 ⏰（taskSummary 新增 scheduleId）；.s.running 改 var(--pri) 蓝。
+- 坑：openRunConfig 内已有遗留 const curTask（同函数重复声明）→ build 的 node --check 才能抓到（tsc 不查内联脚本）；已删遗留两行。
+- smoke「数据落盘」断言偶发中间态（防抖尾随写），改 5s 轮询到满足。验证四件套全过；未做浏览器手测。

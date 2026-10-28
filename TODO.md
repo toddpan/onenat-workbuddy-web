@@ -129,7 +129,8 @@ UI 行为目前没有自动化浏览器测试：任务说明里的「验收」�
 
 ## P3 侧栏按执行位置分组
 
-- [ ] **P3-1** 侧栏分组 + 删除项目模式
+- [x] **P3-1** 侧栏分组 + 删除项目模式
+  - 完成：renderTaskList 改执行位置分组（📦 项目组 / 🖥 单独任务组，活跃组靠前），组内倒序默认 5 条「显示更多/收起」入 localStorage，分组标题「＋」组内建草稿；搜索平铺、归档恒为末组；行标记 pendingAsk 琥珀点 / scheduleId ⏰ / 运行中蓝点；删除 enterProject/exitProject/updateProjectBanner 与 wb-project-id（含命令面板/项目页「进入」改新语义），openRunConfig 与头部⋯改按当前任务项目；taskSummary 补 scheduleId；smoke 落盘断言改轮询消除防抖中间态。验证：build/typecheck/smoke(66)/test:unit(78) 全过；未做浏览器手测
   - 依赖：P2-2
   - `renderTaskList`：分组 = 每个项目一组（📦 名称 · 🖥 节点）+ 每个节点一组「单独任务」；组内按更新时间排序，默认显示 5 条，「显示更多」展开；展开状态存在 localStorage。分组标题上的「＋」= 在该位置新建草稿。
   - 搜索时改为平铺的结果列表；已归档仍单独成组。
