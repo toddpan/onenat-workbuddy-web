@@ -3092,7 +3092,8 @@ export class WorkBuddyRouter {
             id: a.id,
             name: a.name,
             kind: 'agent',
-            detail: `${a.dshRef.kind} · ${a.model ? String(a.model).split('/').pop() : '默认模型'}`,
+            // P5-1：@ 菜单显示执行位置（🖥 节点名 · 模型）
+            detail: `🖥 ${this.nodeLabelOf(a.dshRef) || a.dshRef.kind} · ${a.model ? String(a.model).split('/').pop() : '默认模型'}`,
             meta: { agentId: a.id, description: a.description },
           })
         }
@@ -3137,7 +3138,8 @@ export class WorkBuddyRouter {
               id: e.id,
               name: e.name,
               kind: 'expert',
-              detail: `专家 · ${e.divisionZh || e.division}`,
+              // P5-1：专家在本任务节点执行，如实标注
+              detail: `专家 · ${e.divisionZh || e.division} · 在本任务节点执行`,
               meta: { expertId: e.id, description: e.description, icon: e.icon },
             })
           }

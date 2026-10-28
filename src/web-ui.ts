@@ -8276,9 +8276,10 @@ async function refreshMentionCandidates() {
     });
     (state.agents || []).forEach(a => {
       if (a.enabled !== false) {
+        // P5-1：🖥 节点名 · 模型（与 /mentions/candidates 同口径）
         list.push({
           type: 'agent', id: a.id, name: a.name, kind: 'agent',
-          detail: (a.dshRef && a.dshRef.kind) + ' · ' + (a.model ? String(a.model).split('/').pop() : '默认模型')
+          detail: '🖥 ' + (memberNodeLabel(a.id) || (a.dshRef && a.dshRef.kind) || '节点') + ' · ' + (a.model ? String(a.model).split('/').pop() : '默认模型')
         });
       }
     });
