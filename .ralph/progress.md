@@ -16,3 +16,9 @@
 - 设置页新增「全局默认模型」卡（`renderDefaultModelSetting` + `#btn-save-default-model` → POST /planner/config {model}）。
 - smoke 5.1 节 5 项断言；临时任务结尾删除，保持「tasks=2」断言。
 - 注意（P0-2）：`loadPlannerOptions` 仍按 `nodeState.cur` 拉目录；设置页下拉用的也是这份目录。
+
+## P0-2
+- web-ui.ts：新增 `currentTaskObj()` / `taskExecNodeId(task)`（项目 dshRef → task.nodeRef → nodeState.cur，均只认 mapping）/ `reloadCatalogIfExecNodeChanged()`；`loadPlannerOptions` 的 `?node=` 和 `loadedForNode` 改用执行节点。
+- 重拉时机：`openTask` 末尾、`resetChatView` 末尾、`initNodeState`；`syncNodeChipToTask` 删除了 loadPlannerOptions，`selectNode` 仅在无当前任务时重拉；`applyReachableNodeDefault` 原本就跳过有任务的情况。
+- 手测步骤（未做）：节点 A/B 各一个任务 → 打开 A 任务看模型弹层目录来源（按钮 title「模型目录: 」）为 A → 打开 B 任务应切到 B → 有任务时在节点下拉选别的节点，目录不变 → 删除/关闭任务回空视图，目录回到所选节点；项目任务目录应为项目 dshRef 节点。
+- 注意（P0-3）：`createNewTaskDirectly` 仍对项目任务带 env.nodeRef；`syncNodeChipToTask` 仍只看 task.nodeRef。

@@ -5182,6 +5182,7 @@ async function openTask(taskId) {
   startTaskTodosPolling();
   ensureSkillList(); // "/" 技能候选预热（对齐 harness warm 钩子：打开会话即拉目录）
   loadSessionModelInfo(); // 会话模型选择/推理等级/模式预设回显（失败静默）
+  reloadCatalogIfExecNodeChanged(); // 模型目录跟随该任务实际执行节点（与上一个会话/草稿节点不同时重拉）
   refreshCollab(); // 目标徽标 + 计划模式状态回显（失败静默）
 }
 
@@ -5289,6 +5290,7 @@ function resetChatView() {
   resetTaskStats();
   resetTaskTodos();
   resetTrajView();
+  reloadCatalogIfExecNodeChanged(); // 回到无任务视图：目录回到所选执行位置
 }
 
 function refreshChatHead(taskMaybe) {
@@ -8441,6 +8443,26 @@ function closeMainAgentPop() {
 
 // ---------- 任务节点切换（主 DSH：新模型下节点决定任务在哪台机器上执行） ----------
 const nodeState = { cur: '', userPicked: false }; // mappingId；'' = 未选（资源目录为空时）
+/** 当前打开的任务对象（完整缓存优先，列表摘要兜底）；无当前任务返回 null */
+function currentTaskObj() {
+  if (!state.currentTaskId) return null;
+  return state.taskCache.get(state.currentTaskId) || state.tasks.find(function (x) { return x.id === state.currentTaskId; }) || null;
+}
+/**
+ * 任务实际执行节点（mappingId），模型目录按它拉取（与 engine.taskExec 同口径）：
+ * 项目任务 = project.dshRef → 单独任务 = task.nodeRef → 草稿/解析不到 = 所选执行位置 nodeState.cur
+ */
+function taskExecNodeId(task) {
+  const p = task && task.projectId ? (state.projects || []).find(function (x) { return x.id === task.projectId; }) : null;
+  if (p && p.dshRef && p.dshRef.kind === 'mapping' && p.dshRef.mappingId) return p.dshRef.mappingId;
+  const ref = task && task.nodeRef;
+  if (ref && ref.kind === 'mapping' && ref.mappingId) return ref.mappingId;
+  return (nodeState && nodeState.cur) || '';
+}
+/** 执行节点与已加载目录的节点不一致时重拉模型目录（打开任务 / 首屏节点就绪后调用） */
+function reloadCatalogIfExecNodeChanged() {
+  if (modelState.loaded && modelState.loadedForNode !== taskExecNodeId(currentTaskObj())) loadPlannerOptions();
+}
 /**
  * 会话头部节点选择器回显「该会话实际执行节点」。
  * 节点选择器原本只反映全局默认（新建任务用），打开一个在别的节点上创建的任务时
@@ -8455,8 +8477,6 @@ function syncNodeChipToTask(task) {
         nodeState.cur = ref.mappingId;
         state.taskEnv.nodeRef = { kind: 'mapping', mappingId: ref.mappingId };
         setNodeBtnUi('节点: ' + nodeBtnLabel());
-        // 回显到任务真实节点后，模型目录/规划器选项同步按该节点刷新
-        loadPlannerOptions();
       }
       return true;
     }
@@ -8566,8 +8586,9 @@ function selectNode(mappingId) {
   closeNodePop();
   setNodeBtnUi('节点: ' + nodeBtnLabel());
   hintComposer('✓ 新建任务将在「' + nodeBtnLabel() + '」上执行；@子智能体 回到其绑定节点远程执行');
-  // 节点换了 → 模型目录跟着换（不同引擎注册表互不相通），当前选中模型可能不再适用
-  if (prev !== nodeState.cur) loadPlannerOptions();
+  // 节点换了 → 模型目录跟着换（不同引擎注册表互不相通），当前选中模型可能不再适用；
+  // 已打开任务时目录跟随任务实际执行节点（taskExecNodeId），选择框不得改变它
+  if (prev !== nodeState.cur && !state.currentTaskId) loadPlannerOptions();
 }
 function setNodeBtnUi(label) {
   const btn = $('node-btn');
@@ -8603,7 +8624,7 @@ function initNodeState() {
   setNodeBtnUi('节点: ' + nodeBtnLabel());
   // 首屏 loadPlannerOptions 先于本函数执行（boot Promise.all 顺序），那次目录走的是
   // 「主智能体节点」回退；这里就绪后若与选中节点不一致，补一次按节点联动拉取
-  if (modelState.loaded && modelState.loadedForNode !== nodeState.cur) loadPlannerOptions();
+  reloadCatalogIfExecNodeChanged();
 }
 
 if ($('main-agent-btn')) {
@@ -8753,7 +8774,9 @@ async function loadPlannerOptions() {
 
   // 模型目录跟随所选任务节点（?node=）：调度模型作用于任务节点的主会话，
   // 节点切换后目录必须换成该节点引擎的注册表（否则会把 A 引擎的模型配到 B 引擎上）
-  const nodeQs = nodeState && nodeState.cur ? '?node=' + encodeURIComponent(nodeState.cur) : '';
+  // 节点 = 当前任务实际执行节点（项目 dshRef → task.nodeRef → 所选执行位置），见 taskExecNodeId
+  const catalogNode = taskExecNodeId(currentTaskObj());
+  const nodeQs = catalogNode ? '?node=' + encodeURIComponent(catalogNode) : '';
   const r = await api('/planner/options' + nodeQs);
   if (!r.ok || !r.data) {
     if (modelBtn) modelBtn.disabled = false;
@@ -8798,7 +8821,7 @@ async function loadPlannerOptions() {
   }
   // 服务端权威状态到位后，气泡模型标签与之一致（主智能体 = 列表选中模型）
   refreshMainAgentModelBadges();
-  modelState.loadedForNode = (nodeState && nodeState.cur) || '';
+  modelState.loadedForNode = catalogNode;
 }
 function closeModelPop() { $('model-pop').classList.remove('on'); }
 $('chat-model-btn').addEventListener('click', (e) => {

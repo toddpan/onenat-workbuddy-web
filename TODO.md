@@ -39,7 +39,8 @@ UI 行为目前没有自动化浏览器测试：任务说明里的「验收」�
   - 设置页要有「主调度默认模型」入口（复用 `/planner/config`）；没有就加。
   - 验收：smoke 新增断言——对任务 A 调 `PUT /model` 后，`GET /api/settings` 的 `planner.model` 不变，任务 B 的 `model` 不变。
 
-- [ ] **P0-2** 模型目录跟随任务实际执行节点
+- [x] **P0-2** 模型目录跟随任务实际执行节点
+  - 完成：新增 taskExecNodeId / currentTaskObj / reloadCatalogIfExecNodeChanged，loadPlannerOptions 的 ?node= 改按任务执行节点，openTask / resetChatView / initNodeState 按需重拉；syncNodeChipToTask 与有任务时的 selectNode 不再改目录。验证：npm run build / typecheck / smoke（59 项全过）；未做浏览器手测
   - 依赖：P0-1
   - 新增 `taskExecNodeId(task)`：`project.dshRef`（mapping）→ `task.nodeRef`（mapping）→ `nodeState.cur`。`loadPlannerOptions()` 的 `?node=` 改用它；`openTask` 后执行节点变化时重拉目录。
   - 打开已有任务时，`selectNode` / `applyReachableNodeDefault` 不得再改变模型目录。
