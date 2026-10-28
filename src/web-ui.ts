@@ -2267,6 +2267,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
         <div class="chat-head" id="chat-head">
           <button class="side-toggle" id="btn-side-toggle" title="会话列表"><span class="st-hamb">☰</span></button>
           <span class="title" id="chat-title" title="双击重命名">选择或新建任务</span>
+          <button class="mini-btn" id="chat-fork-crumb" style="display:none" title="跳回原任务"></button>
           <button class="mini-btn" id="btn-rename-task" style="display:none" title="重命名会话">✏️</button>
           <button class="mini-btn" id="btn-goal" style="display:none" title="长期目标（/goal）">🎯</button>
           <button class="mini-btn" id="btn-plan" style="display:none" title="计划模式（/plan）">📋</button>
@@ -5358,6 +5359,16 @@ function applyTaskToView(task, isInitialRender) {
   state.task = task; // 当前任务完整对象（teamId/expertMembers 供编排视图解析专家成员名）
   const ce = $('chat-empty'); if (ce) ce.style.display = 'none';
   if ($('chat-title')) $('chat-title').textContent = task.title || '未命名任务';
+  const crumb = $('chat-fork-crumb');
+  if (crumb) {
+    const ff = task.forkedFrom;
+    if (ff && ff.taskId) {
+      const o = state.taskCache.get(ff.taskId) || state.tasks.find(function (x) { return x.id === ff.taskId; });
+      crumb.textContent = '↪ 续自《' + ((o && o.title) || '原任务') + '》';
+      crumb.style.display = '';
+      crumb.onclick = function () { openTask(ff.taskId); };
+    } else { crumb.style.display = 'none'; crumb.onclick = null; }
+  }
   if ($('btn-ws-toggle')) $('btn-ws-toggle').style.display = '';
   wsRestoreForTask(task);
   if ($('btn-add-member')) $('btn-add-member').style.display = '';
@@ -5431,6 +5442,8 @@ function resetChatView() {
   const scroll = $('chat-scroll');
   if (scroll) scroll.innerHTML = '<div class="chat-empty" id="chat-empty"><div style="font-size:36px">⚡</div><div>从左侧选择任务，或新建一个任务会话</div></div>';
   $('chat-title').textContent = '选择或新建任务';
+  const crumbEl = $('chat-fork-crumb');
+  if (crumbEl) { crumbEl.style.display = 'none'; crumbEl.onclick = null; }
   if ($('btn-add-member')) $('btn-add-member').style.display = 'none';
   if ($('btn-rename-task')) $('btn-rename-task').style.display = 'none';
   if ($('btn-goal')) $('btn-goal').style.display = 'none';
@@ -6334,6 +6347,22 @@ function buildTurnElement(taskId, turn) {
       const t = task && (task.turns || []).find(x => x.id === (turn.id || flow.dataset.turnId));
       return (t && t.text) || flow.querySelector('.dsh-body').textContent || '';
     });
+  }
+
+  // P4-2：system 续接轮「已在 🖥 X 继续 → task-xxx」附打开按钮
+  if (roleClass === 'system') {
+    const fm = /→\s*(task-[A-Za-z0-9]+)/.exec(turn.text || '');
+    if (fm) {
+      const openNew = document.createElement('button');
+      openNew.type = 'button';
+      openNew.className = 'mini-btn';
+      openNew.style.marginLeft = '6px';
+      openNew.textContent = '打开 ↪';
+      openNew.title = '打开续接任务 ' + fm[1];
+      openNew.addEventListener('click', function (e) { e.stopPropagation(); openTask(fm[1]); });
+      const sysRow = flow.querySelector('.dsh-sysRow');
+      if (sysRow) sysRow.appendChild(openNew);
+    }
   }
 
   const blocks = flow.querySelector('.dsh-sys-blocks') || flow.querySelector('.dsh-body');
@@ -8845,9 +8874,9 @@ function renderChatPlace(task) {
   // ⋯ 菜单：任务所属项目，未打开任务时取项目工作台当前项目（原横幅的入口）
   const pj = (info && info.project) || null;
   if (more) {
-    more.style.display = pj ? '' : 'none';
+    // P4-2：⋯ 菜单对单独任务也显示（续接入口）；项目两项由弹层按 pid 决定
+    more.style.display = task ? '' : 'none';
     more.dataset.pid = pj ? pj.id : '';
-    if (!pj) closeHeadMore();
   }
   renderNodeOffline(task);
 }
@@ -8877,9 +8906,11 @@ function renderNodeOffline(task) {
     '<span class="no-msg">🖥 ' + esc(info.nodeLabel) + ' 当前离线，这个任务的会话保存在该节点上' +
     (eng.error ? '（' + esc(eng.error) + '）' : '') + '</span>' +
     '<button class="mini-btn" data-op="retry"' + (retrying ? ' disabled' : '') + '>' + (retrying ? '重试中…' : '重试连接') + '</button>' +
-    '<button class="mini-btn" data-op="fork" disabled title="即将支持">在其他节点继续 →</button>';
+    '<button class="mini-btn" data-op="fork">在其他节点继续 →</button>';
   const retry = bar.querySelector('[data-op="retry"]');
   if (retry) retry.addEventListener('click', retryNodeConnection);
+  const forkBtn = bar.querySelector('[data-op="fork"]');
+  if (forkBtn) forkBtn.addEventListener('click', function () { startForkFlow(forkBtn); });
 }
 async function retryNodeConnection() {
   const bar = $('node-offline');
@@ -8897,16 +8928,17 @@ if ($('btn-head-more')) {
     e.stopPropagation();
     const pop = $('head-more-pop');
     const pid = ($('head-more') && $('head-more').dataset.pid) || '';
-    if (!pop || !pid) return;
+    if (!pop) return;
     if (pop.classList.contains('on')) { closeHeadMore(); return; }
     pop.innerHTML =
-      '<div class="main-agent-item" data-op="files"><div class="ag-info"><div class="ag-title">📁 工作区文件</div></div></div>' +
-      '<div class="main-agent-item" data-op="cfg"><div class="ag-info"><div class="ag-title">⚙ 项目配置</div></div></div>' +
-      '';
+      '<div class="main-agent-item" data-op="fork"><div class="ag-info"><div class="ag-title">↪ 在其他节点继续…</div><div class="ag-sub">携带最近对话，在新位置开新任务（P4）</div></div></div>' +
+      (pid ? '<div class="main-agent-item" data-op="files"><div class="ag-info"><div class="ag-title">📁 工作区文件</div></div></div>' +
+      '<div class="main-agent-item" data-op="cfg"><div class="ag-info"><div class="ag-title">⚙ 项目配置</div></div></div>' : '');
     pop.querySelectorAll('.main-agent-item').forEach(function (it) {
       it.addEventListener('click', function () {
         closeHeadMore();
-        if (it.dataset.op === 'files') openWsSide({ kind: 'files' });
+        if (it.dataset.op === 'fork') startForkFlow($('btn-head-more'));
+        else if (it.dataset.op === 'files') openWsSide({ kind: 'files' });
         else if (it.dataset.op === 'cfg') openProjectDrawer(pid);
       });
     });
@@ -10507,6 +10539,33 @@ function wsChangesMount() {
       openWsSide({ kind: 'preview', path: row.dataset.p, title: String(row.dataset.p).split('/').pop(), agentId: row.dataset.agent || '', viaTask: true });
     });
   });
+}
+
+// ---------- P4-2 跨节点续接：选位置 → fork → 打开新任务并带入草稿（不自动发送） ----------
+function startForkFlow(anchor) {
+  const t = currentTaskObj();
+  if (!t) { toast('请先打开要续接的任务', true); return; }
+  const cur = t.projectId ? { projectId: t.projectId } : { nodeMappingId: taskExecNodeId(t) };
+  openPlacePop(anchor || $('btn-head-more'), cur, function (place) { forkTaskTo(t.id, place); });
+}
+async function forkTaskTo(taskId, place) {
+  toast('正在创建续接任务…');
+  const body = {};
+  if (place && place.projectId) body.projectId = place.projectId;
+  else if (place && place.nodeMappingId) body.nodeRef = { kind: 'mapping', mappingId: place.nodeMappingId };
+  const r = await api('/tasks/' + encodeURIComponent(taskId) + '/fork', { method: 'POST', body: JSON.stringify(body) });
+  if (!r.ok) { toast(r.error || '续接失败', true); return; }
+  const nt = r.data && r.data.task;
+  if (!nt) { toast('续接失败：服务未返回新任务', true); return; }
+  state.taskCache.set(nt.id, nt);
+  await loadTasks();
+  await openTask(nt.id);
+  const input = $('input');
+  if (input && r.data.draft) {
+    input.value = r.data.draft;
+    input.focus();
+    hintComposer('已带入原任务最近对话（不会自动发送，可编辑后再发送）');
+  }
 }
 
 function renderDraftPlaceBtn() {
