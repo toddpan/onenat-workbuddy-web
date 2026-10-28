@@ -30,3 +30,10 @@
 - smoke 新增 5.2 节 4 项断言（创建项目 → projectId+nodeRef 同传创建任务断言无 nodeRef → 回读仍无 → 对照单独任务保留 nodeRef）；engine.test.ts 新增单测「项目任务节点以项目为准」。
 - 验证：build / typecheck / smoke（63 项）/ test:unit（77 项）全过；未做浏览器手测。
 - 手测步骤（未做）：进入项目工作台点「＋新建任务」→ 头部节点应显示项目节点（非默认节点），模型目录来源为项目节点；带 nodeRef 的存量项目任务打开后头部同样显示项目节点；网络层确认 POST /api/tasks 请求体无 nodeRef。
+
+## S1-1
+- web-ui.ts：`#task-stats` 内改为 `.stat-pills`（`#stat-pill-time` / `#stat-pill-tok`）+ `#stat-panel`；新增 `renderStatPills` / `renderStatPanel` / `closeStatPanel` / `statsLiveElapsed` / `statsSpeed`，`renderTaskStats` 只存 `statsState.stats` 后调 `renderStatPills`；statsState 加 `stats` / `panel`。
+- 运行时长：`renderTodoDock` 开头更新 `todoState.running/baseElapsed/anchorAt` 后调 `renderStatPills`；`tickTodoElapsed`（1s）改为刷新胶囊；`#todo-elapsed` 与其 CSS 已删；todo 坞无清单即隐藏；/todos 不支持时把 running 置 false。
+- 关闭面板：胶囊外点击 + document Esc（stopPropagation）；`resetTaskStats` 会关闭面板。
+- 注意（S1-2）：轮询仍是 statsState.timer 5s / todoState.timer 3s 常驻；`supported:false` 时 renderTaskStats(null)，胶囊直接隐藏，还没有「统计不可用」灰胶囊。
+- 未验证：浏览器手测（胶囊样式、面板定位、手机端横滑、运行中每秒递增）。

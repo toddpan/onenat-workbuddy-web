@@ -988,10 +988,33 @@ body.task-running .dsh-sysRow.sys-planning .markdown::after {
 
 /* 任务实时统计条（轮/步 · LLM/工具耗时 · 首 token/吞吐 · 缓存命中 · token 账本），对齐 DSH web StatsLine */
 .task-stats {
-  flex: none; padding: 4px 18px 7px; font-size: 11px; color: var(--tx3); line-height: 1.5;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center;
-  user-select: none; border-top: 1px solid var(--line);
+  flex: none; position: relative; width: 100%; max-width: var(--dsh-composer-card-max-width, 920px);
+  padding: 5px 18px 6px; font-size: 11px; color: var(--tx3); line-height: 1.5; user-select: none;
 }
+/* 两个胶囊：⏱ 时间（轮·步·tok/s，运行中=本轮时长）+ 🗄 Token（总量·缓存命中），点击弹出明细面板 */
+.stat-pills {
+  display: flex; justify-content: center; gap: 6px; white-space: nowrap;
+  overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none;
+}
+.stat-pills::-webkit-scrollbar { display: none; }
+.stat-pill {
+  flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 2px 9px;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--bg2);
+  color: var(--tx3); font-size: 11px; line-height: 1.5; cursor: pointer; font-variant-numeric: tabular-nums;
+}
+.stat-pill:hover { color: var(--tx2); border-color: var(--line2); }
+.stat-pill.run { color: var(--pri); border-color: rgba(77, 107, 254, 0.35); }
+.stat-pill[aria-expanded="true"] { color: var(--pri); background: var(--pri-light); border-color: rgba(77, 107, 254, 0.35); }
+.stat-panel {
+  position: absolute; bottom: calc(100% + 4px); left: 50%; transform: translateX(-50%); z-index: 60;
+  min-width: 230px; max-width: calc(100vw - 20px); padding: 6px 4px;
+  background: var(--bg2); border: 1px solid var(--line2); border-radius: 10px;
+  box-shadow: 0 10px 32px rgba(31,35,41,.12); display: none;
+}
+.stat-panel.on { display: block; }
+.stat-panel .sp-h { padding: 4px 10px 6px; font-size: 11px; font-weight: 600; color: var(--tx2); border-bottom: 1px solid var(--line); margin-bottom: 3px; }
+.stat-panel .sp-r { display: flex; justify-content: space-between; gap: 18px; padding: 3px 10px; font-size: 12px; color: var(--tx2); }
+.stat-panel .sp-r b { font-weight: 500; color: var(--tx); font-variant-numeric: tabular-nums; }
 
 /* ---- 任务清单坞（对齐 DSH web TodoPanel：任务 + N 进行中 · M 待处理 + 运行时长） ---- */
 .todo-dock {
@@ -1007,8 +1030,6 @@ body.task-running .dsh-sysRow.sys-planning .markdown::after {
 .todo-lead { display: inline-flex; align-items: center; color: var(--pri); flex: none; }
 .todo-title { color: var(--tx); font-weight: 600; flex: none; }
 .todo-progress { color: var(--tx3); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.todo-elapsed { color: var(--tx3); font-size: 11.5px; flex: none; font-variant-numeric: tabular-nums; }
-.todo-elapsed.run { color: var(--pri); }
 .todo-chev { flex: none; color: var(--tx3); font-size: 10.5px; }
 .todo-list { list-style: none; max-height: 170px; overflow-y: auto; padding: 2px 0 6px; border-top: 1px solid var(--line); }
 .todo-item { display: flex; gap: 8px; align-items: flex-start; padding: 4px 12px; font-size: 12.5px; line-height: 1.5; color: var(--tx2); }
@@ -1670,9 +1691,10 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
   .jump-bottom { right: 12px; padding: 8px 11px; font-size: 12px; }
   .jump-bottom .jb-t { display: none; }
   .task-stats { padding: 4px 10px 5px; font-size: 10.5px; }
+  .stat-pills { justify-content: flex-start; }
+  .stat-panel { position: fixed; left: 10px; right: 10px; bottom: calc(64px + env(safe-area-inset-bottom)); transform: none; min-width: 0; max-width: none; }
   .todo-dock { margin: 0 8px 6px; }
   .todo-list { max-height: 132px; }
-  .todo-elapsed { font-size: 11px; }
 
   /* ---- 提及浮层 ---- */
   .mention-popup { width: calc(100vw - 24px); left: 12px; }
@@ -2198,12 +2220,11 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           </div>
         </div>
         <div class="todo-dock" id="todo-dock" style="display:none">
-          <button class="todo-head" id="todo-head" aria-expanded="true" title="远端 DSH 会话的任务清单（todo_write）与运行时长 · 点击折叠/展开">
+          <button class="todo-head" id="todo-head" aria-expanded="true" title="远端 DSH 会话的任务清单（todo_write） · 点击折叠/展开">
             <span class="todo-lead" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="1.4" y="1.4" width="11.2" height="11.2" rx="2.6" stroke="currentColor" stroke-width="1.2"/><path d="M4.3 7.1l1.8 1.8 3.5-3.7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
             <span class="todo-title">任务</span>
             <span class="todo-progress" id="todo-progress"></span>
             <span class="hspacer"></span>
-            <span class="todo-elapsed" id="todo-elapsed" style="display:none"></span>
             <span class="todo-chev" id="todo-chev" aria-hidden="true">▴</span>
           </button>
           <ul class="todo-list" id="todo-list"></ul>
@@ -2253,7 +2274,13 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
               </div>
             </div>
           </div>
-          <div class="task-stats" id="task-stats" style="display:none"></div>
+          <div class="task-stats" id="task-stats" style="display:none">
+            <div class="stat-pills">
+              <button type="button" class="stat-pill" id="stat-pill-time" data-k="time" aria-haspopup="dialog" aria-expanded="false" aria-controls="stat-panel"></button>
+              <button type="button" class="stat-pill" id="stat-pill-tok" data-k="tok" aria-haspopup="dialog" aria-expanded="false" aria-controls="stat-panel"></button>
+            </div>
+            <div class="stat-panel" id="stat-panel" role="dialog"></div>
+          </div>
         </div>
       </section>
     </div>
@@ -9004,7 +9031,7 @@ async function selectPreset(id) {
 loadPlannerOptions();
 
 // ---------- 任务实时统计条（对齐 DSH web StatsLine：轮/步 · LLM/工具耗时 · 首 token/吞吐 · 缓存命中 · token 账本） ----------
-const statsState = { timer: null, inFlight: false, lastRendered: '' };
+const statsState = { timer: null, inFlight: false, lastRendered: '', stats: null, panel: null };
 function fmtStatsDuration(ms) {
   const s = ms / 1000;
   if (s < 60) return (Math.round(s * 10) / 10) + '秒';
@@ -9024,40 +9051,92 @@ function fmtCacheHit(read, billedInput) {
   const rounded = Math.round(pct * 10) / 10;
   return rounded < 100 ? String(Math.round(pct)) : rounded.toFixed(1);
 }
-function renderTaskStats(stats) {
+// 运行时长取 todoState（running / baseElapsed / anchorAt，由 renderTodoDock 按 /todos 回包更新）
+function statsLiveElapsed() {
+  return todoState.baseElapsed + (todoState.running ? Date.now() - todoState.anchorAt : 0);
+}
+function statsSpeed(stats) {
+  return stats && stats.decodeMs > 0 ? Math.round(stats.decodeTokens / (stats.decodeMs / 1000)) + ' tok/s' : '';
+}
+function renderStatPanel() {
+  const panel = $('stat-panel');
+  if (!panel) return;
+  const k = statsState.panel;
+  ['time', 'tok'].forEach(function (x) {
+    const b = $(x === 'time' ? 'stat-pill-time' : 'stat-pill-tok');
+    if (b) b.setAttribute('aria-expanded', k === x ? 'true' : 'false');
+  });
+  if (!k) { panel.classList.remove('on'); panel.innerHTML = ''; return; }
+  const s = statsState.stats || {};
+  const row = function (label, val) { return '<div class="sp-r"><span>' + esc(label) + '</span><b>' + esc(val || '—') + '</b></div>'; };
+  let html = '';
+  if (k === 'time') {
+    const elapsed = statsLiveElapsed();
+    html = '<div class="sp-h">耗时</div>'
+      + row(todoState.running ? '本轮运行（进行中）' : '上轮运行', elapsed > 0 || todoState.running ? fmtTodoDuration(elapsed) : '')
+      + row('LLM 耗时', s.llmMs > 0 ? fmtStatsDuration(s.llmMs) : '')
+      + row('工具耗时', s.toolMs > 0 ? fmtStatsDuration(s.toolMs) : '')
+      + row('首 token 平均', s.ttftSteps > 0 ? fmtStatsDuration(s.ttftMs / s.ttftSteps) : '')
+      + row('输出速度', statsSpeed(s));
+  } else {
+    const n = function (v) { return (v || 0) > 0 ? fmtStatsTokens(v) + ' tok' : '0'; };
+    html = '<div class="sp-h">Token</div>'
+      + row('输入（未命中缓存）', n(s.inputTokens))
+      + row('输出', n(s.outputTokens))
+      + row('缓存读', n(s.cacheReadTokens))
+      + row('缓存写', n(s.cacheWriteTokens));
+  }
+  panel.innerHTML = html;
+  panel.classList.add('on');
+}
+function closeStatPanel() {
+  if (!statsState.panel) return;
+  statsState.panel = null;
+  renderStatPanel();
+}
+function renderStatPills() {
   const el = $('task-stats');
-  if (!stats || (!stats.steps && !stats.outputTokens && !stats.inputTokens && !stats.cacheReadTokens)) {
+  const tBtn = $('stat-pill-time'), kBtn = $('stat-pill-tok');
+  if (!el || !tBtn || !kBtn) return;
+  const stats = statsState.stats;
+  let timeText = '';
+  if (todoState.running) {
+    timeText = '⏱ 本轮 ' + fmtTodoDuration(statsLiveElapsed());
+  } else if (stats && stats.steps > 0) {
+    const sp = statsSpeed(stats);
+    timeText = '⏱ ' + stats.turns + ' 轮 · ' + stats.steps + ' 步' + (sp ? ' · ' + sp : '');
+  }
+  let tokText = '';
+  if (stats) {
+    const billedInput = (stats.inputTokens || 0) + (stats.cacheReadTokens || 0) + (stats.cacheWriteTokens || 0);
+    const total = billedInput + (stats.outputTokens || 0);
+    if (total > 0) {
+      const hit = fmtCacheHit(stats.cacheReadTokens || 0, billedInput);
+      tokText = '🗄 ' + fmtStatsTokens(total) + ' tok' + (hit !== null ? ' · 缓存命中 ' + hit + '%' : '');
+    }
+  }
+  const key = timeText + '|' + tokText + '|' + (todoState.running ? 1 : 0);
+  if (key !== statsState.lastRendered) {
+    statsState.lastRendered = key;
+    tBtn.textContent = timeText;
+    tBtn.style.display = timeText ? '' : 'none';
+    tBtn.className = 'stat-pill' + (todoState.running ? ' run' : '');
+    tBtn.title = todoState.running ? '本轮运行中（本地每秒递增）· 点击查看耗时明细' : '点击查看耗时明细';
+    kBtn.textContent = tokText;
+    kBtn.style.display = tokText ? '' : 'none';
+    kBtn.title = '点击查看 token 明细';
+  }
+  if (!timeText && !tokText) {
     el.style.display = 'none';
-    el.textContent = '';
+    closeStatPanel();
     return;
   }
-  const groups = [];
-  if (stats.steps > 0) {
-    groups.push(stats.turns + ' 轮 · ' + stats.steps + ' 步');
-    const durations = [];
-    if (stats.llmMs > 0) durations.push('LLM ' + fmtStatsDuration(stats.llmMs));
-    if (stats.toolMs > 0) durations.push('工具调用 ' + fmtStatsDuration(stats.toolMs));
-    if (durations.length) groups.push(durations.join(' · '));
-    const speeds = [];
-    if (stats.ttftSteps > 0) speeds.push('首 token 平均 ' + fmtStatsDuration(stats.ttftMs / stats.ttftSteps));
-    if (stats.decodeMs > 0) speeds.push(Math.round(stats.decodeTokens / (stats.decodeMs / 1000)) + ' tok/s');
-    if (speeds.length) groups.push(speeds.join(' · '));
-  }
-  const billedInput = (stats.inputTokens || 0) + (stats.cacheReadTokens || 0) + (stats.cacheWriteTokens || 0);
-  const hasTokens = billedInput > 0 || (stats.outputTokens || 0) > 0;
-  if (hasTokens) {
-    const hit = fmtCacheHit(stats.cacheReadTokens || 0, billedInput);
-    if (hit !== null) groups.push('缓存命中 ' + hit + '%');
-    groups.push('输入 ' + fmtStatsTokens(billedInput) + ' tok · 输出 ' + fmtStatsTokens(stats.outputTokens || 0) + ' tok');
-  }
-  const line = groups.join(' | ');
-  if (!line) { el.style.display = 'none'; return; }
-  if (line !== statsState.lastRendered) {
-    statsState.lastRendered = line;
-    el.textContent = line;
-    el.title = line;
-  }
   el.style.display = '';
+  if (statsState.panel) renderStatPanel();
+}
+function renderTaskStats(stats) {
+  statsState.stats = stats || null;
+  renderStatPills();
 }
 async function loadTaskStats() {
   const taskId = state.currentTaskId;
@@ -9073,9 +9152,25 @@ async function loadTaskStats() {
 function resetTaskStats() {
   if (statsState.timer) { clearInterval(statsState.timer); statsState.timer = null; }
   statsState.lastRendered = '';
+  statsState.stats = null;
+  closeStatPanel();
   const el = $('task-stats');
-  if (el) { el.style.display = 'none'; el.textContent = ''; }
+  if (el) el.style.display = 'none';
 }
+document.querySelectorAll('#task-stats .stat-pill').forEach(function (btn) {
+  btn.addEventListener('click', function (e) {
+    e.stopPropagation();
+    const k = btn.getAttribute('data-k');
+    statsState.panel = statsState.panel === k ? null : k;
+    renderStatPanel();
+  });
+});
+document.addEventListener('click', function (e) {
+  if (statsState.panel && !$('task-stats').contains(e.target)) closeStatPanel();
+});
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape' && statsState.panel) { closeStatPanel(); e.stopPropagation(); }
+});
 // 打开会话时启动轮询（5s），关闭/切换时重置；SSE turn_end 处也会即时刷新
 function startTaskStatsPolling() {
   resetTaskStats();
@@ -9117,9 +9212,16 @@ function renderTodoDock(data) {
   const todos = Array.isArray(data && data.todos) ? data.todos : [];
   const running = !!(data && data.running);
   const elapsed = (data && data.elapsedMs) || 0;
-  if (!todos.length && !running && !(elapsed > 0)) {
+  // 运行时长：服务端 elapsedMs 为锚点，前端每秒本地递增（运行中）；显示在状态栏时间胶囊（renderStatPills）
+  todoState.running = running;
+  todoState.baseElapsed = elapsed;
+  todoState.anchorAt = Date.now();
+  renderStatPills();
+  // todo 坞只显示任务清单：没有清单就整块隐藏
+  if (!todos.length) {
     dock.style.display = 'none';
     todoState.visible = false;
+    todoState.lastHtml = '';
     return;
   }
   dock.style.display = '';
@@ -9132,36 +9234,10 @@ function renderTodoDock(data) {
   if (c.inProgress > 0) parts.push(c.inProgress + (running ? ' 进行中' : ' 未完成'));
   if (c.pending > 0) parts.push(c.pending + ' 待处理');
   const prog = $('todo-progress');
-  if (prog) prog.textContent = parts.length ? parts.join(' · ') : (todos.length ? todos.length + ' 项' : '本轮暂无清单');
-  // 运行时长：服务端 elapsedMs 为锚点，前端每秒本地递增（运行中）
-  todoState.running = running;
-  todoState.baseElapsed = elapsed;
-  todoState.anchorAt = Date.now();
-  const el = $('todo-elapsed');
-  if (el) {
-    if (running || elapsed > 0) {
-      el.style.display = '';
-      el.className = 'todo-elapsed' + (running ? ' run' : '');
-      el.textContent = (running ? '⏱ 运行时长 ' : '⏱ 上轮时长 ') + fmtTodoDuration(elapsed);
-      el.title = running
-        ? '远端 DSH 会话本轮运行中（本地每秒递增）'
-        : '远端 DSH 会话最后一轮运行时长';
-    } else {
-      el.style.display = 'none';
-    }
-  }
+  if (prog) prog.textContent = parts.length ? parts.join(' · ') : todos.length + ' 项';
   const list = $('todo-list');
   if (!list) return;
   const chev = $('todo-chev');
-  if (!todos.length) {
-    // 空清单：删除「尚未写入任务清单」占位行并收起列表（旧实现常显一行空态，
-    // 让「任务」坞在无清单时仍占两行、压住编排计划卡底部）。标题行 + 时长仍保留。
-    list.innerHTML = '';
-    list.style.display = 'none';
-    if (chev) chev.style.display = 'none';
-    todoState.lastHtml = '';
-    return;
-  }
   list.style.display = '';
   if (chev) chev.style.display = '';
   setTodoCollapsedUI();
@@ -9177,11 +9253,10 @@ function renderTodoDock(data) {
   }
   setTodoCollapsedUI();
 }
+// 运行中每秒刷新状态栏时间胶囊（及已打开的耗时面板）
 function tickTodoElapsed() {
-  if (!todoState.visible || !todoState.running) return;
-  const el = $('todo-elapsed');
-  if (!el) return;
-  el.textContent = '⏱ 运行时长 ' + fmtTodoDuration(todoState.baseElapsed + (Date.now() - todoState.anchorAt));
+  if (!todoState.running) return;
+  renderStatPills();
 }
 async function loadTaskTodos() {
   const taskId = state.currentTaskId;
@@ -9194,6 +9269,7 @@ async function loadTaskTodos() {
       const dock = $('todo-dock');
       if (dock) dock.style.display = 'none';
       todoState.visible = false;
+      if (todoState.running) { todoState.running = false; renderStatPills(); }
       return;
     }
     renderTodoDock(r.data);
