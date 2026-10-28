@@ -489,7 +489,7 @@ export function buildProjectImportPrompt(opts: {
     '5. 调用平台接口创建项目（JSON 原文 POST，记录 HTTP 响应原文）：',
     '   curl -sS -X POST -H "Content-Type: application/json" --data-binary "@$PAYLOAD" "' + createUrl + '"',
     '   响应为 JSON：ok=true 且 data.workspace=' + path + ' 表示平台已按你推断的表单建好项目；ok=false 时把 error 原文一并汇报。若响应里 data.workspace 与本任务路径不一致，说明载荷被并发任务覆盖了——立即用本任务专属文件名重写载荷并重试一次，仍不一致则汇报失败。',
-    '6. 汇报：项目分析结论（是什么项目/技术栈/怎么跑）、表单各字段的取值与理由（各一句话，含平台侧 data.name 与你提交的 name 是否一致）、平台创建结果原文。',
+    `6. 汇报：项目分析结论（是什么项目/技术栈/怎么跑）、表单各字段的取值与理由（各一句话；字段表第一、二行必须是 node=${nodeKey} 与 workspace=${path}，并注明与平台响应 data.node.mappingId / data.workspace 是否一致；含平台侧 data.name 与你提交的 name 是否一致）、平台创建结果原文。`,
     '不要修改工作区内的任何文件，不要做与本任务无关的其他操作。',
   ].join('\n')
 }

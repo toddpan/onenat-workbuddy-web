@@ -351,6 +351,8 @@ export interface TurnToolCall {
   args?: string
   /** 结果摘要（字符串，截断） */
   result?: string
+  /** 写入/编辑类工具的目标路径（只存路径不存内容；args 摘要会截断，路径须单独落盘） */
+  paths?: string[]
   status: 'running' | 'done' | 'error'
   at: number
   /** 耗时 ms（结果到达时计算） */
@@ -448,6 +450,10 @@ export interface WorkTask {
    * 与 archivedAt（列表隐藏）语义无关。
    */
   bulkArchived?: { at: number; turns: number; logs: number }
+  /** 跨节点续接来源（P4-1）：本任务由 fork 产生，指向原任务 */
+  forkedFrom?: { taskId: string; at: number }
+  /** 被续接记录（P4-1）：本任务被 fork 到其它节点/项目时，原任务上追加的新任务清单 */
+  forks?: Array<{ taskId: string; at: number }>
   /** 会话附件（上传到各成员远端工作区后的登记） */
   attachments?: TaskAttachment[]
   /** 由定时任务派生时记录来源（调度删除/滚动出窗口后类型标识仍可恢复） */

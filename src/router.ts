@@ -428,6 +428,8 @@ export class WorkBuddyRouter {
       // 任务节点：会话头部节点选择器按它回显（否则列表壳/E2E 下显示的是「新任务默认节点」，与实际执行节点不符）
       nodeRef: t.nodeRef,
       lastRoute: t.lastRoute,
+      scheduleId: t.scheduleId || undefined,
+      workDir: t.workDir || undefined,
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,
       archivedAt: t.archivedAt,
@@ -585,6 +587,7 @@ export class WorkBuddyRouter {
       let sessionsOk = 0
       let sessionsTotal = 0
       let supported = false
+      let unsupportedError = ''
       for (const r of results) {
         if (!r) continue
         sessionsTotal += 1
@@ -599,10 +602,42 @@ export class WorkBuddyRouter {
           }
         } else if (r.supported) {
           supported = true
+        } else if (!unsupportedError) {
+          unsupportedError = r.error || ''
         }
       }
       // 无绑定（纯本地 DSH 任务）或全部成员远端过旧时不支持
       if (bindings.length === 0) supported = false
+      // 不支持时给出准确原因：no_session = 还没有远端会话（前端不提示）；offline = 成员节点全部离线；unsupported = 远端版本过低
+      let reasonCode: 'no_session' | 'offline' | 'unsupported' | undefined
+      let reason: string | undefined
+      if (!supported) {
+        if (bindings.length === 0) {
+          reasonCode = 'no_session'
+          reason = '任务尚未在远端节点建立会话'
+        } else if (sessionsTotal === 0) {
+          reasonCode = 'offline'
+          reason = '成员所在节点离线，暂时无法读取统计'
+        } else {
+          reasonCode = 'unsupported'
+          reason = unsupportedError || '远端 dsh-web-service 版本过低，不含统计接口'
+        }
+      }
+      // 按成员拆分（S2-1）：合并口径 stats 保持不变（向后兼容），另带 members[] 供 Token 面板分行展示
+      const okByAgent = new Map(results.filter((x): x is NonNullable<typeof x> => Boolean(x)).map((x) => [x.agentId, x]))
+      const projForLabel = task.projectId ? this.store.getProject(task.projectId) : undefined
+      const members = bindings.map(([agentId]) => {
+        const agent = this.store.getAgent(agentId)
+        const ref = agent?.dshRef || task.nodeRef || projForLabel?.dshRef
+        const hit = okByAgent.get(agentId)
+        return {
+          agentId,
+          name: agent?.name || '主会话',
+          nodeLabel: ref ? this.nodeLabelOf(ref) : '',
+          model: agent?.model || task.model || '',
+          stats: hit && hit.ok ? hit.stats : undefined,
+        }
+      })
       const payload = {
         ok: true,
         data: {
@@ -611,6 +646,8 @@ export class WorkBuddyRouter {
           sessionsOk,
           sessionsTotal,
           stats: supported ? totals : undefined,
+          members,
+          ...(reasonCode ? { reasonCode, reason } : {}),
         },
       }
       const result = { httpStatus: 200, payload }
@@ -3055,7 +3092,8 @@ export class WorkBuddyRouter {
             id: a.id,
             name: a.name,
             kind: 'agent',
-            detail: `${a.dshRef.kind} · ${a.model ? String(a.model).split('/').pop() : '默认模型'}`,
+            // P5-1：@ 菜单显示执行位置（🖥 节点名 · 模型）
+            detail: `🖥 ${this.nodeLabelOf(a.dshRef) || a.dshRef.kind} · ${a.model ? String(a.model).split('/').pop() : '默认模型'}`,
             meta: { agentId: a.id, description: a.description },
           })
         }
@@ -3100,7 +3138,8 @@ export class WorkBuddyRouter {
               id: e.id,
               name: e.name,
               kind: 'expert',
-              detail: `专家 · ${e.divisionZh || e.division}`,
+              // P5-1：专家在本任务节点执行，如实标注
+              detail: `专家 · ${e.divisionZh || e.division} · 在本任务节点执行`,
               meta: { expertId: e.id, description: e.description, icon: e.icon },
             })
           }
@@ -3216,6 +3255,22 @@ export class WorkBuddyRouter {
       const teamId = String(body?.teamId || '').trim()
       const out = await this.engine.sendUserMessage(taskId, String(body.message || ''), teamId ? { teamId } : undefined)
       this.sendJson(res, out.ok ? 202 : 400, out)
+      return true
+    }
+    // 跨节点续接（P4-1）：新任务带最近对话原文草稿（不调用 LLM），双向链接原任务
+    const forkMatch = /^\/api\/tasks\/([^/]+)\/fork$/.exec(p)
+    if (forkMatch && method === 'POST') {
+      const taskId = decodeURIComponent(forkMatch[1])
+      const body = await this.parseBody(req)
+      try {
+        const out = await this.engine.forkTask(taskId, {
+          nodeRef: body?.nodeRef && typeof body.nodeRef === 'object' ? (body.nodeRef as DshRef) : undefined,
+          projectId: body?.projectId ? String(body.projectId) : undefined,
+        })
+        this.sendJson(res, 200, { ok: true, data: out })
+      } catch (err: any) {
+        this.sendJson(res, 400, { ok: false, error: err?.message || String(err) })
+      }
       return true
     }
     // 任务实时统计：聚合各成员远端会话的轮/步/耗时/吞吐/token 账本（3s 缓存 + 并发去重）

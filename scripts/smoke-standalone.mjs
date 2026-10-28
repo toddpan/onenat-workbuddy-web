@@ -205,10 +205,71 @@ async function main() {
   const renamed = await req('POST', `${PREFIX}/api/tasks/${taskId}/rename`, { title: '冒烟任务-改名' })
   check('任务重命名', renamed.status === 200 && renamed.json?.data?.title === '冒烟任务-改名')
 
+  // ---------- 5.1 模型按任务保存（P0-1）：改任务 A 的模型不影响全局默认，也不影响任务 B ----------
+  const settingsBefore = await req('GET', `${PREFIX}/api/settings`)
+  const plannerModelBefore = settingsBefore.json?.data?.planner?.model || ''
+  const taskB = await req('POST', `${PREFIX}/api/tasks`, { title: '冒烟任务-B', memberAgentIds: [agentId], mode: 'chat' })
+  const taskBId = taskB.json?.data?.id
+  const setModelA = await req('PUT', `${PREFIX}/api/tasks/${taskId}/model`, { model: 'smoke-provider/smoke-model-a' })
+  check('任务级模型写入', setModelA.status === 200 && setModelA.json?.data?.model === 'smoke-provider/smoke-model-a')
+  const settingsAfter = await req('GET', `${PREFIX}/api/settings`)
+  const readA = await req('GET', `${PREFIX}/api/tasks/${taskId}`)
+  const readB = await req('GET', `${PREFIX}/api/tasks/${taskBId}`)
+  check('任务级模型不改全局默认模型', (settingsAfter.json?.data?.planner?.model || '') === plannerModelBefore, `before=${plannerModelBefore || '(空)'} after=${settingsAfter.json?.data?.planner?.model || '(空)'}`)
+  check('任务级模型不影响其他任务', readA.json?.data?.model === 'smoke-provider/smoke-model-a' && !readB.json?.data?.model, `B.model=${readB.json?.data?.model || '(空)'}`)
+  const createWithModel = await req('POST', `${PREFIX}/api/tasks`, { title: '冒烟任务-带模型', mode: 'chat', model: 'smoke-provider/smoke-model-c' })
+  check('创建任务时可指定任务级模型', [200, 201].includes(createWithModel.status) && createWithModel.json?.data?.model === 'smoke-provider/smoke-model-c')
+  const clearA = await req('PUT', `${PREFIX}/api/tasks/${taskId}/model`, { model: '' })
+  check('任务级模型可清除（跟随默认）', clearA.status === 200 && clearA.json?.data?.model === '')
+  const statsDraft = await req('GET', `${PREFIX}/api/tasks/${taskId}/stats`)
+  check('stats 返回 members 字段（S2-1，无会话时为空数组）', statsDraft.status === 200 && Array.isArray(statsDraft.json?.data?.members), `members=${JSON.stringify(statsDraft.json?.data?.members)}`)
+  if (taskBId) await req('DELETE', `${PREFIX}/api/tasks/${taskBId}`)
+  if (createWithModel.json?.data?.id) await req('DELETE', `${PREFIX}/api/tasks/${createWithModel.json.data.id}`)
+  // P2-2：草稿页首条消息 = POST /tasks 带 message（创建即发送），任务里应恰好有 1 个 user 轮次
+  const createWithMsg = await req('POST', `${PREFIX}/api/tasks`, { mode: 'chat', model: 'smoke-provider/smoke-model-c', message: '冒烟草稿首条消息' })
+  const msgTaskId = createWithMsg.json?.data?.id
+  const msgUserTurns = (createWithMsg.json?.data?.turns || []).filter((t) => t.role === 'user')
+  check('带 message 创建任务：恰好 1 个 user 轮次', [200, 201].includes(createWithMsg.status) && msgUserTurns.length === 1 && msgUserTurns[0].text === '冒烟草稿首条消息', `userTurns=${msgUserTurns.length}`)
+  check('带 message 创建任务：标题取自首条消息、保留任务级模型', createWithMsg.json?.data?.title?.includes('冒烟草稿') && createWithMsg.json?.data?.model === 'smoke-provider/smoke-model-c', `title=${createWithMsg.json?.data?.title}`)
+  if (msgTaskId) {
+    await req('POST', `${PREFIX}/api/tasks/${msgTaskId}/cancel`)
+    await req('DELETE', `${PREFIX}/api/tasks/${msgTaskId}`)
+  }
+
   const archived = await req('POST', `${PREFIX}/api/tasks/${taskId}/archive`, { archived: true })
   check('任务归档', archived.status === 200)
   const tasks = await req('GET', `${PREFIX}/api/tasks`)
   check('任务列表可读', (tasks.json?.data || []).some((t) => t.id === taskId))
+
+  // ---------- 5.2 项目任务节点以项目为准（P0-3）：带 projectId 时忽略 nodeRef，执行节点由 project.dshRef 决定 ----------
+  const proj = await req('POST', `${PREFIX}/api/projects`, { name: '冒烟项目-P0-3', dshRef: { kind: 'mapping', mappingId: 'map-dsh-01' } })
+  const projId = proj.json?.data?.id
+  check('创建项目（绑定 mock DSH 映射）', proj.status === 200 && proj.json?.ok === true && Boolean(projId), `id=${projId}`)
+  const projTask = await req('POST', `${PREFIX}/api/tasks`, { title: '冒烟项目任务', projectId: projId, nodeRef: { kind: 'mapping', mappingId: 'map-not-this-one' }, mode: 'chat' })
+  const projTaskId = projTask.json?.data?.id
+  check('项目任务忽略 nodeRef（节点以项目为准）', [200, 201].includes(projTask.status) && projTask.json?.data?.projectId === projId && !projTask.json?.data?.nodeRef, `nodeRef=${JSON.stringify(projTask.json?.data?.nodeRef ?? null)}`)
+  const projTaskRead = await req('GET', `${PREFIX}/api/tasks/${projTaskId}`)
+  check('项目任务回读仍无 nodeRef', projTaskRead.status === 200 && !projTaskRead.json?.data?.nodeRef)
+  const soloTask = await req('POST', `${PREFIX}/api/tasks`, { title: '冒烟单独任务', nodeRef: { kind: 'mapping', mappingId: 'map-dsh-01' }, mode: 'chat' })
+  check('单独任务保留 nodeRef（不误伤）', [200, 201].includes(soloTask.status) && soloTask.json?.data?.nodeRef?.mappingId === 'map-dsh-01')
+  // S1-2：统计不支持时如实给出原因（新任务尚无远端会话 → no_session）
+  const soloStats = await req('GET', `${PREFIX}/api/tasks/${soloTask.json?.data?.id}/stats`)
+  check('任务统计不支持时带原因（无会话 → no_session）', soloStats.status === 200 && soloStats.json?.data?.supported === false && soloStats.json?.data?.reasonCode === 'no_session' && Boolean(soloStats.json?.data?.reason), JSON.stringify(soloStats.json?.data ?? null))
+  if (soloTask.json?.data?.id) await req('DELETE', `${PREFIX}/api/tasks/${soloTask.json.data.id}`)
+  if (projTaskId) await req('DELETE', `${PREFIX}/api/tasks/${projTaskId}`)
+  if (projId) await req('DELETE', `${PREFIX}/api/projects/${projId}`)
+
+  // ---------- 5.3 跨节点续接 fork（P4-1）：新任务带草稿、双向链接、原任务插 system 轮 ----------
+  const forkOrigin = await req('POST', `${PREFIX}/api/tasks`, { title: '冒烟原任务', nodeRef: { kind: 'mapping', mappingId: 'map-dsh-01' }, mode: 'chat' })
+  const forkOriginId = forkOrigin.json?.data?.id
+  const forkRes = await req('POST', `${PREFIX}/api/tasks/${forkOriginId}/fork`, { nodeRef: { kind: 'mapping', mappingId: 'map-not-this-one' } })
+  const forkTaskId = forkRes.json?.data?.task?.id
+  check('fork 创建续接任务（↪ 标题 + forkedFrom）', forkRes.status === 200 && String(forkRes.json?.data?.task?.title || '').startsWith('↪') && forkRes.json?.data?.task?.forkedFrom?.taskId === forkOriginId, `title=${forkRes.json?.data?.task?.title}`)
+  check('fork 草稿带说明头（不调用 LLM）', typeof forkRes.json?.data?.draft === 'string' && forkRes.json?.data?.draft.includes('最近对话'))
+  const forkOriginRead = await req('GET', `${PREFIX}/api/tasks/${forkOriginId}`)
+  check('原任务 forks 双向链接 + system 续接轮', (forkOriginRead.json?.data?.forks || []).some((x) => x.taskId === forkTaskId) && (forkOriginRead.json?.data?.turns || []).some((t) => t.role === 'system' && String(t.text || '').includes(forkTaskId)))
+  if (forkTaskId) await req('DELETE', `${PREFIX}/api/tasks/${forkTaskId}`)
+  if (forkOriginId) await req('DELETE', `${PREFIX}/api/tasks/${forkOriginId}`)
 
   // ---------- 5.5 队列管理接口（编辑/删除/立即发送：不存在条目走 400 分支，验证路由与引擎接线） ----------
   const qSendMiss = await req('POST', `${PREFIX}/api/tasks/${taskId}/queue/send`, { turnId: 'turn-nope' })
@@ -291,7 +352,16 @@ async function main() {
   // ---------- 7. 数据落盘（独立服务的数据目录） ----------
   const storeFile = join(dataDir, 'store.json')
   await waitFor(() => existsSync(storeFile), 'store.json 落盘', 5000)
-  const store = JSON.parse(readFileSync(storeFile, 'utf-8'))
+  // 落盘是防抖尾随写（~250ms）：前面刚删除过运行中的任务，读到中间态时等一拍再读，直到满足期望
+  let store = null
+  {
+    const deadline = Date.now() + 5000
+    while (Date.now() < deadline) {
+      store = JSON.parse(readFileSync(storeFile, 'utf-8'))
+      if (store.agents.length === 3 && store.tasks.length === 2 && store.teams?.length === 1) break
+      await sleep(300)
+    }
+  }
   check('数据落盘到 --data 目录（含专家团）', store.agents.length === 3 && store.tasks.length === 2 && store.teams?.length === 1, `agents=${store.agents.length} tasks=${store.tasks.length} teams=${store.teams?.length}`)
 
   // 团队删除（任务保留，仅摘除 teamId 标记）

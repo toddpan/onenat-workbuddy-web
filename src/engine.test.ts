@@ -19,7 +19,7 @@ import { join } from 'node:path'
 // 测试进程内禁止构造函数自带的 30s 启动归档扫描（对齐 store.test 做法）
 process.env.WORKBUDDY_ARCHIVE_BOOT_DELAY_MS = '3600000'
 
-import { TaskEngine } from './engine.js'
+import { TaskEngine, extractToolPaths } from './engine.js'
 import { WorkStore } from './store.js'
 import type { AgentResolver } from './resolver.js'
 import type { PromptComposer, ComposeContext, ComposeResult } from './prompt-composer.js'
@@ -286,6 +286,88 @@ test('项目默认协作成员：全部停用时不强制继承，任务仍可�
     const proj = f.store.getProjects()[0]
     const t = await f.engine.createTask({ title: '默认成员全停用', projectId: proj.id })
     assert.deepEqual(t.memberAgentIds, [])
+  } finally {
+    f.store.flush()
+    rmSync(f.dir, { recursive: true, force: true })
+  }
+})
+
+test('项目任务节点以项目为准：createTask 带 projectId 时忽略 nodeRef', async () => {
+  const f = makeFixture()
+  try {
+    f.store.upsertProject({ name: '项目节点项目', dshRef: { kind: 'direct', apiBaseUrl: 'http://stub-node' } })
+    const proj = f.store.getProjects()[0]
+    const t = await f.engine.createTask({ title: '项目任务', projectId: proj.id, nodeRef: { kind: 'direct', apiBaseUrl: 'http://other-node' } })
+    assert.equal(t.projectId, proj.id)
+    assert.equal(t.nodeRef, undefined, '项目任务不应携带 nodeRef（执行节点由 project.dshRef 决定）')
+    const solo = await f.engine.createTask({ title: '单独任务', nodeRef: { kind: 'direct', apiBaseUrl: 'http://other-node' } })
+    assert.ok(solo.nodeRef, '单独任务的 nodeRef 不受影响')
+  } finally {
+    f.store.flush()
+    rmSync(f.dir, { recursive: true, force: true })
+  }
+})
+
+test('本轮变更：extractToolPaths 只取写入/编辑类工具的路径参数，不含内容', () => {
+  assert.deepEqual(extractToolPaths('write', JSON.stringify({ content: 'x'.repeat(5000), path: 'src/a.ts' })), ['src/a.ts'])
+  assert.deepEqual(extractToolPaths('edit', { file_path: '/abs/b.md', old_string: 'a', new_string: 'b' }), ['/abs/b.md'])
+  assert.deepEqual(extractToolPaths('str_replace_editor', { command: 'str_replace', path: 'c.py' }), ['c.py'])
+  assert.equal(extractToolPaths('str_replace_editor', { command: 'view', path: 'c.py' }), undefined, 'view 命令不算变更')
+  assert.deepEqual(extractToolPaths('MultiEdit', { edits: [{ file_path: 'd.ts' }, { file_path: 'd.ts' }, { path: 'e.ts' }] }), ['d.ts', 'e.ts'])
+  assert.deepEqual(
+    extractToolPaths('apply_patch', { input: '*** Begin Patch\n*** Update File: f.ts\n@@\n-a\n+b\n*** Add File: g.ts\n+x\n*** End Patch' }),
+    ['f.ts', 'g.ts'],
+  )
+  assert.deepEqual(extractToolPaths('apply_patch', '--- a/h.ts\n+++ b/h.ts\n@@\n-a\n+b'), ['h.ts'])
+  assert.equal(extractToolPaths('read', { path: 'a.ts' }), undefined, '读类工具不算变更')
+  assert.equal(extractToolPaths('bash', { command: 'echo > a.ts' }), undefined)
+  assert.equal(extractToolPaths('write', { content: 'no path' }), undefined)
+})
+
+test('跨节点续接 fork：双向链接 + 草稿 8000 字截断（保留尾部）', async () => {
+  const f = makeFixture()
+  try {
+    const origin = await f.engine.createTask({ title: '原任务', nodeRef: { kind: 'direct', apiBaseUrl: 'http://stub-node' } })
+    // 直接写盘几轮对话（不触发 LLM）
+    f.store.mutateTask(origin.id, (t) => {
+      t.turns = [
+        { id: 't1', seq: 1, role: 'user', text: '第一问', at: Date.now() - 9000, endedAt: Date.now() - 8000 },
+        { id: 't2', seq: 2, role: 'agent', agentName: '成员甲', text: '第一答'.repeat(30), at: Date.now() - 8000, endedAt: Date.now() - 7000 },
+        { id: 't3', seq: 3, role: 'user', text: '第二问', at: Date.now() - 7000 },
+      ]
+      return t
+    })
+    const out = await f.engine.forkTask(origin.id, { nodeRef: { kind: 'direct', apiBaseUrl: 'http://other-node' } })
+    assert.ok(out.task.id !== origin.id)
+    assert.equal(out.task.forkedFrom?.taskId, origin.id, '新任务记录来源')
+    assert.ok(out.task.title.startsWith('↪ '), '新任务标题带 ↪ 前缀')
+    assert.ok(out.task.nodeRef, '单独任务续接保留 nodeRef')
+    const originAfter = f.store.getTask(origin.id)!
+    assert.ok((originAfter.forks || []).some((x) => x.taskId === out.task.id), '原任务记录 forks')
+    const sysTurn = originAfter.turns.find((t) => t.role === 'system')
+    assert.ok(sysTurn && sysTurn.text.includes(out.task.id), '原任务插入 system 续接轮（含新任务 ID）')
+    assert.ok(out.draft.includes('最近对话'), '草稿带说明头')
+    assert.ok(out.draft.includes('第二问'), '草稿含最近轮原文')
+    assert.ok(out.draft.includes('【智能体 成员甲】'), '草稿标注角色与成员名')
+    assert.ok(out.draft.length <= 8100, '草稿总长受 8000 上限约束（含头部与标记）')
+    // 超长截断：保尾部 + 截断标记
+    f.store.mutateTask(origin.id, (t) => {
+      t.turns = [
+        { id: 'b1', seq: 1, role: 'agent', text: 'A'.repeat(9000), at: Date.now() },
+        { id: 'b2', seq: 2, role: 'user', text: '结尾问句', at: Date.now() },
+      ]
+      return t
+    })
+    const out2 = await f.engine.forkTask(origin.id)
+    assert.ok(out2.draft.includes('结尾问句'), '截断保留尾部（最近内容）')
+    assert.ok(out2.draft.includes('…（更早内容已截断）'), '截断带标记')
+    // 项目任务续接：projectId 生效、不落 nodeRef（P0-3 同规则）
+    f.store.upsertProject({ name: '续接项目', dshRef: { kind: 'direct', apiBaseUrl: 'http://stub-node' } })
+    const proj = f.store.getProjects()[0]
+    const origin3 = await f.engine.createTask({ title: '项目原任务', projectId: proj.id })
+    const out3 = await f.engine.forkTask(origin3.id, { projectId: proj.id, nodeRef: { kind: 'direct', apiBaseUrl: 'http://other-node' } })
+    assert.equal(out3.task.projectId, proj.id)
+    assert.equal(out3.task.nodeRef, undefined, '项目续接忽略 nodeRef')
   } finally {
     f.store.flush()
     rmSync(f.dir, { recursive: true, force: true })

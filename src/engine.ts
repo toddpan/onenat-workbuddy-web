@@ -87,6 +87,37 @@ function pathEquivalent(a?: string, b?: string): boolean {
   return aa.some((x) => bb.includes(x))
 }
 
+/**
+ * 写入/编辑类工具调用的目标路径（「本轮变更」数据源）。
+ * 只认写类工具（命名口径与前端 toolMeta 的「编辑文件」一致）；str_replace_editor 的 view/只读命令不算。
+ * 参数可能是 JSON 字符串或对象；apply_patch 从补丁头（*** Add/Update/Delete File、+++ b/）解析。
+ */
+export function extractToolPaths(name: unknown, args: unknown): string[] | undefined {
+  const n = String(name || '').toLowerCase()
+  if (!/^(write|edit|apply|str_replace|multiedit|notebook)/.test(n) && !/_write$|_edit$/.test(n)) return undefined
+  let o: any = args
+  if (typeof o === 'string') {
+    try { o = JSON.parse(o) } catch { o = { patch: o } }
+  }
+  if (!o || typeof o !== 'object') return undefined
+  if (typeof o.command === 'string' && /^(view|read|list)$/i.test(o.command)) return undefined
+  const out: string[] = []
+  const add = (v: unknown) => {
+    const s = typeof v === 'string' ? v.trim() : ''
+    if (s && s.length <= 1024 && !s.includes('\n') && !out.includes(s)) out.push(s)
+  }
+  for (const k of ['path', 'file_path', 'filePath', 'notebook_path', 'file', 'filename']) add(o[k])
+  if (Array.isArray(o.edits)) for (const e of o.edits) if (e && typeof e === 'object') add(e.file_path ?? e.path)
+  for (const k of ['patch', 'input', 'diff']) {
+    if (typeof o[k] !== 'string') continue
+    for (const line of o[k].split('\n')) {
+      const m = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/.exec(line) || /^\*\*\* Move to: (.+)$/.exec(line) || /^\+\+\+ (?:b\/)?(.+)$/.exec(line)
+      if (m && m[1].trim() !== '/dev/null') add(m[1])
+    }
+  }
+  return out.length ? out.slice(0, 50) : undefined
+}
+
 /** 给控制面紧急操作（停止）加时限：ONENAT 抖动时不能让"停止"按钮等十几秒才返回 */
 function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
   return Promise.race([
@@ -601,7 +632,9 @@ export class TaskEngine {
       ...(input.scheduleId ? { scheduleId: input.scheduleId } : {}),
       ...(input.scheduleName ? { scheduleName: input.scheduleName } : {}),
       ...(input.projectId ? { projectId: input.projectId } : {}),
-      ...(input.nodeRef ? { nodeRef: input.nodeRef } : {}),
+      // 项目任务节点以项目为准（P0-3）：dshRef 在项目上，带 projectId 时忽略 nodeRef，
+      // 避免项目节点改动后任务仍钉在旧节点（taskExec 的解析顺序本就是项目优先）
+      ...(!input.projectId && input.nodeRef ? { nodeRef: input.nodeRef } : {}),
       ...(input.model ? { model: input.model } : {}),
       ...(input.connectorIds?.length ? { connectorIds: input.connectorIds } : {}),
       ...(input.skillNames?.length ? { skillNames: input.skillNames } : {}),
@@ -611,6 +644,7 @@ export class TaskEngine {
     }
     this.store.upsertTask(task)
     if (inheritedDefaults) this.taskLog(task.id, 'info', `已继承项目默认协作成员（${memberAgentIds.length} 名）：编排与 @ 均可按需使用，不被限死为唯一执行者`)
+    if (input.projectId && input.nodeRef) this.taskLog(task.id, 'info', '项目任务节点以项目为准，已忽略请求中的 nodeRef')
     if (input.message?.trim()) {
       // 团队任务的首页消息由发送者携带团队意图（opts.teamId）——首轮按团队合同编排；
       // 用户后续显式 @ 成员时按轮级参与者聚焦，显式 @ 团队才恢复团队语义。
@@ -630,6 +664,65 @@ export class TaskEngine {
     })
   }
 
+  /**
+   * 跨节点续接（P4-1）：在新节点/项目上开新任务，携带最近对话原文草稿（不调用 LLM）。
+   * 新任务记录 forkedFrom，原任务追加 forks[]（双向链接），并插入一条 system 轮提示。
+   */
+  public async forkTask(taskId: string, opts: { nodeRef?: DshRef; projectId?: string } = {}): Promise<{ task: WorkTask; draft: string }> {
+    const origin = this.store.getTask(taskId)
+    if (!origin) throw new Error(`任务不存在: ${taskId}`)
+    const projectId = opts.projectId || origin.projectId || undefined
+    // 项目任务节点以项目为准（P0-3 同规则）：带 projectId 时忽略 nodeRef
+    const nodeRef = projectId ? undefined : opts.nodeRef
+    const draft = this.forkDraftOf(origin)
+    const created = await this.createTask({
+      title: `↪ ${origin.title}`,
+      projectId: projectId || undefined,
+      nodeRef,
+      memberAgentIds: origin.memberAgentIds?.length ? [...origin.memberAgentIds] : undefined,
+    })
+    const now = Date.now()
+    this.store.mutateTask(created.id, (t) => {
+      t.forkedFrom = { taskId: origin.id, at: now }
+      return t
+    })
+    const nodeLabel = projectId
+      ? (this.store.getProject(projectId)?.name || projectId)
+      : (nodeRef?.kind === 'direct' ? String(nodeRef.apiBaseUrl) : String((nodeRef as { mappingId?: string })?.mappingId || '原节点'))
+    this.store.mutateTask(origin.id, (t) => {
+      t.forks = [...(t.forks || []), { taskId: created.id, at: now }]
+      t.turns = [...(t.turns || []), {
+        id: `turn-${randomUUID().slice(0, 8)}`,
+        seq: (t.turns || []).length + 1,
+        role: 'system',
+        text: `已在 🖥 ${nodeLabel} 继续 → ${created.id}`,
+        at: now,
+      }]
+      return t
+    })
+    return { task: this.store.getTask(created.id)!, draft }
+  }
+  /** 续接草稿：最近 N（默认 6）轮已完成对话原文，总长上限 8000 字，超长截断前面的部分 */
+  private forkDraftOf(task: WorkTask): string {
+    const done = (task.turns || []).filter((t) => (t.role === 'user' || t.role === 'agent') && (t.text || '').trim() && !t.streaming)
+    const recent = done.slice(-6)
+    const body = recent.map((t) => {
+      const who = t.role === 'user' ? '【用户】' : `【智能体${t.agentName ? ' ' + t.agentName : ''}】`
+      return who + String(t.text || '').trim()
+    }).join('\n\n')
+    const header = `以下是在 ${this.forkOriginNodeLabel(task)} 上进行的任务《${task.title}》的最近对话：`
+    const CAP = 8000
+    let b = body
+    if ((header + b).length > CAP) b = '…（更早内容已截断）\n' + b.slice(Math.max(0, b.length - CAP))
+    return header + (b ? '\n\n' + b : '')
+  }
+  private forkOriginNodeLabel(task: WorkTask): string {
+    const proj = task.projectId ? this.store.getProject(task.projectId) : undefined
+    const ref = task.nodeRef || proj?.dshRef
+    if (ref?.kind === 'direct') return String(ref.apiBaseUrl)
+    if (ref?.kind === 'mapping') return String(ref.mappingId)
+    return '原节点'
+  }
   public async deleteTask(taskId: string): Promise<boolean> {
     await this.cancelTask(taskId, '任务已删除')
     for (const k of [...this.blockCache.keys()]) {
@@ -1570,6 +1663,8 @@ export class TaskEngine {
         const isAskTool = info.name === 'ask_user_question' || info.name === 'ask-user-question'
         // ask_user_question 的 args 必须完整：截断的 JSON 会让前端交互卡解析失败，用户无法答复
         const tool: TurnToolCall = { id, name: String(info.name || 'unknown'), args: summarize(info.arguments, isAskTool ? 65_536 : 400), status: 'running', at: Date.now() }
+        const paths = extractToolPaths(info.name, info.arguments)
+        if (paths) tool.paths = paths
         this.store.updateTurn(taskId, turn.id, (tt) => {
           tt.tools = tt.tools || []
           tt.tools.push(tool)

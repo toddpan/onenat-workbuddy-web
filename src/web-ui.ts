@@ -254,7 +254,8 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
 .task-item .s {
   width: 7px; height: 7px; border-radius: 50%; flex: none;
 }
-.s.running { background: var(--warn); box-shadow: 0 0 0 3px rgba(212,136,6,.14); animation: pulse 1.2s infinite; }
+.s.running { background: var(--pri); box-shadow: 0 0 0 3px var(--pri-light); animation: pulse 1.2s infinite; }
+.s.ask { background: var(--warn); box-shadow: 0 0 0 3px rgba(212,136,6,.14); animation: pulse 1.2s infinite; }
 .s.completed { background: var(--ok); }
 .s.failed { background: var(--err); }
 .s.partial_success { background: var(--warn); }
@@ -305,6 +306,9 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
 }
 .badge.mode { color: var(--acc); border-color: rgba(111,123,247,.4); background: var(--acc-light); }
 .badge.mode.chat { color: var(--pri); border-color: rgba(77,107,254,.4); background: var(--pri-light); }
+/* 头部只读执行位置标签（📦 项目 · 🖥 节点），悬停看工作区 / 在线状态 / 默认模型 */
+.badge.place { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--bg3); cursor: default; }
+#head-more-pop { width: 180px; }
 .badge.mode.chat.direct { color: var(--ok); border-color: rgba(43,164,113,.4); background: var(--ok-light); font-weight: 600; }
 .member-chips { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .mchip {
@@ -365,6 +369,11 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
 .main-agent-item.on .ag-sub { color: rgba(77, 107, 254, 0.75); }
 .main-agent-item .ag-ck { flex: none; visibility: hidden; font-weight: 700; color: var(--pri); }
 .main-agent-item.on .ag-ck { visibility: visible; }
+/* 执行位置选择框（P2-1）：挂在 body 上，按触发按钮定位 */
+.main-agent-pop.place-pop { position: fixed; top: auto; right: auto; z-index: 90; }
+.place-back {
+  border: none; background: none; color: var(--pri); font-size: 11px; cursor: pointer; padding: 0;
+}
 
 .chat-scroll {
   flex: 1; overflow-y: auto; padding: 18px 24px 28px; scroll-behavior: auto;
@@ -373,6 +382,16 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
   height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
   color: var(--tx3); gap: 12px; user-select: none;
 }
+/* 草稿新任务页（P2-2）：输入框居中，下方是执行位置选择框 */
+body.draft-mode .dsh-chat { flex: 0 1 auto; min-height: 0; padding-top: 12vh; }
+body.draft-mode .dsh-chat-scroll { flex: none; overflow: visible; }
+body.draft-mode .chat-empty.draft-hero { height: auto; }
+.draft-place {
+  display: flex; align-items: center; justify-content: center; gap: 8px; margin: 8px auto 0;
+  font-size: 12px; color: var(--tx3);
+}
+.draft-place .dp-btn { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-item.draft-item .t { font-style: italic; }
 
 .qe-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 18px; width: min(620px, 92%); }
 .qe-card {
@@ -498,6 +517,20 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
   cursor: default;
 }
 .dsh-usage-pill b { font-weight: 500; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
+
+/* 本轮变更文件标签（写入/编辑类工具的目标路径，点击下载） */
+.dsh-changes { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 12px; font-size: 11px; }
+.dsh-changes-label { color: var(--dsw-alias-label-tertiary); }
+.dsh-change-chip {
+  display: inline-flex; align-items: center; height: 20px; padding: 0 8px; max-width: 220px;
+  border-radius: 999px; background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary); text-decoration: none; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+a.dsh-change-chip:hover { color: var(--dsw-alias-label-primary, inherit); text-decoration: underline; }
+.dsh-change-chip.more { cursor: default; color: var(--dsw-alias-label-tertiary); }
+a.dsh-change-link { text-decoration: none; }
+a.dsh-change-link code { text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; cursor: pointer; }
 
 /* 排队消息（运行中补充意见）：⏳ 排队中 pill + ⚡ 立即发送按钮（对齐移动端） */
 .dsh-queued-pill {
@@ -957,6 +990,16 @@ body.task-running .dsh-sysRow.sys-planning .markdown::after {
   transition: opacity .18s ease, transform .18s ease, border-color .18s ease, color .18s ease;
 }
 .composer-hint.on { opacity: 1; transform: translate(-50%, 0); }
+/* 执行节点离线条（P1-2）：输入区上方，输入框同时禁用 */
+.node-offline {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  width: 100%; max-width: var(--dsh-composer-card-max-width, 920px); margin-bottom: 8px;
+  padding: 7px 12px; border-radius: 12px; border: 1px solid var(--err);
+  background: var(--bg2); color: var(--tx2); font-size: 12px; line-height: 1.5;
+}
+.node-offline .no-msg { flex: 1 1 240px; min-width: 0; }
+.node-offline .mini-btn[disabled] { opacity: .5; cursor: not-allowed; }
+.chat-input textarea:disabled { cursor: not-allowed; opacity: .6; }
 .composer-hint.ok { border-color: rgba(43,164,113,.45); color: #1f8f62; }
 .composer-hint.err { border-color: var(--err); color: #d33a41; }
 .model-pop {
@@ -988,10 +1031,36 @@ body.task-running .dsh-sysRow.sys-planning .markdown::after {
 
 /* 任务实时统计条（轮/步 · LLM/工具耗时 · 首 token/吞吐 · 缓存命中 · token 账本），对齐 DSH web StatsLine */
 .task-stats {
-  flex: none; padding: 4px 18px 7px; font-size: 11px; color: var(--tx3); line-height: 1.5;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center;
-  user-select: none; border-top: 1px solid var(--line);
+  flex: none; position: relative; width: 100%; max-width: var(--dsh-composer-card-max-width, 920px);
+  padding: 5px 18px 6px; font-size: 11px; color: var(--tx3); line-height: 1.5; user-select: none;
 }
+/* 两个胶囊：⏱ 时间（轮·步·tok/s，运行中=本轮时长）+ 🗄 Token（总量·缓存命中），点击弹出明细面板 */
+.stat-pills {
+  display: flex; justify-content: center; gap: 6px; white-space: nowrap;
+  overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none;
+}
+.stat-pills::-webkit-scrollbar { display: none; }
+.stat-pill {
+  flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 2px 9px;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--bg2);
+  color: var(--tx3); font-size: 11px; line-height: 1.5; cursor: pointer; font-variant-numeric: tabular-nums;
+}
+.stat-pill:hover { color: var(--tx2); border-color: var(--line2); }
+.stat-pill.run { color: var(--pri); border-color: rgba(77, 107, 254, 0.35); }
+.stat-pill.off, .stat-pill.off:hover { color: var(--tx3); border-style: dashed; border-color: var(--line); opacity: .75; cursor: help; }
+.stat-pill[aria-expanded="true"] { color: var(--pri); background: var(--pri-light); border-color: rgba(77, 107, 254, 0.35); }
+.stat-panel {
+  position: absolute; bottom: calc(100% + 4px); left: 50%; transform: translateX(-50%); z-index: 60;
+  min-width: 230px; max-width: calc(100vw - 20px); padding: 6px 4px;
+  background: var(--bg2); border: 1px solid var(--line2); border-radius: 10px;
+  box-shadow: 0 10px 32px rgba(31,35,41,.12); display: none;
+}
+.stat-panel.on { display: block; }
+.stat-panel .sp-h { padding: 4px 10px 6px; font-size: 11px; font-weight: 600; color: var(--tx2); border-bottom: 1px solid var(--line); margin-bottom: 3px; }
+.stat-panel .sp-r { display: flex; justify-content: space-between; gap: 18px; padding: 3px 10px; font-size: 12px; color: var(--tx2); }
+.stat-panel .sp-r b { font-weight: 500; color: var(--tx); font-variant-numeric: tabular-nums; }
+.stat-panel .sp-foot { padding: 6px 10px 8px; border-top: 1px solid var(--line); margin-top: 3px; }
+.stat-panel .sp-foot a { color: var(--pri); font-size: 11.5px; cursor: pointer; }
 
 /* ---- 任务清单坞（对齐 DSH web TodoPanel：任务 + N 进行中 · M 待处理 + 运行时长） ---- */
 .todo-dock {
@@ -1007,8 +1076,6 @@ body.task-running .dsh-sysRow.sys-planning .markdown::after {
 .todo-lead { display: inline-flex; align-items: center; color: var(--pri); flex: none; }
 .todo-title { color: var(--tx); font-weight: 600; flex: none; }
 .todo-progress { color: var(--tx3); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.todo-elapsed { color: var(--tx3); font-size: 11.5px; flex: none; font-variant-numeric: tabular-nums; }
-.todo-elapsed.run { color: var(--pri); }
 .todo-chev { flex: none; color: var(--tx3); font-size: 10.5px; }
 .todo-list { list-style: none; max-height: 170px; overflow-y: auto; padding: 2px 0 6px; border-top: 1px solid var(--line); }
 .todo-item { display: flex; gap: 8px; align-items: flex-start; padding: 4px 12px; font-size: 12.5px; line-height: 1.5; color: var(--tx2); }
@@ -1459,6 +1526,83 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .arch-empty { color: var(--tx3); font-size: 12.5px; text-align: center; padding: 34px 12px; border: 1px dashed var(--line); border-radius: var(--rad); line-height: 1.8; }
 .gh-manage { margin-left: 8px; border: none; background: none; color: var(--pri); font-size: 11px; cursor: pointer; padding: 2px 7px; border-radius: 6px; flex: none; }
 .gh-manage:hover { background: var(--pri-light); }
+.gh-add { margin-left: 6px; border: none; background: none; color: var(--tx3); font-size: 13px; line-height: 1; cursor: pointer; padding: 1px 7px 3px; border-radius: 6px; flex: none; }
+.gh-add:hover { background: var(--pri-light); color: var(--pri); }
+.gh-sub { font-size: 10px; color: var(--tx3); font-weight: 400; margin-left: 4px; }
+.gh-more { display: block; width: 100%; border: none; background: none; color: var(--tx3); font-size: 11.5px; text-align: center; padding: 6px 0; cursor: pointer; }
+.gh-more:hover { color: var(--pri); background: var(--bg-hover); }
+
+/* ---- 工作区右侧栏（F1）：打开时聊天区让出宽度，不是遮罩；宽度可拖动 ---- */
+.ws-side {
+  flex: none; width: 420px; min-width: 280px; display: none; flex-direction: column;
+  border-left: 1px solid var(--line2); background: var(--bg2); overflow: hidden; position: relative;
+}
+.ws-tabs {
+  flex: none; display: flex; align-items: center; gap: 2px; height: 36px;
+  padding: 0 6px 0 8px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none;
+}
+.ws-tabs::-webkit-scrollbar { display: none; }
+.ws-tab-strip { display: flex; align-items: center; gap: 2px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.ws-tab-strip::-webkit-scrollbar { display: none; }
+.ws-tab {
+  flex: none; display: inline-flex; align-items: center; gap: 5px; max-width: 180px;
+  border: none; background: transparent; color: var(--tx3); font-size: 12px; line-height: 1;
+  padding: 6px 8px; border-radius: 7px 7px 0 0; cursor: pointer; white-space: nowrap;
+}
+.ws-tab:hover { color: var(--tx2); background: var(--bg-hover); }
+.ws-tab.on { color: var(--tx); background: var(--bg); box-shadow: inset 0 -2px 0 var(--pri); }
+.ws-tab .wt-x { font-size: 10px; opacity: .55; padding: 1px 2px; border-radius: 4px; }
+.ws-tab .wt-x:hover { opacity: 1; background: var(--bg-hover); color: var(--err); }
+.ws-tab-hint { font-size: 11.5px; color: var(--tx3); padding: 0 4px; }
+.ws-close { flex: none; border: none; background: none; color: var(--tx3); font-size: 12px; cursor: pointer; padding: 5px 8px; border-radius: 6px; }
+.ws-close:hover { color: var(--tx); background: var(--bg-hover); }
+.ws-body { flex: 1; min-height: 0; overflow: auto; background: var(--bg); }
+.ws-hint { padding: 28px 16px; text-align: center; color: var(--tx3); font-size: 12.5px; line-height: 1.8; }
+.ws-resizer { position: absolute; top: 0; bottom: 0; left: -3px; width: 6px; cursor: col-resize; z-index: 5; }
+.ws-resizer:hover, .ws-resizer.drag { background: var(--pri-light); }
+.ws-files-head { padding: 8px 10px 6px; border-bottom: 1px solid var(--line); }
+.ws-root-line { font-size: 12px; color: var(--tx2); word-break: break-all; }
+.ws-root-line .mono { font-family: var(--mono); }
+.ws-src { color: var(--tx3); font-size: 11px; }
+.ws-tools { display: flex; align-items: center; gap: 5px; margin-top: 6px; flex-wrap: wrap; }
+.wsf-kw { flex: 1; min-width: 90px; max-width: 160px; font-size: 12px; padding: 4px 8px; border: 1px solid var(--line2); border-radius: 7px; background: var(--bg); color: var(--tx); }
+.ws-batchbar { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 12px; color: var(--tx2); flex-wrap: wrap; }
+.ws-tree { padding: 4px 4px 20px; }
+.ws-row { display: flex; align-items: center; gap: 5px; padding: 3px 6px; border-radius: 6px; font-size: 12.5px; line-height: 1.5; cursor: default; }
+.ws-row:hover { background: var(--bg-hover); }
+.ws-caret { flex: none; width: 14px; }
+.ws-caret-btn { border: none; background: none; color: var(--tx3); cursor: pointer; padding: 0 2px; font-size: 10px; }
+.ws-chk { flex: none; }
+.ws-ic { flex: none; }
+.ws-nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.ws-nm.dim { opacity: .6; }
+.ws-acts { flex: none; display: none; align-items: center; gap: 2px; }
+.ws-row:hover .ws-acts { display: inline-flex; }
+.ws-act { padding: 1px 4px; font-size: 11px; }
+.ws-tree-hint { color: var(--tx3); font-size: 12px; padding: 4px 6px; }
+.ws-tree-hint.err { color: var(--err); }
+.ws-pv-head { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.ws-pv-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--tx3); }
+.ws-preview { padding-bottom: 20px; }
+.ws-preview .dsh-md { padding: 10px 12px; font-size: 13px; }
+.ws-changes { padding: 6px 8px 20px; }
+.ws-chg-turn { font-size: 11.5px; color: var(--tx3); margin: 10px 2px 4px; }
+.ws-chg-row { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+.ws-chg-row:hover { background: var(--bg-hover); }
+.ws-mod-dot { flex: none; color: var(--warn); font-size: 10px; }
+.ws-chg-name { flex: none; font-size: 12.5px; color: var(--tx); }
+.ws-chg-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--tx3); }
+.ws-mod { flex: none; font-size: 10px; color: var(--warn); background: var(--warn-light); border-radius: 999px; padding: 1px 6px; }
+.file-tags { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 22px 0; max-width: var(--dsh-composer-card-max-width, 920px); margin: 0 auto; }
+.file-tag { display: inline-flex; align-items: center; gap: 5px; max-width: 220px; font-size: 12px; line-height: 1; color: var(--tx2); background: var(--bg2); border: 1px solid var(--line2); border-radius: 999px; padding: 4px 8px; }
+.file-tag span.nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-tag .ft-x { cursor: pointer; opacity: .55; font-size: 10px; padding: 1px 2px; border-radius: 4px; }
+.file-tag .ft-x:hover { opacity: 1; color: var(--err); background: var(--bg-hover); }
+.ws-row.drop-into { outline: 1.5px dashed var(--pri); background: var(--pri-light); border-radius: 6px; }
+@media (max-width: 768px) {
+  .ws-side { position: absolute; inset: 0; width: 100% !important; z-index: 30; }
+  .ws-resizer { display: none; }
+}
 @media (max-width: 768px) {
   .arch-set-row { flex-direction: column; align-items: stretch; gap: 10px; }
   .arch-sw, .arch-days-sel { align-self: flex-end; }
@@ -1670,9 +1814,10 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
   .jump-bottom { right: 12px; padding: 8px 11px; font-size: 12px; }
   .jump-bottom .jb-t { display: none; }
   .task-stats { padding: 4px 10px 5px; font-size: 10.5px; }
+  .stat-pills { justify-content: flex-start; }
+  .stat-panel { position: fixed; left: 10px; right: 10px; bottom: calc(64px + env(safe-area-inset-bottom)); transform: none; min-width: 0; max-width: none; }
   .todo-dock { margin: 0 8px 6px; }
   .todo-list { max-height: 132px; }
-  .todo-elapsed { font-size: 11px; }
 
   /* ---- 提及浮层 ---- */
   .mention-popup { width: calc(100vw - 24px); left: 12px; }
@@ -2122,6 +2267,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
         <div class="chat-head" id="chat-head">
           <button class="side-toggle" id="btn-side-toggle" title="会话列表"><span class="st-hamb">☰</span></button>
           <span class="title" id="chat-title" title="双击重命名">选择或新建任务</span>
+          <button class="mini-btn" id="chat-fork-crumb" style="display:none" title="跳回原任务"></button>
           <button class="mini-btn" id="btn-rename-task" style="display:none" title="重命名会话">✏️</button>
           <button class="mini-btn" id="btn-goal" style="display:none" title="长期目标（/goal）">🎯</button>
           <button class="mini-btn" id="btn-plan" style="display:none" title="计划模式（/plan）">📋</button>
@@ -2130,13 +2276,11 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <span class="badge mode" id="chat-goal-badge" style="display:none" title="当前长期目标"></span>
           <span class="badge mode" id="chat-mode" style="display:none"></span>
           <span class="hspacer"></span>
-          <div class="main-agent-picker" id="node-picker">
-            <button class="main-agent-btn" id="node-btn" title="任务节点（主 DSH）：无 @ 的主会话在该节点上执行；@子智能体 作为 sub agent 回到其绑定节点远程执行">
-              <span class="ag-ico">🖥</span>
-              <span class="ag-name" id="node-btn-name">节点: 加载中…</span>
-              <span class="ag-arr">▾</span>
-            </button>
-            <div class="main-agent-pop" id="node-pop"></div>
+          <button class="mini-btn" id="btn-ws-toggle" style="display:none" title="工作区文件 / 变更（右侧栏）">📁</button>
+          <span class="badge place" id="chat-place" style="display:none"></span>
+          <div class="main-agent-picker" id="head-more" style="display:none">
+            <button class="mini-btn" id="btn-head-more" title="更多：工作区文件 / 项目配置">⋯</button>
+            <div class="main-agent-pop" id="head-more-pop"></div>
           </div>
         </div>
         <div class="conv-tabs" id="conv-tabs" style="display:none">
@@ -2198,12 +2342,11 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           </div>
         </div>
         <div class="todo-dock" id="todo-dock" style="display:none">
-          <button class="todo-head" id="todo-head" aria-expanded="true" title="远端 DSH 会话的任务清单（todo_write）与运行时长 · 点击折叠/展开">
+          <button class="todo-head" id="todo-head" aria-expanded="true" title="远端 DSH 会话的任务清单（todo_write） · 点击折叠/展开">
             <span class="todo-lead" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="1.4" y="1.4" width="11.2" height="11.2" rx="2.6" stroke="currentColor" stroke-width="1.2"/><path d="M4.3 7.1l1.8 1.8 3.5-3.7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
             <span class="todo-title">任务</span>
             <span class="todo-progress" id="todo-progress"></span>
             <span class="hspacer"></span>
-            <span class="todo-elapsed" id="todo-elapsed" style="display:none"></span>
             <span class="todo-chev" id="todo-chev" aria-hidden="true">▴</span>
           </button>
           <ul class="todo-list" id="todo-list"></ul>
@@ -2226,6 +2369,8 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           </div>
           <button class="jump-bottom" id="btn-jump-bottom" title="回到底部">⬇<span class="jb-t"> 回到底部</span></button>
           <div class="composer-hint" id="composer-hint"></div>
+          <div class="file-tags" id="file-tags" style="display:none"></div>
+          <div class="node-offline" id="node-offline" style="display:none"></div>
           <div class="chat-input">
             <div class="dsh-cscroll">
               <textarea id="input" placeholder="给 WorkBuddy 发送消息，@ 项目 / 智能体 / 资源，/ 装载技能…"></textarea>
@@ -2253,9 +2398,27 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
               </div>
             </div>
           </div>
-          <div class="task-stats" id="task-stats" style="display:none"></div>
+          <div class="draft-place" id="draft-place" style="display:none">
+            <span class="dp-lb">执行位置</span>
+            <button type="button" class="cfg-sel dp-btn" id="draft-place-btn" aria-haspopup="menu" title="选择节点与项目（发送首条消息后锁定）"></button>
+          </div>
+          <div class="task-stats" id="task-stats" style="display:none">
+            <div class="stat-pills">
+              <button type="button" class="stat-pill" id="stat-pill-time" data-k="time" aria-haspopup="dialog" aria-expanded="false" aria-controls="stat-panel"></button>
+              <button type="button" class="stat-pill" id="stat-pill-tok" data-k="tok" aria-haspopup="dialog" aria-expanded="false" aria-controls="stat-panel"></button>
+            </div>
+            <div class="stat-panel" id="stat-panel" role="dialog"></div>
+          </div>
         </div>
       </section>
+      <aside class="ws-side" id="ws-side">
+        <div class="ws-tabs">
+          <div class="ws-tab-strip" id="ws-tab-strip"></div>
+          <button class="ws-close" id="btn-ws-close" title="收起侧栏">✕</button>
+        </div>
+        <div class="ws-body" id="ws-body"></div>
+        <div class="ws-resizer" id="ws-resizer" title="拖动调整宽度"></div>
+      </aside>
     </div>
     <div class="view" id="view-voice">
       <div class="panel">
@@ -2475,6 +2638,11 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
         </div>
       </div>
       <div class="card">
+        <h3 style="margin-bottom:12px">全局默认模型</h3>
+        <div class="field"><label>未单独指定模型的任务使用此模型（聊天窗模型按钮只改当前任务）</label><select id="set-default-model" class="cfg-sel"></select></div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="btn" id="btn-save-default-model">保存默认模型</button><span id="set-default-model-hint" style="font-size:11.5px;color:var(--tx3)"></span></div>
+      </div>
+      <div class="card">
         <h3 style="margin-bottom:12px">任务归档</h3>
         <div style="font-size:11.5px;color:var(--tx3)">自动归档开关、归档保留时长与已归档会话的搜索 / 批量恢复 / 批量删除，已整合到「归档管理」页。</div>
         <div style="margin-top:10px"><button class="btn" id="btn-goto-archive">🗄 前往归档管理</button></div>
@@ -2625,15 +2793,16 @@ const state = {
   teams: [],
   tasks: [],
   projects: [],
-  projectId: null,   // 项目工作台：当前进入的项目（null = 全部/普通任务）
   taskEnv: { nodeRef: null, connectorIds: [], skillNames: [] },   // 单独任务环境（节点/连接器/技能）
+  draft: null,       // 新任务草稿（P2-2）：{ place: { nodeMappingId, projectId|null }, model }；发送首条消息时才 POST /tasks
   schedules: [],
   scheduleTemplates: null,
   taskCache: new Map(), // taskId -> WorkTask (完整缓存，支持 0ms 瞬间切换)
   settings: null,
   currentTaskId: null,
   searchQuery: '',
-  groupCollapsed: { today: false, week: false, older: false, archived: true },
+  groupCollapsed: { archived: true }, // 分组折叠（localStorage 持久化；P3-1 键 = 执行位置）
+  groupMore: {}, // 分组「显示更多」展开态（localStorage 持久化）
   es: null,
   turnEls: {},
   renderedTurnsCount: 0,
@@ -4224,7 +4393,13 @@ function projectCardHtml(p) {
 }
 function wireProjectCard(card) {
   const pid = card.dataset.proj;
-  card.querySelector('.pj-enter').addEventListener('click', function () { enterProject(pid); });
+  card.querySelector('.pj-enter').addEventListener('click', function () {
+    // P3-1：项目不再是模式 —— 切到工作台、展开该项目分组、在组内新建草稿
+    switchView('work');
+    state.groupCollapsed['proj:' + pid] = false;
+    saveGroupPrefs();
+    startDraft({ projectId: pid });
+  });
   card.querySelector('.pj-edit').addEventListener('click', function () { openProjectDrawer(pid); });
   card.querySelector('.pj-copy').addEventListener('click', function () {
     // 复制：preset 通道进「新建」抽屉；只复制配置（节点/工作区/指令/专家/连接器/技能），任务历史不带走
@@ -4243,7 +4418,7 @@ function wireProjectCard(card) {
   card.querySelector('.pj-del').addEventListener('click', async function () {
     if (!confirm('删除项目「' + (state.projects.find(x => x.id === pid) || {}).name + '」？项目下的任务不会被删除。')) return;
     const r = await api('/projects/' + encodeURIComponent(pid), { method: 'DELETE' });
-    if (r.ok) { toast('✓ 项目已删除'); if (state.projectId === pid) exitProject(); loadProjects(); renderProjects(); }
+    if (r.ok) { toast('✓ 项目已删除'); loadProjects(); renderProjects(); }
     else toast(r.error || '删除失败', true);
   });
 }
@@ -4354,7 +4529,6 @@ async function openProjectImportModal() {
       switched = true;
       watchProjectImports(taskIds);
       m.close();
-      if (state.projectId) exitProject(); // 项目工作台只显示本项目任务，先退出避免导入任务被过滤
       switchView('work');
       loadTasks().then(function () { openTask(taskIds[0]); });
     }
@@ -4395,56 +4569,6 @@ async function openProjectImportModal() {
     }, 1000);
     setTimeout(goWorkspace, 3000);
   });
-}
-
-async function enterProject(projectId, silent) {
-  const p = state.projects.find((x) => x.id === projectId);
-  if (!p) { toast('项目不存在', true); return; }
-  state.projectId = projectId;
-  try { sessionStorage.setItem('wb-project-id', projectId); } catch (e) { /* ignore */ }
-  if (silent) { updateProjectBanner(); return; }
-  state.currentTaskId = null;
-  state.taskCache.clear();
-  await loadTasks();
-  switchView('work');
-  updateProjectBanner();
-  toast('已进入项目「' + p.name + '」');
-}
-
-function exitProject() {
-  state.projectId = null;
-  try { sessionStorage.removeItem('wb-project-id'); } catch (e) { /* ignore */ }
-  state.currentTaskId = null;
-  loadTasks();
-  renderTaskList();
-  updateProjectBanner();
-  const picker = document.getElementById('node-picker');
-  if (picker) picker.style.display = '';
-}
-
-function updateProjectBanner() {
-  var el = document.getElementById('pj-banner');
-  const p = state.projectId ? state.projects.find((x) => x.id === state.projectId) : null;
-  if (!p) { if (el) el.remove(); return; }
-  if (!el) {
-    el = document.createElement('div');
-    el.id = 'pj-banner';
-    el.className = 'pj-banner';
-    const head = document.querySelector('.chat-head');
-    head.insertAdjacentElement('afterend', el);
-  }
-  el.innerHTML = '📦 项目工作台：<b>' + esc(p.name || p.id) + '</b>' +
-    '<span style="color:var(--tx3)">（任务在项目节点执行 · 工作区 / 指令 / 连接器 / 技能随项目继承 · @子智能体 按需调用）</span>' +
-    '<span style="flex:1"></span>' +
-    '<button class="mini-btn" id="pj-files">📁 工作区文件</button>' +
-    '<button class="mini-btn" id="pj-cfg">⚙ 项目配置</button>' +
-    '<button class="mini-btn" id="pj-exit">退出项目</button>';
-  document.getElementById('pj-exit').addEventListener('click', function () { exitProject(); });
-  document.getElementById('pj-cfg').addEventListener('click', function () { openProjectDrawer(p.id); });
-  document.getElementById('pj-files').addEventListener('click', function () { openProjectFiles(); });
-  // 项目工作台隐藏节点切换器（节点随项目锁定）；子智能体均为可 @ 的 sub agent
-  const picker = document.getElementById('node-picker');
-  if (picker) picker.style.display = 'none';
 }
 
 async function openProjectDrawer(projectId, preset) {
@@ -4572,7 +4696,6 @@ async function openProjectDrawer(projectId, preset) {
       closeModal();
       toast('✓ 项目已保存');
       renderProjects();
-      if (isEdit && state.projectId === projectId) updateProjectBanner();
     } },
   ];
   // 归档/恢复（P-08）：编辑态追加（权限由服务端校验，非 owner 点击会得到明确报错）
@@ -4621,9 +4744,10 @@ if (document.getElementById('btn-run-config')) {
 
 /** 打开运行配置弹层。focus: 'expert' 时滚动定位到执行专家分区 */
 async function openRunConfig(focus) {
-  const proj = state.projectId ? state.projects.find(function (x) { return x.id === state.projectId; }) : null;
+  // 项目分区按「当前打开任务所属项目」显示（P3-1：项目不再是工作台模式）
+  const curTask = currentTaskObj();
+  const proj = curTask && curTask.projectId ? state.projects.find(function (x) { return x.id === curTask.projectId; }) : null;
   const isProject = Boolean(proj);
-  const inProject = isProject && state.projectId === proj.id; // 恒真，占位便于阅读
   // 采样智能体：项目首位专家 / 全局默认 / 第一个智能体（用于拉取节点技能清单）
   const sampleAgentId = (proj && proj.expertIds[0]) || (state.agents[0] && state.agents[0].id) || '';
   // 连接器候选
@@ -4645,9 +4769,6 @@ async function openRunConfig(focus) {
     const sr = await api('/agents/' + sampleAgentId + '/skills');
     if (sr.ok) nodeSkills = ((sr.data || {}).skills || []).map(function (x) { return x.name; });
   }
-  const curTask = state.currentTaskId ? state.tasks.find(function (t) { return t.id === state.currentTaskId; }) : null;
-  void curTask;
-
   // ① Sub Agent（@ 调用）：新模型下没有「执行者智能体」概念——主会话在任务节点直发，
   //    这里只展示可用 sub agent 集合（项目任务 = 项目配置勾选的集合，非项目 = 全部）
   const chipsOf = function (ids) {
@@ -4660,17 +4781,14 @@ async function openRunConfig(focus) {
     ? '<div class="pj-chips">' + chipsOf(proj.expertIds) + '</div>' +
       '<div class="hint" style="margin-top:8px">上述为项目默认协作成员（创建任务时自动继承）。主会话在项目节点执行（不绑定身份）；仍可 @ 任意 sub agent/专家库角色在其绑定节点执行专项任务（发飞书、发邮件…）——不受这份清单限制。集合在「⚙ 项目配置」维护。</div>'
     : '<div class="pj-chips">' + state.agents.map(function (a) { return '<span class="tag">🤖 ' + esc(a.name) + '</span>'; }).join(' ') + '</div>' +
-      '<div class="hint" style="margin-top:8px">主会话在当前节点执行（右上角切换节点）；消息里输入 @ 调用 sub agent，在其绑定的节点上远程执行专项任务（发飞书、发邮件…）。</div>';
+      '<div class="hint" style="margin-top:8px">主会话在任务的执行节点上运行（执行位置随任务锁定）；消息里输入 @ 调用 sub agent，在其绑定的节点上远程执行专项任务（发飞书、发邮件…）。</div>';
 
+  // 主会话节点不在这里改（P1-1）：执行位置随任务锁定，新任务的节点由执行位置选择框决定
   const nodeSection = isProject
     ? '<div class="rc-row"><span class="rc-k">节点</span><span class="tag">🔒 ' + esc(proj.nodeTitle || '(默认)') + '</span></div>' +
       '<div class="rc-row" style="margin-top:6px"><span class="rc-k">工作区</span><span class="tag" style="font-family:var(--mono)">📁 ' + esc(proj.workspace || '(默认)') + '</span></div>' +
-      '<div class="hint" style="margin-top:8px">随项目锁定，修改请点项目横幅「⚙ 项目配置」</div>'
-    : '<div class="field"><label>主会话节点（主 DSH，仅对新任务生效；与右上角节点切换器联动）</label><select id="rc-node" class="cfg-sel"><option value="">（跟随右上角节点选择）</option>' +
-      state.resources.filter(function (r) { return r.kind === 'dsh' && r.mappingId; }).map(function (r) {
-        const sel = state.taskEnv.nodeRef && state.taskEnv.nodeRef.mappingId === r.mappingId ? ' selected' : '';
-        return '<option value="' + esc(r.mappingId) + '"' + sel + '>' + esc(r.note || r.appName || r.mappingId) + '</option>';
-      }).join('') + '</select></div>';
+      '<div class="hint" style="margin-top:8px">随项目锁定，修改请点头部「⋯ → ⚙ 项目配置」</div>'
+    : '';
 
   const connSection = isProject
     ? '<div class="rc-row"><span class="rc-k">连接器</span><div class="pj-chips">' + ((proj.connectorIds || []).map(function (cid) { return '<span class="tag">' + esc(connLabel(cid)) + '</span>'; }).join(' ') || '<span class="sub">未绑定</span>') + '</div></div>'
@@ -4680,30 +4798,23 @@ async function openRunConfig(focus) {
       }).join('') : '<div class="mon-empty">暂无候选连接器</div>') + '</div>';
 
   const skillSection = isProject
-    ? '<div class="rc-row" style="margin-top:8px"><span class="rc-k">技能</span><div class="pj-chips">' + ((proj.skillNames || []).map(function (n) { return '<span class="tag" style="font-family:var(--mono)">/' + esc(n) + '</span>'; }).join(' ') || '<span class="sub">未配置</span>') + '</div></div><div class="hint" style="margin-top:8px">修改请点项目横幅「⚙ 项目配置」</div>'
+    ? '<div class="rc-row" style="margin-top:8px"><span class="rc-k">技能</span><div class="pj-chips">' + ((proj.skillNames || []).map(function (n) { return '<span class="tag" style="font-family:var(--mono)">/' + esc(n) + '</span>'; }).join(' ') || '<span class="sub">未配置</span>') + '</div></div><div class="hint" style="margin-top:8px">修改请点头部「⋯ → ⚙ 项目配置」</div>'
     : '<div class="field"><label>技能（逗号分隔，/名 手势加载，仅对新任务生效）</label><input id="rc-skills" style="font-family:var(--mono)" value="' + esc((state.taskEnv.skillNames || []).join(',')) + '" placeholder="lark-cli, kb-log"></div>';
 
-  const modelSection = '<div class="rc-row"><span class="rc-k">调度模型</span><span class="tag">' + esc((state.settings && state.settings.planner && state.settings.planner.model) || '默认模型') + '</span></div><div class="hint" style="margin-top:8px">切换用输入区下方模型按钮（全局生效，含项目任务）</div>';
+  const modelSection = '<div class="rc-row"><span class="rc-k">调度模型</span><span class="tag">' + esc((state.settings && state.settings.planner && state.settings.planner.model) || '默认模型') + '</span></div><div class="hint" style="margin-top:8px">输入区下方模型按钮只改当前任务；这里显示的是全局默认模型（在设置页修改）</div>';
 
   const bodyHtml =
     '<div class="rc-section" id="rc-sec-expert"><b>① 默认协作成员（不限制 @）</b>' + expertSection + '</div>' +
-    '<div class="rc-section"><b>② 执行节点 与 工作区</b>' + nodeSection + '</div>' +
-    '<div class="rc-section"><b>③ 连接器 / 技能</b>' + connSection + skillSection + '</div>' +
-    '<div class="rc-section"><b>④ 模型</b>' + modelSection + '</div>';
+    (nodeSection ? '<div class="rc-section"><b>② 执行节点 与 工作区</b>' + nodeSection + '</div>' : '') +
+    '<div class="rc-section"><b>' + (nodeSection ? '③' : '②') + ' 连接器 / 技能</b>' + connSection + skillSection + '</div>' +
+    '<div class="rc-section"><b>' + (nodeSection ? '④' : '③') + ' 模型</b>' + modelSection + '</div>';
 
   const actions = [];
-  // 单独任务：保存节点/连接器/技能到新任务环境
+  // 单独任务：保存连接器/技能到新任务环境（节点不在这里改）
   if (!isProject) {
     actions.push({ label: '保存为新任务环境', cls: 'pri', act: function () {
-      const node = document.getElementById('rc-node');
-      state.taskEnv.nodeRef = node && node.value ? { kind: 'mapping', mappingId: node.value } : null;
       state.taskEnv.connectorIds = Array.prototype.map.call(document.querySelectorAll('.rc-conn:checked'), function (x) { return x.value; });
       state.taskEnv.skillNames = (document.getElementById('rc-skills') || { value: '' }).value.split(',').map(function (x) { return x.trim(); }).filter(Boolean);
-      if (state.taskEnv.nodeRef) {
-        nodeState.cur = state.taskEnv.nodeRef.mappingId;
-        try { localStorage.setItem('wb-node-id', nodeState.cur); } catch (e) { /* ignore */ }
-        setNodeBtnUi('节点: ' + nodeBtnLabel());
-      }
       closeModal();
       toast('✓ 运行配置已保存（作用于新任务）');
     } });
@@ -4730,7 +4841,7 @@ if (navMoreBtn && navMore) {
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     var anyPop = false;
-    ['model-pop', 'main-agent-pop', 'node-pop'].forEach(function (id) {
+    ['model-pop', 'main-agent-pop'].forEach(function (id) {
       var el = document.getElementById(id);
       if (el && el.classList.contains('on')) { el.classList.remove('on'); anyPop = true; }
     });
@@ -4846,13 +4957,9 @@ async function boot() {
   });
   await Promise.all([loadResources(), loadAgents(), loadTasks(), loadSettings(), loadSchedules(), loadPlannerOptions(), loadProjects(), loadTeams()]);
   await refreshMentionCandidates();
-  // 刷新后恢复项目工作台（sessionStorage 记忆，项目不存在则忽略）
-  var savedPid = null;
-  try { savedPid = sessionStorage.getItem('wb-project-id'); } catch (e) { /* ignore */ }
-  if (savedPid && state.projects.some(function (x) { return x.id === savedPid; })) {
-    state.projectId = savedPid;
-    updateProjectBanner();
-  }
+  // 恢复侧栏分组折叠/展开偏好（localStorage，P3-1）
+  try { const gc = JSON.parse(localStorage.getItem('wb.groupCollapsed') || 'null'); if (gc && typeof gc === 'object') state.groupCollapsed = gc; } catch (e) { /* ignore */ }
+  try { const gm = JSON.parse(localStorage.getItem('wb.groupMore') || 'null'); if (gm && typeof gm === 'object') state.groupMore = gm; } catch (e) { /* ignore */ }
   initNodeState();
   // 后台探测节点健康（TTL 门控），拿到结果后校正默认节点：不可达的默认节点不应被新任务选中
   void refreshNodeEngines(false).then(applyReachableNodeDefault).catch(function () {});
@@ -4941,91 +5048,127 @@ $('side-search-clear').addEventListener('click', () => {
 });
 
 let taskListSig = '';
+function saveGroupPrefs() {
+  try {
+    localStorage.setItem('wb.groupCollapsed', JSON.stringify(state.groupCollapsed || {}));
+    localStorage.setItem('wb.groupMore', JSON.stringify(state.groupMore || {}));
+  } catch (e) { /* ignore */ }
+}
+/** 分组键（P3-1）：项目任务 proj:<id>；单独任务按执行节点 node:<mappingId>（与引擎 taskExec 同口径） */
+function taskPlaceKey(t) {
+  if (t.projectId) return 'proj:' + t.projectId;
+  const ref = t.nodeRef;
+  if (ref && ref.kind === 'mapping' && ref.mappingId) return 'node:' + ref.mappingId;
+  return 'node:';
+}
 function renderTaskList() {
-  // 项目工作台模式：只显示本项目任务
-  var visibleTasks = state.projectId ? state.tasks.filter(function (t) { return t.projectId === state.projectId; }) : state.tasks;
   const el = $('task-list');
   const prevScroll = el.scrollTop;
   el.innerHTML = '';
-  if (!visibleTasks.length) {
-    el.innerHTML = state.projectId
-      ? '<div style="color:var(--tx3);font-size:12.5px;padding:16px 12px;text-align:center">本项目还没有任务，点击上方「＋ 新建任务」发起。</div>'
-      : '<div style="color:var(--tx3);font-size:12.5px;padding:16px 12px;text-align:center">还没有任务，点击上方「新建任务」发起第一个会话。</div>';
+  // 草稿（P2-2）：列表顶部临时一行「新任务（草稿）」，发送首条消息创建任务后消失
+  const draftOn = !!(state.draft && !state.currentTaskId);
+  if (!state.tasks.length) {
+    taskListSig = '';
+    if (draftOn) { el.appendChild(draftTaskItemElement()); return; }
+    el.innerHTML = '<div style="color:var(--tx3);font-size:12.5px;padding:16px 12px;text-align:center">还没有任务，点击上方「新建任务」发起第一个会话。</div>';
     return;
   }
 
-  // 搜索过滤（在项目可见集内过滤）
+  // 搜索：平铺结果列表（归档命中仍归入归档组）
   const q = state.searchQuery;
   const filtered = q
-    ? visibleTasks.filter(t => (t.title && t.title.toLowerCase().includes(q)) || (t.lastPreview && t.lastPreview.toLowerCase().includes(q)))
-    : visibleTasks;
+    ? state.tasks.filter(t => (t.title && t.title.toLowerCase().includes(q)) || (t.lastPreview && t.lastPreview.toLowerCase().includes(q)))
+    : state.tasks;
 
   if (q && !filtered.length) {
     el.innerHTML = '<div style="color:var(--tx3);font-size:12px;padding:16px 12px;text-align:center">未找到匹配的会话</div>';
     return;
   }
 
-  // 时间维度分组：今天 / 前7天 / 更早 / 已归档
-  const now = Date.now();
-  const ONE_DAY = 24 * 3600 * 1000;
-  const SEVEN_DAYS = 7 * ONE_DAY;
-
-  const groups = {
-    today: { title: '今天', items: [] },
-    week: { title: '前 7 天', items: [] },
-    older: { title: '更早', items: [] },
-    archived: { title: '已归档会话', items: [] },
+  // 按执行位置分组：每个项目一组（📦 名称 · 🖥 节点）+ 每个节点一组「单独任务」；归档恒为最后一组
+  const nodeTitleOf = function (mid) {
+    const n = dshNodeOptions().find(x => x.mappingId === mid);
+    return n ? (n.title || n.appName || n.note || mid) : (mid || '未指定节点');
   };
-
+  const PLACE = 5; // 每组默认显示条数，「显示更多」展开（状态存 localStorage）
+  const groups = [];
+  const byKey = {};
+  const archivedGrp = { key: 'archived', title: '已归档会话', place: null, items: [], archived: true };
   for (const t of filtered) {
-    if (t.archivedAt) {
-      groups.archived.items.push(t);
-      continue;
+    if (t.archivedAt) { archivedGrp.items.push(t); continue; }
+    const key = taskPlaceKey(t);
+    let g = byKey[key];
+    if (!g) {
+      if (key.indexOf('proj:') === 0) {
+        const p = (state.projects || []).find(x => x.id === key.slice(5));
+        const nt = p && p.nodeTitle ? p.nodeTitle : '';
+        g = { key, title: '📦 ' + ((p && p.name) || '项目') + (nt ? ' · 🖥 ' + nt : ''), place: { projectId: key.slice(5) }, items: [] };
+      } else {
+        const mid = key.slice(5);
+        g = { key, title: '🖥 ' + nodeTitleOf(mid), sub: '单独任务', place: { nodeMappingId: mid, projectId: null }, items: [] };
+      }
+      byKey[key] = g;
+      groups.push(g);
     }
-    const tTime = t.updatedAt || t.createdAt || now;
-    const diff = now - tTime;
-    if (diff < ONE_DAY) groups.today.items.push(t);
-    else if (diff < SEVEN_DAYS) groups.week.items.push(t);
-    else groups.older.items.push(t);
+    g.items.push(t);
   }
+  const tsOf = (t) => t.updatedAt || t.createdAt || 0;
+  for (const g of groups) g.items.sort((a, b) => tsOf(b) - tsOf(a));
+  groups.sort((a, b) => tsOf(b.items[0]) - tsOf(a.items[0])); // 活跃分组靠前
+  if (archivedGrp.items.length) { archivedGrp.items.sort((a, b) => tsOf(b) - tsOf(a)); groups.push(archivedGrp); }
 
-  // 稳态轮询（每 4s / 每个 turn_end）不该整列重建：内容签名一致时直接跳过，
-  // 否则侧栏滚动位置归零、悬停中的 🗄/🗑 按钮消失、mousedown→mouseup 之间重建会吞掉点击。
+  // 稳态轮询不该整列重建：内容签名一致时跳过（保滚动位置与悬停按钮）
   const sig = JSON.stringify({
-    p: state.projectId || '', q: state.searchQuery || '', cur: state.currentTaskId || '',
-    gc: state.groupCollapsed || {},
+    q: state.searchQuery || '', cur: state.currentTaskId || '',
+    gc: state.groupCollapsed || {}, gm: state.groupMore || {},
+    d: draftOn ? JSON.stringify(state.draft.place) : '',
     items: filtered.map(function (t) {
-      return [t.id, t.title, t.lastPreview, t.status, t.running ? 1 : 0, t.archivedAt ? 1 : 0, (t.memberAgentIds || []).join(','), t.updatedAt];
+      return [t.id, t.title, t.lastPreview, t.status, t.running ? 1 : 0, t.pendingAsk ? 1 : 0, t.scheduleId || '', t.archivedAt ? 1 : 0, (t.memberAgentIds || []).join(','), t.updatedAt];
     }),
   });
-  if (sig === taskListSig && el.childElementCount) {
-    el.scrollTop = prevScroll;
-    return;
-  }
+  if (sig === taskListSig && el.childElementCount) { el.scrollTop = prevScroll; return; }
   taskListSig = sig;
 
-  for (const [key, grp] of Object.entries(groups)) {
+  if (draftOn) el.appendChild(draftTaskItemElement());
+  for (const grp of groups) {
     if (!grp.items.length) continue;
-    const isCollapsed = state.groupCollapsed[key] ?? (key === 'archived');
+    const isCollapsed = (state.groupCollapsed || {})[grp.key] ?? Boolean(grp.archived);
     const grpDiv = document.createElement('div');
     grpDiv.style.marginBottom = '6px';
 
     const head = document.createElement('div');
     head.className = 'group-header';
-    head.innerHTML = '<span class="gh-left"><span class="gh-chev">' + (isCollapsed ? '▸' : '▾') + '</span><span>' + esc(grp.title) + '</span></span><span style="display:flex;align-items:center;gap:2px"><span class="gh-cnt">' + grp.items.length + '</span>' +
-      (key === 'archived' ? '<button class="gh-manage" title="搜索 / 批量恢复 / 批量删除已归档会话">管理</button>' : '') + '</span>';
+    head.innerHTML = '<span class="gh-left"><span class="gh-chev">' + (isCollapsed ? '▸' : '▾') + '</span><span class="gh-title">' + esc(grp.title) +
+      (grp.sub ? ' <span class="gh-sub">' + esc(grp.sub) + '</span>' : '') + '</span></span>' +
+      '<span style="display:flex;align-items:center;gap:2px"><span class="gh-cnt">' + grp.items.length + '</span>' +
+      (grp.place ? '<button class="gh-add" title="在此位置新建草稿">＋</button>' : '') +
+      (grp.archived ? '<button class="gh-manage" title="搜索 / 批量恢复 / 批量删除已归档会话">管理</button>' : '') + '</span>';
     head.addEventListener('click', () => {
-      state.groupCollapsed[key] = !isCollapsed;
+      state.groupCollapsed[grp.key] = !isCollapsed;
+      saveGroupPrefs();
       renderTaskList();
     });
+    const addBtn = head.querySelector('.gh-add');
+    if (addBtn) addBtn.addEventListener('click', (e) => { e.stopPropagation(); startDraft(grp.place); });
     const manageBtn = head.querySelector('.gh-manage');
     if (manageBtn) manageBtn.addEventListener('click', (e) => { e.stopPropagation(); switchView('archive'); });
     grpDiv.appendChild(head);
 
     const body = document.createElement('div');
     body.className = 'group-body' + (isCollapsed ? ' collapsed' : '');
-    for (const t of grp.items) {
-      body.appendChild(createTaskItemElement(t, key === 'archived'));
+    const expanded = Boolean((state.groupMore || {})[grp.key]);
+    const shown = expanded ? grp.items : grp.items.slice(0, PLACE);
+    for (const t of shown) body.appendChild(createTaskItemElement(t, Boolean(grp.archived)));
+    if (grp.items.length > PLACE) {
+      const more = document.createElement('button');
+      more.className = 'gh-more';
+      more.textContent = expanded ? '收起' : ('显示更多（还有 ' + (grp.items.length - PLACE) + ' 条）');
+      more.addEventListener('click', () => {
+        state.groupMore[grp.key] = !expanded;
+        saveGroupPrefs();
+        renderTaskList();
+      });
+      body.appendChild(more);
     }
     grpDiv.appendChild(body);
     el.appendChild(grpDiv);
@@ -5034,6 +5177,19 @@ function renderTaskList() {
   el.scrollTop = prevScroll;
 }
 
+/** 侧栏顶部的临时草稿行（P2-2）：点击回到草稿页，✕ 放弃草稿 */
+function draftTaskItemElement() {
+  const div = document.createElement('div');
+  div.className = 'task-item on draft-item';
+  div.title = '新任务（草稿）· 发送第一条消息时创建';
+  div.innerHTML =
+    '<div class="row-top"><span class="s draft"></span><span class="t">新任务（草稿）</span></div>' +
+    '<div class="row-sub">' + esc(placeLabel(state.draft.place)) + '</div>' +
+    '<span class="acts"><button data-a="discard" title="放弃草稿">✕</button></span>';
+  div.addEventListener('click', function () { if (!state.currentTaskId) { const i = $('input'); if (i) i.focus(); } });
+  div.querySelector('[data-a=discard]').addEventListener('click', function (e) { e.stopPropagation(); discardDraft(); });
+  return div;
+}
 function createTaskItemElement(t, archived) {
   const div = document.createElement('div');
   const isSelected = t.id === state.currentTaskId;
@@ -5050,8 +5206,8 @@ function createTaskItemElement(t, archived) {
 
   div.innerHTML =
     '<div class="row-top">' +
-    '<span class="s ' + statusColor(t.running ? 'running' : t.status) + '"></span>' +
-    '<span class="t">' + esc(t.title) + '</span>' +
+    '<span class="s ' + (t.pendingAsk ? 'ask' : statusColor(t.running ? 'running' : t.status)) + '"' + (t.pendingAsk ? ' title="等待用户回答（ask_user）"' : '') + '></span>' +
+    '<span class="t">' + (t.scheduleId ? '<span title="定时任务创建">⏰</span> ' : '') + esc(t.title) + '</span>' +
     '</div>' +
     '<div class="row-sub">' + subText + '</div>' +
     '<span class="acts">' +
@@ -5133,6 +5289,10 @@ async function openTask(taskId) {
 
   const isSwitching = state.currentTaskId !== taskId;
   state.currentTaskId = taskId;
+  clearFileTags(); // 引用标签属于输入草稿，切会话不带走（F3-1）
+  // 打开已有任务 = 放弃草稿（P2-2）：草稿只是前端态，没有服务端记录
+  if (state.draft) { state.draft = null; closePlacePop(); }
+  hideDraftView();
   const seq = ++openTaskSeq;
   disconnectStream();
   renderTaskList();
@@ -5177,6 +5337,7 @@ async function openTask(taskId) {
   startTaskTodosPolling();
   ensureSkillList(); // "/" 技能候选预热（对齐 harness warm 钩子：打开会话即拉目录）
   loadSessionModelInfo(); // 会话模型选择/推理等级/模式预设回显（失败静默）
+  reloadCatalogIfExecNodeChanged(); // 模型目录跟随该任务实际执行节点（与上一个会话/草稿节点不同时重拉）
   refreshCollab(); // 目标徽标 + 计划模式状态回显（失败静默）
 }
 
@@ -5198,6 +5359,18 @@ function applyTaskToView(task, isInitialRender) {
   state.task = task; // 当前任务完整对象（teamId/expertMembers 供编排视图解析专家成员名）
   const ce = $('chat-empty'); if (ce) ce.style.display = 'none';
   if ($('chat-title')) $('chat-title').textContent = task.title || '未命名任务';
+  const crumb = $('chat-fork-crumb');
+  if (crumb) {
+    const ff = task.forkedFrom;
+    if (ff && ff.taskId) {
+      const o = state.taskCache.get(ff.taskId) || state.tasks.find(function (x) { return x.id === ff.taskId; });
+      crumb.textContent = '↪ 续自《' + ((o && o.title) || '原任务') + '》';
+      crumb.style.display = '';
+      crumb.onclick = function () { openTask(ff.taskId); };
+    } else { crumb.style.display = 'none'; crumb.onclick = null; }
+  }
+  if ($('btn-ws-toggle')) $('btn-ws-toggle').style.display = '';
+  wsRestoreForTask(task);
   if ($('btn-add-member')) $('btn-add-member').style.display = '';
   if ($('btn-rename-task')) $('btn-rename-task').style.display = '';
   if ($('btn-goal')) $('btn-goal').style.display = '';
@@ -5269,12 +5442,16 @@ function resetChatView() {
   const scroll = $('chat-scroll');
   if (scroll) scroll.innerHTML = '<div class="chat-empty" id="chat-empty"><div style="font-size:36px">⚡</div><div>从左侧选择任务，或新建一个任务会话</div></div>';
   $('chat-title').textContent = '选择或新建任务';
+  const crumbEl = $('chat-fork-crumb');
+  if (crumbEl) { crumbEl.style.display = 'none'; crumbEl.onclick = null; }
   if ($('btn-add-member')) $('btn-add-member').style.display = 'none';
   if ($('btn-rename-task')) $('btn-rename-task').style.display = 'none';
   if ($('btn-goal')) $('btn-goal').style.display = 'none';
   if ($('btn-plan')) $('btn-plan').style.display = 'none';
   if ($('btn-compact')) $('btn-compact').style.display = 'none';
   if ($('btn-permission')) $('btn-permission').style.display = 'none';
+  if ($('btn-ws-toggle')) $('btn-ws-toggle').style.display = 'none';
+  closeWsSide();
   var gb = $('chat-goal-badge'); if (gb) { gb.style.display = 'none'; gb.textContent = ''; }
   if ($('btn-plan')) { $('btn-plan').textContent = '📋'; $('btn-plan').style.background = ''; $('btn-plan').style.borderColor = ''; }
   if ($('chat-mode')) $('chat-mode').style.display = 'none';
@@ -5284,6 +5461,9 @@ function resetChatView() {
   resetTaskStats();
   resetTaskTodos();
   resetTrajView();
+  renderChatPlace(null);
+  if (state.draft) renderDraftView(); else hideDraftView();
+  reloadCatalogIfExecNodeChanged(); // 回到无任务视图：目录回到所选执行位置（草稿 = 草稿位置的节点）
 }
 
 function refreshChatHead(taskMaybe) {
@@ -5291,6 +5471,7 @@ function refreshChatHead(taskMaybe) {
   if (nameEl && mainAgentState.loaded) nameEl.textContent = mainAgentBtnLabel();
   const task = taskMaybe || state.taskCache.get(state.currentTaskId) || state.tasks.find(t => t.id === state.currentTaskId);
   if (!task) return;
+  renderChatPlace(task); // 首轮建立会话后（task 更新事件走这里）标签才出现
   const modeEl = $('chat-mode');
   modeEl.style.display = '';
   const isOrch = task.mode === 'orchestrate';
@@ -5435,7 +5616,7 @@ function connectStream(taskId) {
       const el = state.turnEls[ev.turn.id];
       if (el) {
         finalizeTurnBlocks(el, ev.turn, taskId);
-        applyUsageBadge(el, ev.turn.usage);
+        applyUsageBadge(el, ev.turn.usage, ev.turn);
       }
       smartScrollBottom();
       loadTasksQuiet();
@@ -5468,6 +5649,8 @@ function connectStream(taskId) {
       updatePlanRow(ev.subtask);
       markTrajDirty();
       loadTasksQuiet();
+      loadTaskStats();
+      loadTaskTodos();
     } catch {}
   });
 
@@ -5510,6 +5693,8 @@ function connectStream(taskId) {
     // 迟到的旧会话 task_end 不能关掉新会话的停止键（切会话瞬间的竞态）；ev 解析失败视作本会话结束
     if (!(ev && ev.task) || ev.task.id === state.currentTaskId) setSending(false);
     markTrajDirty();
+    loadTaskStats();
+    loadTaskTodos();
   });
 
   // 重连补齐：EventSource 首次连接成功不算重连；此后每次 onopen 都意味着中间丢过帧，
@@ -5974,24 +6159,110 @@ function cacheHitPercent(usage) {
 }
 
 /** 更新 turn 脚注里的用量 pill（流式实时或回放时写入；对齐 DSH TurnUsagePanel 摘要胶囊） */
-function applyUsageBadge(el, usage) {
+/** 逐轮用量胶囊（S2-2）：🗄 总量（K/M 压缩）· ⏱ 本轮时长（endedAt-at，流式中暂无）；点击看输入/输出/缓存/命中率明细 */
+function applyUsageBadge(el, usage, turn) {
   if (!el || !el.foot) return;
   const old = el.foot.querySelector('.dsh-usage-pill[data-role="usage"]');
   if (old) old.remove();
   if (!usage || typeof usage !== 'object') return;
+  const miss = Number(usage.uncachedInputTokens) || Number(usage.inputTokens) || 0;
+  const read = Number(usage.cacheReadTokens) || 0;
+  const write = Number(usage.cacheWriteTokens) || 0;
   const out = Number(usage.outputTokens) || 0;
-  const total = (Number(usage.uncachedInputTokens) || Number(usage.inputTokens) || 0)
-    + (Number(usage.cacheReadTokens) || 0) + (Number(usage.cacheWriteTokens) || 0) + out;
+  const total = miss + read + write + out;
   if (total <= 0) return;
+  const durMs = turn && turn.endedAt && turn.at ? Math.max(0, turn.endedAt - turn.at) : (Number(usage.durationMs) || 0);
   const pct = cacheHitPercent(usage);
-  const label = '用量 ' + total.toLocaleString() + ' tok' + (pct !== null ? ' · 缓存 ' + pct + '%' : '');
-  const pill = document.createElement('span');
+  const pill = document.createElement('button');
+  pill.type = 'button';
   pill.className = 'dsh-usage-pill';
   pill.dataset.role = 'usage';
-  pill.title = label + '（输出 ' + out.toLocaleString() + ' tok）';
-  pill.innerHTML = '<b>' + total.toLocaleString() + '</b>&nbsp;tok' + (pct !== null ? '&nbsp;·&nbsp;缓存 ' + pct + '%' : '');
+  pill.title = '本轮用量 ' + total.toLocaleString() + ' tok（点击看明细）';
+  pill.innerHTML = '🗄 ' + fmtStatsTokens(total) + (durMs > 0 ? '&nbsp;·&nbsp;⏱ ' + fmtStatsDuration(durMs) : '');
+  pill.addEventListener('click', function (e) {
+    e.stopPropagation();
+    openTurnUsageDetail(usage, durMs, pct, total);
+  });
   const anchor = el.foot.querySelector('.dsh-timeEnd');
   if (anchor) el.foot.insertBefore(pill, anchor); else el.foot.appendChild(pill);
+}
+/** 单轮用量明细弹层（S2-2）：输入 / 输出 / 缓存读 / 缓存写 / 命中率（/ 首 token：远端透传 ttftMs 时展示） */
+function openTurnUsageDetail(usage, durMs, pct, total) {
+  const row = function (label, val) { return '<div class="sp-r"><span>' + esc(label) + '</span><b>' + esc(val || '—') + '</b></div>'; };
+  const n = function (v) { return (Number(v) || 0).toLocaleString() + ' tok'; };
+  let html = '<div style="min-width:280px">'
+    + row('输入（未命中缓存）', n(usage.uncachedInputTokens || usage.inputTokens))
+    + row('输出', n(usage.outputTokens))
+    + row('缓存读', n(usage.cacheReadTokens))
+    + row('缓存写', n(usage.cacheWriteTokens))
+    + row('合计', n(total))
+    + row('缓存命中率', pct !== null ? pct + '%' : '')
+    + (Number(usage.ttftMs) > 0 ? row('首 token', fmtStatsDuration(Number(usage.ttftMs))) : '')
+    + (durMs > 0 ? row('本轮时长', fmtStatsDuration(durMs)) : '')
+    + '</div>';
+  openModal('本轮用量', html, [{ label: '关闭', cls: '', act: closeModal }]);
+}
+
+/** 本轮变更文件：写入/编辑类工具的路径（engine 落盘的 tool.paths），失败的调用不算，按出现顺序去重 */
+function turnChangedPaths(turn) {
+  const out = [];
+  for (const t of (turn && turn.tools) || []) {
+    if (!t || t.status === 'error' || !Array.isArray(t.paths)) continue;
+    for (const p of t.paths) if (p && out.indexOf(p) < 0) out.push(p);
+  }
+  return out;
+}
+/** agent 轮末尾的「本轮变更」标签：最多 6 个，多出的显示 +N；点击走任务文件下载（F1 完成后改为右侧栏预览） */
+function renderTurnChanges(foot, turn, taskId) {
+  if (!foot || !foot.parentNode) return;
+  const old = foot.parentNode.querySelector('.dsh-changes');
+  if (old) old.remove();
+  if (!turn || turn.role !== 'agent') return;
+  const paths = turnChangedPaths(turn);
+  if (!paths.length) return;
+  const MAX = 6;
+  const box = document.createElement('div');
+  box.className = 'dsh-changes';
+  let html = '<span class="dsh-changes-label">本轮变更</span>';
+  for (const p of paths.slice(0, MAX)) {
+    html += '<span class="dsh-change-chip" role="button" tabindex="0" data-cp="' + esc(p) + '" title="' + esc(p) + '（点击在右侧栏预览）">' + esc(p.split('/').pop() || p) + '</span>';
+  }
+  if (paths.length > MAX) {
+    html += '<span class="dsh-change-chip more" title="' + esc(paths.slice(MAX).join('\\n')) + '">+' + (paths.length - MAX) + '</span>';
+  }
+  box.innerHTML = html;
+  box.querySelectorAll('.dsh-change-chip[data-cp]').forEach(function (chip) {
+    const open = function () { openWsSide({ kind: 'preview', path: chip.dataset.cp, title: String(chip.dataset.cp).split('/').pop(), agentId: turn.agentId || '', viaTask: true }); };
+    chip.addEventListener('click', open);
+    chip.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+  });
+  foot.parentNode.insertBefore(box, foot);
+  linkChangedPathsInBody(foot.parentNode.querySelector('.dsh-body'), paths, turn, taskId);
+}
+/** 行内代码 → 变更文件：精确等于某个变更路径，或等于唯一一个变更文件的文件名；同名多于一个返回空 */
+function changedPathForCode(code, paths) {
+  if (!code) return '';
+  if (paths.indexOf(code) >= 0) return code;
+  const hits = paths.filter(p => (p.split('/').pop() || p) === code);
+  return hits.length === 1 ? hits[0] : '';
+}
+/** AI 回复正文里的行内代码若对应本轮变更文件，渲染为下载链接（代码块 pre 内不处理） */
+function linkChangedPathsInBody(body, paths, turn, taskId) {
+  if (!body || !paths.length) return;
+  for (const c of Array.prototype.slice.call(body.querySelectorAll('code'))) {
+    if (c.closest('pre') || c.closest('a')) continue;
+    const p = changedPathForCode((c.textContent || '').trim(), paths);
+    if (!p) continue;
+    const a = document.createElement('a');
+    a.className = 'dsh-change-link';
+    a.title = p + '（点击在右侧栏预览）';
+    a.addEventListener('click', function (e) {
+      e.preventDefault();
+      openWsSide({ kind: 'preview', path: p, title: String(p).split('/').pop(), agentId: turn.agentId || '', viaTask: true });
+    });
+    c.parentNode.insertBefore(a, c);
+    a.appendChild(c);
+  }
 }
 
 /** 流式轮次的活动状态行（DSH TurnStatus：深度求索中...，15s 后出现计时钟；插入到流式轮上方） */
@@ -6078,6 +6349,22 @@ function buildTurnElement(taskId, turn) {
     });
   }
 
+  // P4-2：system 续接轮「已在 🖥 X 继续 → task-xxx」附打开按钮
+  if (roleClass === 'system') {
+    const fm = /→\s*(task-[A-Za-z0-9]+)/.exec(turn.text || '');
+    if (fm) {
+      const openNew = document.createElement('button');
+      openNew.type = 'button';
+      openNew.className = 'mini-btn';
+      openNew.style.marginLeft = '6px';
+      openNew.textContent = '打开 ↪';
+      openNew.title = '打开续接任务 ' + fm[1];
+      openNew.addEventListener('click', function (e) { e.stopPropagation(); openTask(fm[1]); });
+      const sysRow = flow.querySelector('.dsh-sysRow');
+      if (sysRow) sysRow.appendChild(openNew);
+    }
+  }
+
   const blocks = flow.querySelector('.dsh-sys-blocks') || flow.querySelector('.dsh-body');
   const foot = flow.querySelector('.dsh-actions-foot');
   const turnMeta = { agentName: turn.agentName, agentId: turn.agentId, taskId };
@@ -6098,7 +6385,8 @@ function buildTurnElement(taskId, turn) {
       te.el.innerHTML = turn.role === 'agent' ? md(withFileLinks(taskId, turn.agentId, turn.text || '')) : md(turn.text || '');
       blocks.appendChild(te.el);
     }
-    if (turn.usage) applyUsageBadge({ foot }, turn.usage);
+    if (turn.usage) applyUsageBadge({ foot }, turn.usage, turn);
+    renderTurnChanges(foot, turn, taskId);
   } else if (blocks && turn.streaming && turn.text) {
     const te = createBlock('text'); te.el.textContent = turn.text || ''; blocks.appendChild(te.el);
   }
@@ -6348,7 +6636,8 @@ function finalizeTurnBlocks(el, turn, taskId) {
     for (const n of texts) blocks.appendChild(n);
   }
 
-  if (turn.usage) applyUsageBadge(el, turn.usage);
+  if (turn.usage) applyUsageBadge(el, turn.usage, turn);
+  renderTurnChanges(el.foot, turn, taskId);
 
   markTrajDirty();
 }
@@ -6568,10 +6857,11 @@ function setSending(on) {
   // 发送键常驻：空闲 = 新轮次；运行中 = 补充意见排队（本轮结束自动补发，气泡上可「⚡ 立即发送」插话）。
   // 停止键仅运行中出现；body.task-running 同时驱动「规划中」系统消息的等待动效
   $('btn-send').style.display = '';
-  $('btn-send').disabled = false;
+  $('btn-send').disabled = document.body.classList.contains('node-offline'); // 执行节点离线时保持禁用（renderNodeOffline）
   $('btn-send').title = on ? '发送（运行中：先排队，气泡上可 ⚡ 立即发送插话）' : '发送';
   $('btn-stop').style.display = on ? 'grid' : 'none';
   document.body.classList.toggle('task-running', on);
+  syncLivePolling(on);
 }
 
 // ====================================================================
@@ -7329,15 +7619,29 @@ function safeJsonParse(s) {
 // ---------- 发送消息与附件 ----------
 $('btn-send').addEventListener('click', send);
 
+/** 引用标签（F3-1）：发送时展开为相对工作区的路径并入正文 */
+function composeOutgoingText(text) {
+  const tags = state.fileTags || [];
+  if (!tags.length) return text;
+  const refs = tags.map(function (t) { return wsRelPath(t.path) || String(t.path).split('/').pop(); });
+  return text ? (text + '\\n' + refs.join(' ')) : refs.join(' ');
+}
+function clearFileTags() { state.fileTags = []; renderFileTags(); }
 async function send() {
-  const text = $('input').value.trim();
-  if (!text) return;
+  const text = composeOutgoingText($('input').value.trim());
+  if (!text || document.body.classList.contains('node-offline')) return;
   if (!state.currentTaskId) {
-    // 欢迎页直接输入即开新会话（对齐 DSH 体验）：不必先点「＋ 新建任务」再回来输入。
-    // 创建失败（或并发点击）时直接返回，错误已由创建流程 toast。
-    if (document.body.classList.contains('task-running')) return;
-    await createNewTaskDirectly();
-    if (!state.currentTaskId) return;
+    // 草稿 / 欢迎页的首条消息：POST /tasks 带 message 一次完成「创建 + 发送」（P2-2），
+    // 之后项目与节点锁定在任务上。创建失败（或并发点击）时回填输入框，错误已由创建流程 toast。
+    if (document.body.classList.contains('task-running') || draftCreating) return;
+    if (!state.draft) state.draft = { place: defaultDraftPlace(), model: (state.taskEnv && state.taskEnv.model) || '' };
+    $('input').value = '';
+    const createdId = await commitDraft(text);
+    if (!createdId) {
+      const input = $('input');
+      if (input && !input.value.trim()) input.value = text;
+    } else clearFileTags();
+    return;
   }
   const sendTaskId = state.currentTaskId;
   const wasRunning = document.body.classList.contains('task-running');
@@ -7353,6 +7657,7 @@ async function send() {
     if (state.currentTaskId === sendTaskId) setSending(wasRunning);
     return;
   }
+  if (state.currentTaskId === sendTaskId) clearFileTags();
   // 运行中的补充意见 → 服务端已经落账为排队轮：立即渲染该轮（⏳ 排队气泡 + ⚡ 立即发送），
   // 不能只留一句 composer 提示——否则用户以为消息丢了，刷新后又看到「补发 + 原排队」两条重复。
   if (r.queued && r.turn && state.currentTaskId === sendTaskId) {
@@ -7655,16 +7960,28 @@ async function applyPermission() {
 
 // ---------- 附件上传 ----------
 $('btn-attach').addEventListener('click', () => {
-  if (!state.currentTaskId) { toast('请先选择或新建任务', true); return; }
+  if (!state.currentTaskId && !state.draft) { toast('请先选择或新建任务', true); return; }
   $('file-input').click();
 });
 $('file-input').addEventListener('change', () => {
   const input = $('file-input');
   const files = Array.from(input.files || []);
   input.value = '';
-  if (!files.length || !state.currentTaskId) return;
-  uploadAttachments(files);
+  if (!files.length) return;
+  uploadAttachmentsEnsuringTask(files);
 });
+/** 草稿态上传附件（P2-2）：先按草稿位置创建任务（不带 message，不执行），再上传到该任务工作区 */
+async function uploadAttachmentsEnsuringTask(files) {
+  if (!state.currentTaskId) {
+    if (!state.draft) { toast('请先选择或新建任务，再上传附件', true); return; }
+    const keep = $('input') ? $('input').value : '';
+    const id = await commitDraft('');
+    if (!id) return;
+    const input = $('input');
+    if (input && keep && !input.value) input.value = keep; // 草稿文字保留，用户上传后再发送
+  }
+  uploadAttachments(files);
+}
 
 function uploadAttachments(files) {
   const taskId = state.currentTaskId;
@@ -7925,8 +8242,8 @@ function appendAttachmentLine(line, taskId) {
     container.classList.remove('drop-hover');
     const files = Array.from(e.dataTransfer?.files || []);
     if (!files.length) return;
-    if (!state.currentTaskId) { toast('请先选择或新建任务，再拖入附件', true); return; }
-    uploadAttachments(files);
+    if (!state.currentTaskId && !state.draft) { toast('请先选择或新建任务，再拖入附件', true); return; }
+    uploadAttachmentsEnsuringTask(files);
   });
   // 拖拽被系统/浏览器取消时兜底清高亮
   document.addEventListener('dragend', () => { dragDepth = 0; container.classList.remove('drop-hover'); });
@@ -7936,8 +8253,8 @@ function appendAttachmentLine(line, taskId) {
     const files = Array.from(e.clipboardData?.files || []);
     if (!files.length) return;
     e.preventDefault();
-    if (!state.currentTaskId) { toast('请先选择或新建任务，再粘贴附件', true); return; }
-    uploadAttachments(files);
+    if (!state.currentTaskId && !state.draft) { toast('请先选择或新建任务，再粘贴附件', true); return; }
+    uploadAttachmentsEnsuringTask(files);
   });
 })();
 
@@ -7959,9 +8276,10 @@ async function refreshMentionCandidates() {
     });
     (state.agents || []).forEach(a => {
       if (a.enabled !== false) {
+        // P5-1：🖥 节点名 · 模型（与 /mentions/candidates 同口径）
         list.push({
           type: 'agent', id: a.id, name: a.name, kind: 'agent',
-          detail: (a.dshRef && a.dshRef.kind) + ' · ' + (a.model ? String(a.model).split('/').pop() : '默认模型')
+          detail: '🖥 ' + (memberNodeLabel(a.id) || (a.dshRef && a.dshRef.kind) || '节点') + ' · ' + (a.model ? String(a.model).split('/').pop() : '默认模型')
         });
       }
     });
@@ -8329,9 +8647,10 @@ function applyTaskSummaries(summaries) {
   if (list.some(s => s.id === state.currentTaskId)) refreshChatHead();
 }
 
-/** 主智能体当前生效的模型（模型列表选中值；未选中时回退其自身配置） */
+/** 主会话当前生效的模型（任务级选择 → 全局默认模型 → 主智能体自身配置） */
 function mainAgentEffectiveModel() {
-  if (modelState.cur) return String(modelState.cur).split('/').pop();
+  const eff = modelState.cur || modelState.globalDefault;
+  if (eff) return String(eff).split('/').pop();
   const mainId = mainAgentState.cur || mainAgentState.resolvedAgentId || '';
   const a = state.agents.find(x => x.id === mainId);
   return a && a.model ? String(a.model).split('/').pop() : '';
@@ -8435,6 +8754,31 @@ function closeMainAgentPop() {
 
 // ---------- 任务节点切换（主 DSH：新模型下节点决定任务在哪台机器上执行） ----------
 const nodeState = { cur: '', userPicked: false }; // mappingId；'' = 未选（资源目录为空时）
+// 执行位置选择框（P2-1）：place = { nodeMappingId, projectId|null }；pop/anchor = 当前挂载的弹层与触发按钮；
+// level = 'node' | 'project'，browse = 第二层正在看的节点；onChange(place) 由调用方传入
+const placeState = { place: { nodeMappingId: '', projectId: null }, pop: null, anchor: null, level: 'node', browse: '', onChange: null, nodeOnly: false };
+/** 当前打开的任务对象（完整缓存优先，列表摘要兜底）；无当前任务返回 null */
+function currentTaskObj() {
+  if (!state.currentTaskId) return null;
+  return state.taskCache.get(state.currentTaskId) || state.tasks.find(function (x) { return x.id === state.currentTaskId; }) || null;
+}
+/**
+ * 任务实际执行节点（mappingId），模型目录按它拉取（与 engine.taskExec 同口径）：
+ * 项目任务 = project.dshRef → 单独任务 = task.nodeRef → 草稿/解析不到 = 所选执行位置 nodeState.cur
+ */
+function taskExecNodeId(task) {
+  const p = task && task.projectId ? (state.projects || []).find(function (x) { return x.id === task.projectId; }) : null;
+  if (p && p.dshRef && p.dshRef.kind === 'mapping' && p.dshRef.mappingId) return p.dshRef.mappingId;
+  const ref = task && task.nodeRef;
+  if (ref && ref.kind === 'mapping' && ref.mappingId) return ref.mappingId;
+  // 草稿态（P2-2）：目录跟随草稿所选执行位置
+  if (!task && state.draft && state.draft.place && state.draft.place.nodeMappingId) return state.draft.place.nodeMappingId;
+  return (nodeState && nodeState.cur) || '';
+}
+/** 执行节点与已加载目录的节点不一致时重拉模型目录（打开任务 / 首屏节点就绪后调用） */
+function reloadCatalogIfExecNodeChanged() {
+  if (modelState.loaded && modelState.loadedForNode !== taskExecNodeId(currentTaskObj())) loadPlannerOptions();
+}
 /**
  * 会话头部节点选择器回显「该会话实际执行节点」。
  * 节点选择器原本只反映全局默认（新建任务用），打开一个在别的节点上创建的任务时
@@ -8442,24 +8786,163 @@ const nodeState = { cur: '', userPicked: false }; // mappingId；'' = 未选（�
  */
 function syncNodeChipToTask(task) {
   try {
+    // 项目任务节点以项目为准（P0-3）：按 project.dshRef 回显（/api/projects 摘要带 dshRef + nodeTitle），
+    // 与引擎 taskExec / taskExecNodeId 的「项目 dshRef 优先」同口径；任务上的 nodeRef 已不再参与项目任务。
+    const pj = task && task.projectId ? (state.projects || []).find(function (x) { return x.id === task.projectId; }) : null;
+    const pref = pj && pj.dshRef;
+    if (pref && typeof pref === 'object') {
+      if (pref.kind === 'mapping' && pref.mappingId && dshNodeOptions().some(function (x) { return x.mappingId === pref.mappingId; })) {
+        if (nodeState.cur !== pref.mappingId) {
+          nodeState.cur = pref.mappingId;
+          state.taskEnv.nodeRef = { kind: 'mapping', mappingId: pref.mappingId };
+        }
+        return true;
+      }
+      if (pref.kind === 'direct' && pref.apiBaseUrl) {
+        return true;
+      }
+      // app 型项目节点（或映射不在当前资源快照里）：回显目录解析出的节点名
+      if (pj.nodeTitle) {
+        return true;
+      }
+    }
     const ref = task && task.nodeRef;
     if (!ref || typeof ref !== 'object') return false;
     if (ref.kind === 'mapping' && ref.mappingId && dshNodeOptions().some(function (x) { return x.mappingId === ref.mappingId; })) {
       if (nodeState.cur !== ref.mappingId) {
         nodeState.cur = ref.mappingId;
         state.taskEnv.nodeRef = { kind: 'mapping', mappingId: ref.mappingId };
-        setNodeBtnUi('节点: ' + nodeBtnLabel());
-        // 回显到任务真实节点后，模型目录/规划器选项同步按该节点刷新
-        loadPlannerOptions();
       }
       return true;
     }
     if (ref.kind === 'direct' && ref.apiBaseUrl) {
-      setNodeBtnUi('节点: 直连 ' + String(ref.apiBaseUrl).replace('https://', '').replace('http://', ''));
       return true;
     }
   } catch (e) { /* 回显失败不阻断渲染 */ }
   return false;
+}
+/**
+ * 任务执行位置（只读展示用）：项目 dshRef 优先，其次 task.nodeRef（与 taskExecNodeId 同口径）。
+ * 返回 { project, nodeLabel, res（DSH 资源，含 engine 探测档案）, workspace }。
+ */
+function taskPlaceInfo(task) {
+  const pj = task && task.projectId ? (state.projects || []).find(function (x) { return x.id === task.projectId; }) : null;
+  const ref = (pj && pj.dshRef) || (task && task.nodeRef) || null;
+  let nodeLabel = '';
+  let res = null;
+  if (ref && ref.kind === 'mapping' && ref.mappingId) {
+    res = dshNodeOptions().find(function (x) { return x.mappingId === ref.mappingId; }) || null;
+    nodeLabel = res ? (res.title || res.appName || res.note || res.mappingId) : ((pj && pj.nodeTitle) || ref.mappingId);
+  } else if (ref && ref.kind === 'direct' && ref.apiBaseUrl) {
+    nodeLabel = '直连 ' + String(ref.apiBaseUrl).replace('https://', '').replace('http://', '');
+  } else if (pj && pj.nodeTitle) {
+    nodeLabel = pj.nodeTitle;
+  }
+  return { project: pj, nodeLabel: nodeLabel || '默认节点', res: res, workspace: (task && task.workDir) || (pj && pj.workspace) || '' };
+}
+/**
+ * 头部只读执行位置标签「📦 项目 · 🖥 节点」+ ⋯ 菜单（P1-1）。项目和节点在首条消息后锁定在任务上，
+ * 头部只显示不切换；草稿（还没有远端会话）不显示标签，留给 P2 的执行位置选择框。
+ */
+function renderChatPlace(task) {
+  const chip = $('chat-place');
+  const more = $('head-more');
+  const info = task ? taskPlaceInfo(task) : null;
+  if (chip) {
+    if (!task || !task.sessions || !Object.keys(task.sessions).length) {
+      chip.style.display = 'none';
+      chip.textContent = '';
+      chip.removeAttribute('title');
+    } else {
+      chip.style.display = '';
+      chip.textContent = (info.project ? '📦 ' + (info.project.name || info.project.id) + ' · ' : '') + '🖥 ' + info.nodeLabel;
+      const eng = info.res && info.res.engine;
+      const status = !info.res ? '' : !eng ? '未探测' : eng.reachable ? '在线' : '离线' + (eng.error ? '（' + eng.error + '）' : '');
+      const lines = [
+        '工作区：' + (info.workspace || '远端默认目录'),
+        '节点：' + info.nodeLabel + (status ? ' · ' + status : ''),
+      ];
+      if (eng && eng.defaultModel) lines.push('默认模型：' + eng.defaultModel);
+      lines.push('执行位置随任务锁定');
+      chip.title = lines.join('\\n');
+    }
+  }
+  // ⋯ 菜单：任务所属项目，未打开任务时取项目工作台当前项目（原横幅的入口）
+  const pj = (info && info.project) || null;
+  if (more) {
+    // P4-2：⋯ 菜单对单独任务也显示（续接入口）；项目两项由弹层按 pid 决定
+    more.style.display = task ? '' : 'none';
+    more.dataset.pid = pj ? pj.id : '';
+  }
+  renderNodeOffline(task);
+}
+/**
+ * 执行节点离线（P1-2）：任务已有远端会话且执行节点探测为不可达时，禁用输入框并在输入区上方给出
+ * 「重试连接 / 在其他节点继续」。未探测（engine 缺失）不算离线；草稿没有会话，留给 P2 选择框。
+ * 离线态记在 body.node-offline（setSending / send 读它），重试中记在离线条的 data-retrying。
+ */
+function renderNodeOffline(task) {
+  const bar = $('node-offline');
+  const input = $('input');
+  const info = task && task.sessions && Object.keys(task.sessions).length ? taskPlaceInfo(task) : null;
+  const eng = info && info.res && info.res.engine;
+  const off = !!(eng && eng.reachable === false);
+  document.body.classList.toggle('node-offline', off);
+  if (input) {
+    input.disabled = off;
+    if (off) input.title = '执行节点离线，暂时无法发送';
+    else input.removeAttribute('title');
+  }
+  if ($('btn-send')) $('btn-send').disabled = off;
+  if (!bar) return;
+  if (!off) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+  const retrying = bar.dataset.retrying === '1';
+  bar.style.display = '';
+  bar.innerHTML =
+    '<span class="no-msg">🖥 ' + esc(info.nodeLabel) + ' 当前离线，这个任务的会话保存在该节点上' +
+    (eng.error ? '（' + esc(eng.error) + '）' : '') + '</span>' +
+    '<button class="mini-btn" data-op="retry"' + (retrying ? ' disabled' : '') + '>' + (retrying ? '重试中…' : '重试连接') + '</button>' +
+    '<button class="mini-btn" data-op="fork">在其他节点继续 →</button>';
+  const retry = bar.querySelector('[data-op="retry"]');
+  if (retry) retry.addEventListener('click', retryNodeConnection);
+  const forkBtn = bar.querySelector('[data-op="fork"]');
+  if (forkBtn) forkBtn.addEventListener('click', function () { startForkFlow(forkBtn); });
+}
+async function retryNodeConnection() {
+  const bar = $('node-offline');
+  if (!bar || bar.dataset.retrying === '1') return;
+  bar.dataset.retrying = '1';
+  renderNodeOffline(currentTaskObj());
+  try { await refreshNodeEngines(true); } finally { bar.dataset.retrying = ''; }
+  renderNodeOffline(currentTaskObj());
+  if (document.body.classList.contains('node-offline')) hintComposer('节点仍然离线，请稍后再试', true);
+  else hintComposer('✓ 节点已恢复连接');
+}
+function closeHeadMore() { const p = $('head-more-pop'); if (p) p.classList.remove('on'); }
+if ($('btn-head-more')) {
+  $('btn-head-more').addEventListener('click', function (e) {
+    e.stopPropagation();
+    const pop = $('head-more-pop');
+    const pid = ($('head-more') && $('head-more').dataset.pid) || '';
+    if (!pop) return;
+    if (pop.classList.contains('on')) { closeHeadMore(); return; }
+    pop.innerHTML =
+      '<div class="main-agent-item" data-op="fork"><div class="ag-info"><div class="ag-title">↪ 在其他节点继续…</div><div class="ag-sub">携带最近对话，在新位置开新任务（P4）</div></div></div>' +
+      (pid ? '<div class="main-agent-item" data-op="files"><div class="ag-info"><div class="ag-title">📁 工作区文件</div></div></div>' +
+      '<div class="main-agent-item" data-op="cfg"><div class="ag-info"><div class="ag-title">⚙ 项目配置</div></div></div>' : '');
+    pop.querySelectorAll('.main-agent-item').forEach(function (it) {
+      it.addEventListener('click', function () {
+        closeHeadMore();
+        if (it.dataset.op === 'fork') startForkFlow($('btn-head-more'));
+        else if (it.dataset.op === 'files') openWsSide({ kind: 'files' });
+        else if (it.dataset.op === 'cfg') openProjectDrawer(pid);
+      });
+    });
+    pop.classList.add('on');
+  });
+  document.addEventListener('click', function (e) {
+    if (!(e.target instanceof Element) || !e.target.closest('#head-more')) closeHeadMore();
+  });
 }
 /**
  * 默认节点可达性校正：探测结果显示当前默认节点不可达、且存在健康节点时，
@@ -8475,7 +8958,6 @@ function applyReachableNodeDefault() {
   if (!healthy) return;
   nodeState.cur = healthy.mappingId;
   state.taskEnv.nodeRef = { kind: 'mapping', mappingId: healthy.mappingId };
-  setNodeBtnUi('节点: ' + nodeBtnLabel());
   // 节点换了 → 模型目录/规划器选项需按新节点重拉；否则模型弹层一直显示旧（挂掉）节点的
   // 「⚠️ 模型目录获取失败: fetch failed」，且可选模型列表为空
   loadPlannerOptions();
@@ -8488,47 +8970,37 @@ function nodeBtnLabel() {
   const n = dshNodeOptions().find(function (x) { return x.mappingId === nodeState.cur; });
   return n ? (n.title || n.appName || n.note || n.mappingId) : '自动';
 }
-function renderNodePop() {
-  const pop = $('node-pop');
-  if (!pop) return;
-  const opts = dshNodeOptions();
-  let html = '<div class="main-agent-pop-head"><span>任务节点（主 DSH）</span><span>新建任务在此执行</span></div>';
-  if (!opts.length) html += '<div class="model-empty">暂无 DSH 节点（资源目录未同步）</div>';
-  // 按隧道分组：隧道=机器，组内每条映射=一个可执行引擎入口（同一台机器可并存 DSH 与 ZCode 引擎）
+/** 按隧道分组：隧道=机器，组内每条映射=一个可执行引擎入口（同一台机器可并存 DSH 与 ZCode 引擎） */
+function dshNodeGroups(opts) {
   const byTunnel = {};
-  const tunnelOrder = [];
+  const order = [];
   for (const n of opts) {
     const k = n.tunnelName || '未命名隧道';
-    if (!byTunnel[k]) { byTunnel[k] = []; tunnelOrder.push(k); }
+    if (!byTunnel[k]) { byTunnel[k] = []; order.push(k); }
     byTunnel[k].push(n);
   }
-  for (const tn of tunnelOrder) {
-    const group = byTunnel[tn];
-    if (tunnelOrder.length > 1 || group.length > 1) html += '<div class="model-group">🖥 ' + esc(tn) + '</div>';
-    for (const n of group) {
-      const label = n.title || n.appName || n.note || n.mappingId;
-      const eng = n.engine || null;
-      const isCur = nodeState.cur === n.mappingId;
-      // 引擎徽标 + 健康点：探测档案有则显示；未探测（灰点）/不可达（红点）均可点选
-      const engBadge = eng ? (eng.engine === 'zcode' ? 'ZCode' : eng.engine === 'dsh' ? 'DSH' : '引擎?') : '';
-      const dotCls = !eng ? 'np-dot' : eng.reachable ? 'np-dot ok' : 'np-dot err';
-      const subParts = [];
-      if (eng && eng.reachable && eng.defaultModel) subParts.push('默认 ' + eng.defaultModel);
-      if (!eng || !eng.reachable) subParts.push(eng && eng.error ? '⚠️ ' + eng.error : '探测中…');
-      const sub = esc(n.baseUrl || '') + (subParts.length ? ' · ' + esc(subParts.join(' · ')) : '');
-      const style = eng && !eng.reachable ? ' style="opacity:.62"' : '';
-      html += '<div class="main-agent-item' + (isCur ? ' on' : '') + '"' + style + ' data-mid="' + esc(n.mappingId) + '">' +
-        '<div class="ag-info"><div class="ag-title"><span class="' + dotCls + '" style="display:inline-block;margin-right:6px"></span>🖥 ' + esc(label) +
-        (engBadge ? ' <span class="ag-badge">' + esc(engBadge) + '</span>' : '') + '</div>' +
-        '<div class="ag-sub">' + sub + '</div></div>' +
-        '<span class="ag-ck">✓</span></div>';
-    }
-  }
-  pop.innerHTML = html;
-  pop.querySelectorAll('.main-agent-item').forEach(function (it) {
-    it.addEventListener('click', function () { selectNode(it.dataset.mid); });
-  });
-  // 引擎档案缺失/临期 → 后台探测（TTL 门控）后按 mappingId 合并回列表重绘
+  return order.map(function (k) { return { tunnel: k, list: byTunnel[k] }; });
+}
+/** 节点下拉行：引擎徽标 + 健康点（探测档案有则显示；未探测灰点 / 不可达红点，均可点选）；extra 追加到副标题 */
+function dshNodeItemHtml(n, isCur, extra) {
+  const label = n.title || n.appName || n.note || n.mappingId;
+  const eng = n.engine || null;
+  const engBadge = eng ? (eng.engine === 'zcode' ? 'ZCode' : eng.engine === 'dsh' ? 'DSH' : '引擎?') : '';
+  const dotCls = !eng ? 'np-dot' : eng.reachable ? 'np-dot ok' : 'np-dot err';
+  const subParts = [];
+  if (eng && eng.reachable && eng.defaultModel) subParts.push('默认 ' + eng.defaultModel);
+  if (!eng || !eng.reachable) subParts.push(eng && eng.error ? '⚠️ ' + eng.error : '探测中…');
+  if (extra) subParts.push(extra);
+  const sub = esc(n.baseUrl || '') + (subParts.length ? ' · ' + esc(subParts.join(' · ')) : '');
+  const style = eng && !eng.reachable ? ' style="opacity:.62"' : '';
+  return '<div class="main-agent-item' + (isCur ? ' on' : '') + '"' + style + ' data-mid="' + esc(n.mappingId) + '">' +
+    '<div class="ag-info"><div class="ag-title"><span class="' + dotCls + '" style="display:inline-block;margin-right:6px"></span>🖥 ' + esc(label) +
+    (engBadge ? ' <span class="ag-badge">' + esc(engBadge) + '</span>' : '') + '</div>' +
+    '<div class="ag-sub">' + sub + '</div></div>' +
+    '<span class="ag-ck">✓</span></div>';
+}
+/** 引擎档案缺失/临期 → 后台探测（TTL 门控），结果合并回 state.resources 后由 refreshNodeEngines 重绘 */
+function probeNodesIfStale(opts) {
   const needProbe = opts.some(function (n) { return !n.engine || Date.now() - (n.engine.probedAt || 0) > 90000; });
   if (needProbe) refreshNodeEngines(false);
 }
@@ -8547,7 +9019,8 @@ async function refreshNodeEngines(force) {
       res.engine = e.engine;
       if (JSON.stringify(e.engine) !== before) changed = true;
     }
-    if (changed && $('node-pop') && $('node-pop').classList.contains('on')) renderNodePop();
+    if (changed && placeState.pop) renderPlacePop();
+    if (changed) renderChatPlace(currentTaskObj()); // 头部标签悬停里的在线状态 / 默认模型跟着刷新
   } catch (e) { /* 探测失败静默：下拉里已显示「探测中…」 */ }
 }
 function selectNode(mappingId) {
@@ -8557,35 +9030,134 @@ function selectNode(mappingId) {
   try { localStorage.setItem('wb-node-id', nodeState.cur); } catch (e) { /* ignore */ }
   // 与新任务环境同步（创建任务时随 body.nodeRef 下发，engine 按 task.nodeRef 路由主会话）
   state.taskEnv.nodeRef = nodeState.cur ? { kind: 'mapping', mappingId: nodeState.cur } : null;
-  closeNodePop();
-  setNodeBtnUi('节点: ' + nodeBtnLabel());
   hintComposer('✓ 新建任务将在「' + nodeBtnLabel() + '」上执行；@子智能体 回到其绑定节点远程执行');
-  // 节点换了 → 模型目录跟着换（不同引擎注册表互不相通），当前选中模型可能不再适用
-  if (prev !== nodeState.cur) loadPlannerOptions();
+  // 节点换了 → 模型目录跟着换（不同引擎注册表互不相通），当前选中模型可能不再适用；
+  // 已打开任务时目录跟随任务实际执行节点（taskExecNodeId），选择框不得改变它
+  if (prev !== nodeState.cur && !state.currentTaskId) loadPlannerOptions();
 }
-function setNodeBtnUi(label) {
-  const btn = $('node-btn');
-  if (!btn) return;
-  btn.innerHTML = '<span class="ag-ico">🖥</span><span class="ag-name"></span><span class="ag-arr">▾</span>';
-  const nameEl = btn.querySelector('.ag-name');
-  if (nameEl) {
-    nameEl.id = 'node-btn-name'; // 保留 id：重建 innerHTML 会丢掉原节点名元素的标识
-    nameEl.textContent = label;
+
+/** 项目绑定的节点 mappingId（dshRef 非 mapping 时返回 ''） */
+function placeProjectNode(pj) {
+  return pj && pj.dshRef && pj.dshRef.kind === 'mapping' && pj.dshRef.mappingId ? pj.dshRef.mappingId : '';
+}
+/** 规范化执行位置：选了项目时节点取项目节点；项目不存在则退回单独任务 */
+function normalizePlace(place) {
+  const p = place || {};
+  const pj = p.projectId ? (state.projects || []).find(function (x) { return x.id === p.projectId; }) : null;
+  if (pj) return { nodeMappingId: placeProjectNode(pj) || p.nodeMappingId || '', projectId: pj.id };
+  return { nodeMappingId: p.nodeMappingId || '', projectId: null };
+}
+/** 执行位置的展示文字「📦 项目 · 🖥 节点」/「🖥 节点 · 单独任务」 */
+function placeLabel(place) {
+  const p = normalizePlace(place);
+  const res = dshNodeOptions().find(function (x) { return x.mappingId === p.nodeMappingId; });
+  const node = res ? (res.title || res.appName || res.note || res.mappingId) : (p.nodeMappingId || '默认节点');
+  const pj = p.projectId ? (state.projects || []).find(function (x) { return x.id === p.projectId; }) : null;
+  return pj ? '📦 ' + (pj.name || pj.id) + ' · 🖥 ' + node : '🖥 ' + node + ' · 单独任务';
+}
+function placeNodeProjects(mid) {
+  return (state.projects || []).filter(function (pj) { return placeProjectNode(pj) === mid; });
+}
+/**
+ * 打开执行位置选择框（P2-1）：第一层选节点（在线点 + 引擎徽标 + 默认模型，离线灰显仍可选），
+ * 第二层选该节点下的项目或「不使用项目（单独任务）」；选定后回调 onChange({ nodeMappingId, projectId|null })。
+ */
+function openPlacePop(anchor, place, onChange, opts) {
+  closePlacePop();
+  placeState.place = normalizePlace(place);
+  placeState.anchor = anchor || null;
+  placeState.onChange = onChange || null;
+  placeState.level = 'node';
+  placeState.nodeOnly = Boolean(opts && opts.nodeOnly); // 只有节点层（P5-2：抽屉/定时任务表单选节点用）
+  placeState.browse = '';
+  const pop = document.createElement('div');
+  pop.className = 'main-agent-pop place-pop on';
+  pop.addEventListener('click', function (e) { e.stopPropagation(); });
+  document.body.appendChild(pop);
+  placeState.pop = pop;
+  renderPlacePop();
+  if (anchor && anchor.getBoundingClientRect) {
+    const r = anchor.getBoundingClientRect();
+    const w = pop.offsetWidth || 350;
+    pop.style.left = Math.max(12, Math.min(r.left, window.innerWidth - w - 12)) + 'px';
+    const below = window.innerHeight - r.bottom;
+    if (below < 260 && r.top > below) pop.style.bottom = (window.innerHeight - r.top + 6) + 'px';
+    else pop.style.top = (r.bottom + 6) + 'px';
   }
 }
-function closeNodePop() { const p = $('node-pop'); if (p) p.classList.remove('on'); }
-if ($('node-btn')) {
-  $('node-btn').addEventListener('click', function (e) {
-    e.stopPropagation();
-    closeModelPop();
-    closeMainAgentPop();
-    const pop = $('node-pop');
-    if (!pop) return;
-    if (pop.classList.contains('on')) { closeNodePop(); return; }
-    renderNodePop();
-    pop.classList.add('on');
-  });
+function closePlacePop() {
+  if (placeState.pop) placeState.pop.remove();
+  placeState.pop = null;
+  placeState.anchor = null;
+  placeState.nodeOnly = false;
 }
+function selectPlace(place) {
+  placeState.place = normalizePlace(place);
+  const cb = placeState.onChange;
+  closePlacePop();
+  if (cb) cb(placeState.place);
+}
+function renderPlacePop() {
+  const pop = placeState.pop;
+  if (!pop) return;
+  const opts = dshNodeOptions();
+  const cur = placeState.place;
+  let html = '';
+  if (placeState.level === 'node') {
+    html += '<div class="main-agent-pop-head"><span>执行位置 · 选择节点</span><span>离线节点也可选</span></div>';
+    if (!opts.length) html += '<div class="model-empty">暂无 DSH 节点（资源目录未同步）</div>';
+    const groups = dshNodeGroups(opts);
+    for (const g of groups) {
+      if (groups.length > 1 || g.list.length > 1) html += '<div class="model-group">🖥 ' + esc(g.tunnel) + '</div>';
+      for (const n of g.list) {
+        const cnt = placeNodeProjects(n.mappingId).length;
+        html += dshNodeItemHtml(n, cur.nodeMappingId === n.mappingId, placeState.nodeOnly ? '选定 ›' : (cnt ? cnt + ' 个项目 ›' : '单独任务 ›'));
+      }
+    }
+  } else {
+    const mid = placeState.browse;
+    const n = opts.find(function (x) { return x.mappingId === mid; });
+    html += '<div class="main-agent-pop-head"><button type="button" class="place-back" data-op="back">‹ 节点</button>' +
+      '<span>' + esc(n ? (n.title || n.appName || n.note || n.mappingId) : mid) + '</span></div>';
+    const solo = cur.nodeMappingId === mid && !cur.projectId;
+    html += '<div class="main-agent-item' + (solo ? ' on' : '') + '" data-pid="">' +
+      '<div class="ag-info"><div class="ag-title">💬 不使用项目（单独任务）</div>' +
+      '<div class="ag-sub">在节点默认工作目录执行</div></div><span class="ag-ck">✓</span></div>';
+    const list = placeNodeProjects(mid);
+    if (list.length) html += '<div class="model-group">📦 项目</div>';
+    for (const pj of list) {
+      html += '<div class="main-agent-item' + (cur.projectId === pj.id ? ' on' : '') + '" data-pid="' + esc(pj.id) + '">' +
+        '<div class="ag-info"><div class="ag-title">📦 ' + esc(pj.name || pj.id) + '</div>' +
+        '<div class="ag-sub">' + esc(pj.workspace || '远端默认目录') + '</div></div><span class="ag-ck">✓</span></div>';
+    }
+  }
+  pop.innerHTML = html;
+  if (placeState.level === 'node') {
+    pop.querySelectorAll('.main-agent-item[data-mid]').forEach(function (it) {
+      it.addEventListener('click', function () {
+        if (placeState.nodeOnly) { selectPlace({ nodeMappingId: it.dataset.mid, projectId: null }); return; }
+        placeState.level = 'project';
+        placeState.browse = it.dataset.mid;
+        renderPlacePop();
+      });
+    });
+    probeNodesIfStale(opts);
+  } else {
+    const back = pop.querySelector('[data-op="back"]');
+    if (back) back.addEventListener('click', function () { placeState.level = 'node'; renderPlacePop(); });
+    pop.querySelectorAll('.main-agent-item[data-pid]').forEach(function (it) {
+      it.addEventListener('click', function () {
+        selectPlace({ nodeMappingId: placeState.browse, projectId: it.dataset.pid || null });
+      });
+    });
+  }
+}
+document.addEventListener('click', function (e) {
+  if (placeState.pop && !(placeState.anchor && placeState.anchor.contains(e.target))) closePlacePop();
+});
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape' && placeState.pop) { e.stopPropagation(); closePlacePop(); }
+});
 function initNodeState() {
   const opts = dshNodeOptions();
   var saved = '';
@@ -8594,10 +9166,9 @@ function initNodeState() {
   if (!opts.some(function (x) { return x.mappingId === cur; })) cur = opts[0] ? opts[0].mappingId : '';
   nodeState.cur = cur;
   state.taskEnv.nodeRef = cur ? { kind: 'mapping', mappingId: cur } : null;
-  setNodeBtnUi('节点: ' + nodeBtnLabel());
   // 首屏 loadPlannerOptions 先于本函数执行（boot Promise.all 顺序），那次目录走的是
   // 「主智能体节点」回退；这里就绪后若与选中节点不一致，补一次按节点联动拉取
-  if (modelState.loaded && modelState.loadedForNode !== nodeState.cur) loadPlannerOptions();
+  reloadCatalogIfExecNodeChanged();
 }
 
 if ($('main-agent-btn')) {
@@ -8635,9 +9206,10 @@ async function selectMainAgent(agentId) {
 
   if (r.ok) {
     // 2) 服务端权威结果覆盖本地（自动模式解析出的真实主智能体、成员账本同步后的任务摘要）；
-    //    模型选中保持用户所选（d.model = settings.planner.model，切主智能体不重置）
+    //    d.model = settings.planner.model 只是全局默认模型；按钮仍显示当前任务的任务级选择
     const d = r.data || {};
-    modelState.cur = d.model || '';
+    modelState.globalDefault = d.model || '';
+    modelState.cur = currentTaskModelChoice();
     if (modelBtnEl) modelBtnEl.textContent = modelBtnLabel(modelState.cur);
     applyMainAgentSelection({
       agentId: d.agentId || '',
@@ -8659,8 +9231,9 @@ async function selectMainAgent(agentId) {
 
 // ---------- 主调度模型选择（自定义弹层：原生 select 的移动端全屏弹窗字大折行且样式失控） ----------
 // curEffort/curPreset：当前执行会话的推理强度与模式预设（任务内才有意义；打开会话时回读回显）
-const modelState = { groups: {}, cur: '', loaded: false, error: '', presets: [], curEffort: '', curPreset: '', presetsLoaded: false, loadedForNode: '' };
-function modelBtnTitle() { return '主调度模型 + 执行会话模型（点选即生效）'; }
+// cur = 当前任务的任务级模型（空 = 跟随默认）；globalDefault = 全局默认模型（settings.planner.model，只在设置页改）
+const modelState = { groups: {}, cur: '', globalDefault: '', loaded: false, error: '', presets: [], curEffort: '', curPreset: '', presetsLoaded: false, loadedForNode: '' };
+function modelBtnTitle() { return '本任务模型（只影响当前任务的主会话；全局默认模型在设置页修改）'; }
 function curModelEntry() {
   if (!modelState.cur) return null;
   for (const pv of Object.keys(modelState.groups)) {
@@ -8673,8 +9246,18 @@ function effortName(id) {
   const e = (curModelEntry()?.reasoning?.efforts || []).find(x => x.id === id);
   return e ? (e.name || e.id) : (id || '');
 }
+/** 「跟随默认」时实际使用的模型名：全局默认模型，未设置则为节点默认 */
+function followDefaultName() {
+  return modelState.globalDefault || '节点默认';
+}
+/** 当前任务的任务级模型（空 = 跟随默认）；无当前任务时取新任务环境里选好的模型 */
+function currentTaskModelChoice() {
+  if (!state.currentTaskId) return state.draft ? (state.draft.model || '') : ((state.taskEnv && state.taskEnv.model) || '');
+  const t = state.taskCache.get(state.currentTaskId) || state.tasks.find(function (x) { return x.id === state.currentTaskId; });
+  return (t && t.model) || '';
+}
 function modelBtnLabel(v) {
-  let t = '⚙ ' + (v || '主调度默认模型');
+  let t = '⚙ ' + (v || ('跟随默认 · ' + followDefaultName()));
   if (modelState.curEffort) t += ' ' + effortName(modelState.curEffort);
   if (modelState.curPreset) t += ' · ' + modelState.curPreset;
   return t;
@@ -8683,8 +9266,8 @@ function renderModelPop() {
   const pop = $('model-pop');
   const cur = modelState.cur;
   const known = Object.keys(modelState.groups).some(pv => (modelState.groups[pv] || []).some(m => pv + '/' + m.id === cur));
-  let html = '<div class="model-pop-head"><span>主调度 + 执行会话模型</span><span>点选即生效</span></div>';
-  html += '<div class="model-item' + (!cur ? ' on' : '') + '" data-v=""><span class="n">主调度默认模型</span><span class="ck">✓</span></div>';
+  let html = '<div class="model-pop-head"><span>' + (state.currentTaskId ? '本任务模型' : '新任务模型') + '</span><span>只影响主会话 · @ 子智能体用各自模型</span></div>';
+  html += '<div class="model-item' + (!cur ? ' on' : '') + '" data-v=""><span class="n">跟随默认（' + esc(followDefaultName()) + '）</span><span class="ck">✓</span></div>';
   if (cur && !known) {
     // 目录按所选任务节点拉取：已保存模型不在目录里 = 该节点引擎没有这个模型（跨引擎配置的典型症状）
     const mismatchNote = Object.keys(modelState.groups).length ? '（已保存 · 当前节点目录不存在）' : '（已保存）';
@@ -8735,7 +9318,9 @@ async function loadPlannerOptions() {
 
   // 模型目录跟随所选任务节点（?node=）：调度模型作用于任务节点的主会话，
   // 节点切换后目录必须换成该节点引擎的注册表（否则会把 A 引擎的模型配到 B 引擎上）
-  const nodeQs = nodeState && nodeState.cur ? '?node=' + encodeURIComponent(nodeState.cur) : '';
+  // 节点 = 当前任务实际执行节点（项目 dshRef → task.nodeRef → 所选执行位置），见 taskExecNodeId
+  const catalogNode = taskExecNodeId(currentTaskObj());
+  const nodeQs = catalogNode ? '?node=' + encodeURIComponent(catalogNode) : '';
   const r = await api('/planner/options' + nodeQs);
   if (!r.ok || !r.data) {
     if (modelBtn) modelBtn.disabled = false;
@@ -8763,8 +9348,9 @@ async function loadPlannerOptions() {
     renderMainAgentPop();
   }
 
-  // 2. 更新模型状态
-  modelState.cur = (d.current || {}).model || '';
+  // 2. 更新模型状态：planner.model 只是「全局默认模型」；按钮显示的是当前任务（或新任务环境）的任务级选择
+  modelState.globalDefault = (d.current || {}).model || '';
+  modelState.cur = currentTaskModelChoice();
   modelState.groups = {};
   modelState.error = d.modelError || '';
   for (const m of d.models || []) { (modelState.groups[m.provider] = modelState.groups[m.provider] || []).push(m); }
@@ -8779,7 +9365,7 @@ async function loadPlannerOptions() {
   }
   // 服务端权威状态到位后，气泡模型标签与之一致（主智能体 = 列表选中模型）
   refreshMainAgentModelBadges();
-  modelState.loadedForNode = (nodeState && nodeState.cur) || '';
+  modelState.loadedForNode = catalogNode;
 }
 function closeModelPop() { $('model-pop').classList.remove('on'); }
 $('chat-model-btn').addEventListener('click', (e) => {
@@ -8799,10 +9385,6 @@ document.addEventListener('click', (e) => {
   if (agentPop && agentPop.classList.contains('on') && !agentPop.contains(e.target) && e.target !== $('main-agent-btn') && !($('main-agent-btn') && $('main-agent-btn').contains(e.target))) {
     closeMainAgentPop();
   }
-  const nodePop = $('node-pop');
-  if (nodePop && nodePop.classList.contains('on') && !nodePop.contains(e.target) && e.target !== $('node-btn') && !($('node-btn') && $('node-btn').contains(e.target))) {
-    closeNodePop();
-  }
 });
 /** 模型切换结果就地展示在 composer 工具条（替代底部 toast，不遮挡输入区），8s 后自动隐去 */
 function setModelStatus(text) {
@@ -8814,6 +9396,11 @@ function setModelStatus(text) {
   el.className = 'model-status on ok';
   el._h = setTimeout(() => { el.className = 'model-status'; el.textContent = ''; el._h = null; }, 8000);
 }
+/**
+ * 模型选择是任务级的：只写当前任务（task.model），不改全局默认模型（全局默认只在设置页维护），
+ * 因此在 A 任务里切模型不会让 B 任务下一轮跟着换。v 为空串 = 跟随默认（全局默认模型，未设置则节点默认）。
+ * 无当前任务时记入新任务环境，创建任务时随 body.model 下发。
+ */
 async function selectModel(v) {
   const prevModel = modelState.cur;
   modelState.cur = v;
@@ -8822,56 +9409,46 @@ async function selectModel(v) {
   const btn = $('chat-model-btn');
   btn.textContent = modelBtnLabel(v);
   closeModelPop();
-  const shortModel = v ? (v.indexOf('/') >= 0 ? v.slice(v.indexOf('/') + 1).trim() : v) : '默认';
-  // 1) 更新主调度模型（只写 planner 设置，不改写主智能体自身 provider/model 配置：
-  //    「选中的模型」与「智能体默认模型」是两个概念，@ 子智能体仍按各自配置执行）
-  const r = await api('/planner/config', { method: 'POST', body: JSON.stringify({ model: v || '' }) });
-  // 气泡模型标签就地与新选中值对齐（主智能体 = 列表选中；其余 = 各自配置）
-  if (r.ok) { refreshMainAgentModelBadges(); }
-  // 2) 同步更新当前任务里主智能体执行会话的模型（不传 agentId，服务端默认作用于当前主智能体；PUT /sessions/:id 透传到远端 DSH）
-  if (state.currentTaskId) {
-    const slashIdx = v.indexOf('/');
-    const provider = slashIdx >= 0 ? v.slice(0, slashIdx).trim() : '';
-    const modelId = slashIdx >= 0 ? v.slice(slashIdx + 1).trim() : v;
-    const sr = await api('/tasks/' + state.currentTaskId + '/session-model', {
-      method: 'PUT',
-      body: JSON.stringify({ provider: provider || undefined, model: modelId }),
-    });
-    if (sr.ok) {
-      // v 为空串 = 恢复节点默认：服务端会解析默认 provider/model 显式下发，用实际值回执
-      const sel = (sr.data && sr.data.selected) || {};
-      const fallback = (sr.data && sr.data.defaultModel && sr.data.defaultModel.model) || sel.model || '';
-      const actual = v ? modelId : fallback;
-      flashBtnOk(btn, '✓ ' + (v ? '已切换「' + actual + '」' : '已恢复节点默认「' + (actual || '默认') + '」'), modelBtnLabel(v));
-      setModelStatus('✓ 主智能体会话已切到「' + (actual || '默认') + '」· 主调度「' + (v || '默认') + '」');
-      return;
-    }
-    // 无会话（草稿/首轮未建立）：主调度模型已持久化，落到下方成功提示；其余失败必须中止，
-    // 否则会同时出现红色失败 toast + 绿色「已切换」闪烁（0.5.0 默认模型清除场景实测）
-    if (sr.code === 'NO_SESSION') {
-      // fall through
-    } else {
-      // 跨引擎/跨节点的目录外选择：服务端本地拦截（不再透传远端吃天书报错），
-      // 主调度模型已先行落盘 → 就地回滚到点击前的值，按钮/弹层状态与实际生效保持一致
-      if (sr.code === 'MODEL_NOT_IN_CATALOG' && r.ok) {
-        const rr = await api('/planner/config', { method: 'POST', body: JSON.stringify({ model: prevModel || '' }) });
-        if (rr.ok) {
-          modelState.cur = prevModel;
-          modelState.curEffort = '';
-          btn.textContent = modelBtnLabel(prevModel);
-          refreshMainAgentModelBadges();
-        }
-      }
-      toast(sr.error || '执行会话模型更新失败', true);
-      return;
-    }
+  const taskId = state.currentTaskId;
+  if (!taskId) {
+    state.taskEnv.model = v || '';
+    if (state.draft) state.draft.model = v || '';
+    setModelStatus('✓ 新任务将使用「' + (v || followDefaultName()) + '」');
+    return;
   }
-  if (r.ok) {
-    flashBtnOk(btn, '✓ 已切换「' + shortModel + '」', modelBtnLabel(v));
-    setModelStatus('✓ 主调度模型已切到「' + (v || '默认') + '」');
-  } else {
-    toast(r.error || '保存失败', true);
+  const rollback = function () {
+    if (state.currentTaskId !== taskId) return;
+    modelState.cur = prevModel;
+    btn.textContent = modelBtnLabel(prevModel);
+  };
+  // 1) 先对已建立的主会话即时生效：目标 = 任务指定值；跟随默认时 = 全局默认模型（空 = 恢复节点默认）。
+  //    会话拒绝（如 MODEL_NOT_IN_CATALOG）时任务级模型尚未写入，只回滚本地显示即可。
+  const effective = v || modelState.globalDefault || '';
+  const slashIdx = effective.indexOf('/');
+  const provider = slashIdx >= 0 ? effective.slice(0, slashIdx).trim() : '';
+  const modelId = slashIdx >= 0 ? effective.slice(slashIdx + 1).trim() : effective;
+  const sr = await api('/tasks/' + taskId + '/session-model', {
+    method: 'PUT',
+    body: JSON.stringify({ provider: provider || undefined, model: modelId }),
+  });
+  if (!sr.ok && sr.code !== 'NO_SESSION') {
+    rollback();
+    toast(sr.error || '执行会话模型更新失败', true);
+    return;
   }
+  // 2) 持久化为任务级模型（engine 取模型：task.model 优先于全局默认）
+  const r = await api('/tasks/' + taskId + '/model', { method: 'PUT', body: JSON.stringify({ model: v || '' }) });
+  if (!r.ok) {
+    rollback();
+    toast(r.error || '任务模型保存失败', true);
+    return;
+  }
+  const cached = state.taskCache.get(taskId);
+  if (cached) { if (v) cached.model = v; else delete cached.model; }
+  const nodeDefault = (sr.ok && sr.data && sr.data.defaultModel && sr.data.defaultModel.model) || '';
+  const actual = v ? modelId : (modelState.globalDefault || nodeDefault || '节点默认');
+  flashBtnOk(btn, '✓ ' + (v ? '已切换「' + modelId + '」' : '已跟随默认「' + actual + '」'), modelBtnLabel(v));
+  setModelStatus('✓ 本任务已切到「' + actual + '」' + (sr.ok ? '' : '（首轮建会话时生效）') + '，其他任务不受影响');
 }
 /** 会话当前模型选择/模式预设回读（打开会话时调用；失败静默——弹层仍可用，只是不回显） */
 async function loadSessionModelInfo() {
@@ -8882,6 +9459,8 @@ async function loadSessionModelInfo() {
   if (!r.ok || !r.data || state.currentTaskId !== taskId) return;
   const d = r.data || {};
   const sess = d.session || null;
+  // 模型按钮回显任务级模型（空 = 跟随默认）；不再显示全局 planner.model
+  modelState.cur = d.taskModel || '';
   modelState.curEffort = (sess && sess.model && sess.model.reasoningEffort) || d.taskReasoningEffort || '';
   modelState.curPreset = (sess && sess.agentPreset) || d.taskAgentPreset || '';
   const btn = $('chat-model-btn');
@@ -8943,7 +9522,7 @@ async function selectPreset(id) {
 loadPlannerOptions();
 
 // ---------- 任务实时统计条（对齐 DSH web StatsLine：轮/步 · LLM/工具耗时 · 首 token/吞吐 · 缓存命中 · token 账本） ----------
-const statsState = { timer: null, inFlight: false, lastRendered: '' };
+const statsState = { timer: null, inFlight: false, lastRendered: '', stats: null, panel: null, unsupported: '', members: [] };
 function fmtStatsDuration(ms) {
   const s = ms / 1000;
   if (s < 60) return (Math.round(s * 10) / 10) + '秒';
@@ -8963,40 +9542,150 @@ function fmtCacheHit(read, billedInput) {
   const rounded = Math.round(pct * 10) / 10;
   return rounded < 100 ? String(Math.round(pct)) : rounded.toFixed(1);
 }
-function renderTaskStats(stats) {
-  const el = $('task-stats');
-  if (!stats || (!stats.steps && !stats.outputTokens && !stats.inputTokens && !stats.cacheReadTokens)) {
-    el.style.display = 'none';
-    el.textContent = '';
+// 运行时长取 todoState（running / baseElapsed / anchorAt，由 renderTodoDock 按 /todos 回包更新）
+function statsLiveElapsed() {
+  return todoState.baseElapsed + (todoState.running ? Date.now() - todoState.anchorAt : 0);
+}
+function statsSpeed(stats) {
+  return stats && stats.decodeMs > 0 ? Math.round(stats.decodeTokens / (stats.decodeMs / 1000)) + ' tok/s' : '';
+}
+function renderStatPanel() {
+  const panel = $('stat-panel');
+  if (!panel) return;
+  const k = statsState.panel;
+  ['time', 'tok'].forEach(function (x) {
+    const b = $(x === 'time' ? 'stat-pill-time' : 'stat-pill-tok');
+    if (b) b.setAttribute('aria-expanded', k === x ? 'true' : 'false');
+  });
+  if (!k) { panel.classList.remove('on'); panel.innerHTML = ''; return; }
+  const s = statsState.stats || {};
+  const row = function (label, val) { return '<div class="sp-r"><span>' + esc(label) + '</span><b>' + esc(val || '—') + '</b></div>'; };
+  let html = '';
+  if (k === 'time') {
+    const elapsed = statsLiveElapsed();
+    html = '<div class="sp-h">耗时</div>'
+      + row(todoState.running ? '本轮运行（进行中）' : '上轮运行', elapsed > 0 || todoState.running ? fmtTodoDuration(elapsed) : '')
+      + row('LLM 耗时', s.llmMs > 0 ? fmtStatsDuration(s.llmMs) : '')
+      + row('工具耗时', s.toolMs > 0 ? fmtStatsDuration(s.toolMs) : '')
+      + row('首 token 平均', s.ttftSteps > 0 ? fmtStatsDuration(s.ttftMs / s.ttftSteps) : '')
+      + row('输出速度', statsSpeed(s));
+  } else {
+    const n = function (v) { return (v || 0) > 0 ? fmtStatsTokens(v) + ' tok' : '0'; };
+    html = '<div class="sp-h">Token</div>'
+      + row('输入（未命中缓存）', n(s.inputTokens))
+      + row('输出', n(s.outputTokens))
+      + row('缓存读', n(s.cacheReadTokens))
+      + row('缓存写', n(s.cacheWriteTokens));
+    // 按成员拆分（S2-1）：主会话 / 🤖 成员 · 🖥 节点 · 模型 · token · 缓存命中
+    const members = statsState.members || [];
+    if (members.length) {
+      html += '<div class="sp-h" style="margin-top:6px">按成员</div>';
+      for (const m of members) {
+        const ms = m.stats || null;
+        const billed = ms ? (ms.inputTokens || 0) + (ms.cacheReadTokens || 0) + (ms.cacheWriteTokens || 0) : 0;
+        const total = billed + (ms ? ms.outputTokens || 0 : 0);
+        const hit = ms ? fmtCacheHit(ms.cacheReadTokens || 0, billed) : null;
+        const label = (m.agentId === '__node__' ? '主会话' : '🤖 ' + (m.name || m.agentId))
+          + (m.nodeLabel ? ' · 🖥 ' + m.nodeLabel : '')
+          + (m.model ? ' · ' + String(m.model).split('/').pop() : '');
+        html += row(label, ms ? (fmtStatsTokens(total) + ' tok' + (hit !== null ? ' · 命中 ' + hit + '%' : '')) : '—');
+      }
+    }
+    html += '<div class="sp-foot"><a id="sp-task-usage" role="button" tabindex="0">查看本任务明细 →</a></div>';
+  }
+  panel.innerHTML = html;
+  panel.classList.add('on');
+  const usageLink = panel.querySelector('#sp-task-usage');
+  if (usageLink) usageLink.addEventListener('click', openTaskUsageReport);
+}
+/** 本任务 Token 明细（S2-1）：/api/usage/tokens/records?taskId= 逐轮记录 */
+async function openTaskUsageReport() {
+  const taskId = state.currentTaskId;
+  if (!taskId) return;
+  const m = openModal('🗄 本任务 Token 明细', '<div style="padding:20px;text-align:center;color:var(--tx3)">加载中…</div>', [{ label: '关闭', cls: '', act: closeModal }]);
+  const r = await api('/usage/tokens/records?taskId=' + encodeURIComponent(taskId) + '&limit=200');
+  const rows = (r.ok && r.data) || [];
+  if (!rows.length) {
+    m.body.innerHTML = '<div style="padding:24px;text-align:center;color:var(--tx3)">本任务还没有 Token 消耗记录。</div>';
     return;
   }
-  const groups = [];
-  if (stats.steps > 0) {
-    groups.push(stats.turns + ' 轮 · ' + stats.steps + ' 步');
-    const durations = [];
-    if (stats.llmMs > 0) durations.push('LLM ' + fmtStatsDuration(stats.llmMs));
-    if (stats.toolMs > 0) durations.push('工具调用 ' + fmtStatsDuration(stats.toolMs));
-    if (durations.length) groups.push(durations.join(' · '));
-    const speeds = [];
-    if (stats.ttftSteps > 0) speeds.push('首 token 平均 ' + fmtStatsDuration(stats.ttftMs / stats.ttftSteps));
-    if (stats.decodeMs > 0) speeds.push(Math.round(stats.decodeTokens / (stats.decodeMs / 1000)) + ' tok/s');
-    if (speeds.length) groups.push(speeds.join(' · '));
+  const escN = function (v) { return esc(v == null ? '—' : String(v)); };
+  let html = '<div style="max-height:60vh;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px">' +
+    '<thead><tr style="color:var(--tx3);text-align:left">' +
+    '<th style="padding:6px 8px;border-bottom:1px solid var(--line);font-weight:500">时间</th>' +
+    '<th style="padding:6px 8px;border-bottom:1px solid var(--line);font-weight:500">成员</th>' +
+    '<th style="padding:6px 8px;border-bottom:1px solid var(--line);font-weight:500">模型</th>' +
+    '<th style="padding:6px 8px;border-bottom:1px solid var(--line);font-weight:500;text-align:right">输入</th>' +
+    '<th style="padding:6px 8px;border-bottom:1px solid var(--line);font-weight:500;text-align:right">输出</th>' +
+    '<th style="padding:6px 8px;border-bottom:1px solid var(--line);font-weight:500;text-align:right">缓存读</th>' +
+    '<th style="padding:6px 8px;border-bottom:1px solid var(--line);font-weight:500;text-align:right">合计</th>' +
+    '</tr></thead><tbody>';
+  for (const rec of rows) {
+    html += '<tr>' +
+      '<td style="padding:5px 8px;border-bottom:1px solid var(--line);white-space:nowrap;color:var(--tx3)">' + esc(fmtTime(rec.at)) + '</td>' +
+      '<td style="padding:5px 8px;border-bottom:1px solid var(--line)">' + escN(rec.agentName || (rec.agentId === '__node__' ? '主会话' : rec.agentId) || '—') + '</td>' +
+      '<td style="padding:5px 8px;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:11px">' + escN(rec.model ? String(rec.model).split('/').pop() : '') + '</td>' +
+      '<td style="padding:5px 8px;border-bottom:1px solid var(--line);text-align:right;font-variant-numeric:tabular-nums">' + escN(rec.input) + '</td>' +
+      '<td style="padding:5px 8px;border-bottom:1px solid var(--line);text-align:right;font-variant-numeric:tabular-nums">' + escN(rec.output) + '</td>' +
+      '<td style="padding:5px 8px;border-bottom:1px solid var(--line);text-align:right;font-variant-numeric:tabular-nums">' + escN(rec.cacheRead) + '</td>' +
+      '<td style="padding:5px 8px;border-bottom:1px solid var(--line);text-align:right;font-variant-numeric:tabular-nums"><b>' + escN(rec.total) + '</b></td>' +
+      '</tr>';
   }
-  const billedInput = (stats.inputTokens || 0) + (stats.cacheReadTokens || 0) + (stats.cacheWriteTokens || 0);
-  const hasTokens = billedInput > 0 || (stats.outputTokens || 0) > 0;
-  if (hasTokens) {
-    const hit = fmtCacheHit(stats.cacheReadTokens || 0, billedInput);
-    if (hit !== null) groups.push('缓存命中 ' + hit + '%');
-    groups.push('输入 ' + fmtStatsTokens(billedInput) + ' tok · 输出 ' + fmtStatsTokens(stats.outputTokens || 0) + ' tok');
+  html += '</tbody></table></div>';
+  m.body.innerHTML = html;
+}
+function closeStatPanel() {
+  if (!statsState.panel) return;
+  statsState.panel = null;
+  renderStatPanel();
+}
+function renderStatPills() {
+  const el = $('task-stats');
+  const tBtn = $('stat-pill-time'), kBtn = $('stat-pill-tok');
+  if (!el || !tBtn || !kBtn) return;
+  const stats = statsState.stats;
+  let timeText = '';
+  if (todoState.running) {
+    timeText = '⏱ 本轮 ' + fmtTodoDuration(statsLiveElapsed());
+  } else if (stats && stats.steps > 0) {
+    const sp = statsSpeed(stats);
+    timeText = '⏱ ' + stats.turns + ' 轮 · ' + stats.steps + ' 步' + (sp ? ' · ' + sp : '');
   }
-  const line = groups.join(' | ');
-  if (!line) { el.style.display = 'none'; return; }
-  if (line !== statsState.lastRendered) {
-    statsState.lastRendered = line;
-    el.textContent = line;
-    el.title = line;
+  let tokText = '';
+  if (stats) {
+    const billedInput = (stats.inputTokens || 0) + (stats.cacheReadTokens || 0) + (stats.cacheWriteTokens || 0);
+    const total = billedInput + (stats.outputTokens || 0);
+    if (total > 0) {
+      const hit = fmtCacheHit(stats.cacheReadTokens || 0, billedInput);
+      tokText = '🗄 ' + fmtStatsTokens(total) + ' tok' + (hit !== null ? ' · 缓存命中 ' + hit + '%' : '');
+    }
+  }
+  // 节点不支持统计：没有可显示的数据时，用灰色胶囊如实说明（title 为服务端给出的原因）
+  const off = !timeText && !tokText && !!statsState.unsupported;
+  if (off) timeText = '统计不可用';
+  const key = timeText + '|' + tokText + '|' + (todoState.running ? 1 : 0) + '|' + (off ? statsState.unsupported : '');
+  if (key !== statsState.lastRendered) {
+    statsState.lastRendered = key;
+    tBtn.textContent = timeText;
+    tBtn.style.display = timeText ? '' : 'none';
+    tBtn.className = 'stat-pill' + (off ? ' off' : (todoState.running ? ' run' : ''));
+    tBtn.title = off ? statsState.unsupported : (todoState.running ? '本轮运行中（本地每秒递增）· 点击查看耗时明细' : '点击查看耗时明细');
+    kBtn.textContent = tokText;
+    kBtn.style.display = tokText ? '' : 'none';
+    kBtn.title = '点击查看 token 明细';
+  }
+  if (!timeText && !tokText) {
+    el.style.display = 'none';
+    closeStatPanel();
+    return;
   }
   el.style.display = '';
+  if (off) closeStatPanel();
+  if (statsState.panel) renderStatPanel();
+}
+function renderTaskStats(stats) {
+  statsState.stats = stats || null;
+  renderStatPills();
 }
 async function loadTaskStats() {
   const taskId = state.currentTaskId;
@@ -9005,21 +9694,57 @@ async function loadTaskStats() {
   try {
     const r = await api('/tasks/' + taskId + '/stats');
     // 期间切走了会话则丢弃
-    if (r.ok && state.currentTaskId === taskId) renderTaskStats(r.data && r.data.supported ? r.data.stats : null);
+    if (r.ok && state.currentTaskId === taskId) {
+      const d = r.data || {};
+      // no_session（尚未建立远端会话）不算「不可用」：首轮跑起来后自然有数据，不提示
+      statsState.unsupported = !d.supported && d.reasonCode && d.reasonCode !== 'no_session' ? (d.reason || '当前节点不支持会话统计') : '';
+      statsState.members = Array.isArray(d.members) ? d.members : [];
+      renderTaskStats(d.supported ? d.stats : null);
+    }
   } catch {}
   statsState.inFlight = false;
 }
 function resetTaskStats() {
   if (statsState.timer) { clearInterval(statsState.timer); statsState.timer = null; }
   statsState.lastRendered = '';
+  statsState.stats = null;
+  statsState.members = [];
+  statsState.unsupported = '';
+  closeStatPanel();
   const el = $('task-stats');
-  if (el) { el.style.display = 'none'; el.textContent = ''; }
+  if (el) el.style.display = 'none';
 }
-// 打开会话时启动轮询（5s），关闭/切换时重置；SSE turn_end 处也会即时刷新
+document.querySelectorAll('#task-stats .stat-pill').forEach(function (btn) {
+  btn.addEventListener('click', function (e) {
+    e.stopPropagation();
+    if (btn.classList.contains('off')) return; // 「统计不可用」灰胶囊没有明细
+    const k = btn.getAttribute('data-k');
+    statsState.panel = statsState.panel === k ? null : k;
+    renderStatPanel();
+  });
+});
+document.addEventListener('click', function (e) {
+  if (statsState.panel && !$('task-stats').contains(e.target)) closeStatPanel();
+});
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape' && statsState.panel) { closeStatPanel(); e.stopPropagation(); }
+});
+// 打开会话时拉一次，按运行态决定是否轮询（运行中 5s，空闲停止）；SSE turn_end / subtask_status / task_end 即时刷新
 function startTaskStatsPolling() {
   resetTaskStats();
   loadTaskStats();
-  statsState.timer = setInterval(loadTaskStats, 5000);
+  syncLivePolling(document.body.classList.contains('task-running'));
+}
+// 统计 / 清单轮询只在任务运行中保持：setSending 切换运行态时调用
+function syncLivePolling(running) {
+  const on = !!(running && state.currentTaskId);
+  if (on) {
+    if (!statsState.timer) statsState.timer = setInterval(loadTaskStats, 5000);
+    if (!todoState.timer) todoState.timer = setInterval(loadTaskTodos, 3000);
+  } else {
+    if (statsState.timer) { clearInterval(statsState.timer); statsState.timer = null; }
+    if (todoState.timer) { clearInterval(todoState.timer); todoState.timer = null; }
+  }
 }
 
 // ---------- 任务清单坞（远端 DSH 会话的 todo_write 投影 + 运行时长，对齐 DSH web TodoPanel） ----------
@@ -9056,9 +9781,16 @@ function renderTodoDock(data) {
   const todos = Array.isArray(data && data.todos) ? data.todos : [];
   const running = !!(data && data.running);
   const elapsed = (data && data.elapsedMs) || 0;
-  if (!todos.length && !running && !(elapsed > 0)) {
+  // 运行时长：服务端 elapsedMs 为锚点，前端每秒本地递增（运行中）；显示在状态栏时间胶囊（renderStatPills）
+  todoState.running = running;
+  todoState.baseElapsed = elapsed;
+  todoState.anchorAt = Date.now();
+  renderStatPills();
+  // todo 坞只显示任务清单：没有清单就整块隐藏
+  if (!todos.length) {
     dock.style.display = 'none';
     todoState.visible = false;
+    todoState.lastHtml = '';
     return;
   }
   dock.style.display = '';
@@ -9071,36 +9803,10 @@ function renderTodoDock(data) {
   if (c.inProgress > 0) parts.push(c.inProgress + (running ? ' 进行中' : ' 未完成'));
   if (c.pending > 0) parts.push(c.pending + ' 待处理');
   const prog = $('todo-progress');
-  if (prog) prog.textContent = parts.length ? parts.join(' · ') : (todos.length ? todos.length + ' 项' : '本轮暂无清单');
-  // 运行时长：服务端 elapsedMs 为锚点，前端每秒本地递增（运行中）
-  todoState.running = running;
-  todoState.baseElapsed = elapsed;
-  todoState.anchorAt = Date.now();
-  const el = $('todo-elapsed');
-  if (el) {
-    if (running || elapsed > 0) {
-      el.style.display = '';
-      el.className = 'todo-elapsed' + (running ? ' run' : '');
-      el.textContent = (running ? '⏱ 运行时长 ' : '⏱ 上轮时长 ') + fmtTodoDuration(elapsed);
-      el.title = running
-        ? '远端 DSH 会话本轮运行中（本地每秒递增）'
-        : '远端 DSH 会话最后一轮运行时长';
-    } else {
-      el.style.display = 'none';
-    }
-  }
+  if (prog) prog.textContent = parts.length ? parts.join(' · ') : todos.length + ' 项';
   const list = $('todo-list');
   if (!list) return;
   const chev = $('todo-chev');
-  if (!todos.length) {
-    // 空清单：删除「尚未写入任务清单」占位行并收起列表（旧实现常显一行空态，
-    // 让「任务」坞在无清单时仍占两行、压住编排计划卡底部）。标题行 + 时长仍保留。
-    list.innerHTML = '';
-    list.style.display = 'none';
-    if (chev) chev.style.display = 'none';
-    todoState.lastHtml = '';
-    return;
-  }
   list.style.display = '';
   if (chev) chev.style.display = '';
   setTodoCollapsedUI();
@@ -9116,11 +9822,10 @@ function renderTodoDock(data) {
   }
   setTodoCollapsedUI();
 }
+// 运行中每秒刷新状态栏时间胶囊（及已打开的耗时面板）
 function tickTodoElapsed() {
-  if (!todoState.visible || !todoState.running) return;
-  const el = $('todo-elapsed');
-  if (!el) return;
-  el.textContent = '⏱ 运行时长 ' + fmtTodoDuration(todoState.baseElapsed + (Date.now() - todoState.anchorAt));
+  if (!todoState.running) return;
+  renderStatPills();
 }
 async function loadTaskTodos() {
   const taskId = state.currentTaskId;
@@ -9133,6 +9838,7 @@ async function loadTaskTodos() {
       const dock = $('todo-dock');
       if (dock) dock.style.display = 'none';
       todoState.visible = false;
+      if (todoState.running) { todoState.running = false; renderStatPills(); }
       return;
     }
     renderTodoDock(r.data);
@@ -9149,11 +9855,11 @@ function resetTaskTodos() {
   const dock = $('todo-dock');
   if (dock) dock.style.display = 'none';
 }
-// 打开会话时启动轮询（3s，清单随 todo_write 步进变化）+ 运行时长 1s 本地递增；SSE turn_end 处即时刷新
+// 打开会话时拉一次；运行中轮询（3s，清单随 todo_write 步进变化，见 syncLivePolling）+ 运行时长 1s 本地递增；SSE 事件即时刷新
 function startTaskTodosPolling() {
   resetTaskTodos();
   loadTaskTodos();
-  todoState.timer = setInterval(loadTaskTodos, 3000);
+  syncLivePolling(document.body.classList.contains('task-running'));
   todoState.tick = setInterval(tickTodoElapsed, 1000);
 }
 $('todo-head').addEventListener('click', () => {
@@ -9172,17 +9878,716 @@ $('chat-title').addEventListener('dblclick', () => {
   if (t) promptRenameTask(t);
 });
 
-// ---------- 一键新建任务（免弹窗，自动生成会话并即刻开聊，参考 DSH 体验） ----------
-$('btn-new-task').addEventListener('click', createNewTaskDirectly);
-async function createNewTaskDirectly() {
+// ---------- 新建任务 = 草稿（P2-2）：「＋ 新建任务」只进入草稿态，发送首条消息时才 POST /tasks ----------
+$('btn-new-task').addEventListener('click', function () { startDraft(); });
+/** 草稿默认执行位置：显式传入（侧栏分组「＋」）→ 项目工作台 → 当前任务的位置 → 本地记录的最近一次位置 → 节点默认 */
+function defaultDraftPlace(explicit) {
+  if (explicit) return normalizePlace(explicit);
+  const t = currentTaskObj();
+  if (t) return normalizePlace({ nodeMappingId: taskExecNodeId(t), projectId: t.projectId || null });
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem('wb-last-place') || 'null'); } catch (e) { /* ignore */ }
+  if (saved && typeof saved === 'object') {
+    const p = normalizePlace(saved);
+    if (p.projectId || dshNodeOptions().some(function (x) { return x.mappingId === p.nodeMappingId; })) return p;
+  }
+  return normalizePlace({ nodeMappingId: nodeState.cur || '' });
+}
+function rememberPlace(place) {
+  try { localStorage.setItem('wb-last-place', JSON.stringify(normalizePlace(place))); } catch (e) { /* ignore */ }
+}
+function startDraft(place) {
+  const inDraft = !!state.draft && !state.currentTaskId;
+  const p = defaultDraftPlace(place || (inDraft ? state.draft.place : null));
+  state.draft = { place: p, model: inDraft ? (state.draft.model || '') : ((state.taskEnv && state.taskEnv.model) || '') };
+  if (state.currentTaskId) { state.currentTaskId = null; disconnectStream(); }
+  closePlacePop();
+  resetChatView(); // 末尾按 state.draft 渲染草稿页，并按草稿节点重拉模型目录
+  renderTaskList();
+  const input = $('input');
+  if (input) input.focus();
+}
+function discardDraft() {
+  state.draft = null;
+  closePlacePop();
+  if (!state.currentTaskId) resetChatView();
+  renderTaskList();
+}
+// ---------- 工作区右侧栏（F1-1）：页签 = 文件 / 变更 / 预览*N；宽度入 localStorage，页签按任务记忆 ----------
+const wsState = {
+  open: false,
+  width: 420,
+  byTask: {}, // taskId -> { tabs: [{key,kind,title,path,agentId}], active }
+};
+try { const w = parseInt(localStorage.getItem('wb.wsWidth'), 10); if (w >= 280 && w <= 1200) wsState.width = w; } catch (e) { /* ignore */ }
+function wsTaskState() {
+  const id = state.currentTaskId;
+  if (!id) return { tabs: [], active: null };
+  if (!wsState.byTask[id]) wsState.byTask[id] = { tabs: [], active: null };
+  return wsState.byTask[id];
+}
+function wsTabBodyHtml(tab) {
+  if (!tab) return '<div class="ws-hint">从页签打开「文件 / 变更」；点目录树中的文件可在此预览。</div>';
+  if (tab.kind === 'files') return '<div id="ws-files-root" class="ws-files"></div>';
+  if (tab.kind === 'changes') return '<div id="ws-changes-root" class="ws-changes"></div>';
+  if (tab.kind === 'preview') return '<div id="ws-preview-root" class="ws-preview"><div class="ws-hint">正在加载文件内容…</div></div>';
+  return '';
+}
+function renderWsSide() {
+  const side = $('ws-side');
+  if (!side || !wsState.open) return;
+  if (window.innerWidth > 768) side.style.width = wsState.width + 'px';
+  const st = wsTaskState();
+  const strip = $('ws-tab-strip');
+  strip.innerHTML = st.tabs.length
+    ? st.tabs.map(function (t) {
+      return '<button type="button" class="ws-tab' + (t.key === st.active ? ' on' : '') + '" data-k="' + esc(t.key) + '" title="' + esc(t.title) + '">' + esc(t.title) + '<span class="wt-x" data-x="' + esc(t.key) + '" title="关闭页签">✕</span></button>';
+    }).join('')
+    : '<span class="ws-tab-hint">文件 · 变更</span>';
+  strip.querySelectorAll('.ws-tab').forEach(function (b) {
+    b.addEventListener('click', function (e) {
+      if (e.target.closest('.wt-x')) return;
+      const st2 = wsTaskState();
+      st2.active = b.dataset.k;
+      renderWsSide();
+    });
+  });
+  strip.querySelectorAll('.wt-x').forEach(function (x) {
+    x.addEventListener('click', function (e) { e.stopPropagation(); closeWsTab(x.dataset.x); });
+  });
+  const tab = st.tabs.find(function (t) { return t.key === st.active; }) || null;
+  $('ws-body').innerHTML = wsTabBodyHtml(tab);
+  if (tab && tab.kind === 'files') wsFilesMount();
+  else if (tab && tab.kind === 'changes') wsChangesMount();
+  else if (tab && tab.kind === 'preview') wsPreviewRender(tab);
+}
+function openWsTab(kind, extra) {
+  const st = wsTaskState();
+  const key = kind === 'preview' ? 'preview:' + ((extra && extra.path) || '') : kind;
+  const title = kind === 'files' ? '文件' : kind === 'changes' ? '变更' : ((extra && extra.path) ? String(extra.path).split('/').pop() : '预览');
+  let tab = st.tabs.find(function (t) { return t.key === key; });
+  if (!tab) {
+    tab = Object.assign({ key: key, kind: kind, title: title }, extra || {});
+    st.tabs.push(tab);
+  }
+  st.active = key;
+  renderWsSide();
+}
+function closeWsTab(key) {
+  const st = wsTaskState();
+  const i = st.tabs.findIndex(function (t) { return t.key === key; });
+  if (i < 0) return;
+  st.tabs.splice(i, 1);
+  if (st.active === key) st.active = st.tabs.length ? st.tabs[Math.max(0, i - 1)].key : null;
+  renderWsSide();
+}
+function openWsSide(tab) {
+  const side = $('ws-side');
+  if (!side) return;
+  wsState.open = true;
+  side.classList.add('on');
+  const st = wsTaskState();
+  if (tab) openWsTab(tab.kind, tab);
+  else if (!st.tabs.length) openWsTab('files');
+  else if (!st.tabs.some(function (t) { return t.key === st.active; })) { st.active = st.tabs[0].key; renderWsSide(); }
+}
+function closeWsSide() {
+  const side = $('ws-side');
+  wsState.open = false;
+  if (side) side.classList.remove('on');
+}
+function wsRestoreForTask(task) {
+  if (!task || !wsState.open) return;
+  const st = wsTaskState();
+  if (!st.tabs.length) { openWsTab('files'); return; }
+  if (!st.tabs.some(function (t) { return t.key === st.active; })) st.active = st.tabs[0].key;
+  renderWsSide();
+}
+(function wireWsSide() {
+  const tgl = $('btn-ws-toggle');
+  if (tgl) tgl.addEventListener('click', function () { if (wsState.open) closeWsSide(); else openWsSide(); });
+  const close = $('btn-ws-close');
+  if (close) close.addEventListener('click', closeWsSide);
+  const rz = $('ws-resizer');
+  if (rz) {
+    rz.addEventListener('pointerdown', function (e) {
+      e.preventDefault();
+      rz.classList.add('drag');
+      rz.setPointerCapture(e.pointerId);
+      const move = function (ev) {
+        const maxW = Math.max(340, Math.floor(window.innerWidth * 0.7));
+        wsState.width = Math.min(maxW, Math.max(280, window.innerWidth - ev.clientX));
+        $('ws-side').style.width = wsState.width + 'px';
+      };
+      const up = function (ev) {
+        rz.classList.remove('drag');
+        try { rz.releasePointerCapture(ev.pointerId); } catch (err) { /* ignore */ }
+        rz.removeEventListener('pointermove', move);
+        rz.removeEventListener('pointerup', up);
+        try { localStorage.setItem('wb.wsWidth', String(wsState.width)); } catch (err) { /* ignore */ }
+      };
+      rz.addEventListener('pointermove', move);
+      rz.addEventListener('pointerup', up);
+    });
+  }
+})();
+
+// ---------- F1-2 文件页签：逐层展开目录树（所有任务可用；接口与 pjFiles 同源 /agents/fs/*?node=） ----------
+const wsFiles = { node: null, root: '', rootSrc: '', loaded: false, levels: {}, showHidden: false, kw: '', selected: new Set(), lastDir: '' };
+/** 任务执行节点的 dshRef：项目 dshRef → task.nodeRef → 所选节点（与 taskExecNodeId 同口径，含 direct 形态） */
+function wsTaskDshRef(task) {
+  const t = task || currentTaskObj();
+  if (!t) return null;
+  const p = t.projectId ? (state.projects || []).find(function (x) { return x.id === t.projectId; }) : null;
+  if (p && p.dshRef && typeof p.dshRef === 'object') return p.dshRef;
+  if (t.nodeRef && typeof t.nodeRef === 'object' && (t.nodeRef.kind === 'mapping' || t.nodeRef.kind === 'direct')) return t.nodeRef;
+  if (nodeState.cur) return { kind: 'mapping', mappingId: nodeState.cur };
+  return null;
+}
+/** 目录树根：task.workDir → 项目 workspace → 节点默认（列表接口不传 path 时返回节点默认 cwd） */
+async function wsTaskFileCtx() {
+  const t = currentTaskObj();
+  const node = wsTaskDshRef(t);
+  if (!node) return null;
+  let root = (t && t.workDir) || '';
+  let src = root ? '任务工作目录' : '';
+  if (!root) {
+    const p = t && t.projectId ? (state.projects || []).find(function (x) { return x.id === t.projectId; }) : null;
+    if (p && p.workspace) { root = p.workspace; src = '项目工作区'; }
+  }
+  if (!root) {
+    try {
+      const r = await api('/agents/fs/list?node=' + encodeURIComponent(JSON.stringify(node)) + '&all=1');
+      if (r.ok && r.data && r.data.path) { root = r.data.path; src = '节点默认目录'; }
+    } catch (e) { /* ignore */ }
+  }
+  return { node: node, root: pjTrimSlash(root), rootSrc: src };
+}
+function wsFilesLevel(dir) {
+  return wsFiles.levels[dir] || (wsFiles.levels[dir] = { open: dir === wsFiles.root, entries: [], loading: false, error: '' });
+}
+async function wsFilesLoadLevel(dir) {
+  if (!wsFiles.node) return;
+  const lv = wsFilesLevel(dir);
+  lv.open = true; lv.loading = true; lv.error = '';
+  wsFilesRenderTree();
+  const r = await api('/agents/fs/list?node=' + encodeURIComponent(JSON.stringify(wsFiles.node)) + (dir ? '&path=' + encodeURIComponent(dir) : '') + '&all=1');
+  lv.loading = false;
+  if (!r.ok) { lv.error = r.error || '读取目录失败'; wsFilesRenderTree(); return; }
+  lv.entries = (r.data.entries || []).slice().sort(function (a, b) {
+    const ad = a.type === 'dir' ? 0 : 1, bd = b.type === 'dir' ? 0 : 1;
+    return ad !== bd ? ad - bd : String(a.name).localeCompare(String(b.name));
+  });
+  wsFilesRenderTree();
+}
+function wsFilesReset(node, root, rootSrc) {
+  wsFiles.node = node; wsFiles.root = root || ''; wsFiles.rootSrc = rootSrc || '';
+  wsFiles.levels = {}; wsFiles.selected = new Set(); wsFiles.showHidden = false; wsFiles.kw = '';
+  wsFiles.loaded = Boolean(node); wsFiles.lastDir = root || '';
+  if (wsFiles.loaded && wsFiles.root) wsFilesLoadLevel(wsFiles.root);
+}
+async function wsFilesMount() {
+  const ctx = await wsTaskFileCtx();
+  const el = $('ws-files-root');
+  if (!el) return;
+  if (!ctx || !ctx.node) { el.innerHTML = '<div class="ws-hint">当前任务没有可用的执行节点，无法浏览工作区。</div>'; return; }
+  const same = wsFiles.loaded && JSON.stringify(wsFiles.node) === JSON.stringify(ctx.node) && wsFiles.root === ctx.root;
+  if (!same) wsFilesReset(ctx.node, ctx.root, ctx.rootSrc);
+  wsFilesRenderAll();
+}
+function wsFilesHeaderHtml() {
+  return '<div class="ws-files-head">' +
+    '<div class="ws-root-line">📁 <span class="mono">' + esc(wsFiles.root || '(未解析到根目录)') + '</span>' +
+    (wsFiles.rootSrc ? ' <span class="ws-src">来源：' + esc(wsFiles.rootSrc) + '</span>' : '') + '</div>' +
+    '<div class="ws-tools">' +
+    '<input id="wsf-kw" class="wsf-kw" placeholder="过滤文件名…" value="' + esc(wsFiles.kw) + '" />' +
+    '<button class="mini-btn" id="wsf-hidden" title="显示/隐藏 dot 开头的隐藏项">' + (wsFiles.showHidden ? '✓ 隐藏项' : '隐藏项') + '</button>' +
+    '<button class="mini-btn" id="wsf-mkdir" title="在最近浏览的目录下新建文件夹">＋文件夹</button>' +
+    '<button class="mini-btn" id="wsf-upload" title="上传到最近浏览的目录">⬆️ 上传</button>' +
+    '<button class="mini-btn" id="wsf-refresh" title="重新加载已展开目录">⟳</button>' +
+    '<input type="file" id="wsf-file" multiple style="display:none" />' +
+    '</div><div class="ws-batchbar" id="ws-batchbar"></div></div>';
+}
+function wsFindEntry(path) {
+  for (const k of Object.keys(wsFiles.levels)) {
+    const hit = (wsFiles.levels[k].entries || []).find(function (e) { return e.path === path; });
+    if (hit) return hit;
+  }
+  return null;
+}
+function wsRelPath(p) {
+  const r = pjTrimSlash(wsFiles.root), t = pjTrimSlash(p);
+  if (r && (t === r || t.startsWith(r + '/'))) return t === r ? '' : t.slice(r.length + 1);
+  return t;
+}
+function wsRefToChat(p) {
+  switchView('work');
+  if (!state.fileTags) state.fileTags = [];
+  if (state.fileTags.some(function (t) { return t.path === p; })) { hintComposer('该文件已在引用列表'); return; }
+  state.fileTags.push({ path: p });
+  renderFileTags();
+  pulseComposer();
+  hintComposer('已引用 ' + (wsRelPath(p) || String(p).split('/').pop()) + '（发送时并入正文）');
+}
+function addFileTag(p) {
+  switchView('work');
+  if (!state.fileTags) state.fileTags = [];
+  if (state.fileTags.some(function (t) { return t.path === p; })) { hintComposer('该文件已在引用列表'); return; }
+  state.fileTags.push({ path: p });
+  renderFileTags();
+  pulseComposer();
+  hintComposer('已引用 ' + (String(p).split('/').pop() || p) + '（发送时并入正文）');
+}
+function renderFileTags() {
+  const row = $('file-tags');
+  if (!row) return;
+  const tags = state.fileTags || [];
+  row.style.display = tags.length ? '' : 'none';
+  row.innerHTML = tags.map(function (t, i) {
+    return '<span class="file-tag" title="' + esc(t.path) + '">📎 ' + esc(String(t.path).split('/').pop() || t.path) + '<span class="ft-x" data-i="' + i + '" title="移除">✕</span></span>';
+  }).join('');
+  row.querySelectorAll('.ft-x').forEach(function (x) {
+    x.addEventListener('click', function (e) { e.stopPropagation(); state.fileTags.splice(Number(x.dataset.i), 1); renderFileTags(); });
+  });
+}
+function wsLevelHtml(dir, depth, kw) {
+  const lv = wsFiles.levels[dir];
+  if (!lv) return '';
+  const pad = ' style="padding-left:' + (depth * 14 + 4) + 'px"';
+  let html = '';
+  if (lv.loading && !(lv.entries || []).length) html += '<div class="ws-tree-hint"' + pad + '>读取中…</div>';
+  else if (lv.error) html += '<div class="ws-tree-hint err"' + pad + '>⚠️ ' + esc(lv.error) + '</div>';
+  else if (!(lv.entries || []).length && depth === 0) html += '<div class="ws-tree-hint"' + pad + '>（空目录）</div>';
+  for (const it of (lv.entries || [])) {
+    if (!wsFiles.showHidden && it.hidden) continue;
+    if (kw && !String(it.name).toLowerCase().includes(kw)) continue;
+    const isDir = it.type === 'dir';
+    const child = wsFiles.levels[it.path];
+    const sel = wsFiles.selected.has(it.path);
+    html += '<div class="ws-row" data-path="' + esc(it.path) + '" data-name="' + esc(it.name) + '" data-type="' + (isDir ? 'dir' : 'file') + '"' + pad + '>' +
+      '<span class="ws-caret">' + (isDir ? '<button class="ws-caret-btn" data-dir="' + esc(it.path) + '" title="展开/收起">' + (child && child.open ? '▾' : '▸') + '</button>' : '') + '</span>' +
+      '<input type="checkbox" class="ws-chk" data-p="' + esc(it.path) + '"' + (sel ? ' checked' : '') + ' title="选择" />' +
+      '<span class="ws-ic">' + classifyFileIcon(it.name, it.type) + '</span>' +
+      '<span class="ws-nm' + (it.hidden ? ' dim' : '') + '" title="' + esc(it.path) + '">' + esc(it.name) + '</span>' +
+      (wsChangedSet().has(it.path) ? '<span class="ws-mod" title="本轮会话中有工具写入/编辑过">●已修改</span>' : '') +
+      '<span class="ws-acts">' +
+      '<button class="mini-btn ws-act" data-op="at" title="引用到对话（相对路径）">@</button>' +
+      (!isDir ? '<button class="mini-btn ws-act" data-op="prev" title="预览">👁</button>' : '') +
+      (!isDir ? '<button class="mini-btn ws-act" data-op="dl" title="下载">⬇</button>' : '') +
+      '<button class="mini-btn ws-act" data-op="cp" title="复制路径">⧉</button>' +
+      '<button class="mini-btn danger ws-act" data-op="del" title="删除">🗑</button>' +
+      '</span></div>';
+    if (isDir && child && child.open) html += wsLevelHtml(it.path, depth + 1, kw);
+  }
+  return html;
+}
+function wsSyncBatchBar() {
+  const bar = $('ws-batchbar');
+  if (!bar) return;
+  const n = wsFiles.selected.size;
+  bar.innerHTML = n
+    ? '<span>已选 ' + n + ' 项</span>' +
+    '<button class="mini-btn" id="wsf-bat-at" title="以相对路径引用到对话">@ 引用</button>' +
+    '<button class="mini-btn" id="wsf-bat-dl" title="批量下载（不含文件夹）">⬇ 下载</button>' +
+    '<button class="mini-btn danger" id="wsf-bat-del" title="批量删除">🗑 删除</button>' +
+    '<button class="mini-btn" id="wsf-bat-clear">清空选择</button>'
+    : '';
+  if (!n) return;
+  const q = function (id) { return bar.querySelector(id); };
+  if (q('#wsf-bat-clear')) q('#wsf-bat-clear').addEventListener('click', function () { wsFiles.selected.clear(); wsFilesRenderTree(); });
+  if (q('#wsf-bat-at')) q('#wsf-bat-at').addEventListener('click', function () {
+    const paths = Array.from(wsFiles.selected);
+    closeWsSide();
+    switchView('work');
+    if (!state.fileTags) state.fileTags = [];
+    for (const p of paths) if (!state.fileTags.some(function (t) { return t.path === p; })) state.fileTags.push({ path: p });
+    renderFileTags();
+    pulseComposer();
+    wsFiles.selected.clear(); wsFilesRenderTree();
+    hintComposer('已引用 ' + paths.length + ' 个工作区文件（发送时并入正文）');
+  });
+  if (q('#wsf-bat-dl')) q('#wsf-bat-dl').addEventListener('click', async function () {
+    const items = Array.from(wsFiles.selected).map(wsFindEntry).filter(function (e) { return e && e.type !== 'dir'; });
+    if (!items.length) { toast('请选择要下载的文件（不含文件夹）', true); return; }
+    toast('正在下载 ' + items.length + ' 个文件…');
+    let ok = 0;
+    for (const it of items) {
+      try {
+        const res = await fetch(API + '/agents/fs/download?node=' + encodeURIComponent(JSON.stringify(wsFiles.node)) + '&path=' + encodeURIComponent(it.path));
+        if (!res.ok) { toast('「' + it.name + '」下载失败 (HTTP ' + res.status + ')', true); continue; }
+        const blob = new Blob([await res.arrayBuffer()], { type: 'application/octet-stream' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = it.name;
+        a.click();
+        setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+        ok++;
+      } catch (e) { toast('「' + it.name + '」下载网络错误', true); }
+    }
+    if (ok) toast('✓ 已下载 ' + ok + '/' + items.length + ' 个文件');
+  });
+  if (q('#wsf-bat-del')) q('#wsf-bat-del').addEventListener('click', async function () {
+    const paths = Array.from(wsFiles.selected);
+    if (!paths.length) return;
+    if (!confirm('确定在执行节点上删除选中的 ' + paths.length + ' 项？此操作不可恢复。')) return;
+    let ok = 0;
+    for (const p of paths) {
+      const r = await api('/agents/fs/remove?node=' + encodeURIComponent(JSON.stringify(wsFiles.node)) + '&path=' + encodeURIComponent(p), { method: 'DELETE' });
+      if (r.ok) { ok++; wsFiles.selected.delete(p); const parent = String(p).split('/').slice(0, -1).join('/'); if (wsFiles.levels[p]) delete wsFiles.levels[p]; if (wsFiles.levels[parent]) wsFilesLoadLevel(parent); }
+      else toast('「' + p.split('/').pop() + '」删除失败：' + (r.error || ''), true);
+    }
+    if (ok) toast('✓ 已删除 ' + ok + ' 项');
+    wsFilesRenderTree();
+  });
+}
+function wsFilesRenderTree() {
+  const tree = $('ws-tree');
+  if (!tree) return;
+  const kw = String(wsFiles.kw || '').toLowerCase().trim();
+  tree.innerHTML = wsLevelHtml(wsFiles.root, 0, kw);
+  tree.onclick = async function (e) {
+    const tg = e.target;
+    const caret = tg.closest('.ws-caret-btn');
+    if (caret) {
+      const dir = caret.dataset.dir;
+      const lv = wsFilesLevel(dir);
+      wsFiles.lastDir = dir;
+      if (lv.open && lv.entries.length) { lv.open = false; wsFilesRenderTree(); }
+      else wsFilesLoadLevel(dir);
+      return;
+    }
+    const chk = tg.closest('.ws-chk');
+    if (chk) {
+      if (chk.checked) wsFiles.selected.add(chk.dataset.p); else wsFiles.selected.delete(chk.dataset.p);
+      wsSyncBatchBar();
+      return;
+    }
+    const act = tg.closest('.ws-act');
+    const row = tg.closest('.ws-row');
+    if (!row) return;
+    const p = row.dataset.path, name = row.dataset.name, type = row.dataset.type;
+    if (act) {
+      const op = act.dataset.op;
+      if (op === 'at') { wsRefToChat(p); return; }
+      if (op === 'prev') { openWsTab('preview', { path: p, title: name }); return; }
+      if (op === 'dl') {
+        const a = document.createElement('a');
+        a.href = API + '/agents/fs/download?node=' + encodeURIComponent(JSON.stringify(wsFiles.node)) + '&path=' + encodeURIComponent(p);
+        a.download = name;
+        a.click();
+        return;
+      }
+      if (op === 'cp') {
+        try { await navigator.clipboard.writeText(p); toast('✓ 已复制路径'); }
+        catch (err) { prompt('复制路径：', p); }
+        return;
+      }
+      if (op === 'del') {
+        if (!confirm('确定在执行节点上删除「' + name + '」？此操作不可恢复。')) return;
+        const r = await api('/agents/fs/remove?node=' + encodeURIComponent(JSON.stringify(wsFiles.node)) + '&path=' + encodeURIComponent(p), { method: 'DELETE' });
+        if (!r.ok) { toast(r.error || '删除失败', true); return; }
+        toast('✓ 已删除 ' + name);
+        const parent = String(p).split('/').slice(0, -1).join('/');
+        if (wsFiles.levels[p]) delete wsFiles.levels[p];
+        if (wsFiles.levels[parent]) wsFilesLoadLevel(parent); else wsFilesRenderTree();
+        return;
+      }
+      return;
+    }
+    if (type === 'dir') {
+      const lv = wsFilesLevel(p);
+      wsFiles.lastDir = p;
+      if (lv.open && (lv.entries || []).length) { lv.open = false; wsFilesRenderTree(); }
+      else wsFilesLoadLevel(p);
+    } else {
+      openWsTab('preview', { path: p, title: name });
+    }
+  };
+  wsSyncBatchBar();
+}
+/** 上传文件到指定目录（工具栏按钮与目录树拖放共用，F3-1） */
+async function wsFilesUpload(files, destDir) {
+  if (!files || !files.length) return;
+  if (!destDir) { toast('未解析到目标目录', true); return; }
+  if (!wsFiles.node) { toast('当前任务没有可用的执行节点', true); return; }
+  toast('正在上传 ' + files.length + ' 个文件…');
+  let ok = 0;
+  for (const f of files) {
+    try {
+      const fd = new FormData();
+      fd.append('files', f, f.name);
+      const res = await fetch(API + '/agents/fs/upload?node=' + encodeURIComponent(JSON.stringify(wsFiles.node)) + '&path=' + encodeURIComponent(destDir), { method: 'POST', body: fd });
+      const json = await res.json().catch(function () { return {}; });
+      if (res.ok && json.ok) ok++;
+      else toast('「' + f.name + '」上传失败: ' + (json.error || 'HTTP ' + res.status), true);
+    } catch (e) { toast('「' + f.name + '」上传网络错误', true); }
+  }
+  if (ok) { toast('✓ 已上传 ' + ok + '/' + files.length + ' 个文件'); wsFilesLoadLevel(destDir); }
+}
+function wsFilesRenderAll() {
+  const el = $('ws-files-root');
+  if (!el) return;
+  el.innerHTML = wsFilesHeaderHtml() + '<div class="ws-tree" id="ws-tree"></div>';
+  const kw = $('wsf-kw');
+  if (kw) kw.addEventListener('input', function () { wsFiles.kw = this.value; wsFilesRenderTree(); });
+  const hid = $('wsf-hidden');
+  if (hid) hid.addEventListener('click', function () { wsFiles.showHidden = !wsFiles.showHidden; wsFilesRenderAll(); });
+  const mk = $('wsf-mkdir');
+  if (mk) mk.addEventListener('click', async function () {
+    const dir = wsFiles.lastDir || wsFiles.root;
+    if (!dir) { toast('未解析到根目录', true); return; }
+    const name = prompt('在目录下新建文件夹：\\n' + dir, '');
+    if (!name || !name.trim()) return;
+    const r = await api('/agents/fs/mkdir', { method: 'POST', body: JSON.stringify({ node: wsFiles.node, path: dir, name: name.trim() }) });
+    if (!r.ok) { toast(r.error || '创建文件夹失败', true); return; }
+    toast('✓ 已创建文件夹「' + name.trim() + '」');
+    wsFilesLoadLevel(dir);
+  });
+  const up = $('wsf-upload');
+  if (up) up.addEventListener('click', function () { const f = $('wsf-file'); if (f) f.click(); });
+  const fi = $('wsf-file');
+  if (fi) fi.addEventListener('change', async function () {
+    const files = Array.from(this.files || []);
+    this.value = '';
+    await wsFilesUpload(files, wsFiles.lastDir || wsFiles.root);
+  });
+  // 拖放上传（F3-1）：文件拖到目录行 = 上传到该目录；拖到空白处 = 最近浏览的目录
+  tree.addEventListener('dragover', function (e) {
+    if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    const row = e.target.closest('.ws-row');
+    tree.querySelectorAll('.drop-into').forEach(function (x) { x.classList.remove('drop-into'); });
+    if (row) row.classList.add('drop-into');
+  });
+  tree.addEventListener('dragleave', function () {
+    tree.querySelectorAll('.drop-into').forEach(function (x) { x.classList.remove('drop-into'); });
+  });
+  tree.addEventListener('drop', async function (e) {
+    const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+    if (!files.length) return;
+    e.preventDefault();
+    e.stopPropagation();
+    tree.querySelectorAll('.drop-into').forEach(function (x) { x.classList.remove('drop-into'); });
+    const row = e.target.closest('.ws-row');
+    let dir = wsFiles.lastDir || wsFiles.root;
+    if (row && row.dataset.path) {
+      dir = row.dataset.type === 'dir' ? row.dataset.path : String(row.dataset.path).split('/').slice(0, -1).join('/');
+    }
+    wsFiles.lastDir = dir;
+    await wsFilesUpload(files, dir);
+  });
+  const rf = $('wsf-refresh');
+  if (rf) rf.addEventListener('click', function () {
+    for (const k of Object.keys(wsFiles.levels)) if (wsFiles.levels[k].open || k === wsFiles.root) wsFilesLoadLevel(k);
+  });
+  wsFilesRenderTree();
+}
+/** 预览页签：图片 / Markdown（渲染+源码切换）/ 文本代码 / 其它（提示下载） */
+async function wsPreviewRender(tab) {
+  const root = $('ws-preview-root');
+  if (!root || !tab) return;
+  const p = tab.path || '';
+  const name = tab.title || String(p).split('/').pop() || '';
+  // viaTask = 文件属于某轮工具调用（可能在成员节点上）：走任务下载通道（服务端按 agent 解析节点）；
+  // 否则走目录树当前节点的 /agents/fs 通道
+  let downloadUrl;
+  if (tab.viaTask && state.currentTaskId) {
+    downloadUrl = API + '/tasks/' + encodeURIComponent(state.currentTaskId) + '/files/download?agent=' + encodeURIComponent(tab.agentId || '') + '&path=' + encodeURIComponent(p);
+  } else {
+    const node = wsFiles.node || wsTaskDshRef(currentTaskObj());
+    if (!node) { root.innerHTML = '<div class="ws-hint">无法解析文件位置</div>'; return; }
+    downloadUrl = API + '/agents/fs/download?node=' + encodeURIComponent(JSON.stringify(node)) + '&path=' + encodeURIComponent(p);
+  }
+  if (!p) { root.innerHTML = '<div class="ws-hint">无法解析文件位置</div>'; return; }
+  const inlineUrl = downloadUrl + '&inline=1';
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico'].includes(ext);
+  const isMarkdown = ['md', 'markdown'].includes(ext);
+  const head = '<div class="ws-pv-head"><span class="mono ws-pv-path" title="' + esc(p) + '">' + esc(p) + '</span>' +
+    '<button class="mini-btn" id="wspv-cp" title="复制路径">⧉</button>' +
+    '<a class="mini-btn" href="' + esc(downloadUrl) + '" download="' + esc(name) + '" title="下载" style="text-decoration:none">⬇</a></div>';
+  try {
+    if (isImage) {
+      root.innerHTML = head + '<div style="text-align:center;padding:12px"><img src="' + esc(inlineUrl) + '" style="max-width:100%;max-height:60vh;border-radius:6px" alt="' + esc(name) + '"></div>';
+    } else {
+      const res = await fetch(inlineUrl);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const text = await res.text();
+      if (isMarkdown) {
+        root.innerHTML = head +
+          '<div style="display:flex;gap:8px;margin-bottom:8px"><button class="mini-btn pri" id="wspv-r">渲染视图</button><button class="mini-btn" id="wspv-s">源码视图</button></div>' +
+          '<div id="wspv-md" class="dsh-md markdown"></div><pre id="wspv-src" class="code-preview-box" style="display:none;max-height:70vh;overflow:auto"></pre>';
+        $('wspv-md').innerHTML = md(text);
+        $('wspv-src').textContent = text;
+        const setV = function (rendered) {
+          $('wspv-md').style.display = rendered ? '' : 'none';
+          $('wspv-src').style.display = rendered ? 'none' : '';
+          $('wspv-r').classList.toggle('pri', rendered);
+          $('wspv-s').classList.toggle('pri', !rendered);
+        };
+        $('wspv-r').addEventListener('click', function () { setV(true); });
+        $('wspv-s').addEventListener('click', function () { setV(false); });
+        setV(true);
+      } else {
+        root.innerHTML = head + '<pre class="code-preview-box" style="max-height:70vh;overflow:auto;margin:0">' + esc(text.slice(0, 400000)) + (text.length > 400000 ? '\\n…（已截断）' : '') + '</pre>';
+      }
+    }
+  } catch (err) {
+    root.innerHTML = head + '<div class="ws-hint">⚠️ 预览失败（' + esc(String(err && err.message || err)) + '），可尝试下载查看。</div>';
+  }
+  const cp = $('wspv-cp');
+  if (cp) cp.addEventListener('click', async function () { try { await navigator.clipboard.writeText(p); toast('✓ 已复制路径'); } catch (e) { prompt('复制路径：', p); } });
+}
+
+// ---------- F1-3 变更页签：按轮分组列出 F2 提取的变更文件；目录树标 ●已修改 ----------
+let wsChangedCache = { taskId: '', set: null };
+function wsChangedSet() {
+  const t = currentTaskObj();
+  if (!t) return new Set();
+  if (wsChangedCache.taskId !== t.id || !wsChangedCache.set) wsChangedCache = { taskId: t.id, set: wsChangesAllPaths(t) };
+  return wsChangedCache.set;
+}
+/** 全任务的变更轮清单（新→旧）：写入/编辑类工具落盘的路径（失败调用不计） */
+function wsTaskChanges(task) {
+  const out = [];
+  const t = task || currentTaskObj();
+  if (!t) return out;
+  for (const turn of (t.turns || [])) {
+    if (turn.role !== 'agent') continue;
+    const paths = turnChangedPaths(turn);
+    if (!paths.length) continue;
+    out.push({ turnId: turn.id, agentId: turn.agentId || '', agentName: turn.agentName || '', at: turn.at, paths: paths });
+  }
+  out.reverse();
+  return out;
+}
+function wsChangesAllPaths(task) {
+  const set = new Set();
+  for (const g of wsTaskChanges(task)) for (const p of g.paths) set.add(p);
+  return set;
+}
+function wsChangesMount() {
+  const el = $('ws-changes-root');
+  if (!el) return;
+  const groups = wsTaskChanges(currentTaskObj());
+  if (!groups.length) {
+    el.innerHTML = '<div class="ws-hint">本会话还没有写入/编辑过文件。子智能体跑完写入类工具后会在这里按轮列出，目录树中对应文件会标 ●。</div>';
+    return;
+  }
+  let html = '';
+  for (const g of groups) {
+    const nodeLabel = memberNodeLabel(g.agentId);
+    html += '<div class="ws-chg-turn">' + fmtTime(g.at) + (g.agentName ? ' · 🤖 ' + esc(g.agentName) : '') + (nodeLabel ? ' · 🖥 ' + esc(nodeLabel) : '') + '</div>';
+    for (const p of g.paths) {
+      html += '<div class="ws-chg-row" data-p="' + esc(p) + '" data-agent="' + esc(g.agentId) + '" title="' + esc(p) + '（点击预览）"><span class="ws-mod-dot">●</span><span class="ws-chg-name">' + esc(p.split('/').pop() || p) + '</span><span class="ws-chg-path mono">' + esc(p) + '</span></div>';
+    }
+  }
+  el.innerHTML = html;
+  el.querySelectorAll('.ws-chg-row').forEach(function (row) {
+    row.addEventListener('click', function () {
+      openWsSide({ kind: 'preview', path: row.dataset.p, title: String(row.dataset.p).split('/').pop(), agentId: row.dataset.agent || '', viaTask: true });
+    });
+  });
+}
+
+// ---------- P4-2 跨节点续接：选位置 → fork → 打开新任务并带入草稿（不自动发送） ----------
+function startForkFlow(anchor) {
+  const t = currentTaskObj();
+  if (!t) { toast('请先打开要续接的任务', true); return; }
+  const cur = t.projectId ? { projectId: t.projectId } : { nodeMappingId: taskExecNodeId(t) };
+  openPlacePop(anchor || $('btn-head-more'), cur, function (place) { forkTaskTo(t.id, place); });
+}
+async function forkTaskTo(taskId, place) {
+  toast('正在创建续接任务…');
+  const body = {};
+  if (place && place.projectId) body.projectId = place.projectId;
+  else if (place && place.nodeMappingId) body.nodeRef = { kind: 'mapping', mappingId: place.nodeMappingId };
+  const r = await api('/tasks/' + encodeURIComponent(taskId) + '/fork', { method: 'POST', body: JSON.stringify(body) });
+  if (!r.ok) { toast(r.error || '续接失败', true); return; }
+  const nt = r.data && r.data.task;
+  if (!nt) { toast('续接失败：服务未返回新任务', true); return; }
+  state.taskCache.set(nt.id, nt);
+  await loadTasks();
+  await openTask(nt.id);
+  const input = $('input');
+  if (input && r.data.draft) {
+    input.value = r.data.draft;
+    input.focus();
+    hintComposer('已带入原任务最近对话（不会自动发送，可编辑后再发送）');
+  }
+}
+
+function renderDraftPlaceBtn() {
+  const btn = $('draft-place-btn');
+  if (btn && state.draft) btn.textContent = placeLabel(state.draft.place) + ' ▾';
+}
+function renderDraftView() {
+  document.body.classList.add('draft-mode');
+  const scroll = $('chat-scroll');
+  if (scroll) scroll.innerHTML = '<div class="chat-empty draft-hero" id="chat-empty"><div style="font-size:30px">⚡</div>' +
+    '<div style="font-weight:600;font-size:15px;color:var(--tx)">新任务</div>' +
+    '<div style="font-size:12.5px;max-width:420px;text-align:center;line-height:1.6">发送第一条消息时才创建任务。执行位置和模型在发送前都可修改，发送后锁定在任务上。</div></div>';
+  $('chat-title').textContent = '新任务（草稿）';
+  const bar = $('draft-place');
+  if (bar) bar.style.display = 'flex';
+  renderDraftPlaceBtn();
+  if (modelState.loaded) {
+    modelState.cur = currentTaskModelChoice();
+    const mb = $('chat-model-btn');
+    if (mb) mb.textContent = modelBtnLabel(modelState.cur);
+  }
+}
+function hideDraftView() {
+  document.body.classList.remove('draft-mode');
+  const bar = $('draft-place');
+  if (bar) bar.style.display = 'none';
+}
+/** 新节点的模型目录里没有草稿所选模型 → 回退为跟随默认（节点默认模型），提示一次 */
+function draftModelFallback() {
+  const d = state.draft;
+  if (!d || !d.model || !Object.keys(modelState.groups).length) return;
+  const known = Object.keys(modelState.groups).some(function (pv) { return (modelState.groups[pv] || []).some(function (m) { return pv + '/' + m.id === d.model; }); });
+  if (known) return;
+  const old = d.model;
+  d.model = '';
+  state.taskEnv.model = '';
+  modelState.cur = '';
+  const mb = $('chat-model-btn');
+  if (mb) mb.textContent = modelBtnLabel('');
+  renderModelPop();
+  hintComposer('⚠️ 新节点的模型目录里没有「' + old + '」，已改为跟随默认（' + followDefaultName() + '）', true);
+}
+async function onDraftPlaceChange(place) {
+  if (!state.draft || state.currentTaskId) return;
+  const prevNode = state.draft.place.nodeMappingId;
+  state.draft.place = place; // 只改位置：输入框里的草稿文字保持不动
+  rememberPlace(place);
+  renderDraftPlaceBtn();
+  renderTaskList();
+  if (place.nodeMappingId !== prevNode || modelState.loadedForNode !== taskExecNodeId(null)) {
+    await loadPlannerOptions();
+    if (state.draft && !state.currentTaskId) draftModelFallback();
+  }
+  const input = $('input');
+  if (input) input.focus();
+}
+$('draft-place-btn').addEventListener('click', function (e) {
+  e.stopPropagation();
+  if (!state.draft) return;
+  if (placeState.pop) { closePlacePop(); return; }
+  openPlacePop(this, state.draft.place, onDraftPlaceChange);
+});
+/** 草稿 → 创建请求体：项目任务带 projectId（节点以项目为准），单独任务带 nodeRef；有 message 时创建即发送 */
+function draftCreateBody(d, message) {
   // 不指定成员：由服务端按「主智能体」默认归属（engine.defaultMemberAgentIds，与无 @ 消息的路由判定同源）。
   // 历史实现传 state.agents.map(...) 全部子智能体，导致无 @ 的新任务被放大成全员编排，
   // 且上传附件时会向所有成员节点扇出（每个成员都被建远端会话）。
-  const proj = state.projectId ? state.projects.find(function (x) { return x.id === state.projectId; }) : null;
+  const place = normalizePlace(d.place);
+  const proj = place.projectId ? state.projects.find(function (x) { return x.id === place.projectId; }) : null;
   const env = state.taskEnv || {};
-  const body = {
-    title: '新任务',
-  };
+  // 带 message 时不传 title：engine 按首条消息生成标题
+  const body = message ? { message: message } : { title: '新任务' };
   if (proj) {
     body.projectId = proj.id;
     // 项目默认协作成员由服务端继承（defaultAgentIds）：客户端不再塞 memberAgentIds，
@@ -9190,21 +10595,46 @@ async function createNewTaskDirectly() {
     if (proj.skillNames.length) body.skillNames = proj.skillNames;
     if (proj.connectorIds.length) body.connectorIds = proj.connectorIds;
   }
-  if (env.nodeRef) body.nodeRef = env.nodeRef;
+  // 项目任务节点以项目为准（P0-3）：不再下发 nodeRef，执行节点由 project.dshRef 决定
+  if (!proj && place.nodeMappingId) body.nodeRef = { kind: 'mapping', mappingId: place.nodeMappingId };
+  // 草稿里选好的模型 → 任务级模型（engine.createTask 透传 input.model）
+  if (d.model) body.model = d.model;
   if (env.connectorIds && env.connectorIds.length) body.connectorIds = env.connectorIds;
   if (env.skillNames && env.skillNames.length) body.skillNames = env.skillNames;
-  const r = await api('/tasks', {
-    method: 'POST',
-    body: JSON.stringify(body)
-  });
-  if (!r.ok) {
-    toast(r.error || '创建会话失败', true);
-    return;
+  return body;
+}
+let draftCreating = false;
+/**
+ * 把草稿落成任务：message 非空 = 创建即发送首条消息（POST /tasks 带 message，engine.createTask 内发送）；
+ * message 为空 = 只创建（附件上传前需要任务）。成功后清草稿并打开任务，返回任务 id；失败返回 ''。
+ */
+async function commitDraft(message) {
+  if (!state.draft || draftCreating) return '';
+  draftCreating = true;
+  const d = state.draft;
+  try {
+    const r = await api('/tasks', { method: 'POST', body: JSON.stringify(draftCreateBody(d, message)) });
+    if (!r.ok || !r.data) { toast(r.error || '创建会话失败', true); return ''; }
+    rememberPlace(d.place);
+    state.draft = null;
+    hideDraftView();
+    state.taskCache.set(r.data.id, r.data);
+    await loadTasks();
+    await openTask(r.data.id);
+    // 创建即发送：首轮在 SSE 连上前就已开跑（流不补发历史事件），连上后回源对账一次补齐空档
+    if (message && state.currentTaskId === r.data.id) resyncCurrentTask();
+    return r.data.id;
+  } finally {
+    draftCreating = false;
   }
-  await loadTasks();
-  await openTask(r.data.id);
+}
+/** 兼容旧入口：直接从默认位置建任务（不经草稿页），返回任务 id */
+async function createNewTaskDirectly(message) {
+  if (!state.draft) state.draft = { place: defaultDraftPlace(), model: (state.taskEnv && state.taskEnv.model) || '' };
+  const id = await commitDraft(message || '');
   const input = $('input');
   if (input) input.focus();
+  return id;
 }
 function closeModal() { $('modal-mask').classList.remove('on'); }
 
@@ -9340,7 +10770,6 @@ function wireAgentCard(card) {
   if (!a) return;
   card.querySelector('[data-op=enter]').addEventListener('click', async () => {
     // 新模型：进入工作台并把任务节点切到该智能体绑定的节点（主 DSH 跟节点走）
-    if (state.projectId) exitProject();
     switchView('work');
     const mid = a.dshRef && a.dshRef.kind === 'mapping' ? a.dshRef.mappingId : '';
     if (mid && dshNodeOptions().some(x => x.mappingId === mid)) selectNode(mid);
@@ -9690,6 +11119,26 @@ function skillRowHtml(s, bound, i) {
     '<button class="mini-btn danger" data-sk="del" data-name="' + esc(s.name) + '">删除</button></div></div>';
 }
 
+/** 模型下拉按所选节点目录过滤（P5-2）：/dsh-models?node= 建议列表；目录外当前值如实提示 */
+async function filterAgentModelsByNode(mid) {
+  const input = $('ag-model');
+  if (!input) return;
+  const r = await api('/dsh-models?node=' + encodeURIComponent(mid || ''));
+  const models = (r.ok && r.models) || [];
+  if (!models.length) return;
+  const values = models.map(function (m) { return (m.provider ? m.provider + '/' : '') + m.id; }).filter(Boolean);
+  let dl = $('ag-model-dl');
+  if (!dl) {
+    dl = document.createElement('datalist');
+    dl.id = 'ag-model-dl';
+    input.setAttribute('list', 'ag-model-dl');
+    input.parentNode.appendChild(dl);
+  }
+  dl.innerHTML = values.map(function (v) { return '<option value="' + esc(v) + '"></option>'; }).join('');
+  const cur = input.value.trim();
+  const hintEl = $('ag-place-hint');
+  if (cur && values.indexOf(cur) < 0 && hintEl) hintEl.textContent = '⚠️ 当前模型 ' + cur + ' 不在该节点目录内（下拉可选 ' + values.length + ' 个），保存后可能被节点拒绝';
+}
 function openAgentDrawer(agent, copyMode) {
   // copyMode: 传入了带完整配置的源对象但 id 已剥掉 —— 抽屉按「新建」保存（POST 无 id 即创建）
   const isEdit = Boolean(agent) && !copyMode;
@@ -9701,7 +11150,9 @@ function openAgentDrawer(agent, copyMode) {
   $('drawer-body').innerHTML =
     '<div class="field"><label>名称</label><input id="ag-name" value="' + esc(agent ? agent.name : '') + '" placeholder="如: 136-执行者 / 169-质检员"></div>' +
     '<div class="field"><label>专家名册库（321 位专业智能体 · 点选预填人格与提示词）</label><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="mini-btn" id="ag-roster">🎓 从专家库选择…</button><span class="hint" style="margin:0">按分类浏览或搜索 The Agency 名册，选中后自动预填，可再改</span></div></div>' +
-    '<div class="field"><label>DSH 实体（稳定 ID 绑定 · 端口漂移免疫）</label><select id="ag-dsh"><option value="">— 选择 ONENAT 上的 DSH 实例 —</option>' + dshOptions +
+    '<div class="field"><label>DSH 实体（稳定 ID 绑定 · 端口漂移免疫）</label>' +
+    '<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><button class="mini-btn" id="ag-place" type="button">🖥 执行位置选择…</button><span class="hint" id="ag-place-hint" style="margin:0">从资源目录可视化选节点（选定后模型下拉按该节点目录过滤）；下方下拉可手工改 / 直连</span></div>' +
+    '<select id="ag-dsh"><option value="">— 选择 ONENAT 上的 DSH 实例 —</option>' + dshOptions +
       '<option value="direct:">直连地址（手工输入）…</option></select>' +
       '<input id="ag-direct" placeholder="http://host:port/api/v1" style="display:none;margin-top:8px">' +
       '<div class="hint">列表来自资源目录中 type=http-api 且带 dsh-web-service 技能的映射。</div></div>' +
@@ -9798,6 +11249,24 @@ function openAgentDrawer(agent, copyMode) {
     }
     if (!nref) { toast('请先选择 DSH 实体', true); return; }
     openDirBrowser({ nodeJson: JSON.stringify(nref) }, p => { const inp = $('ag-workdir'); if (inp) inp.value = p; });
+  });
+  // P5-2：执行位置选择框（只有节点层）→ 选定后写回 ag-dsh 并按该节点目录过滤模型下拉
+  const placeBtn = $('ag-place');
+  if (placeBtn) placeBtn.addEventListener('click', function () {
+    openPlacePop(placeBtn, null, function (pl) {
+      if (!pl || !pl.nodeMappingId) return;
+      const sel = $('ag-dsh');
+      if (sel) {
+        sel.value = 'mapping:' + pl.nodeMappingId;
+        sel.dispatchEvent(new Event('change'));
+      }
+      const dir = $('ag-direct');
+      if (dir) dir.style.display = 'none';
+      const res = dshNodeOptions().find(function (x) { return x.mappingId === pl.nodeMappingId; });
+      const hintEl = $('ag-place-hint');
+      if (hintEl) hintEl.textContent = '✓ 已选节点：' + (res ? (res.title || res.appName || res.note || res.mappingId) : pl.nodeMappingId);
+      filterAgentModelsByNode(pl.nodeMappingId);
+    }, { nodeOnly: true });
   });
   $('ag-sync').addEventListener('click', async () => {
     const btn = $('ag-sync'), hint = $('ag-opts-hint');
@@ -10291,7 +11760,8 @@ async function openScheduleDrawer(s, tpl, copyMode) {
   openDrawer(copyMode ? '复制定时任务（另存为新任务）' : (isEdit ? '编辑定时任务' : (prefill.id ? '新建定时任务（模板: ' + prefill.name + '）' : '新建定时任务')));
   $('drawer-body').innerHTML =
     '<div class="field"><label>任务标题</label><input id="sc-name" value="' + esc(s ? s.name : (prefill.name || '')) + '" placeholder="如: 每日站会摘要"></div>' +
-    '<div class="field"><label>执行节点（主 DSH：主会话在该节点上直发，@ sub agent 回其绑定节点远程执行）</label>' +
+    '<div class="field"><label>执行位置（主 DSH：主会话在该节点上直发，@ sub agent 回其绑定节点远程执行）</label>' +
+    '<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px"><button class="mini-btn" id="sc-place" type="button">🖥 执行位置选择…</button><span class="hint" id="sc-node-label" style="margin:0">也可用下方下拉直接切换</span></div>' +
     '<select id="sc-node">' +
     dshNodeOptions().map(function (n) {
       const label = n.title || n.appName || n.note || n.mappingId;
@@ -10358,7 +11828,7 @@ async function openScheduleDrawer(s, tpl, copyMode) {
   // 执行模型下拉：从所选 DSH 节点拉取可用模型（/api/dsh-models）
   const setModelOptions = function (models, current) {
     const sel = $('sc-model'); if (!sel) return
-    let opts = '<option value=""' + (!current ? ' selected' : '') + '>跟随全局调度模型</option>'
+    let opts = '<option value=""' + (!current ? ' selected' : '') + '>跟随节点默认（无人值守任务建议固定模型）</option>'
     let hasCurrent = !current
     for (const m of models) {
       const v = (m.provider ? m.provider + '/' : '') + m.id
@@ -10376,12 +11846,12 @@ async function openScheduleDrawer(s, tpl, copyMode) {
     // /api/dsh-models 响应为顶层结构（ok/models/nodeTitle），无 data 包裹
     const d = r.ok ? r : {}
     if (!r.ok) {
-      if (hintEl) hintEl.textContent = '⚠ 节点模型列表获取失败（' + (d.error || '未知') + '），已回退跟随全局调度模型'
+      if (hintEl) hintEl.textContent = '⚠ 节点模型列表获取失败（' + (d.error || '未知') + '），已回退跟随节点默认'
       setModelOptions([], current)
       return
     }
     setModelOptions(d.models || [], current)
-    if (hintEl) hintEl.textContent = '模型来自节点「' + (d.nodeTitle || mappingId) + '」的可用列表；主会话与编排汇总使用该模型，留空跟随全局调度模型。'
+    if (hintEl) hintEl.textContent = '模型来自节点「' + (d.nodeTitle || mappingId) + '」的可用列表；留空 = 跟随节点默认（无人值守任务建议固定模型）。'
   }
   // 工作目录浏览 / 技能绑定：目标节点 = 「执行节点」当前选中值（与项目工作目录同一 node= 通道，免保存直连）
   const scheduleNodeRef = function () {
@@ -10414,6 +11884,21 @@ async function openScheduleDrawer(s, tpl, copyMode) {
   $('sc-node').addEventListener('change', function () {
     loadNodeModels($('sc-node').value, '');
     loadScheduleNodeSkills($('sc-node').value, checkedScheduleSkills());
+  });
+  // P5-2：执行位置选择框（只有节点层）
+  const scPlaceBtn = $('sc-place');
+  if (scPlaceBtn) scPlaceBtn.addEventListener('click', function () {
+    openPlacePop(scPlaceBtn, { nodeMappingId: $('sc-node').value || '' }, function (pl) {
+      if (!pl || !pl.nodeMappingId) return;
+      const sel = $('sc-node');
+      if (sel && sel.value !== pl.nodeMappingId) {
+        sel.value = pl.nodeMappingId;
+        sel.dispatchEvent(new Event('change'));
+      }
+      const res = dshNodeOptions().find(function (x) { return x.mappingId === pl.nodeMappingId; });
+      const hintEl = $('sc-node-label');
+      if (hintEl) hintEl.textContent = '✓ 已选节点：' + (res ? (res.title || res.appName || res.note || res.mappingId) : pl.nodeMappingId);
+    }, { nodeOnly: true });
   });
   $('sc-browse').addEventListener('click', function () {
     const nref = scheduleNodeRef();
@@ -11385,26 +12870,13 @@ function pjWithinWs(p) {
 
 /** 项目工作区文件引用到对话：插入相对工作区的路径（项目会话 cwd=工作区，可直接使用） */
 function pjRefToChat(filePath, ws) {
-  switchView('work');
-  const inp = $('input');
-  if (!inp) return;
-  let rel = String(filePath || '');
-  const nws = pjTrimSlash(ws);
-  if (nws && rel.startsWith(nws + '/')) rel = rel.slice(nws.length + 1);
-  else if (nws && rel === nws) rel = '';
-  const name = rel || (filePath.split('/').pop() || filePath);
-  const val = inp.value || '';
-  const insertText = name + ' ';
-  inp.value = val ? (val.endsWith(' ') ? val + insertText : val + ' ' + insertText) : insertText;
-  inp.focus();
-  pulseComposer();
-  hintComposer('已引用工作区文件 ' + name + '（相对项目工作区）');
+  addFileTag(filePath);
 }
 
-/** 打开项目工作区文件抽屉（项目工作台横幅「📁 工作区文件」入口） */
-async function openProjectFiles() {
-  const p = state.projectId ? state.projects.find(x => x.id === state.projectId) : null;
-  if (!p) { toast('请先进入项目工作台', true); return; }
+/** 打开项目工作区文件抽屉（头部 ⋯ 菜单「📁 工作区文件」入口；pid 缺省取项目工作台当前项目） */
+async function openProjectFiles(pid) {
+  const p = pid ? state.projects.find(x => x.id === pid) : null;
+  if (!p) { toast('未找到项目', true); return; }
   pjFilesState.projectId = p.id;
   pjFilesState.node = p.dshRef || null;
   pjFilesState.ws = pjTrimSlash(p.workspace || '');
@@ -11774,23 +13246,13 @@ function pjOpenPreview(filePath, fileName) {
 function pjBatchAt() {
   const items = pjGetSelected();
   if (!items.length) { toast('请先选择文件', true); return; }
-  const nws = pjTrimSlash(pjFilesState.ws);
-  const refs = items.map(it => {
-    let rel = it.path;
-    if (nws && rel.startsWith(nws + '/')) rel = rel.slice(nws.length + 1);
-    return rel || it.name;
-  });
   closeDrawer();
   switchView('work');
-  const inp = $('input');
-  if (inp) {
-    const val = inp.value || '';
-    const insertText = refs.join(' ') + ' ';
-    inp.value = val ? (val.endsWith(' ') ? val + insertText : val + ' ' + insertText) : insertText;
-    inp.focus();
-    pulseComposer();
-    hintComposer('已引用 ' + refs.length + ' 个工作区文件（相对项目工作区）');
-  }
+  if (!state.fileTags) state.fileTags = [];
+  for (const it of items) if (!state.fileTags.some(function (t) { return t.path === it.path; })) state.fileTags.push({ path: it.path });
+  renderFileTags();
+  pulseComposer();
+  hintComposer('已引用 ' + items.length + ' 个工作区文件（发送时并入正文）');
   pjFilesState.selected.clear();
 }
 
@@ -11882,6 +13344,7 @@ function renderSettings() {
   $('set-key').value = s.onenat.apiKey || '';
   $('set-refresh').value = s.onenat.autoRefreshMs || 60000;
   $('set-ai-token').value = s.aiToken || '';
+  renderDefaultModelSetting();
   renderAiInstall();
   // SSH 池卡随设置页打开刷新（管理员卡；未登录 me 时静默跳过）
   if (document.getElementById('ssh-pool-card')?.style.display !== 'none') loadSshResources();
@@ -12057,6 +13520,38 @@ $('btn-reset-ai-token').addEventListener('click', async () => {
     renderAiInstall();
     toast('✓ 新 APIKEY 已生成（无需重启）');
   } else toast(r.error || '生成失败', true);
+});
+/** 设置页「全局默认模型」：候选取当前节点模型目录（modelState.groups），已保存但不在目录里的值保留显示 */
+function renderDefaultModelSetting() {
+  const sel = $('set-default-model');
+  if (!sel) return;
+  const cur = modelState.globalDefault || '';
+  let html = '<option value="">节点默认（不指定）</option>';
+  let known = false;
+  for (const pv of Object.keys(modelState.groups)) {
+    html += '<optgroup label="' + esc(pv) + '">';
+    for (const m of modelState.groups[pv]) {
+      const v = pv + '/' + m.id;
+      if (v === cur) known = true;
+      html += '<option value="' + esc(v) + '"' + (v === cur ? ' selected' : '') + '>' + esc(m.id + (m.isDefault ? ' ★' : '')) + '</option>';
+    }
+    html += '</optgroup>';
+  }
+  if (cur && !known) html += '<option value="' + esc(cur) + '" selected>' + esc(cur + '（已保存 · 当前节点目录不存在）') + '</option>';
+  sel.innerHTML = html;
+  const hint = $('set-default-model-hint');
+  if (hint) hint.textContent = Object.keys(modelState.groups).length ? '' : (modelState.error ? '⚠️ 模型目录获取失败: ' + modelState.error : '模型目录加载中…');
+}
+$('btn-save-default-model').addEventListener('click', async () => {
+  const v = $('set-default-model').value || '';
+  const r = await api('/planner/config', { method: 'POST', body: JSON.stringify({ model: v }) });
+  if (!r.ok) { toast(r.error || '保存失败', true); return; }
+  modelState.globalDefault = v;
+  // 跟随默认的任务按钮文字随之更新
+  const btn = $('chat-model-btn');
+  if (btn) btn.textContent = modelBtnLabel(modelState.cur);
+  refreshMainAgentModelBadges();
+  toast('✓ 全局默认模型已设为「' + (v || '节点默认') + '」');
 });
 $('btn-save-settings').addEventListener('click', async () => {
   // 归档设置已迁至「归档管理」页（不随本卡提交，避免误改；POST /settings 分段合并保持原值）
@@ -12880,7 +14375,7 @@ function cmdkErrToast(e) { var m = (e && e.message) ? e.message : String(e); toa
 function cmdkViewCmd(v, label, icon) { return { g: '视图', ic: icon, lb: label, kw: v, ord: 20, act: function () { switchView(v); } }; }
 function cmdkCommands(query) {
   var cmds = [];
-  cmds.push({ g: '操作', ic: '✚', lb: '新建任务（免弹窗，立即开聊）', kw: 'new task create 新建 会话 开聊', ord: 1, act: function () { createNewTaskDirectly(); } });
+  cmds.push({ g: '操作', ic: '✚', lb: '新建任务（草稿，发送首条消息时创建）', kw: 'new task create 新建 会话 开聊', ord: 1, act: function () { switchView('work'); startDraft(); } });
   cmds.push({ g: '操作', ic: '🎛', lb: '运行配置', kw: 'run config 专家 连接器 技能 节点 模型', ord: 2, act: function () { switchView('work'); openRunConfig('top'); } });
   cmds.push(cmdkViewCmd('work', '工作台 · 任务会话', '💬'));
   cmds.push(cmdkViewCmd('projects', '项目', '📦'));
@@ -12904,7 +14399,7 @@ function cmdkCommands(query) {
     cmds.push({ g: '子智能体', ic: '🤖', lb: a.name || a.id, kw: describeDshRef(a), ord: 40, act: function () { switchView('agents'); openAgentDrawer(a); } });
   });
   state.projects.forEach(function (p) {
-    cmds.push({ g: '项目', ic: '📦', lb: p.name || p.id, sub: p.archived ? '已归档' : '', ord: 50, act: function () { enterProject(p.id); } });
+    cmds.push({ g: '项目', ic: '📦', lb: p.name || p.id, sub: p.archived ? '已归档' : '', ord: 50, act: function () { switchView('work'); state.groupCollapsed['proj:' + p.id] = false; saveGroupPrefs(); startDraft({ projectId: p.id }); } });
   });
   return cmds;
 }
