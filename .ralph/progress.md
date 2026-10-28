@@ -103,3 +103,8 @@
 - 头部⋯「工作区文件」→ openWsSide({kind:'files'})；openProjectFiles 暂留（P5-3 清理）。renderWsSide 按 tab.kind 分发 mount。
 - 大坑（再犯就打脸）：web-ui.ts 是 TS 模板字面量——要写进内联脚本的 `\n` 必须在源码里写 `\\n`；python heredoc 里写 '\\\\n'（4 个）才落成源码 '\\n'（3 字符）。node --check 才能抓到，tsc 不查。
 - openRunConfig 的 curTask 重复声明教训同前：新增局部名先 grep。
+
+## F1-3（ZCode 主会话）
+- wsTaskChanges/wsChangesAllPaths（turnChangedPaths 复用 F2 提取）+ wsChangedCache 按 taskId 缓存（树标记用）；wsChangesMount 按轮分组渲染。
+- 预览双通道：tab.viaTask → /tasks/:id/files/download?agent=（成员节点）；否则 /agents/fs/download?node=。F2 chip 与行内代码链接的 click 都走 openWsSide preview。
+- 注意：dsh-change-chip 从 <a> 改成了 span[role=button]（保留键盘 Enter/Space）；F2 的 CSS 不用动。
