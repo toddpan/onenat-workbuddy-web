@@ -5603,7 +5603,7 @@ function connectStream(taskId) {
       const el = state.turnEls[ev.turn.id];
       if (el) {
         finalizeTurnBlocks(el, ev.turn, taskId);
-        applyUsageBadge(el, ev.turn.usage);
+        applyUsageBadge(el, ev.turn.usage, ev.turn);
       }
       smartScrollBottom();
       loadTasksQuiet();
@@ -6146,24 +6146,48 @@ function cacheHitPercent(usage) {
 }
 
 /** 更新 turn 脚注里的用量 pill（流式实时或回放时写入；对齐 DSH TurnUsagePanel 摘要胶囊） */
-function applyUsageBadge(el, usage) {
+/** 逐轮用量胶囊（S2-2）：🗄 总量（K/M 压缩）· ⏱ 本轮时长（endedAt-at，流式中暂无）；点击看输入/输出/缓存/命中率明细 */
+function applyUsageBadge(el, usage, turn) {
   if (!el || !el.foot) return;
   const old = el.foot.querySelector('.dsh-usage-pill[data-role="usage"]');
   if (old) old.remove();
   if (!usage || typeof usage !== 'object') return;
+  const miss = Number(usage.uncachedInputTokens) || Number(usage.inputTokens) || 0;
+  const read = Number(usage.cacheReadTokens) || 0;
+  const write = Number(usage.cacheWriteTokens) || 0;
   const out = Number(usage.outputTokens) || 0;
-  const total = (Number(usage.uncachedInputTokens) || Number(usage.inputTokens) || 0)
-    + (Number(usage.cacheReadTokens) || 0) + (Number(usage.cacheWriteTokens) || 0) + out;
+  const total = miss + read + write + out;
   if (total <= 0) return;
+  const durMs = turn && turn.endedAt && turn.at ? Math.max(0, turn.endedAt - turn.at) : (Number(usage.durationMs) || 0);
   const pct = cacheHitPercent(usage);
-  const label = '用量 ' + total.toLocaleString() + ' tok' + (pct !== null ? ' · 缓存 ' + pct + '%' : '');
-  const pill = document.createElement('span');
+  const pill = document.createElement('button');
+  pill.type = 'button';
   pill.className = 'dsh-usage-pill';
   pill.dataset.role = 'usage';
-  pill.title = label + '（输出 ' + out.toLocaleString() + ' tok）';
-  pill.innerHTML = '<b>' + total.toLocaleString() + '</b>&nbsp;tok' + (pct !== null ? '&nbsp;·&nbsp;缓存 ' + pct + '%' : '');
+  pill.title = '本轮用量 ' + total.toLocaleString() + ' tok（点击看明细）';
+  pill.innerHTML = '🗄 ' + fmtStatsTokens(total) + (durMs > 0 ? '&nbsp;·&nbsp;⏱ ' + fmtStatsDuration(durMs) : '');
+  pill.addEventListener('click', function (e) {
+    e.stopPropagation();
+    openTurnUsageDetail(usage, durMs, pct, total);
+  });
   const anchor = el.foot.querySelector('.dsh-timeEnd');
   if (anchor) el.foot.insertBefore(pill, anchor); else el.foot.appendChild(pill);
+}
+/** 单轮用量明细弹层（S2-2）：输入 / 输出 / 缓存读 / 缓存写 / 命中率（/ 首 token：远端透传 ttftMs 时展示） */
+function openTurnUsageDetail(usage, durMs, pct, total) {
+  const row = function (label, val) { return '<div class="sp-r"><span>' + esc(label) + '</span><b>' + esc(val || '—') + '</b></div>'; };
+  const n = function (v) { return (Number(v) || 0).toLocaleString() + ' tok'; };
+  let html = '<div style="min-width:280px">'
+    + row('输入（未命中缓存）', n(usage.uncachedInputTokens || usage.inputTokens))
+    + row('输出', n(usage.outputTokens))
+    + row('缓存读', n(usage.cacheReadTokens))
+    + row('缓存写', n(usage.cacheWriteTokens))
+    + row('合计', n(total))
+    + row('缓存命中率', pct !== null ? pct + '%' : '')
+    + (Number(usage.ttftMs) > 0 ? row('首 token', fmtStatsDuration(Number(usage.ttftMs))) : '')
+    + (durMs > 0 ? row('本轮时长', fmtStatsDuration(durMs)) : '')
+    + '</div>';
+  openModal('本轮用量', html, [{ label: '关闭', cls: '', act: closeModal }]);
 }
 
 /** 本轮变更文件：写入/编辑类工具的路径（engine 落盘的 tool.paths），失败的调用不算，按出现顺序去重 */
@@ -6332,7 +6356,7 @@ function buildTurnElement(taskId, turn) {
       te.el.innerHTML = turn.role === 'agent' ? md(withFileLinks(taskId, turn.agentId, turn.text || '')) : md(turn.text || '');
       blocks.appendChild(te.el);
     }
-    if (turn.usage) applyUsageBadge({ foot }, turn.usage);
+    if (turn.usage) applyUsageBadge({ foot }, turn.usage, turn);
     renderTurnChanges(foot, turn, taskId);
   } else if (blocks && turn.streaming && turn.text) {
     const te = createBlock('text'); te.el.textContent = turn.text || ''; blocks.appendChild(te.el);
@@ -6583,7 +6607,7 @@ function finalizeTurnBlocks(el, turn, taskId) {
     for (const n of texts) blocks.appendChild(n);
   }
 
-  if (turn.usage) applyUsageBadge(el, turn.usage);
+  if (turn.usage) applyUsageBadge(el, turn.usage, turn);
   renderTurnChanges(el.foot, turn, taskId);
 
   markTrajDirty();
