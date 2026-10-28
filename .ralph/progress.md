@@ -91,3 +91,9 @@
 - 行标记：createTaskItemElement 的点支持 t.pendingAsk（.s.ask 琥珀）、title 前缀 ⏰（taskSummary 新增 scheduleId）；.s.running 改 var(--pri) 蓝。
 - 坑：openRunConfig 内已有遗留 const curTask（同函数重复声明）→ build 的 node --check 才能抓到（tsc 不查内联脚本）；已删遗留两行。
 - smoke「数据落盘」断言偶发中间态（防抖尾随写），改 5s 轮询到满足。验证四件套全过；未做浏览器手测。
+
+## F1-1（ZCode 主会话）
+- ws-side：HTML 在 </section>(chat-main) 后、CSS 挂 .gh-more 锚点后；display 由 .on 类控制；media ≤768 全屏（width:100%!important，拖手隐藏）。
+- JS：wsState{open,width,byTask}；wsTaskState()=byTask[currentTaskId]；openWsTab(kind,extra)/closeWsTab(key)/openWsSide(tab?)/closeWsSide/wsRestoreForTask；wireWsSide IIFE 绑 📁/✕/拖宽。preview 页签 key='preview:'+path。
+- 接线：applyTaskToView 显示 📁 + wsRestoreForTask；resetChatView 隐藏 📁 + closeWsSide。
+- 注意：openRunConfig 那次 curTask 重复声明的教训——同函数内加局部变量先 grep；锚点替换若 count!=1 先看上下文（S1-1 工人已改过 task-stats 区块）。
