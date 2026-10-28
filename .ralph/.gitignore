@@ -1,0 +1,10 @@
+# 运行时产物不入库；PROMPT/SUPERVISOR/progress/脚本入库
+logs/
+supervisor/
+ledger.jsonl
+loop.log
+*.out
+*.pid
+untracked.baseline
+STOP
+PAUSE
