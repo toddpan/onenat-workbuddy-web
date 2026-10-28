@@ -601,7 +601,9 @@ export class TaskEngine {
       ...(input.scheduleId ? { scheduleId: input.scheduleId } : {}),
       ...(input.scheduleName ? { scheduleName: input.scheduleName } : {}),
       ...(input.projectId ? { projectId: input.projectId } : {}),
-      ...(input.nodeRef ? { nodeRef: input.nodeRef } : {}),
+      // 项目任务节点以项目为准（P0-3）：dshRef 在项目上，带 projectId 时忽略 nodeRef，
+      // 避免项目节点改动后任务仍钉在旧节点（taskExec 的解析顺序本就是项目优先）
+      ...(!input.projectId && input.nodeRef ? { nodeRef: input.nodeRef } : {}),
       ...(input.model ? { model: input.model } : {}),
       ...(input.connectorIds?.length ? { connectorIds: input.connectorIds } : {}),
       ...(input.skillNames?.length ? { skillNames: input.skillNames } : {}),
@@ -611,6 +613,7 @@ export class TaskEngine {
     }
     this.store.upsertTask(task)
     if (inheritedDefaults) this.taskLog(task.id, 'info', `已继承项目默认协作成员（${memberAgentIds.length} 名）：编排与 @ 均可按需使用，不被限死为唯一执行者`)
+    if (input.projectId && input.nodeRef) this.taskLog(task.id, 'info', '项目任务节点以项目为准，已忽略请求中的 nodeRef')
     if (input.message?.trim()) {
       // 团队任务的首页消息由发送者携带团队意图（opts.teamId）——首轮按团队合同编排；
       // 用户后续显式 @ 成员时按轮级参与者聚焦，显式 @ 团队才恢复团队语义。

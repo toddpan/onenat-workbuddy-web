@@ -292,6 +292,22 @@ test('项目默认协作成员：全部停用时不强制继承，任务仍可�
   }
 })
 
+test('项目任务节点以项目为准：createTask 带 projectId 时忽略 nodeRef', async () => {
+  const f = makeFixture()
+  try {
+    f.store.upsertProject({ name: '项目节点项目', dshRef: { kind: 'direct', apiBaseUrl: 'http://stub-node' } })
+    const proj = f.store.getProjects()[0]
+    const t = await f.engine.createTask({ title: '项目任务', projectId: proj.id, nodeRef: { kind: 'direct', apiBaseUrl: 'http://other-node' } })
+    assert.equal(t.projectId, proj.id)
+    assert.equal(t.nodeRef, undefined, '项目任务不应携带 nodeRef（执行节点由 project.dshRef 决定）')
+    const solo = await f.engine.createTask({ title: '单独任务', nodeRef: { kind: 'direct', apiBaseUrl: 'http://other-node' } })
+    assert.ok(solo.nodeRef, '单独任务的 nodeRef 不受影响')
+  } finally {
+    f.store.flush()
+    rmSync(f.dir, { recursive: true, force: true })
+  }
+})
+
 test('团队任务：首轮消息触发团队合同（plan.scope.team 快照）；无 @ 追问回主会话并携带上一轮汇总', async () => {
   const f = makeFixture()
   try {

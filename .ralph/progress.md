@@ -22,3 +22,11 @@
 - 重拉时机：`openTask` 末尾、`resetChatView` 末尾、`initNodeState`；`syncNodeChipToTask` 删除了 loadPlannerOptions，`selectNode` 仅在无当前任务时重拉；`applyReachableNodeDefault` 原本就跳过有任务的情况。
 - 手测步骤（未做）：节点 A/B 各一个任务 → 打开 A 任务看模型弹层目录来源（按钮 title「模型目录: 」）为 A → 打开 B 任务应切到 B → 有任务时在节点下拉选别的节点，目录不变 → 删除/关闭任务回空视图，目录回到所选节点；项目任务目录应为项目 dshRef 节点。
 - 注意（P0-3）：`createNewTaskDirectly` 仍对项目任务带 env.nodeRef；`syncNodeChipToTask` 仍只看 task.nodeRef。
+
+## P0-3
+- engine.ts `createTask`：带 projectId 时不再落 nodeRef（任务对象铺开处按 `!input.projectId && input.nodeRef` 守卫），并 taskLog 一条「项目任务节点以项目为准，已忽略请求中的 nodeRef」。排查过其它 createTask 调用方（router 项目导入/安装/插件导出、scheduler）均不带 projectId，无误伤面。
+- web-ui.ts `createNewTaskDirectly`：项目任务不再下发 `env.nodeRef`（`if (!proj && env.nodeRef)`）。
+- web-ui.ts `syncNodeChipToTask`：先按 project.dshRef 回显（mapping→nodeState.cur+taskEnv；direct→「直连」；app/快照缺失→项目摘要 nodeTitle 兜底），项目分支 return true 不再落到 task.nodeRef。返回值调用方未使用。
+- smoke 新增 5.2 节 4 项断言（创建项目 → projectId+nodeRef 同传创建任务断言无 nodeRef → 回读仍无 → 对照单独任务保留 nodeRef）；engine.test.ts 新增单测「项目任务节点以项目为准」。
+- 验证：build / typecheck / smoke（63 项）/ test:unit（77 项）全过；未做浏览器手测。
+- 手测步骤（未做）：进入项目工作台点「＋新建任务」→ 头部节点应显示项目节点（非默认节点），模型目录来源为项目节点；带 nodeRef 的存量项目任务打开后头部同样显示项目节点；网络层确认 POST /api/tasks 请求体无 nodeRef。

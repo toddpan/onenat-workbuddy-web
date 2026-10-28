@@ -229,6 +229,21 @@ async function main() {
   const tasks = await req('GET', `${PREFIX}/api/tasks`)
   check('任务列表可读', (tasks.json?.data || []).some((t) => t.id === taskId))
 
+  // ---------- 5.2 项目任务节点以项目为准（P0-3）：带 projectId 时忽略 nodeRef，执行节点由 project.dshRef 决定 ----------
+  const proj = await req('POST', `${PREFIX}/api/projects`, { name: '冒烟项目-P0-3', dshRef: { kind: 'mapping', mappingId: 'map-dsh-01' } })
+  const projId = proj.json?.data?.id
+  check('创建项目（绑定 mock DSH 映射）', proj.status === 200 && proj.json?.ok === true && Boolean(projId), `id=${projId}`)
+  const projTask = await req('POST', `${PREFIX}/api/tasks`, { title: '冒烟项目任务', projectId: projId, nodeRef: { kind: 'mapping', mappingId: 'map-not-this-one' }, mode: 'chat' })
+  const projTaskId = projTask.json?.data?.id
+  check('项目任务忽略 nodeRef（节点以项目为准）', [200, 201].includes(projTask.status) && projTask.json?.data?.projectId === projId && !projTask.json?.data?.nodeRef, `nodeRef=${JSON.stringify(projTask.json?.data?.nodeRef ?? null)}`)
+  const projTaskRead = await req('GET', `${PREFIX}/api/tasks/${projTaskId}`)
+  check('项目任务回读仍无 nodeRef', projTaskRead.status === 200 && !projTaskRead.json?.data?.nodeRef)
+  const soloTask = await req('POST', `${PREFIX}/api/tasks`, { title: '冒烟单独任务', nodeRef: { kind: 'mapping', mappingId: 'map-dsh-01' }, mode: 'chat' })
+  check('单独任务保留 nodeRef（不误伤）', [200, 201].includes(soloTask.status) && soloTask.json?.data?.nodeRef?.mappingId === 'map-dsh-01')
+  if (soloTask.json?.data?.id) await req('DELETE', `${PREFIX}/api/tasks/${soloTask.json.data.id}`)
+  if (projTaskId) await req('DELETE', `${PREFIX}/api/tasks/${projTaskId}`)
+  if (projId) await req('DELETE', `${PREFIX}/api/projects/${projId}`)
+
   // ---------- 5.5 队列管理接口（编辑/删除/立即发送：不存在条目走 400 分支，验证路由与引擎接线） ----------
   const qSendMiss = await req('POST', `${PREFIX}/api/tasks/${taskId}/queue/send`, { turnId: 'turn-nope' })
   check('队列立即发送：不存在条目 400', qSendMiss.status === 400 && String(qSendMiss.json?.error || '').includes('排队消息不存在'))

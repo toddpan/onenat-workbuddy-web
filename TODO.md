@@ -46,7 +46,8 @@ UI 行为目前没有自动化浏览器测试：任务说明里的「验收」�
   - 打开已有任务时，`selectNode` / `applyReachableNodeDefault` 不得再改变模型目录。
   - 验收：build / typecheck / smoke 通过；在 `.ralph/progress.md` 写下手测步骤。
 
-- [ ] **P0-3** 项目任务的节点以项目为准
+- [x] **P0-3** 项目任务的节点以项目为准
+  - 完成：engine.createTask 带 projectId 时丢弃 nodeRef（+taskLog 说明，其它调用方均不带 projectId 已排查无误伤）；createNewTaskDirectly 项目任务不再下发 env.nodeRef；syncNodeChipToTask 先按 project.dshRef 回显（mapping/direct/项目摘要 nodeTitle 兜底）。smoke 新增 5.2 节 4 项断言，engine.test.ts 新增 1 用例。验证：npm run build / typecheck / smoke（63 项）/ test:unit（77 项）全过；未做浏览器手测
   - 依赖：P0-2
   - `createNewTaskDirectly`：项目任务不再带 `env.nodeRef`。
   - `syncNodeChipToTask`：项目任务按 `project.dshRef` 回显（核对 `/api/projects` 是否返回 `dshRef`）。

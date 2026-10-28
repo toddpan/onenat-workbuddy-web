@@ -8470,6 +8470,29 @@ function reloadCatalogIfExecNodeChanged() {
  */
 function syncNodeChipToTask(task) {
   try {
+    // 项目任务节点以项目为准（P0-3）：按 project.dshRef 回显（/api/projects 摘要带 dshRef + nodeTitle），
+    // 与引擎 taskExec / taskExecNodeId 的「项目 dshRef 优先」同口径；任务上的 nodeRef 已不再参与项目任务。
+    const pj = task && task.projectId ? (state.projects || []).find(function (x) { return x.id === task.projectId; }) : null;
+    const pref = pj && pj.dshRef;
+    if (pref && typeof pref === 'object') {
+      if (pref.kind === 'mapping' && pref.mappingId && dshNodeOptions().some(function (x) { return x.mappingId === pref.mappingId; })) {
+        if (nodeState.cur !== pref.mappingId) {
+          nodeState.cur = pref.mappingId;
+          state.taskEnv.nodeRef = { kind: 'mapping', mappingId: pref.mappingId };
+          setNodeBtnUi('节点: ' + nodeBtnLabel());
+        }
+        return true;
+      }
+      if (pref.kind === 'direct' && pref.apiBaseUrl) {
+        setNodeBtnUi('节点: 直连 ' + String(pref.apiBaseUrl).replace('https://', '').replace('http://', ''));
+        return true;
+      }
+      // app 型项目节点（或映射不在当前资源快照里）：回显目录解析出的节点名
+      if (pj.nodeTitle) {
+        setNodeBtnUi('节点: ' + pj.nodeTitle);
+        return true;
+      }
+    }
     const ref = task && task.nodeRef;
     if (!ref || typeof ref !== 'object') return false;
     if (ref.kind === 'mapping' && ref.mappingId && dshNodeOptions().some(function (x) { return x.mappingId === ref.mappingId; })) {
@@ -9228,7 +9251,8 @@ async function createNewTaskDirectly() {
     if (proj.skillNames.length) body.skillNames = proj.skillNames;
     if (proj.connectorIds.length) body.connectorIds = proj.connectorIds;
   }
-  if (env.nodeRef) body.nodeRef = env.nodeRef;
+  // 项目任务节点以项目为准（P0-3）：不再下发 env.nodeRef，执行节点由 project.dshRef 决定
+  if (!proj && env.nodeRef) body.nodeRef = env.nodeRef;
   // 无任务时在模型按钮选好的模型 → 任务级模型（engine.createTask 透传 input.model）
   if (env.model) body.model = env.model;
   if (env.connectorIds && env.connectorIds.length) body.connectorIds = env.connectorIds;
