@@ -11,8 +11,21 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { WorkStore } from './store.js'
+import { WorkStore, isNodeAbsolutePath } from './store.js'
 import type { WorkTask } from './types.js'
+
+// —— 工作目录「节点侧绝对路径」判断（Windows DSH 节点兼容） ——
+test('isNodeAbsolutePath: 接受 POSIX / Windows 盘符 / UNC 绝对路径', () => {
+  for (const ok of ['/data/x/workspace', '/', '/a', 'C:\\work\\demo', 'C:/work/demo', 'd:/work', '\\\\server\\share', '//server/share', 'Z:\\tmp']) {
+    assert.equal(isNodeAbsolutePath(ok), true, ok)
+  }
+})
+
+test('isNodeAbsolutePath: 拒绝相对路径与无根盘符', () => {
+  for (const bad of ['rel/path', './tmp', '../tmp', 'work', 'C:', 'c::\\x', '', '   ']) {
+    assert.equal(isNodeAbsolutePath(bad), false, bad)
+  }
+})
 
 // 测试进程内禁止构造函数自带的 30s 启动扫描（改由用例直接 await archiveSweep，保证确定性）
 process.env.WORKBUDDY_ARCHIVE_BOOT_DELAY_MS = '3600000'

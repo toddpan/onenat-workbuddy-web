@@ -22,6 +22,7 @@ import type { PromptComposer } from './prompt-composer.js'
 import { interactionGuard } from './prompt-composer.js'
 import type { Orchestrator } from './orchestrator.js'
 import type { WorkStore } from './store.js'
+import { isNodeAbsolutePath, WORK_DIR_NOT_ABSOLUTE_MSG } from './store.js'
 import { DshClient } from './remote-client.js'
 import { SshInputError, execOnSshResource, maskSshResource, normalizeSshResource, testSshResource } from './ssh-resources.js'
 import type { SshResourceStore } from './ssh-store.js'
@@ -458,7 +459,7 @@ export class WorkBuddyRouter {
     const model = String(body?.model || '').trim()
     if (model && !model.includes('/')) throw new Error('模型格式应为 provider/model（如 zai-coding-cn/glm-5.3-flash），留空跟随全局调度模型')
     const workDir = String(body?.workDir || '').trim()
-    if (workDir && !workDir.startsWith('/')) throw new Error('工作目录必须是绝对路径（以 / 开头）')
+    if (workDir && !isNodeAbsolutePath(workDir)) throw new Error(WORK_DIR_NOT_ABSOLUTE_MSG)
     const skills = Array.isArray(body?.skills)
       ? Array.from(new Set((body.skills as any[]).map((s) => String(s).trim()).filter(Boolean)))
       : []
@@ -2112,8 +2113,8 @@ export class WorkBuddyRouter {
         return true
       }
       const workDir = String(body?.workDir ?? '').trim()
-      if (workDir && !workDir.startsWith('/')) {
-        this.sendJson(res, 400, { ok: false, error: '工作目录必须是绝对路径（以 / 开头）' })
+      if (workDir && !isNodeAbsolutePath(workDir)) {
+        this.sendJson(res, 400, { ok: false, error: WORK_DIR_NOT_ABSOLUTE_MSG })
         return true
       }
       // expertSource 是服务端权威打的来源快照：① 客户端显式带时校验专家存在才保留（防伪造来源）；
@@ -4115,8 +4116,8 @@ export class WorkBuddyRouter {
       return true
     }
     const workDir = String(body?.workDir ?? '').trim()
-    if (workDir && !workDir.startsWith('/')) {
-      this.sendJson(res, 400, { ok: false, error: '工作目录必须是绝对路径（以 / 开头）' })
+    if (workDir && !isNodeAbsolutePath(workDir)) {
+      this.sendJson(res, 400, { ok: false, error: WORK_DIR_NOT_ABSOLUTE_MSG })
       return true
     }
     const saved = this.store.upsertAgent({

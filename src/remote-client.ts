@@ -60,6 +60,8 @@ export interface PromptResult {
   via?: 'sse' | 'sync' | 'poll'
   /** SSE 是否收到 turn_end（false = 流提前终结，content 可能不完整，调用方应对账兜底） */
   complete?: boolean
+  /** 流以 done 帧正常收尾（未发 turn_end 的节点如 pi-web-service）⇒ 回合确已结束，可立即对账而非长轮询 */
+  streamDone?: boolean
   /** 远端不支持 prompt-stream（旧版）⇒ 调用方降级同步 prompt */
   sseUnsupported?: boolean
   /** 远端会话被 ask_user_question 挂起（等待答复桥解锁），错误为快速失败而非真失败 */
@@ -1434,7 +1436,7 @@ export class DshClient {
         return { ok: false, error: 'SSE 流在产出任何内容前结束', sseUnsupported: false }
       }
       // complete=false：流被远端/网络提前收掉且未收到 turn_end，内容可能缺尾，交由调用方对账
-      return { ok: true, content, reasoning: reasoning || undefined, via: 'sse', usage, complete: sawTurnEnd }
+      return { ok: true, content, reasoning: reasoning || undefined, via: 'sse', usage, complete: sawTurnEnd, streamDone: done }
     } catch (err: any) {
       if (err?.name === 'AbortError') return { ok: false, content, reasoning, complete: false, error: '已中止', timedOut: true }
       return { ok: false, content, reasoning, complete: false, error: err?.message || 'SSE 流失败' }

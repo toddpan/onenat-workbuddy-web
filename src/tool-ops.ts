@@ -15,6 +15,7 @@ import type { PromptComposer } from './prompt-composer.js'
 import type { Orchestrator } from './orchestrator.js'
 import type { MonitorService } from './monitor.js'
 import type { WorkStore } from './store.js'
+import { isNodeAbsolutePath, WORK_DIR_NOT_ABSOLUTE_MSG } from './store.js'
 import type { SshResourceStore } from './ssh-store.js'
 import type { ScheduleRunner } from './scheduler.js'
 import { normalizeRule, nextRun, ruleText } from './scheduler.js'
@@ -233,6 +234,9 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
         if (!agent?.name) return JSON.stringify({ ok: false, error: '缺少 name' })
         const dshRef = normalizeDshRef(agent.dshRef || (agent.apiBaseUrl ? { kind: 'direct', apiBaseUrl: agent.apiBaseUrl } : undefined))
         if ('error' in dshRef) return JSON.stringify({ ok: false, error: dshRef.error })
+        // 工作目录与 HTTP 通道同规则：POSIX / Windows 盘符 / UNC 均可，纯相对路径拒绝
+        const workDirIn = String(agent?.workDir ?? '').trim()
+        if (workDirIn && !isNodeAbsolutePath(workDirIn)) return JSON.stringify({ ok: false, error: WORK_DIR_NOT_ABSOLUTE_MSG })
         const saved = store.upsertAgent({ ...agent, dshRef })
         return JSON.stringify({ ok: true, message: '子智能体已保存', agent: { ...saved, apiKey: saved.apiKey ? '***' : undefined } }, null, 2)
       }

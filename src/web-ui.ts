@@ -1387,6 +1387,28 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .bind-row { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-bottom: 8px; background: var(--bg); }
 .modal-mask { position: fixed; inset: 0; background: rgba(15,23,42,.35); z-index: 50; display: none; align-items: center; justify-content: center; }
 .modal-mask.on { display: flex; }
+
+/* ---- ⌘K 命令面板：视图/操作/会话/子智能体/项目 一站式直达 ---- */
+.cmdk-mask { position: fixed; inset: 0; background: rgba(15,23,42,.28); z-index: 60; display: none; align-items: flex-start; justify-content: center; padding-top: 12vh; }
+.cmdk-mask.on { display: flex; }
+.cmdk { width: min(620px, calc(100vw - 32px)); max-height: 64vh; background: var(--bg); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 48px rgba(15,23,42,.18), 0 4px 16px rgba(15,23,42,.08); display: flex; flex-direction: column; overflow: hidden; }
+.cmdk-input-row { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line); flex: none; }
+.cmdk-input-row > svg { flex: none; width: 16px; height: 16px; color: var(--tx3); }
+.cmdk-input { flex: 1; min-width: 0; border: none; outline: none; font-size: 15px; color: var(--tx); background: transparent; }
+.cmdk-input::placeholder { color: var(--tx3); }
+.cmdk-kbd { flex: none; font-size: 11px; color: var(--tx3); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; background: var(--bg2); }
+.cmdk-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 6px; }
+.cmdk-group { font-size: 11px; color: var(--tx3); padding: 8px 10px 4px; }
+.cmdk-item { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 10px; cursor: pointer; font-size: 13.5px; color: var(--tx); }
+.cmdk-item .ic { flex: none; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; border-radius: 8px; background: var(--bg2); font-size: 14px; }
+.cmdk-item .lb { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmdk-item .sub { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--tx3); }
+.cmdk-item.sel { background: var(--pri-light); }
+.cmdk-item.sel .ic { background: var(--bg3); }
+.cmdk-empty { padding: 28px 0 34px; text-align: center; color: var(--tx3); font-size: 12.5px; }
+.cmdk-foot { display: flex; gap: 14px; padding: 8px 14px; border-top: 1px solid var(--line); font-size: 11px; color: var(--tx3); flex: none; }
+.cmdk-foot b { font-weight: 500; color: var(--tx2); background: var(--bg2); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; margin-right: 2px; }
+@media (max-width: 768px) { .cmdk-mask { padding-top: 8vh; } .cmdk-item .sub { display: none; } }
 .modal { width: 620px; max-width: 94vw; max-height: 86vh; background: var(--bg2); border: 1px solid var(--line2); border-radius: 14px; display: flex; flex-direction: column; overflow: hidden; }
 .modal-head { padding: 14px 20px; border-bottom: 1px solid var(--line); display: flex; align-items: center; }
 .modal-head b { flex: 1; font-size: 15px; }
@@ -2078,6 +2100,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
     <div class="hspacer"></div>
     <div class="chip" id="onenat-chip"><span class="dot" id="onenat-dot"></span><span id="onenat-text">ONENAT 连接中…</span></div>
     <div class="chip" id="version-chip" title="OneNat WorkBuddy 版本（日期发布）"><span class="ver-ic">🏷</span><span id="version-text">v${VERSION}</span></div>
+    <button class="mini-btn" id="cmdk-btn" title="命令面板（⌘K / Ctrl+K）：搜索视图、会话、子智能体、项目与操作">⌘K</button>
     ${AUTH_ENABLED ? '<button class="mini-btn" id="logout-btn" title="退出登录">⎋ 退出</button>' : ''}
   </header>
   <main>
@@ -2479,6 +2502,16 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
         <h3 style="margin-bottom:12px">审计日志（管理员 · 最近 100 条）</h3>
         <div style="max-height:260px;overflow:auto"><table class="res" id="audit-table" style="width:100%;font-size:11.5px"><thead><tr><th>时间</th><th>操作者</th><th>动作</th><th>对象</th><th>详情</th></tr></thead><tbody id="audit-body"><tr><td colspan="5" style="color:var(--tx3)">加载中…</td></tr></tbody></table></div>
       </div>
+      <div class="card" id="ssh-pool-card" style="display:none">
+        <h3 style="margin-bottom:4px">SSH 资源池（管理员）</h3>
+        <div style="font-size:11.5px;color:var(--tx3);margin-bottom:10px">连接器池：智能体/项目可勾选绑定，任务派发时注入 SSH 入口。列表仅显示是否已配置凭证（hasPassword / hasPrivateKey），明文不回传。</div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+          <span class="hspacer"></span>
+          <button class="btn pri" id="btn-ssh-new" style="white-space:nowrap">＋ 新增 SSH 资源</button>
+          <button class="btn" id="btn-ssh-refresh" style="white-space:nowrap">↻ 刷新</button>
+        </div>
+        <div style="max-height:260px;overflow:auto"><table class="res" id="ssh-table" style="width:100%;font-size:12px"><thead><tr><th>名称</th><th>主机</th><th>账号</th><th>凭证</th><th>最近测试</th><th>操作</th></tr></thead><tbody id="ssh-body"><tr><td colspan="6" style="color:var(--tx3)">加载中…</td></tr></tbody></table></div>
+      </div>
       <div class="card ai-card">
         <h3 style="margin-bottom:12px">AI 接入（一键安装 · HTTP + MCP 双通道）</h3>
         <div style="display:flex;gap:8px;align-items:center">
@@ -2556,6 +2589,17 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 <aside class="drawer" id="drawer"><div class="drawer-head"><b id="drawer-title">详情</b><button class="mini-btn" id="drawer-close">✕ 关闭</button></div><div class="drawer-body" id="drawer-body"></div></aside>
 
 <div class="modal-mask" id="modal-mask"><div class="modal"><div class="modal-head"><b id="modal-title"></b><button class="mini-btn" onclick="closeModal()">✕</button></div><div class="modal-body" id="modal-body"></div><div class="modal-foot" id="modal-foot"></div></div></div>
+<div class="cmdk-mask" id="cmdk-mask">
+  <div class="cmdk" role="dialog" aria-modal="true" aria-label="命令面板">
+    <div class="cmdk-input-row">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="7" cy="7" r="4.6"/><path d="M10.4 10.4L14 14" stroke-linecap="round"/></svg>
+      <input id="cmdk-input" class="cmdk-input" placeholder="搜索视图 / 会话 / 子智能体 / 项目 / 操作…" autocomplete="off" spellcheck="false" />
+      <span class="cmdk-kbd">Esc 关闭</span>
+    </div>
+    <div class="cmdk-list" id="cmdk-list" role="listbox"></div>
+    <div class="cmdk-foot"><span><b>↑↓</b>选择</span><span><b>Enter</b>执行</span><span><b>Esc</b>关闭</span><span><b>⌘K / Ctrl+K</b>随时呼出</span></div>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -3792,8 +3836,7 @@ async function monOpenTask(taskId) {
   $('modal-foot').innerHTML = foot + ' <button class="btn pri" id="mtd-open-work">💬 在工作台打开完整对话</button>';
   $('mtd-open-work').addEventListener('click', function() {
     closeModal();
-    switchView('work');
-    openTask(taskId);
+    jumpToTask(taskId);
   });
 }
 
@@ -4449,9 +4492,18 @@ async function openProjectDrawer(projectId, preset) {
     if (a.kind === 'mapping') return a.mappingId === b.mappingId;
     if (a.kind === 'app') return a.appId === b.appId;
     if (a.kind === 'direct') return a.apiBaseUrl === b.apiBaseUrl;
-    return false;
+    // 未知 ref 形态（如直连 ref 带 url 而非 apiBaseUrl）：按内容整包比较做兜底回显
+    return JSON.stringify(a) === JSON.stringify(b);
   };
-  const bodyHtml =
+  // 编辑态兜底（保存无响应第二层）：项目既有节点不在候选里（映射被删除 / 直连 ref 非标准形态 /
+  // ONENAT 资源目录为空）时，下拉会没有可选项 → 保存时 JSON.parse('') 直接抛错静默失败。
+  // 保底追加「当前节点」选项，编辑时至少能原样保存。
+  if (isEdit && v.nodeRef && !nodeOptions.some(function (n) { return sameRef(v.nodeRef, n.ref); })) {
+    nodeOptions.push({ label: '当前节点（保留原配置）', tunnel: '', ref: v.nodeRef });
+  }
+  // 编辑态会在下方追加「项目成员」字段；const 会让 openProjectDrawer 对 const 赋值直接抛
+  // TypeError: Assignment to constant variable. —— 「⚙ 编辑」按钮点击后整段静默无反应（新建不追加故未暴露）
+  let bodyHtml =
     '<div class="field" style="margin-bottom:10px"><label>项目名称</label><input id="pj-f-name" value="' + esc(v.name) + '" placeholder="例：KB 平台交付"></div>' +
     '<div class="field" style="margin-bottom:10px"><label>DSH 节点</label><select id="pj-f-node" class="cfg-sel">' +
     (function () {
@@ -4674,6 +4726,16 @@ if (navMoreBtn && navMore) {
     if (!e.target.closest('#nav-more')) navMore.classList.remove('open');
   });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeNavMore(); });
+  // Esc 统一收起 composer 三个下拉（模型 / 主智能体 / 节点）——与导航「更多」菜单行为一致
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    var anyPop = false;
+    ['model-pop', 'main-agent-pop', 'node-pop'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el && el.classList.contains('on')) { el.classList.remove('on'); anyPop = true; }
+    });
+    if (anyPop) e.stopPropagation();
+  });
 }
 document.querySelectorAll('#nav button').forEach(btn => {
   if (btn.id === 'nav-more-btn') return; // 更多按钮已单独绑定 toggle，走这里会刚展开就被 closeNavMore 关掉
@@ -4704,7 +4766,7 @@ function switchView(v) {
   if (location.hash !== h) { try { history.replaceState(null, '', h); } catch (e) { location.hash = h; } }
 }
 window.addEventListener('hashchange', () => {
-  var v = (location.hash || '').replace('#', '') || 'work';
+  var v = ((location.hash || '').replace('#', '').split('?')[0]) || 'work';
   if (v !== currentView && document.getElementById('view-' + v)) switchView(v);
 });
 
@@ -4795,8 +4857,9 @@ async function boot() {
   // 后台探测节点健康（TTL 门控），拿到结果后校正默认节点：不可达的默认节点不应被新任务选中
   void refreshNodeEngines(false).then(applyReachableNodeDefault).catch(function () {});
   renderTaskList();
-  // 按 hash 恢复刷新前的页签（#monitor / #voice / #settings …），无 hash 停在工作台
-  var initial = (location.hash || '').replace('#', '');
+  // 按 hash 恢复刷新前的页签（#monitor / #voice / #settings …），无 hash 停在工作台；
+  // hash 携带查询参数（如 #monitor?from=share）时只取视图段
+  var initial = ((location.hash || '').replace('#', '').split('?')[0]);
   if (initial && document.getElementById('view-' + initial)) switchView(initial);
   setInterval(loadTasksQuiet, 4000);
   // ONENAT 状态自愈：资源目录未加载成功时每 8s 重试（覆盖启动瞬间网络抖动/服务重启窗口），成功或超 2 分钟后停止
@@ -5054,6 +5117,14 @@ function promptRenameTask(t) {
 
 // ---------- 对话回话交互（0ms 内存缓存瞬时呈现 + 分批渲染 + RAF 调度） ----------
 let openTaskSeq = 0;
+
+// ---------- 任务跨视图跳转（单一入口：任何视图里点到任务都统一走这里） ----------
+// openTask 只负责渲染聊天区、不切视图；各跨入口（监控/定时任务/归档/⌘K）必须先 switchView。
+// 此前归档页只调 openTask 导致聊天区在后台渲染、页面停在归档页 —— 统一收敛到本函数避免再漏。
+async function jumpToTask(taskId) {
+  switchView('work');
+  await openTask(taskId);
+}
 
 async function openTask(taskId) {
   if (state.currentTaskId === taskId && state.taskCache.has(taskId)) {
@@ -5416,8 +5487,9 @@ function connectStream(taskId) {
   });
 
   es.addEventListener('task_end', e => {
+    let ev = null;
     try {
-      const ev = JSON.parse(e.data);
+      ev = JSON.parse(e.data);
       if (ev.task) {
         state.taskCache.set(ev.task.id, ev.task);
         if (ev.task.id === state.currentTaskId) {
@@ -5435,8 +5507,8 @@ function connectStream(taskId) {
       if (c) c.remove();
     }
     removeTurnStatus();
-    // 迟到的旧会话 task_end 不能关掉新会话的停止键（切会话瞬间的竞态）
-    if (!ev.task || ev.task.id === state.currentTaskId) setSending(false);
+    // 迟到的旧会话 task_end 不能关掉新会话的停止键（切会话瞬间的竞态）；ev 解析失败视作本会话结束
+    if (!(ev && ev.task) || ev.task.id === state.currentTaskId) setSending(false);
     markTrajDirty();
   });
 
@@ -7314,6 +7386,8 @@ $('btn-stop').addEventListener('click', async () => {
 // supported 三态：undefined=未探测（先按可见处理）/ true / false（远端节点未启用该服务 → 隐藏入口，
 // 避免用户点一个必然失败的按钮；dsh-web-service 对「宿主未装载子系统」返回 501，不是版本过低）
 var collab = { goal: null, planActive: false, planPending: false, goalSupported: undefined, planSupported: undefined, compactSupported: undefined, hasSession: undefined, permSupported: undefined, permission: null };
+// PUT /plan 实测不支持（如 pi 节点 GET 仍报 supported:true）的任务：sticky 隐藏入口，避免「点击失败→按钮又回来」循环
+var collabPlanPutUnsupported = {};
 
 async function refreshCollab() {
   var tid = state.currentTaskId;
@@ -7327,7 +7401,7 @@ async function refreshCollab() {
   collab.goalSupported = (grv && grv.supported === false) ? false : true;
   collab.planActive = !!(prv && prv.ok && prv.data && prv.data.active);
   collab.planPending = !!(prv && prv.ok && prv.data && prv.data.pending);
-  collab.planSupported = (prv && prv.supported === false) ? false : true;
+  collab.planSupported = collabPlanPutUnsupported[tid] ? false : ((prv && prv.supported === false) ? false : true);
   // 没有远端会话（草稿/首轮失败）时三个协作入口都不可用：否则点开只会报「任务尚无可用的远端会话」
   var tk = state.task && state.task.id === tid ? state.task : state.taskCache.get(tid);
   collab.hasSession = !!(tk && tk.sessions && Object.keys(tk.sessions).length);
@@ -7498,6 +7572,7 @@ async function togglePlanMode() {
     toast(next ? '📋 计划模式：' + msg : '已退出计划模式' + (msg ? '：' + msg : ''));
   } else {
     if (r && r.supported === false) {
+      collabPlanPutUnsupported[tid] = true;
       collab.planSupported = false;
       renderCollabState();
     }
@@ -9638,7 +9713,7 @@ function openAgentDrawer(agent, copyMode) {
     '</select></div>' +
     '<div class="field"><label>Provider</label><input id="ag-provider" value="' + esc(agent && agent.provider || '') + '" placeholder="远端默认"></div>' +
     '<div class="field"><label>Model</label><input id="ag-model" value="' + esc(agent && agent.model || '') + '" placeholder="远端默认"></div></div>' +
-    '<div class="field"><label>工作目录（绝对路径 · 对齐 DSH 工作区）</label><div style="display:flex;gap:8px"><input id="ag-workdir" value="' + esc(agent && agent.workDir || '') + '" placeholder="如 /data/panzj/workspace/demo"><button class="mini-btn" id="ag-browse" style="flex:none;padding:10px 12px" title="浏览远端目录并选择">📁 浏览</button></div>' +
+    '<div class="field"><label>工作目录（节点侧绝对路径 · 对齐 DSH 工作区；Windows 节点用盘符路径）</label><div style="display:flex;gap:8px"><input id="ag-workdir" value="' + esc(agent && agent.workDir || '') + '" placeholder="如 /data/x/workspace/demo 或 D:/work/demo (Windows 节点)"><button class="mini-btn" id="ag-browse" style="flex:none;padding:10px 12px" title="浏览远端目录并选择">📁 浏览</button></div>' +
     '<div class="hint">该成员远端会话的 cwd：文件工具根目录、附件落盘处。</div></div>' +
     '<div class="field"><label>专家角色 role（花名册与卡片展示；空 = 通用执行者）</label><input id="ag-role" value="' + esc(agent && agent.role || '') + '" placeholder="如: 需求分析师 / 评审专家"></div>' +
     '<div class="field"><label>角色提示词 systemPrompt（职责与约束）</label><textarea id="ag-sp" placeholder="你是……负责……">' + esc(agent && agent.systemPrompt || '') + '</textarea></div>' +
@@ -10228,8 +10303,8 @@ async function openScheduleDrawer(s, tpl, copyMode) {
     '<div class="field"><label>执行模型（从所选 DSH 节点获取，无人值守建议固定稳定模型）</label>' +
     '<select id="sc-model" data-current="' + esc(s && s.model || '') + '"><option value="">加载节点模型中…</option></select>' +
     '<div class="hint" id="sc-model-hint">主会话与编排汇总使用该模型，不受模型按钮切换影响；留空跟随全局调度模型。</div></div>' +
-    '<div class="field"><label>工作目录（绝对路径 · 主会话 cwd，从远程 DSH 节点浏览选择）</label>' +
-    '<div style="display:flex;gap:8px"><input id="sc-workdir" style="font-family:var(--mono);flex:1" value="' + esc(s && s.workDir || '') + '" placeholder="/workspace/xxx">' +
+    '<div class="field"><label>工作目录（节点侧绝对路径 · 主会话 cwd，从远程 DSH 节点浏览选择；Windows 节点用盘符路径）</label>' +
+    '<div style="display:flex;gap:8px"><input id="sc-workdir" style="font-family:var(--mono);flex:1" value="' + esc(s && s.workDir || '') + '" placeholder="/workspace/xxx 或 D:/work/demo (Windows 节点)">' +
     '<button class="mini-btn" id="sc-browse" style="flex:none;padding:10px 12px" title="浏览远端目录并选择">📁 浏览节点目录</button></div>' +
     '<div class="hint">派生任务的主会话在该目录中执行（文件工具根目录、附件落盘处）；留空用远端默认。</div></div>' +
     '<div class="field"><label>技能绑定（目标节点已安装技能 · 勾选后派发以 /名 手势加载，最多 8 个）</label>' +
@@ -10474,6 +10549,18 @@ async function openScheduleDrawer(s, tpl, copyMode) {
     }
   });
 }
+/**
+ * 节点侧绝对路径判断（与 store.ts isNodeAbsolutePath 同语义，前端轻量版）：
+ * POSIX（/…）、UNC（\\…）、Windows 盘符（C:\ 或 C:/…）均合法；纯相对路径拒绝。
+ * 反斜杠经 String.fromCharCode(92) 取得，规避模板字符串转义。
+ */
+function isNodeAbsDir(v) {
+  const s = String(v || '');
+  if (!s) return false;
+  const BS = String.fromCharCode(92);
+  if (s.charAt(0) === '/' || s.charAt(0) === BS) return true;
+  return s.charAt(1) === ':' && (s.charAt(2) === '/' || s.charAt(2) === BS) && /[A-Za-z]/.test(s.charAt(0));
+}
 function collectSchedule(existing) {
   const name = $('sc-name').value.trim();
   if (!name) { toast('缺少名称', true); return null; }
@@ -10513,7 +10600,7 @@ function collectSchedule(existing) {
   }
   const model = ($('sc-model') || { value: '' }).value;
   const workDir = ($('sc-workdir') || { value: '' }).value.trim();
-  if (workDir && !workDir.startsWith('/')) { toast('工作目录必须是绝对路径（以 / 开头）', true); return null; }
+  if (workDir && !isNodeAbsDir(workDir)) { toast('工作目录必须是绝对路径（POSIX 以 / 开头；Windows 节点可用盘符路径，如 D:/work/demo）', true); return null; }
   const payload = { name, agentIds, nodeMappingId, model: model || undefined, workDir, skills: Array.from(document.querySelectorAll('.sc-skill:checked')).map(x => x.value), rule, message, enabled: existing ? existing.enabled : true };
   const desc = $('sc-desc').value.trim();
   if (desc) payload.description = desc;
@@ -10617,8 +10704,7 @@ function renderScheduleDetail(s, tab, keepScroll) {
     }).join('');
     tb.querySelectorAll('[data-task]').forEach(b => b.addEventListener('click', () => {
       closeDrawer();
-      switchView('work');
-      openTask(b.dataset.task);
+      jumpToTask(b.dataset.task);
     }));
   }
   if (keepScroll) body.scrollTop = scrollTop;
@@ -11797,6 +11883,132 @@ function renderSettings() {
   $('set-refresh').value = s.onenat.autoRefreshMs || 60000;
   $('set-ai-token').value = s.aiToken || '';
   renderAiInstall();
+  // SSH 池卡随设置页打开刷新（管理员卡；未登录 me 时静默跳过）
+  if (document.getElementById('ssh-pool-card')?.style.display !== 'none') loadSshResources();
+}
+
+// ---------- SSH 资源池管理（设置区 · 管理员）：CRUD + 真实连接测试 + 远程执行 ----------
+function sshTestEcho(r) {
+  if (r.lastTestedAt === undefined || r.lastTestedAt === null) return '<span style="color:var(--tx3)">未测试</span>';
+  return r.lastTestOk
+    ? '<span style="color:#1f8f62">✓ 通过 · ' + fmtTime(r.lastTestedAt) + '</span>'
+    : '<span style="color:var(--err)" title="' + esc(r.lastTestError || '') + '">✗ 失败 · ' + fmtTime(r.lastTestedAt) + '</span>';
+}
+async function loadSshResources() {
+  if (!document.getElementById('ssh-body')) return;
+  const r = await api('/ssh-resources');
+  const body = $('ssh-body');
+  if (!r.ok) { body.innerHTML = '<tr><td colspan="6" style="color:var(--err)">' + esc(r.error || '加载失败') + '</td></tr>'; return; }
+  const list = r.data || [];
+  if (!list.length) { body.innerHTML = '<tr><td colspan="6" style="color:var(--tx3)">池为空 —— 点「＋ 新增 SSH 资源」添加第一台主机。</td></tr>'; return; }
+  body.innerHTML = list.map(function (x) {
+    const cred = (x.hasPassword ? '🔑密码 ' : '') + (x.hasPrivateKey ? '🗝密钥 ' : '') + (x.hasPassphrase ? '(#)' : '') || '<span style="color:var(--err)">未配置</span>';
+    return '<tr>' +
+      '<td>' + esc(x.name) + '</td>' +
+      '<td style="font-family:var(--mono)">' + esc(x.host) + ':' + esc(x.port || 22) + '</td>' +
+      '<td>' + esc(x.username) + '</td>' +
+      '<td>' + cred + '</td>' +
+      '<td>' + sshTestEcho(x) + '</td>' +
+      '<td style="white-space:nowrap">' +
+      '<button class="mini-btn" data-ssh="test" data-id="' + esc(x.id) + '">测试</button> ' +
+      '<button class="mini-btn" data-ssh="exec" data-id="' + esc(x.id) + '">执行</button> ' +
+      '<button class="mini-btn" data-ssh="edit" data-id="' + esc(x.id) + '">编辑</button> ' +
+      '<button class="mini-btn" data-ssh="del" data-id="' + esc(x.id) + '" style="color:var(--err)">删除</button>' +
+      '</td></tr>';
+  }).join('');
+  body.querySelectorAll('[data-ssh]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      const item = list.find(function (x) { return x.id === b.dataset.id; });
+      if (!item) return;
+      if (b.dataset.ssh === 'test') sshTestResource(item);
+      else if (b.dataset.ssh === 'exec') sshExecDialog(item);
+      else if (b.dataset.ssh === 'edit') sshEditDialog(item);
+      else if (b.dataset.ssh === 'del') sshDeleteResource(item);
+    });
+  });
+}
+async function sshTestResource(item) {
+  toast('🔍 正在测试 ' + item.name + ' …');
+  const r = await api('/ssh-resources/' + item.id + '/test', { method: 'POST', body: '{}' });
+  if (r.ok && r.data) {
+    const d = r.data;
+    toast(d.ok ? '✓ ' + item.name + ' 连接测试通过（TCP ' + (d.tcpReachable ? '可达' : '?') + (d.authOk === false ? ' · 认证未验证' : ' · 认证通过') + '）' : '✗ 测试失败：' + (d.error || '未知原因'), !d.ok);
+  } else toast(r.error || '测试请求失败', true);
+  loadSshResources();
+}
+function sshEditDialog(item) {
+  const isNew = !item;
+  openModal(isNew ? '新增 SSH 资源' : '编辑 SSH 资源 · ' + (item.name || ''),
+    '<div class="grid3">' +
+    '<div class="field"><label>名称 *</label><input id="ssh-f-name" value="' + esc(item && item.name || '') + '" placeholder="如: 数据库跳板机"></div>' +
+    '<div class="field"><label>主机 *</label><input id="ssh-f-host" value="' + esc(item && item.host || '') + '" placeholder="IP 或主机名"></div>' +
+    '<div class="field"><label>端口</label><input id="ssh-f-port" type="number" value="' + esc(item && item.port || 22) + '"></div>' +
+    '</div>' +
+    '<div class="grid3" style="margin-top:8px">' +
+    '<div class="field"><label>登录账号 *</label><input id="ssh-f-user" value="' + esc(item && item.username || '') + '"></div>' +
+    '<div class="field"><label>认证方式</label><select id="ssh-f-authtype">' +
+    '<option value="password"' + (item && item.authType !== 'key' ? ' selected' : '') + '>密码</option>' +
+    '<option value="key"' + (item && item.authType === 'key' ? ' selected' : '') + '>私钥</option>' +
+    '</select></div>' +
+    '<div class="field"><label>用途备注</label><input id="ssh-f-notes" value="' + esc(item && item.notes || '') + '"></div>' +
+    '</div>' +
+    '<div class="field" style="margin-top:8px"><label>密码' + (item && item.hasPassword ? '（已配置，留空保持不变）' : ' *') + '</label><input id="ssh-f-password" type="password" placeholder="' + (item && item.hasPassword ? '••••••••' : '登录密码') + '"></div>' +
+    '<div class="field" style="margin-top:8px"><label>私钥（PEM）' + (item && item.hasPrivateKey ? '（已配置，留空保持不变）' : '') + '</label><textarea id="ssh-f-pk" rows="4" style="font-family:var(--mono)" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></div>' +
+    '<div class="field" style="margin-top:8px"><label>私钥口令 passphrase（可选）</label><input id="ssh-f-pp" type="password"></div>',
+    [
+      { label: '取消', cls: '', act: function () { closeModal(); } },
+      { label: isNew ? '创建' : '保存', cls: 'pri', act: async function () {
+        const body = {
+          id: item && item.id,
+          name: $('ssh-f-name').value.trim(),
+          host: $('ssh-f-host').value.trim(),
+          port: Number($('ssh-f-port').value) || 22,
+          username: $('ssh-f-user').value.trim(),
+          authType: $('ssh-f-authtype').value,
+          notes: $('ssh-f-notes').value.trim(),
+        };
+        const pw = $('ssh-f-password').value;
+        const pk = $('ssh-f-pk').value.trim();
+        const pp = $('ssh-f-pp').value;
+        if (pw) body.password = pw;
+        if (pk) body.privateKey = pk;
+        if (pp) body.passphrase = pp;
+        const r = await api('/ssh-resources', { method: 'POST', body: JSON.stringify(body) });
+        if (!r.ok) { toast(r.error || '保存失败', true); return; }
+        toast('✓ SSH 资源已保存');
+        closeModal();
+        loadSshResources();
+      } },
+    ]);
+}
+function sshExecDialog(item) {
+  openModal('远程执行 · ' + item.name + '（' + item.username + '@' + item.host + ':' + (item.port || 22) + '）',
+    '<div class="field"><label>Shell 命令（默认 30s 超时）</label><textarea id="ssh-x-cmd" rows="3" style="font-family:var(--mono)" placeholder="uname -a && uptime"></textarea></div>' +
+    '<div id="ssh-x-out" style="margin-top:10px;font-family:var(--mono);font-size:11.5px;white-space:pre-wrap;background:var(--bg3);border-radius:8px;padding:10px;display:none;max-height:280px;overflow:auto"></div>',
+    [
+      { label: '关闭', cls: '', act: function () { closeModal(); } },
+      { label: '▶ 执行', cls: 'pri', act: async function () {
+        const cmd = $('ssh-x-cmd').value.trim();
+        if (!cmd) { toast('请输入命令', true); return; }
+        const outEl = $('ssh-x-out');
+        outEl.style.display = 'block';
+        outEl.textContent = '⏳ 执行中…';
+        const r = await api('/ssh-resources/' + item.id + '/exec', { method: 'POST', body: JSON.stringify({ command: cmd, timeoutMs: 30000 }) });
+        if (!r.ok) { outEl.textContent = '✗ ' + (r.error || '执行失败'); return; }
+        const d = r.data || {};
+        outEl.textContent =
+          'exitCode: ' + d.exitCode + ' · ' + ((d.durationMs || 0) / 1000).toFixed(1) + 's\\n' +
+          '--- stdout ---\\n' + (d.stdout || '(空)') + '\\n' +
+          (d.stderr ? '--- stderr ---\\n' + d.stderr : '');
+      } },
+    ]);
+}
+async function sshDeleteResource(item) {
+  if (!window.confirm('确定删除 SSH 资源「' + item.name + '」？（已绑定它的智能体/项目将失去该连接器）')) return;
+  const r = await api('/ssh-resources/' + item.id, { method: 'DELETE' });
+  if (!r.ok) { toast(r.error || '删除失败', true); return; }
+  toast('✓ 已删除');
+  loadSshResources();
 }
 /** AI 安装提示词（合并版）：以浏览器当前访问地址为准（反代/远程场景自动匹配），内嵌 APIKEY。
  *  两步接入——第 1 步一键脚本（所有有终端的 AI）：双通道技能 + 自检；第 2 步 MCP 原生注册（仅 MCP 宿主叠加）。
@@ -11868,6 +12080,17 @@ state.me = null;
       state.me = r.data;
       var card = document.getElementById('users-card');
       if (card && r.data.role === 'admin') { card.style.display = ''; loadUsers(); loadMailStatus(); }
+      var sshCard = document.getElementById('ssh-pool-card');
+      if (sshCard && r.data.role === 'admin') {
+        sshCard.style.display = '';
+        const sshNew = document.getElementById('btn-ssh-new');
+        if (sshNew && !sshNew._wired) {
+          sshNew._wired = true;
+          sshNew.addEventListener('click', function () { sshEditDialog(null); });
+          document.getElementById('btn-ssh-refresh').addEventListener('click', loadSshResources);
+        }
+        if (document.getElementById('view-settings').classList.contains('on')) loadSshResources();
+      }
       var acct = document.getElementById('account-card');
       if (acct) {
         acct.style.display = '';
@@ -12304,7 +12527,7 @@ function renderArchiveList() {
     box.querySelectorAll('.arch-sess').forEach(row => {
       const t = g.items.find(x => x.id === row.dataset.id);
       if (!t) return;
-      row.querySelector('.arch-sess-main').addEventListener('click', () => openTask(t.id));
+      row.querySelector('.arch-sess-main').addEventListener('click', () => jumpToTask(t.id));
       row.querySelector('[data-a=restore]').addEventListener('click', () => archToggleOne(t));
       row.querySelector('[data-a=delete]').addEventListener('click', () => archDeleteOne(t));
     });
@@ -12650,6 +12873,122 @@ function openDirBrowser(target, onPick) {
   $('db-open').addEventListener('click', () => { if (!st.path) { toast('尚未加载目录', true); return; } onPick(st.path); closeModal(); });
   load('');
 }
+
+// ---------- ⌘K 命令面板（视图 / 操作 / 会话 / 子智能体 / 项目 一站式直达） ----------
+const cmdk = { open: false, items: [], sel: 0 };
+function cmdkErrToast(e) { var m = (e && e.message) ? e.message : String(e); toast('操作失败：' + m, true); }
+function cmdkViewCmd(v, label, icon) { return { g: '视图', ic: icon, lb: label, kw: v, ord: 20, act: function () { switchView(v); } }; }
+function cmdkCommands(query) {
+  var cmds = [];
+  cmds.push({ g: '操作', ic: '✚', lb: '新建任务（免弹窗，立即开聊）', kw: 'new task create 新建 会话 开聊', ord: 1, act: function () { createNewTaskDirectly(); } });
+  cmds.push({ g: '操作', ic: '🎛', lb: '运行配置', kw: 'run config 专家 连接器 技能 节点 模型', ord: 2, act: function () { switchView('work'); openRunConfig('top'); } });
+  cmds.push(cmdkViewCmd('work', '工作台 · 任务会话', '💬'));
+  cmds.push(cmdkViewCmd('projects', '项目', '📦'));
+  cmds.push(cmdkViewCmd('monitor', '监控大屏', '📊'));
+  cmds.push(cmdkViewCmd('agents', '子智能体', '🤖'));
+  var moreViews = [
+    ['resources', '资源目录', '🗂'], ['library', '技能库', '📚'], ['plugins', '插件库', '🔌'],
+    ['voice', '语音助手', '🎙'], ['schedules', '定时任务', '⏰'], ['files', '文件管理', '📁'],
+    ['experts', '专家管理', '🧠'], ['archive', '归档管理', '🗄'], ['settings', '设置', '⚙️'],
+  ];
+  moreViews.forEach(function (m) { cmds.push(cmdkViewCmd(m[0], m[1], m[2])); });
+  var taskCap = query ? 60 : 8;
+  state.tasks.filter(function (t) { return !t.archivedAt; }).slice(0, taskCap).forEach(function (t) {
+    cmds.push({
+      g: '会话', ic: '💬', lb: t.title || t.id,
+      sub: t.lastPreview ? String(t.lastPreview).slice(0, 24) : fmtTime(t.updatedAt || t.createdAt),
+      ord: 30, act: function () { jumpToTask(t.id); },
+    });
+  });
+  state.agents.forEach(function (a) {
+    cmds.push({ g: '子智能体', ic: '🤖', lb: a.name || a.id, kw: describeDshRef(a), ord: 40, act: function () { switchView('agents'); openAgentDrawer(a); } });
+  });
+  state.projects.forEach(function (p) {
+    cmds.push({ g: '项目', ic: '📦', lb: p.name || p.id, sub: p.archived ? '已归档' : '', ord: 50, act: function () { enterProject(p.id); } });
+  });
+  return cmds;
+}
+function cmdkHay(c) { return (String(c.lb || '') + ' ' + String(c.kw || '')).toLowerCase(); }
+function cmdkMatch(c, words) {
+  var hay = cmdkHay(c);
+  for (var i = 0; i < words.length; i++) if (hay.indexOf(words[i]) < 0) return false;
+  return true;
+}
+function cmdkRank(c, q) {
+  var idx = String(c.lb || '').toLowerCase().indexOf(q);
+  if (idx === 0) return 0;
+  if (idx > 0) return 1;
+  return cmdkHay(c).indexOf(q) >= 0 ? 2 : 9;
+}
+function cmdkRender() {
+  var q = String($('cmdk-input').value || '').trim().toLowerCase();
+  var words = q ? q.split(/\\s+/) : [];
+  cmdk.items = cmdkCommands(q).filter(function (c) { return !q || cmdkMatch(c, words); });
+  if (q) cmdk.items.sort(function (a, b) { var r = cmdkRank(a, q) - cmdkRank(b, q); return r !== 0 ? r : a.ord - b.ord; });
+  cmdk.sel = cmdk.items.length ? Math.max(0, Math.min(cmdk.sel, cmdk.items.length - 1)) : 0;
+  var html = '', lastG = null;
+  for (var i = 0; i < cmdk.items.length; i++) {
+    var c = cmdk.items[i];
+    if (c.g !== lastG) { html += '<div class="cmdk-group">' + esc(c.g) + '</div>'; lastG = c.g; }
+    html += '<div class="cmdk-item' + (i === cmdk.sel ? ' sel' : '') + '" data-i="' + i + '" role="option">' +
+      '<span class="ic">' + c.ic + '</span><span class="lb">' + esc(c.lb) + '</span>' +
+      (c.sub ? '<span class="sub" title="' + esc(c.sub) + '">' + esc(c.sub) + '</span>' : '') + '</div>';
+  }
+  var listEl = $('cmdk-list');
+  listEl.innerHTML = cmdk.items.length ? html : '<div class="cmdk-empty">没有匹配项，换个关键词试试</div>';
+  var selEl = listEl.querySelector('.cmdk-item.sel');
+  if (selEl && selEl.scrollIntoView) selEl.scrollIntoView({ block: 'nearest' });
+  listEl.querySelectorAll('.cmdk-item').forEach(function (el) {
+    var i = +el.dataset.i;
+    el.addEventListener('click', function () { cmdkRun(i); });
+    el.addEventListener('mousemove', function () { if (i !== cmdk.sel) { cmdk.sel = i; cmdkPaintSel(); } });
+  });
+}
+function cmdkPaintSel() {
+  var listEl = $('cmdk-list');
+  listEl.querySelectorAll('.cmdk-item').forEach(function (el) { el.classList.toggle('sel', +el.dataset.i === cmdk.sel); });
+  var selEl = listEl.querySelector('.cmdk-item.sel');
+  if (selEl && selEl.scrollIntoView) selEl.scrollIntoView({ block: 'nearest' });
+}
+function cmdkOpen() {
+  $('cmdk-mask').classList.add('on');
+  cmdk.open = true; cmdk.sel = 0;
+  var inp = $('cmdk-input'); inp.value = '';
+  cmdkRender();
+  setTimeout(function () { inp.focus(); }, 20);
+}
+function cmdkClose() { $('cmdk-mask').classList.remove('on'); cmdk.open = false; }
+function cmdkRun(i) {
+  var c = cmdk.items[i]; if (!c) return;
+  cmdkClose();
+  try {
+    var r = c.act();
+    if (r && typeof r.catch === 'function') r.catch(function (e) { cmdkErrToast(e); });
+  } catch (e) { cmdkErrToast(e); }
+}
+(function initCmdk() {
+  var mask = $('cmdk-mask'), inp = $('cmdk-input');
+  var btn = $('cmdk-btn');
+  if (btn) btn.addEventListener('click', cmdkOpen);
+  mask.addEventListener('click', function (e) { if (e.target === mask) cmdkClose(); });
+  inp.addEventListener('input', function () { cmdk.sel = 0; cmdkRender(); });
+  inp.addEventListener('keydown', function (e) {
+    var n = cmdk.items.length;
+    if (e.key === 'ArrowDown' && n) { e.preventDefault(); cmdk.sel = (cmdk.sel + 1) % n; cmdkPaintSel(); }
+    else if (e.key === 'ArrowUp' && n) { e.preventDefault(); cmdk.sel = (cmdk.sel - 1 + n) % n; cmdkPaintSel(); }
+    else if (e.key === 'Enter') { e.preventDefault(); cmdkRun(cmdk.sel); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cmdkClose(); }
+  });
+  document.addEventListener('keydown', function (e) {
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+      e.preventDefault();
+      if (cmdk.open) cmdkClose(); else cmdkOpen();
+    } else if (cmdk.open && e.key === 'Escape') {
+      // 焦点不在面板输入框时（如点击过列表项后焦点回到 body），Esc 也应能关闭
+      cmdkClose();
+    }
+  });
+})();
 
 boot();
 </script>

@@ -1611,7 +1611,10 @@ export class TaskEngine {
     // ask 挂起终结的回合也绝不重发（重发只会经 followup 排队在挂起 run 后面，制造孤儿消息）
     if (!askWatch.fired) {
       const turnNow = this.store.getTask(taskId)!.turns.find((x) => x.id === turn.id)
-      if (!signal.aborted && !(turnNow?.tools || []).length && !(streamSeq > 1)) {
+      // 只对「真零产出」重发：无工具 && 无任何流事件 && 派发结果也没有文本。
+      // （只看 streamSeq 会在单 delta 短回复上误判 —— pi 类节点流只有一条 delta 且不发 turn_end，
+      //   对账内容已带回，重发会把同一指令打两遍、正文在历史对账时拼成双份）
+      if (!signal.aborted && !(turnNow?.tools || []).length && !(streamSeq > 1) && !(result.content && result.content.trim())) {
         this.taskLog(taskId, 'warn', `${agent.name} 本轮无任何内容产出（远端流为空），自动重发一次`)
         result = await this.dispatchWithFallback(target, session.remoteSessionId!, fullPrompt, streamHandlers, streamCtrl.signal)
       }
@@ -3250,6 +3253,12 @@ export class TaskEngine {
       if (parked?.ok && (parked.count || 0) > 0) {
         handlers.onLog?.('远端会话被提问挂起（pending ask），不转入长轮询 —— 等待答复桥解锁', 'warn')
         return { ok: false, content: sse.content, reasoning: sse.reasoning, complete: false, error: '远端会话挂起等待提问答复', pendingAsk: true }
+      }
+      // 流以 done 帧正常收尾（远端不发 turn_end 的节点，如 pi-web-service）⇒ 回合确已结束，
+      // 立即回查历史重建整轮文本，不进 15s 间隔的长轮询（否则每轮固定多等一个轮询周期）
+      if (sse.streamDone && sse.content) {
+        const rec = await this.client.reconcileTurn(target, sessionId, turnFragment(prompt), { signal, attempts: 4 })
+        if (rec.ok && rec.content) return rec
       }
       handlers.onLog?.('SSE 流中断/提前结束，转轮询对账整轮结果...', 'warn')
       const polled = await this.client.waitForSessionResult(target, sessionId, {

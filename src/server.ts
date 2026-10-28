@@ -573,7 +573,8 @@ engine.startPendingAskSweeper()
       const projectImportUpload = underPrefix && method === 'POST'
         && url.pathname === `${prefix}/api/projects/import-create`
         && Boolean(String(url.searchParams.get('token') || '').trim())
-      if (underPrefix && !sessionUser && !aiTokenOk && !projectImportUpload) {
+      // OPTIONS 预检不走登录门禁（浏览器预检不携带凭证），交由 router.dispatch 顶部的 204 处理器统一回 CORS 头
+      if (underPrefix && method !== 'OPTIONS' && !sessionUser && !aiTokenOk && !projectImportUpload) {
         const isConsoleGet = method === 'GET' && (url.pathname === prefix || url.pathname === `${prefix}/` || url.pathname === `${prefix}/console` || url.pathname === `${prefix}/monitor` || url.pathname === `${prefix}/monitor/`)
         if (!isConsoleGet) {
           sendJson(res, 401, { ok: false, error: '未登录或会话已过期', authRequired: true })

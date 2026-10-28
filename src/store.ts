@@ -723,8 +723,26 @@ export class WorkStore {
   }
 }
 
-/** 工作目录规范化：去空白与尾斜杠；空值 → undefined */
+/**
+ * 工作目录是否为「节点侧绝对路径」。子智能体可能绑定 Windows DSH 节点，三种形态均合法：
+ * - POSIX 绝对路径: /data/workspace/demo
+ * - Windows 盘符路径: C:\work\demo 或 C:/work/demo
+ * - UNC 路径: \\server\share 或 //server/share
+ * 纯相对路径（rel/path、./tmp 等）仍拒绝——节点侧无确定的解析基准。
+ */
+export function isNodeAbsolutePath(v: string): boolean {
+  const s = String(v || '')
+  if (!s) return false
+  if (s.startsWith('/') || s.startsWith('\\') || s.startsWith('//') || s.startsWith('\\\\')) return true
+  // 盘符形态：首字符为字母、第二字符为冒号且第三字符为分隔符（"C:" 单独出现语义为"盘符当前目录"，无确定基准，不通过）
+  return s[1] === ':' && /[a-zA-Z]/.test(s[0] ?? '') && (s[2] === '/' || s[2] === '\\')
+}
+
+/** 工作目录校验失败的统一提示（子智能体 upsert / 专家绑定 / 定时任务 三处共用） */
+export const WORK_DIR_NOT_ABSOLUTE_MSG = '工作目录必须是绝对路径（POSIX 以 / 开头；Windows 节点可用盘符如 C:\\work\\demo 或 UNC）'
+
+/** 工作目录规范化：去空白与尾分隔符（POSIX 斜杠 / Windows 反斜杠均裁剪）；空值 → undefined */
 function normalizeWorkDir(v: unknown): string | undefined {
-  const s = String(v ?? '').trim().replace(/\/+$/, '')
+  const s = String(v ?? '').trim().replace(/[\/\\]+$/, '')
   return s || undefined
 }
