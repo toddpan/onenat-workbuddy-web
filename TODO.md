@@ -203,7 +203,8 @@ UI 行为目前没有自动化浏览器测试：任务说明里的「验收」�
 
 ## P5 一致性收尾
 
-- [ ] **P5-1** @ 菜单显示执行位置
+- [x] **P5-1** @ 菜单显示执行位置
+  - 完成：agent 候选 desc=🖥 节点·模型（服务端 nodeLabelOf + 前端降级 memberNodeLabel）；expert 加「在本任务节点执行」。验证：build/typecheck/smoke(70) 全过
   - 依赖：P4-2
   - 子智能体：「🤖 名称 · 🖥 节点 · 模型」；专家：「🧠 名称 · 在本任务节点执行」。
   - 验收：build / typecheck / smoke 通过。

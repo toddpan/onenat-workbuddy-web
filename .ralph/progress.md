@@ -132,3 +132,6 @@
 - startForkFlow(anchor) 复用 openPlacePop（预填当前任务位置）；forkTaskTo 组 body（projectId 优先，否则 nodeRef mapping）→ openTask 后 $('input').value = draft。
 - ⋯ 菜单改造：visibility=有任务即显示（原=仅项目任务）；弹层内 fork 恒有、files/cfg 仅 pid 存在；btn-head-more 空 pid 不再 return。
 - 面包屑 #chat-fork-crumb 在 applyTaskToView 回显（标题从 taskCache/tasks 查，无则「原任务」），resetChatView 隐藏；system 轮「打开 ↪」按钮正则 /→\s*(task-[A-Za-z0-9]+)/。
+
+## P5-1（ZCode 主会话）
+- /mentions/candidates：agent detail=`🖥 ${nodeLabelOf(a.dshRef)} · 模型`；expert detail 追加「在本任务节点执行」；前端降级聚合用 memberNodeLabel 同口径。
