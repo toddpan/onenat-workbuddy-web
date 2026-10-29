@@ -1573,7 +1573,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .ws-row:hover { background: var(--bg-hover); }
 .ws-caret { flex: none; width: 14px; }
 .ws-caret-btn { border: none; background: none; color: var(--tx3); cursor: pointer; padding: 0 2px; font-size: 10px; }
-.ws-chk { flex: none; }
+.ws-chk { flex: none; width: auto; }
 .ws-ic { flex: none; }
 .ws-nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .ws-nm.dim { opacity: .6; }
