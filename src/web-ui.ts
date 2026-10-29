@@ -1537,6 +1537,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
   flex: none; width: 420px; min-width: 280px; display: none; flex-direction: column;
   border-left: 1px solid var(--line2); background: var(--bg2); overflow: hidden; position: relative;
 }
+.ws-side.on { display: flex; }
 .ws-tabs {
   flex: none; display: flex; align-items: center; gap: 2px; height: 36px;
   padding: 0 6px 0 8px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none;
@@ -10328,6 +10329,7 @@ function wsFilesRenderAll() {
   const el = $('ws-files-root');
   if (!el) return;
   el.innerHTML = wsFilesHeaderHtml() + '<div class="ws-tree" id="ws-tree"></div>';
+  const tree = $('ws-tree');
   const kw = $('wsf-kw');
   if (kw) kw.addEventListener('input', function () { wsFiles.kw = this.value; wsFilesRenderTree(); });
   const hid = $('wsf-hidden');
@@ -14113,6 +14115,7 @@ function openModal(title, bodyHtml, actions) {
     $('modal-foot').innerHTML = '<button class="btn" onclick="closeModal()">关闭</button>';
   }
   $('modal-mask').classList.add('on');
+  return { body: $('modal-body') };
 }
 
 // ---------- 专家名册选择器（The Agency 321 位专家，索引全量拉取后前端过滤） ----------
