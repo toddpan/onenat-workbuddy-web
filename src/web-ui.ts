@@ -7635,7 +7635,7 @@ async function send() {
     // 草稿 / 欢迎页的首条消息：POST /tasks 带 message 一次完成「创建 + 发送」（P2-2），
     // 之后项目与节点锁定在任务上。创建失败（或并发点击）时回填输入框，错误已由创建流程 toast。
     if (document.body.classList.contains('task-running') || draftCreating) return;
-    if (!state.draft) state.draft = { place: defaultDraftPlace(), model: (state.taskEnv && state.taskEnv.model) || '' };
+    if (!state.draft) state.draft = { place: defaultDraftPlace(), model: (state.taskEnv && state.taskEnv.model) || '', agentPreset: '', reasoningEffort: '' };
     $('input').value = '';
     const createdId = await commitDraft(text);
     if (!createdId) {
@@ -8932,7 +8932,10 @@ if ($('btn-head-more')) {
       (pid ? '<div class="main-agent-item" data-op="files"><div class="ag-info"><div class="ag-title">📁 工作区文件</div></div></div>' +
       '<div class="main-agent-item" data-op="cfg"><div class="ag-info"><div class="ag-title">⚙ 项目配置</div></div></div>' : '');
     pop.querySelectorAll('.main-agent-item').forEach(function (it) {
-      it.addEventListener('click', function () {
+      it.addEventListener('click', function (e) {
+        // fork 项会以 ⋯ 按钮为锚打开执行位置弹层：不拦冒泡的话，本次点击继续冒到 document
+        // 的「点外部关弹层」处理器，刚打开的弹层被立刻关掉 → 表现为点了没反应
+        e.stopPropagation();
         closeHeadMore();
         if (it.dataset.op === 'fork') startForkFlow($('btn-head-more'));
         else if (it.dataset.op === 'files') openWsSide({ kind: 'files' });
@@ -9233,7 +9236,7 @@ async function selectMainAgent(agentId) {
 // ---------- 主调度模型选择（自定义弹层：原生 select 的移动端全屏弹窗字大折行且样式失控） ----------
 // curEffort/curPreset：当前执行会话的推理强度与模式预设（任务内才有意义；打开会话时回读回显）
 // cur = 当前任务的任务级模型（空 = 跟随默认）；globalDefault = 全局默认模型（settings.planner.model，只在设置页改）
-const modelState = { groups: {}, cur: '', globalDefault: '', loaded: false, error: '', presets: [], curEffort: '', curPreset: '', presetsLoaded: false, loadedForNode: '' };
+const modelState = { groups: {}, cur: '', globalDefault: '', loaded: false, error: '', presets: [], curEffort: '', curPreset: '', presetsLoaded: false, loadedForNode: '', presetsForNode: '' };
 function modelBtnTitle() { return '本任务模型（只影响当前任务的主会话；全局默认模型在设置页修改）'; }
 function curModelEntry() {
   if (!modelState.cur) return null;
@@ -9286,8 +9289,9 @@ function renderModelPop() {
     else if (!cur) html += '<div class="model-empty">暂无可选模型</div>';
   }
   // 推理等级：仅当前选中模型配置了 efforts 才渲染（模型没配 = 不支持强度切换，整个入口不出现）
+  const draftMode = !state.currentTaskId && !!state.draft;
   const efforts = (curModelEntry()?.reasoning?.efforts) || [];
-  if (state.currentTaskId && efforts.length) {
+  if ((state.currentTaskId || draftMode) && efforts.length) {
     html += '<div class="model-group">推理等级</div>';
     if (modelState.curEffort && !efforts.some(e => e.id === modelState.curEffort)) {
       html += '<div class="model-item on" data-effort="' + esc(modelState.curEffort) + '"><span class="n">' + esc(modelState.curEffort + '（已保存）') + '</span><span class="ck">✓</span></div>';
@@ -9296,8 +9300,9 @@ function renderModelPop() {
       html += '<div class="model-item' + (e.id === modelState.curEffort ? ' on' : '') + '" data-effort="' + esc(e.id) + '" title="' + esc(e.description || '') + '"><span class="n">' + esc(e.name || e.id) + '</span><span class="ck">✓</span></div>';
     }
   }
-  // 模式预设：任务节点远端 /presets 候选（拉取失败或为空 = 不渲染，对旧节点完全兼容）
-  if (state.currentTaskId && modelState.presetsLoaded && modelState.presets.length) {
+  // 模式预设：任务节点远端 /presets 候选（拉取失败或为空 = 不渲染，对旧节点完全兼容）；
+  // 草稿态同享：候选按草稿节点拉（loadDraftPresets），选择随创建下发为任务级 agentPreset
+  if ((state.currentTaskId || draftMode) && modelState.presetsLoaded && modelState.presets.length) {
     html += '<div class="model-group">模式预设</div>';
     html += '<div class="model-item' + (!modelState.curPreset ? ' on' : '') + '" data-preset=""><span class="n">跟随实体默认</span><span class="ck">✓</span></div>';
     for (const pr of modelState.presets) {
@@ -9479,12 +9484,36 @@ async function loadTaskPresets(taskId) {
   const pop = $('model-pop');
   if (pop && pop.classList.contains('on')) renderModelPop();
 }
+/** 草稿态的模式预设候选：按草稿执行节点直拉（复用 /api/agents/presets?node=，节点变更后重拉） */
+async function loadDraftPresets() {
+  if (state.currentTaskId || !state.draft) return;
+  const mid = (state.draft.place && state.draft.place.nodeMappingId) || '';
+  if (!mid || modelState.presetsForNode === mid) return;
+  const n = dshNodeOptions().find(function (x) { return x.mappingId === mid; });
+  if (!n) return;
+  const nodeRef = n.apiBaseUrl ? { kind: 'direct', apiBaseUrl: n.apiBaseUrl } : { kind: 'mapping', mappingId: mid };
+  const r = await api('/agents/presets?node=' + encodeURIComponent(JSON.stringify(nodeRef)));
+  if (state.currentTaskId || !state.draft) return; // 打开任务后到达的草稿响应丢弃
+  modelState.presets = (r.ok && r.data && r.data.presets) || [];
+  modelState.presetsForNode = mid;
+  modelState.presetsLoaded = true;
+  const pop = $('model-pop');
+  if (pop && pop.classList.contains('on')) renderModelPop();
+}
 /** 推理等级切换：单独传 reasoningEffort，远端与会话当前模型合并（dsh-web-service ≥ 本版） */
 async function selectEffort(id) {
   modelState.curEffort = id;
   const btn = $('chat-model-btn');
   btn.textContent = modelBtnLabel(modelState.cur);
   closeModelPop();
+  // 草稿态：记进草稿，随创建请求体下发为任务级 reasoningEffort（无会话可即时生效）
+  if (!state.currentTaskId) {
+    if (state.draft) state.draft.reasoningEffort = id;
+    const label = effortName(id) || id;
+    flashBtnOk(btn, '✓ 推理等级 ' + label, modelBtnLabel(modelState.cur));
+    setModelStatus('✓ 新任务将以推理等级「' + label + '」创建');
+    return;
+  }
   const r = await api('/tasks/' + state.currentTaskId + '/session-model', {
     method: 'PUT',
     body: JSON.stringify({ reasoningEffort: id }),
@@ -9503,6 +9532,14 @@ async function selectPreset(id) {
   const btn = $('chat-model-btn');
   btn.textContent = modelBtnLabel(modelState.cur);
   closeModelPop();
+  // 草稿态：记进草稿，随创建请求体下发为任务级 agentPreset（建会话时优先于实体默认 cordis）
+  if (!state.currentTaskId) {
+    if (state.draft) state.draft.agentPreset = id;
+    const label = id || '跟随实体默认';
+    flashBtnOk(btn, '✓ 已保存 ' + label, modelBtnLabel(modelState.cur));
+    setModelStatus('✓ 新任务将以模式预设「' + label + '」创建');
+    return;
+  }
   const r = await api('/tasks/' + state.currentTaskId + '/session-preset', {
     method: 'PUT',
     body: JSON.stringify({ preset: id }),
@@ -9900,7 +9937,13 @@ function rememberPlace(place) {
 function startDraft(place) {
   const inDraft = !!state.draft && !state.currentTaskId;
   const p = defaultDraftPlace(place || (inDraft ? state.draft.place : null));
-  state.draft = { place: p, model: inDraft ? (state.draft.model || '') : ((state.taskEnv && state.taskEnv.model) || '') };
+  state.draft = {
+    place: p,
+    model: inDraft ? (state.draft.model || '') : ((state.taskEnv && state.taskEnv.model) || ''),
+    // 草稿级的模式预设/推理等级：已是草稿则保留用户已选，新开草稿从「跟随默认」起步
+    agentPreset: inDraft ? (state.draft.agentPreset || '') : '',
+    reasoningEffort: inDraft ? (state.draft.reasoningEffort || '') : '',
+  };
   if (state.currentTaskId) { state.currentTaskId = null; disconnectStream(); }
   closePlacePop();
   resetChatView(); // 末尾按 state.draft 渲染草稿页，并按草稿节点重拉模型目录
@@ -10539,6 +10582,13 @@ function renderDraftView() {
     const mb = $('chat-model-btn');
     if (mb) mb.textContent = modelBtnLabel(modelState.cur);
   }
+  // 模式预设/推理等级从草稿自身回显：不继承上一个已打开任务的会话残留
+  // （否则新任务按钮一直显示上个任务的「· cordis」，且草稿态没有入口可改）
+  modelState.curEffort = (state.draft && state.draft.reasoningEffort) || '';
+  modelState.curPreset = (state.draft && state.draft.agentPreset) || '';
+  const mbAlways = $('chat-model-btn');
+  if (mbAlways) mbAlways.textContent = modelBtnLabel(modelState.cur);
+  loadDraftPresets();
 }
 function hideDraftView() {
   document.body.classList.remove('draft-mode');
@@ -10569,7 +10619,19 @@ async function onDraftPlaceChange(place) {
   renderTaskList();
   if (place.nodeMappingId !== prevNode || modelState.loadedForNode !== taskExecNodeId(null)) {
     await loadPlannerOptions();
-    if (state.draft && !state.currentTaskId) draftModelFallback();
+    if (state.draft && !state.currentTaskId) {
+      draftModelFallback();
+      // 预设/强度是节点候选集的产物：换节点后旧选择不保证存在，退回「跟随默认」并按新节点重拉候选
+      if (state.draft.agentPreset || state.draft.reasoningEffort) {
+        state.draft.agentPreset = '';
+        state.draft.reasoningEffort = '';
+        modelState.curPreset = '';
+        modelState.curEffort = '';
+        const mb = $('chat-model-btn');
+        if (mb) mb.textContent = modelBtnLabel(modelState.cur);
+      }
+      loadDraftPresets();
+    }
   }
   const input = $('input');
   if (input) input.focus();
@@ -10601,6 +10663,9 @@ function draftCreateBody(d, message) {
   if (!proj && place.nodeMappingId) body.nodeRef = { kind: 'mapping', mappingId: place.nodeMappingId };
   // 草稿里选好的模型 → 任务级模型（engine.createTask 透传 input.model）
   if (d.model) body.model = d.model;
+  // 草稿里选好的推理等级/模式预设 → 任务级落点（建会话时随 createPayload 透传，优先于实体默认）
+  if (d.reasoningEffort) body.reasoningEffort = d.reasoningEffort;
+  if (d.agentPreset) body.agentPreset = d.agentPreset;
   if (env.connectorIds && env.connectorIds.length) body.connectorIds = env.connectorIds;
   if (env.skillNames && env.skillNames.length) body.skillNames = env.skillNames;
   return body;
@@ -10632,7 +10697,7 @@ async function commitDraft(message) {
 }
 /** 兼容旧入口：直接从默认位置建任务（不经草稿页），返回任务 id */
 async function createNewTaskDirectly(message) {
-  if (!state.draft) state.draft = { place: defaultDraftPlace(), model: (state.taskEnv && state.taskEnv.model) || '' };
+  if (!state.draft) state.draft = { place: defaultDraftPlace(), model: (state.taskEnv && state.taskEnv.model) || '', agentPreset: '', reasoningEffort: '' };
   const id = await commitDraft(message || '');
   const input = $('input');
   if (input) input.focus();
@@ -10666,6 +10731,23 @@ function renderResources() {
       '<td><span class="tag ' + kindTag + '">' + esc(ep.kind) + '</span></td>' +
       '<td class="mono">' + esc(entry) + '</td><td class="mono">' + esc(ep.local) + '</td>' +
       '<td class="mono">' + ((ep.appSkills || []).map(s => esc(s.name)).join(', ') || '—') + '</td>';
+    // DSH 映射 = 可执行引擎入口：就地给「进入工作台」，点了切到工作台、选中该节点并开新任务草稿
+    if (ep.kind === 'dsh' && ep.mappingId) {
+      const act = document.createElement('button');
+      act.type = 'button';
+      act.className = 'mini-btn';
+      act.style.marginLeft = '8px';
+      act.textContent = '🚀 进入工作台';
+      act.title = '切到工作台，新建任务落在「' + (ep.appName || ep.note || ep.mappingId) + '」节点上';
+      const mid = ep.mappingId;
+      act.addEventListener('click', function (e) {
+        e.stopPropagation();
+        switchView('work');
+        selectNode(mid);
+        startDraft();
+      });
+      tr.lastElementChild.appendChild(act);
+    }
     tb.appendChild(tr);
   }
 }

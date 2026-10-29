@@ -55,6 +55,10 @@ export interface CreateTaskInput {
   workDir?: string
   /** 任务级模型（provider/model）：定时任务实例配置；主会话（__node__）优先于全局调度模型 */
   model?: string
+  /** 任务级推理强度：建会话时随 createPayload 透传（与 task.reasoningEffort 同落点） */
+  reasoningEffort?: string
+  /** 任务级模式预设：建会话时优先于智能体实体默认（agentPreset） */
+  agentPreset?: string
   /** 专家团任务：按团队合同展开成员并注入规划/派工/汇总（memberAgentIds 未显式给定时以团队名册为准） */
   teamId?: string
 }
@@ -636,6 +640,8 @@ export class TaskEngine {
       // 避免项目节点改动后任务仍钉在旧节点（taskExec 的解析顺序本就是项目优先）
       ...(!input.projectId && input.nodeRef ? { nodeRef: input.nodeRef } : {}),
       ...(input.model ? { model: input.model } : {}),
+      ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
+      ...(input.agentPreset ? { agentPreset: input.agentPreset } : {}),
       ...(input.connectorIds?.length ? { connectorIds: input.connectorIds } : {}),
       ...(input.skillNames?.length ? { skillNames: input.skillNames } : {}),
       ...(input.workDir ? { workDir: input.workDir } : {}),
