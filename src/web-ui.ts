@@ -2215,6 +2215,33 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .lib-st.err { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, transparent); background: color-mix(in srgb, var(--err) 8%, transparent); }
 .lib-st.run { color: var(--pri); border-color: color-mix(in srgb, var(--pri) 40%, transparent); background: color-mix(in srgb, var(--pri) 8%, transparent); }
 .lib-tip { color: var(--tx3); font-size: 11.5px; }
+/* ---------- Backlog 视图（B5+B7） ---------- */
+.bl-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.bl-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px; cursor: pointer; user-select: none; color: var(--tx2); }
+.bl-chip.on { color: var(--pri); border-color: color-mix(in srgb, var(--pri) 45%, transparent); background: color-mix(in srgb, var(--pri) 8%, transparent); }
+.bl-group { border: 1px solid var(--line); border-radius: 12px; margin-bottom: 10px; overflow: hidden; }
+.bl-group-h { display: flex; align-items: center; gap: 8px; padding: 9px 12px; background: var(--bg2); cursor: pointer; font-size: 13px; font-weight: 600; flex-wrap: wrap; }
+.bl-group-h .cnt { font-size: 11.5px; color: var(--tx3); font-weight: 400; }
+.bl-group-h .node-ok, .bl-group-h .node-err { font-size: 11px; padding: 2px 8px; border-radius: 8px; }
+.bl-group-h .node-ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent); }
+.bl-group-h .node-err { color: var(--err); background: color-mix(in srgb, var(--err) 10%, transparent); cursor: pointer; }
+.bl-row { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 12.5px; flex-wrap: wrap; }
+.bl-row .bl-title { font-weight: 600; cursor: pointer; }
+.bl-row .bl-title:hover { color: var(--pri); }
+.bl-board { display: flex; gap: 10px; align-items: flex-start; overflow-x: auto; padding-bottom: 8px; }
+.bl-col { flex: 0 0 250px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg2); max-height: 62vh; display: flex; flex-direction: column; }
+.bl-col-h { padding: 8px 10px; font-size: 12.5px; font-weight: 700; display: flex; gap: 6px; align-items: center; border-bottom: 1px solid var(--line); }
+.bl-col-b { overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+.bl-card { border: 1px solid var(--line); border-radius: 10px; background: var(--bg); padding: 8px 10px; font-size: 12.5px; }
+.bl-card .bl-title { font-weight: 600; cursor: pointer; word-break: break-all; }
+.bl-card .bl-title:hover { color: var(--pri); }
+.bl-card .meta { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 5px; align-items: center; color: var(--tx3); font-size: 11px; }
+.bl-card .ops { display: flex; gap: 6px; margin-top: 7px; }
+.bl-tag { display: inline-block; padding: 1px 7px; border-radius: 8px; border: 1px solid var(--line); font-size: 10.5px; color: var(--tx2); }
+.bl-badge { cursor: pointer; }
+.bl-empty { color: var(--tx3); font-size: 12px; padding: 10px; }
+.bl-ac { color: var(--tx3); font-size: 11px; }
+.bl-warn { color: var(--err); font-size: 11px; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -2224,6 +2251,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
     <nav id="nav">
       <button data-v="work" class="on"><span class="ic">💬</span><span class="lb">工作台</span></button>
       <button data-v="projects"><span class="ic">📦</span><span class="lb">项目</span></button>
+      <button data-v="backlog"><span class="ic">✅</span><span class="lb">待办</span></button>
       <button data-v="monitor"><span class="ic">📊</span><span class="lb">监控大屏</span></button>
       <button data-v="agents"><span class="ic">🤖</span><span class="lb">子智能体</span></button>
       <span class="nav-sep" aria-hidden="true"></span>
@@ -2259,7 +2287,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
         </div>
         <div class="side-search-box">
           <span class="s-icon">🔍</span>
-          <input id="side-search" placeholder="搜索会话…" />
+          <input id="side-search" placeholder="搜索会话…" autocomplete="off" />
           <span class="s-clear" id="side-search-clear">✕</span>
         </div>
         <div class="task-list" id="task-list"></div>
@@ -2295,7 +2323,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <div class="chat-empty" id="chat-empty">
             <div style="font-size:34px">⚡</div>
             <div style="font-weight:600;font-size:15px;color:var(--tx)">OneNat WorkBuddy · 智能体协作工作台</div>
-            <div style="font-size:12.5px;max-width:360px;text-align:center;line-height:1.6">点击「＋ 新建任务」开启会话；输入框键入 @ 可即时指定智能体或注入资源。</div>
+            <div style="font-size:12.5px;max-width:360px;text-align:center;line-height:1.6">点击「＋ 新建任务」开启会话；输入框键入 @ 可即时指定专家、专家团、智能体或注入资源。</div>
             <div class="qe-grid">
               <button class="qe-card" data-qe="monitor"><span class="qe-ic">📊</span><b>监控大屏</b><span class="qe-d">智能体运行态势 · 任务进度 · 实时动态</span></button>
               <button class="qe-card" data-qe="agents"><span class="qe-ic">🤖</span><b>子智能体</b><span class="qe-d">添加/编辑执行节点 · 绑定资源与工作目录</span></button>
@@ -2356,7 +2384,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <!-- @ 提及自动联想浮层 -->
           <div class="mention-popup" id="mention-popup">
             <div class="mention-popup-head">
-              <span>提及项目、智能体或资源 (@)</span>
+              <span>提及项目、专家、专家团、智能体或资源 (@)</span>
               <span>↑↓ 选择 · Enter 插入</span>
             </div>
             <div class="mention-popup-list" id="mention-list"></div>
@@ -2374,7 +2402,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <div class="node-offline" id="node-offline" style="display:none"></div>
           <div class="chat-input">
             <div class="dsh-cscroll">
-              <textarea id="input" placeholder="给 WorkBuddy 发送消息，@ 项目 / 智能体 / 资源，/ 装载技能…"></textarea>
+              <textarea id="input" placeholder="给 WorkBuddy 发送消息，@ 项目 / 专家 / 专家团 / 智能体 / 资源，/ 装载技能…"></textarea>
             </div>
             <div class="composer-bar">
               <div class="tools">
@@ -2432,6 +2460,17 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
         <div class="xz-list" id="xz-list"><div class="mon-empty">加载中…</div></div>
         <div class="settings-note" style="margin-top:12px">接入点地址在小智平台「MCP 插件」页查看（形如 wss://api.xiaozhi.me/mcp/?token=…）。
           连接断开自动重连；停用/删除即时生效。注册的工具清单与「设置 → AI 接入」的工具通道实时同步，语音即可发任务、管理任务、看监控、管理定时任务。</div>
+      </div>
+    </div>
+    <div class="view" id="view-backlog">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>✅ 待办（Backlog）</h2>
+          <span class="sub">待办文件存放在各项目的 backlog/ 目录，人与智能体共编辑；一键派发为任务，完成后自动回写状态。</span>
+          <span class="hspacer"></span>
+          <button class="btn" id="btn-bl-refresh">↻ 刷新</button>
+        </div>
+        <div id="bl-root"><div class="bl-empty">加载中…</div></div>
       </div>
     </div>
     <div class="view" id="view-projects">
@@ -2616,7 +2655,11 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
       <div class="card" style="padding:0"><div class="tbl-wrap"><table class="res" id="res-table"><thead><tr><th>资源</th><th>类型</th><th>公网入口（实时解析）</th><th>内网目标</th><th>技能</th></tr></thead><tbody></tbody></table></div></div>
     </div></div>
     <div class="view" id="view-experts"><div class="panel">
-      <div class="panel-head"><h2>专家管理</h2><span class="sub">专家库统一视图（内置/名册只读，用户自建可编辑/删除）· 下方可组建专家团 · AI 可经 MCP（/api/experts/mcp）调用 expert.* 工具</span><span class="hspacer"></span><button class="btn pri" id="btn-new-expert">＋ 新建专家</button></div>
+      <div class="panel-head"><h2>专家与专家团</h2><span class="sub">🧩 专家团（合同式协作）在前 · 🧠 专家库（内置/名册只读，用户自建可编辑/删除）在后 · AI 可经 MCP（/api/experts/mcp）调用 expert.* 工具</span><span class="hspacer"></span><button class="btn pri" id="btn-new-expert">＋ 新建专家</button></div>
+      <!-- 专家团区块前置（线上实测曾埋在 328 行专家表之下 ~2 万 px，管理入口基本不可发现） -->
+      <div class="panel-head" style="margin-top:4px"><h2 style="font-size:15px">🧩 专家团</h2><span class="sub">合同式团队：共同目标/约束/交付要求 + 成员分工 · 团队任务按合同注入主调度规划、成员派工与汇总核对</span><span class="hspacer"></span><button class="btn" id="btn-new-team">＋ 新建专家团</button></div>
+      <div id="team-list"></div>
+      <div class="panel-head" style="margin-top:22px"><h2 style="font-size:15px">🧠 专家库</h2><span class="sub">专家 = 纯人格档案，@专家名 在任务节点动态实例化执行；无节点绑定，要固定执行机器请复制为子智能体</span></div>
       <div class="ros-bar" style="margin-bottom:12px">
         <select id="exm-div" style="flex:0 0 auto;min-width:150px"><option value="">全部分区</option></select>
         <input id="exm-q" placeholder="搜索名称 / 简介 / 标签" style="flex:1">
@@ -2624,8 +2667,6 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
         <button class="mini-btn" id="exm-refresh" title="重新拉取专家列表">↻ 刷新</button>
       </div>
       <div class="card" style="padding:0"><div class="tbl-wrap"><table class="res" id="exm-table"><thead><tr><th>专家</th><th>分区</th><th>来源</th><th>标签</th><th>简介</th><th>操作</th></tr></thead><tbody id="exm-body"></tbody></table></div></div>
-      <div class="panel-head" style="margin-top:26px"><h2 style="font-size:15px">🧩 专家团</h2><span class="sub">合同式团队：共同目标/约束/交付要求 + 成员分工 · 团队任务按合同注入主调度规划、成员派工与汇总核对</span><span class="hspacer"></span><button class="btn" id="btn-new-team">＋ 新建专家团</button></div>
-      <div id="team-list"></div>
     </div></div>
     <div class="view" id="view-settings"><div class="panel" style="max-width:1100px;margin:0 auto">
       <div class="panel-head"><h2>设置</h2><span class="sub">平台连接 · 任务归档 · AI 接入</span><span class="hspacer"></span><button class="btn pri" id="btn-save-settings">保存设置</button></div>
@@ -3035,8 +3076,12 @@ function md(text) {
 function parseInline(text) {
   let s = esc(text);
   // @ 智能体与资源高亮（对齐 DSH UI pill）。注意：本文件主体在模板字符串内，\s 必须双写为 \\s——
-  // 单写会被模板求值吞成字母 s，高亮会一路吃到标点或字母 s（线上实测 @提及高亮过长）
-  s = s.replace(/@([^\\s@,，。!！?？:：;；]+)/g, '<span class="mention-tag">@$1</span>');
+  // 单写会被模板求值吞成字母 s，高亮会一路吃到标点或字母 s（线上实测 @提及高亮过长）。
+  // 嵌入 token 的 @ 不高亮（邮箱 / URL user@host / CLI @file，与服务端 isAtMentionBoundary 同口径）
+  const EMBEDDED_AT = /[A-Za-z0-9._+~/=-]/;
+  s = s.replace(/@([^\\s@,，。!！?？:：;；]+)/g, function (m, tag, off, full) {
+    return off > 0 && EMBEDDED_AT.test(full.charAt(off - 1)) ? m : '<span class="mention-tag">@' + tag + '</span>';
+  });
   // 行内代码
   s = s.replace(/\`([^\`\\n]+)\`/g, '<code>$1</code>');
   // 粗体
@@ -4872,6 +4917,7 @@ function switchView(v) {
   if (v === 'voice') voiceStart(); else voiceStop();
   if (v === 'monitor') monitorStart(); else monitorStop();
   if (v === 'projects') renderProjects();
+  if (v === 'backlog') renderBacklogView();
   if (v === 'library' || v === 'plugins') libLoad();
   // 当前页签写入 hash：刷新/分享链接都停留在原页签（replaceState 不产生历史噪音）
   var h = '#' + v;
@@ -5046,6 +5092,22 @@ $('side-search-clear').addEventListener('click', () => {
   state.searchQuery = '';
   $('side-search-clear').style.display = 'none';
   renderTaskList();
+});
+// 刷新后浏览器会把上次输入还原回静态输入框（表单状态恢复，Chrome/Firefox/Safari 均有此行为，
+// 且不触发 input 事件），表现为“每次刷新搜索会话里都残留上次的搜索词”。
+// 每次页面显示完成后强制清空一次：搜索词只在当次页面生命周期内有效。
+function resetSearchBoxesUI() {
+  state.searchQuery = '';
+  var box = $('side-search'); if (box) box.value = '';
+  var btn = $('side-search-clear'); if (btn) btn.style.display = 'none';
+  var fbox = $('files-search'); if (fbox) fbox.value = '';
+  var fbtn = $('files-search-clear'); if (fbtn) fbtn.style.display = 'none';
+  if (typeof filesState !== 'undefined' && filesState) filesState.searchKeyword = '';
+  renderTaskList();
+}
+window.addEventListener('pageshow', function () {
+  // 延一帧：浏览器表单还原发生在页面显示阶段，等它写完再清空，避免被覆盖
+  requestAnimationFrame(resetSearchBoxesUI);
 });
 
 let taskListSig = '';
@@ -6717,7 +6779,14 @@ function createPlanCardElement(plan) {
   const stratLabel = plan.strategy === 'dag' ? 'DAG 依赖编排' : (plan.strategy === 'sequential' ? '顺序执行' : '并行协同');
   const tm = teamMemberMeta(plan);
   const teamBadge = tm ? '<span class="tag team" style="font-weight:600">🧩 ' + esc(tm.team.name) + '</span>' : '';
-  const headerTail = teamBadge +
+  // 覆盖度徽标（E8）：coverage 从「只在汇总文本里」上浮为计划卡结构化徽标
+  const cov = (state.task && state.task.summary && state.task.summary.coverage) || null;
+  const covBadge = cov && cov.total > 0
+    ? '<span class="tag ' + (cov.status === 'complete' ? 'ok' : cov.status === 'partial' ? '' : 'err') + '" style="font-weight:600" title="' +
+      esc((cov.missing || []).map(m => m.name + (m.reason ? '（' + (m.reason === 'unassigned' ? '未分配' : m.reason === 'skipped' ? '被跳过' : '失败') + '）' : '')).join('；')) +
+      '">📋 覆盖 ' + cov.completed + '/' + cov.total + (cov.status === 'complete' ? '' : cov.status === 'partial' ? ' ⚠' : ' ⛔') + '</span>'
+    : '';
+  const headerTail = teamBadge + covBadge +
     '<span class="plan-strat" style="font-weight:600;color:var(--pri)">' + esc(stratLabel) + '</span>' +
     '<span style="font-size:11.5px;color:var(--tx3)">' + subs.length + ' 个子任务</span>';
 
@@ -6756,7 +6825,9 @@ function createPlanCardElement(plan) {
     rowsHtml += '<div class="plan-member-row"><span class="pm-icon">' + icon + '</span>' +
       '<span class="pm-name">' + esc(name) + '</span>' + dutyHtml +
       (isMain ? '<span class="pm-duty" style="color:var(--tx3)">任务发起节点 · 自留子任务在此执行</span>'
-        : '<span class="pm-duty" style="color:var(--tx3)">场外成员' + (nodeLabel ? ' · ' + esc(nodeLabel) : '') + '</span>') +
+        : isExpert
+          ? '<span class="pm-duty" style="color:var(--tx3)">专家 · 任务节点动态实例化执行</span>'
+          : '<span class="pm-duty" style="color:var(--tx3)">场外成员' + (nodeLabel ? ' · ' + esc(nodeLabel) : '') + '</span>') +
       '</div>';
     if (!list.length) {
       rowsHtml += '<div class="plan-row row-pending" style="opacity:.65"><span class="st skipped">n/a</span>' +
@@ -8305,14 +8376,55 @@ function initMentionPopup() {
     mentionMatched = [];
   }
 
+  // 当前渲染项在 mentionMatched 里的原始下标（分组/截断后只渲染子集，键盘高亮按渲染位走）
+  let mentionRenderIdx = [];
+
+  function mentionGroupOf(item) {
+    if (item.type === 'team' || item.kind === 'team') return 'team';
+    if (item.type === 'expert' || item.kind === 'expert') return 'expert';
+    if (item.type === 'project' || item.kind === 'project') return 'project';
+    if (item.type === 'agent') return 'agent';
+    return item.kind === 'ssh' ? 'ssh' : (item.kind === 'http' ? 'http' : 'dsh');
+  }
+
   function renderMentionList() {
     if (!mentionMatched.length) {
       listEl.innerHTML = '<div class="mention-empty">无匹配的项目、团队、专家、智能体或资源</div>';
+      mentionRenderIdx = [];
       return;
     }
+    // 空查询 = 分组浏览：五类各取前几条 + 分组计数头 + 「更多」提示行；
+    // 有查询 = 按现有匹配顺序渲染，最多 60 条。专家 328 条不再永远沉底（线上评审 E2）。
+    const GROUP_CAP = { project: 6, team: 5, agent: 6, dsh: 4, ssh: 2, http: 2, expert: 8 };
+    const GROUP_NAME = { project: '项目', team: '专家团', agent: '智能体', dsh: 'DSH 节点', ssh: 'SSH', http: 'HTTP', expert: '专家' };
+    const GROUP_ORDER = ['project', 'team', 'agent', 'dsh', 'ssh', 'http', 'expert'];
+    let plan = [];
+    if (!mentionQuery) {
+      for (const g of GROUP_ORDER) {
+        const idxs = [];
+        mentionMatched.forEach((c, i) => { if (mentionGroupOf(c) === g) idxs.push(i); });
+        if (!idxs.length) continue;
+        plan.push({ header: GROUP_NAME[g] + ' · ' + idxs.length });
+        idxs.slice(0, GROUP_CAP[g]).forEach(i => plan.push(i));
+        if (idxs.length > GROUP_CAP[g]) plan.push({ more: GROUP_NAME[g] + ' 共 ' + idxs.length + ' 个，输入关键字过滤' });
+      }
+    } else {
+      mentionMatched.forEach((c, i) => { if (i < 60) plan.push(i); });
+      if (mentionMatched.length > 60) plan.push({ more: '匹配共 ' + mentionMatched.length + ' 条，继续输入缩小范围' });
+    }
+    mentionRenderIdx = plan.filter(x => typeof x === 'number');
+    if (!mentionRenderIdx.includes(mentionActiveIdx)) mentionActiveIdx = mentionRenderIdx.length ? mentionRenderIdx[0] : -1;
+
     let html = '';
-    mentionMatched.forEach((item, idx) => {
-      const active = idx === mentionActiveIdx ? ' active' : '';
+    plan.forEach(entry => {
+      if (typeof entry !== 'number') {
+        if (entry.header) html += '<div class="mention-group">' + esc(entry.header) + '</div>';
+        else html += '<div class="mention-group more">' + esc(entry.more) + '</div>';
+        return;
+      }
+      const idx = entry;
+      const item = mentionMatched[idx];
+      const active = mentionActiveIdx === idx ? ' active' : '';
       const isTeam = item.type === 'team' || item.kind === 'team';
       const isExpert = item.type === 'expert' || item.kind === 'expert';
       const isProject = item.type === 'project' || item.kind === 'project';
@@ -8346,8 +8458,10 @@ function initMentionPopup() {
     const text = input.value;
     const before = text.slice(0, mentionCursorStart);
     const after = text.slice(input.selectionEnd);
-    // 专家带 #id：专家库存在同名角色，服务端按 @名称#id 精确直派（无 # 回退按名）
-    const insertText = '@' + item.name + (item.type === 'expert' && item.id ? '#' + item.id : '') + ' ';
+    // 专家 #id 仅在同名冲突时携带（服务端按 @名称#id 精确直派）：328 位专家实测 0 真重名，
+    // 无条件带 #id 只会给消息正文加机器噪音（线上评审 E4）
+    const sameNameExperts = mentionCandidates.filter(c => c.type === 'expert' && c.name === item.name).length;
+    const insertText = '@' + item.name + (item.type === 'expert' && item.id && sameNameExperts > 1 ? '#' + item.id : '') + ' ';
     input.value = before + insertText + after;
     const newPos = before.length + insertText.length;
     input.selectionStart = newPos;
@@ -8398,26 +8512,34 @@ function initMentionPopup() {
     if (e.isComposing || e.keyCode === 229) return;
     const isPopupOpen = popup.classList.contains('on') && mentionMatched.length > 0;
     if (isPopupOpen) {
+      // 高亮沿「渲染子集」移动：分组视图下跳过分组头与「更多」提示行
+      const activeMove = (delta) => {
+        if (!mentionRenderIdx.length) return;
+        let pos = mentionRenderIdx.indexOf(mentionActiveIdx);
+        pos = pos === -1 ? 0 : (pos + delta + mentionRenderIdx.length) % mentionRenderIdx.length;
+        mentionActiveIdx = mentionRenderIdx[pos];
+      };
+      const activeItem = () => (mentionRenderIdx.includes(mentionActiveIdx) ? mentionMatched[mentionActiveIdx] : mentionMatched[mentionRenderIdx[0]]);
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        mentionActiveIdx = (mentionActiveIdx + 1) % mentionMatched.length;
+        activeMove(1);
         renderMentionList();
         return;
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
-        mentionActiveIdx = (mentionActiveIdx - 1 + mentionMatched.length) % mentionMatched.length;
+        activeMove(-1);
         renderMentionList();
         return;
       } else if (e.key === 'Tab') {
         e.preventDefault();
         e.stopPropagation();
-        insertMention(mentionMatched[mentionActiveIdx]);
+        insertMention(activeItem());
         return;
       } else if (e.key === 'Enter') {
         // 若弹窗中有多个选项或者用户主动用上下键选了某个非首项，优先插入；否则允许直接回车或按 Tab
         e.preventDefault();
         e.stopPropagation();
-        insertMention(mentionMatched[mentionActiveIdx]);
+        insertMention(activeItem());
         return;
       } else if (e.key === 'Escape') {
         hidePopup();
@@ -10943,15 +11065,33 @@ function renderTeams() {
           '<button class="btn danger" data-op="del">删除</button>') +
       '</div>';
     card.querySelector('[data-op=task]').addEventListener('click', async () => {
-      // 带上当前节点选择：纯专家团队（内置团）没有自带节点的 agent 成员，任务无节点会无法执行
-      const nodeRef = nodeState.cur ? { kind: 'mapping', mappingId: nodeState.cur } : null;
-      const r = await api('/tasks', { method: 'POST', body: JSON.stringify({ title: '🧩 ' + tm.name, teamId: tm.id, ...(nodeRef ? { nodeRef } : {}) }) });
-      if (!r.ok) { toast(r.error || '创建团队任务失败', true); return; }
-      switchView('work');
-      await loadTasks(); await openTask(r.data.id);
-      const input = $('input');
-      if (input) input.focus();
-      toast('团队任务已创建（' + tm.members.length + ' 名成员），输入目标即按合同编排');
+      await exmLoad().catch(() => {});
+      const memberChips = tm.members.map(m => '<span class="tag" style="margin:2px 6px 2px 0">🧩 ' + esc(teamMemberDisplayName(m)) + ' · ' + esc((m.duty || '').slice(0, 16)) + '</span>').join('');
+      const resCur = (state.resources || []).find(x => x.mappingId === nodeState.cur);
+      const nodeText = nodeState.cur ? esc(resCur ? (resCur.appName || resCur.note || resCur.mappingId) : nodeState.cur) : '默认节点';
+      openModal('🚀 发起团队编排 · ' + tm.name, '', [
+        { label: '取消', act: closeModal },
+        { label: '🚀 发起编排', cls: 'pri', act: async () => {
+          const goal = ($('tf-goal') && $('tf-goal').value || '').trim();
+          if (!goal) { toast('请先填写本轮目标', true); return; }
+          // 目标确认后才创建任务：不再落地空草稿（线上评审 E6——点发任务即建 draft 任务污染会话列表）
+          const nodeRef = nodeState.cur ? { kind: 'mapping', mappingId: nodeState.cur } : null;
+          const r = await api('/tasks', { method: 'POST', body: JSON.stringify({ teamId: tm.id, message: goal, ...(nodeRef ? { nodeRef } : {}) }) });
+          if (!r.ok) { toast(r.error || '创建团队任务失败', true); return; }
+          closeModal();
+          switchView('work');
+          await loadTasks(); await openTask(r.data.id);
+          const input = $('input');
+          if (input) input.focus();
+          toast('团队任务已发起（' + tm.members.length + ' 名成员按合同编排）');
+        } },
+      ]);
+      $('modal-body').innerHTML =
+        '<div class="field"><label>本轮目标（将按团队合同全员编排）</label>' +
+        '<textarea id="tf-goal" rows="4" placeholder="如：对 XX 方案做架构/安全/验收三方面评审，输出风险与验收清单">' + esc(tm.goal || '') + '</textarea></div>' +
+        '<div class="field"><label>执行位置（主调度与汇总所在节点）</label><div class="hint" style="margin:0">🖥 ' + nodeText + '（可在工作台右上角切换器调整）</div></div>' +
+        '<div class="field"><label>团队成员（' + tm.members.length + ' 名）</label><div>' + memberChips + '</div></div>';
+      setTimeout(() => { const ta = $('tf-goal'); if (ta) ta.focus(); }, 60);
     });
     const copyBtn = card.querySelector('[data-op=copy]');
     if (copyBtn) copyBtn.addEventListener('click', async () => {
@@ -11073,7 +11213,7 @@ function openTeamDrawer(team) {
       deliveryRequirements: $('tm-delivery').value,
       templateId: $('tm-template').value,
       coordinatorPrompt: $('tm-coord').value,
-      enabled: team ? team.enabled !== false : false,
+      enabled: team ? team.enabled !== false : true,
       members: members,
     };
     const r = await api('/teams', { method: 'POST', body: JSON.stringify(body) });
@@ -11566,9 +11706,18 @@ function setupScheduleMention(input, popup, listEl) {
     if (!matched.length) { listEl.innerHTML = '<div class="mention-empty">无匹配的智能体或资源</div>'; return; }
     listEl.innerHTML = matched.map((item, idx) => {
       const active = idx === activeIdx ? ' active' : '';
-      const icon = item.type === 'agent' ? '🤖' : (item.kind === 'ssh' ? '🖥️' : (item.kind === 'http' ? '🌐' : '📦'));
-      const tagClass = item.type === 'agent' ? 'agent' : 'resource';
-      const tagText = item.type === 'agent' ? '智能体' : (item.kind ? item.kind.toUpperCase() : '资源');
+      // 专家/专家团/项目此前被渲染成「资源」样式（线上评审 E10）：按提及类型给出正确图标与标签
+      const icon = item.type === 'agent' ? '🤖'
+        : item.type === 'expert' ? ((item.meta && item.meta.icon) || '🧠')
+        : item.type === 'team' ? '🧩'
+        : item.type === 'project' ? '📁'
+        : (item.kind === 'ssh' ? '🖥️' : (item.kind === 'http' ? '🌐' : '📦'));
+      const tagClass = item.type === 'agent' ? 'agent' : (item.type === 'expert' ? 'expert' : (item.type === 'team' ? 'team' : (item.type === 'project' ? 'project' : 'resource')));
+      const tagText = item.type === 'agent' ? '智能体'
+        : item.type === 'expert' ? '专家'
+        : item.type === 'team' ? '专家团'
+        : item.type === 'project' ? '项目'
+        : (item.kind ? item.kind.toUpperCase() : '资源');
       return '<div class="mention-item' + active + '" data-idx="' + idx + '">' +
         '<span class="icon">' + icon + '</span>' +
         '<div class="info"><div class="name">' + esc(item.name) + '</div>' +
@@ -11587,8 +11736,9 @@ function setupScheduleMention(input, popup, listEl) {
     const text = input.value;
     const before = text.slice(0, cursorStart);
     const after = text.slice(input.selectionEnd);
-    // 专家带 #id：专家库存在同名角色，服务端按 @名称#id 精确直派（无 # 回退按名）
-    const insertText = '@' + item.name + (item.type === 'expert' && item.id ? '#' + item.id : '') + ' ';
+    // 与主弹层同口径：专家 #id 仅同名冲突时携带（其余场景是机器噪音）
+    const sameNameExperts = mentionCandidates.filter(c => c.type === 'expert' && c.name === item.name).length;
+    const insertText = '@' + item.name + (item.type === 'expert' && item.id && sameNameExperts > 1 ? '#' + item.id : '') + ' ';
     input.value = before + insertText + after;
     const pos = before.length + insertText.length;
     input.selectionStart = input.selectionEnd = pos;
@@ -11639,9 +11789,12 @@ function parseScheduleMentions(text) {
   }
   dict.sort((x, y) => y.name.length - x.name.length);
   const agentIds = []; const unknown = new Set();
+  // 与服务端 isAtMentionBoundary 同口径：嵌入 token 的 @（邮箱/URL user@host/CLI @file）不是提及
+  const EMBEDDED_AT = /[A-Za-z0-9._+~/=-]/;
   let i = 0;
   while (i < text.length) {
     if (text[i] !== '@') { i++; continue; }
+    if (i > 0 && EMBEDDED_AT.test(text.charAt(i - 1))) { i++; continue; }
     const rest = text.slice(i + 1);
     const hit = dict.find(e => rest.startsWith(e.name));
     if (hit) {
@@ -14293,6 +14446,7 @@ function exmRender() {
       '<td>' + esc((e.tags || []).join('、')) + '</td>' +
       '<td style="max-width:360px">' + esc(e.description) + '</td>' +
       '<td style="white-space:nowrap">' +
+      '<button class="mini-btn" data-exm-run="' + esc(e.id) + '" title="以 @' + esc(e.name) + ' 发起任务">🚀 任务</button> ' +
       '<button class="mini-btn" data-exm-view="' + esc(e.id) + '">查看</button> ' +
       (editable
         ? '<button class="mini-btn" data-exm-edit="' + esc(e.id) + '">编辑</button> <button class="mini-btn" data-exm-del="' + esc(e.id) + '">删除</button>'
@@ -14300,6 +14454,15 @@ function exmRender() {
       '</td></tr>';
   }).join('') || '<tr><td colspan="6" class="hint" style="text-align:center;padding:24px 0">没有匹配的专家</td></tr>';
   document.querySelectorAll('[data-exm-view]').forEach(b => b.addEventListener('click', () => exmOpenForm(b.dataset.exmView, 'view')));
+  // 用此专家发任务：回工作台预填 @名称（专家行此前只有「查看」，无任何转化动作——线上评审 E11）
+  document.querySelectorAll('[data-exm-run]').forEach(b => b.addEventListener('click', () => {
+    const e = (exmCache && exmCache.experts || []).find(x => x.id === b.dataset.exmRun);
+    if (!e) return;
+    switchView('work');
+    const input = $('input');
+    if (input) { input.value = '@' + e.name + ' '; input.focus(); }
+    toast('已预填 @' + e.name + '，输入目标后发送（将在任务节点动态实例化执行）');
+  }));
   document.querySelectorAll('[data-exm-edit]').forEach(b => b.addEventListener('click', () => exmOpenForm(b.dataset.exmEdit, 'edit')));
   document.querySelectorAll('[data-exm-del]').forEach(b => b.addEventListener('click', () => exmDelete(b.dataset.exmDel)));
 }
@@ -14315,6 +14478,7 @@ async function exmOpenForm(id, mode) {
   const dis = ro ? ' disabled' : '';
   openModal(isNew ? '新建专家' : (ro ? '查看专家：' + e.name : '编辑专家：' + e.name), '', [
     { label: '取消', act: closeModal },
+    ...(ro && e.source !== 'user' ? [{ label: '📋 复制为我的专家', act: () => exmOpenCopy(e) }] : []),
     ...(ro ? [] : [{ label: isNew ? '创建' : '保存', cls: 'pri', act: () => exmSave(isNew) }]),
   ]);
   $('modal-body').innerHTML =
@@ -14329,6 +14493,26 @@ async function exmOpenForm(id, mode) {
     '<div class="field"><label>简介</label><input id="exf-desc" value="' + esc(e.description || '') + '"' + dis + '></div>' +
     '<div class="field"><label>职责与约束提示词 systemPrompt（必填）</label><textarea id="exf-sp" rows="6" style="width:100%;font-family:var(--mono)"' + dis + '>' + esc(e.systemPrompt || '') + '</textarea></div>' +
     '<div class="field"><label>执行指导 executionPrompt（可选）</label><textarea id="exf-ep" rows="4" style="width:100%;font-family:var(--mono)"' + dis + '>' + esc(e.executionPrompt || '') + '</textarea></div>';
+}
+/** 名册/内置专家 copy-on-write：预填原档案建用户专家（id 自动加 -my 后缀，可改） */
+function exmOpenCopy(e) {
+  const copy = Object.assign({}, e, { id: (e.id + '-my').slice(0, 64), source: 'user' });
+  openModal('复制为我的专家（基于 ' + e.name + '）', '', [
+    { label: '取消', act: closeModal },
+    { label: '创建', cls: 'pri', act: () => exmSave(true) },
+  ]);
+  $('modal-body').innerHTML =
+    '<div class="grid3">' +
+    '<div class="field"><label>标识 id（小写中划线 slug）</label><input id="exf-id" value="' + esc(copy.id) + '"></div>' +
+    '<div class="field"><label>展示名</label><input id="exf-name" value="' + esc(copy.name) + '"></div>' +
+    '<div class="field"><label>图标（emoji）</label><input id="exf-icon" value="' + esc(copy.icon || '') + '"></div>' +
+    '<div class="field"><label>分区</label><input id="exf-div" value="' + esc(copy.division || 'user') + '"></div>' +
+    '<div class="field"><label>角色名（可选）</label><input id="exf-role" value="' + esc(copy.role || '') + '"></div>' +
+    '<div class="field"><label>标签（逗号分隔）</label><input id="exf-tags" value="' + esc((copy.tags || []).join(',')) + '"></div>' +
+    '</div>' +
+    '<div class="field"><label>简介</label><input id="exf-desc" value="' + esc(copy.description || '') + '"></div>' +
+    '<div class="field"><label>职责与约束提示词 systemPrompt（必填）</label><textarea id="exf-sp" rows="6" style="width:100%;font-family:var(--mono)">' + esc(copy.systemPrompt || '') + '</textarea></div>' +
+    '<div class="field"><label>执行指导 executionPrompt（可选）</label><textarea id="exf-ep" rows="4" style="width:100%;font-family:var(--mono)">' + esc(copy.executionPrompt || '') + '</textarea></div>';
 }
 async function exmSave(isNew) {
   const body = {
@@ -14569,6 +14753,362 @@ function cmdkRun(i) {
     }
   });
 })();
+
+// ---------- Backlog 视图（B5+B7，docs/design-backlog-integration.md §7）：我的待办聚合 + 项目看板 ----------
+var blState = { data: null, loading: false, filters: { openOnly: true, mine: false }, expanded: {}, board: null, mineName: localStorage.getItem('bl-mine') || '' };
+
+function blIsOpenStatus(s) { return !(/done|完成/i.test(s || '') || /cancel|取消/i.test(s || '')); }
+function blOpenItem(t) { try { jumpToTask(t.id); } catch (e) { toast('无法打开任务: ' + t.id, true); } }
+
+async function renderBacklogView(force) {
+  if (blState.board && !force) { blRender(); return; }
+  if (!blState.data || force) {
+    blState.loading = true; blRender();
+    blState.data = await api('/backlog/overview');
+    blState.loading = false;
+  }
+  if (blState.filters.mine && !blState.mineName) {
+    try { const me = await api('/users/me/profile'); blState.mineName = (me.data && (me.data.displayName || me.data.username)) || ''; } catch (e) {}
+    if (!blState.mineName) blState.mineName = prompt('「仅分配给我」按 assignee 名匹配，请输入你的名称（@名/显示名）：') || '';
+    if (blState.mineName) localStorage.setItem('bl-mine', blState.mineName);
+    if (!blState.mineName) { blState.filters.mine = false; }
+  }
+  blRender();
+}
+
+function blBadgeOf(tasks) {
+  const t = (tasks || [])[0];
+  if (!t) return '';
+  if (t.writebackFailed) return '<span class="bl-warn bl-badge" data-rt="' + esc(t.id) + '" title="回写未确认（点击重试）">⚠ 回写未确认</span>';
+  const st = t.summaryStatus || '';
+  // 直发（chat）任务没有编排汇总，summaryStatus 为空；此时以任务自身终态判定，
+  // 否则完成的任务会显示 ⚪（与「手动关闭」混淆、也让已回写的 Done 卡片看起来没有佐证）
+  const ic = st === 'success' ? '✅'
+    : st === 'failed' ? '🔴'
+      : t.status === 'running' ? '🔵'
+        : t.status === 'completed' ? '✅'
+          : (t.status === 'failed' || t.status === 'cancelled') ? '🔴' : '⚪';
+  return '<span class="bl-badge" data-task="' + esc(t.id) + '" title="关联任务 ' + esc(t.id) + '（点击打开）">' + ic + ' ' + esc(t.id) + '</span>';
+}
+
+function blRowHtml(g, it) {
+  if (blState.filters.openOnly && !blIsOpenStatus(it.status)) return '';
+  if (blState.filters.mine && !(it.assignees || []).some(function (a) { return a.indexOf(blState.mineName) >= 0; })) return '';
+  const ac = it.acceptance ? '<span class="bl-ac">AC ' + it.acceptance.done + '/' + it.acceptance.total + '</span>' : '';
+  const labels = (it.labels || []).map(function (l) { return '<span class="bl-tag">' + esc(l) + '</span>'; }).join('');
+  const done = !blIsOpenStatus(it.status);
+  return '<div class="bl-row" data-grp="' + esc(g.projectId) + '" data-item="' + esc(it.itemId) + '">' +
+    '<span class="bl-tag">' + esc(it.status || '—') + '</span>' +
+    '<span class="bl-title" data-detail="' + esc(it.itemId) + '">' + esc(it.itemId) + ' ' + esc(it.title || '') + '</span>' + labels + ac + blBadgeOf(it.tasks) +
+    '<span class="hspacer"></span>' +
+    (!done ? '<button class="mini-btn bl-dispatch" data-dispatch="' + esc(it.itemId) + '">▶ 派发</button>' : '') +
+    '</div>';
+}
+
+function blOverviewHtml() {
+  const d = blState.data;
+  if (!d) return '<div class="bl-empty">' + (blState.loading ? '加载中…' : '加载失败，点「刷新」重试') + '</div>';
+  if (blState.loading) return '<div class="bl-empty">加载中…</div>';
+  const groups = d.data || [];
+  let openTotal = 0;
+  const html = groups.map(function (g) {
+    const openItems = (g.items || []).filter(function (it) { return blIsOpenStatus(it.status); });
+    openTotal += openItems.length;
+    const doneCount = (g.items || []).length - openItems.length;
+    const expanded = blState.expanded[g.projectId] !== false;
+    const nodeChip = g.nodeStatus === 'ok'
+      ? '<span class="node-ok">● 节点正常</span>'
+      : g.nodeStatus === 'archived'
+        ? '<span class="cnt">归档只读</span>'
+        : '<span class="node-err" data-bl-retry="' + esc(g.projectId) + '" title="' + esc(g.error || '节点不可达') + '（点击重试）">⚠ 节点不可达</span>';
+    const rows = !g.initialized
+      ? '<div class="bl-row"><span class="bl-empty">该项目尚未初始化 backlog。' + (g.nodeStatus === 'ok' ? '可在项目卡片「进入工作台」后让智能体建待办，或' : '') + '</span><button class="mini-btn bl-init" data-init="' + esc(g.projectId) + '" ' + (g.nodeStatus !== 'ok' ? 'disabled' : '') + '>初始化 backlog</button></div>'
+      : (g.items || []).map(function (it) { return blRowHtml(g, it); }).join('') || '<div class="bl-row"><span class="bl-empty">暂无待办</span></div>';
+    return '<div class="bl-group">' +
+      '<div class="bl-group-h" data-grp-h="' + esc(g.projectId) + '">' +
+      '<span>' + (expanded ? '▾' : '▸') + '</span>' +
+      '<span>📦 ' + esc(g.projectName) + '</span>' +
+      '<span class="cnt">待办 ' + openItems.length + ' / 完成 ' + doneCount + '</span>' + nodeChip +
+      (g.truncated ? '<span class="cnt" title="目录列表被截断，仅显示部分">仅显示前若干条</span>' : '') +
+      '<span class="hspacer"></span>' +
+      '<button class="mini-btn bl-board-btn" data-board="' + esc(g.projectId) + '" ' + (g.nodeStatus !== 'ok' ? 'disabled' : '') + '>看板</button>' +
+      '</div>' + (expanded ? rows : '') + '</div>';
+  }).join('');
+  return '<div class="bl-head">' +
+    '<span class="bl-chip' + (blState.filters.openOnly ? ' on' : '') + '" id="bl-f-open">仅未完成 (' + openTotal + ')</span>' +
+    '<span class="bl-chip' + (blState.filters.mine ? ' on' : '') + '" id="bl-f-mine" title="按 assignee 匹配' + (blState.mineName ? '：' + esc(blState.mineName) : '') + '">仅分配给我</span>' +
+    '<span class="bl-empty" style="padding:0">共 ' + groups.length + ' 个项目</span>' +
+    '</div>' + (html || '<div class="bl-empty">没有可见项目</div>');
+}
+
+function blCardHtml(it, statuses) {
+  const ac = it.acceptance ? '<span class="bl-ac">AC ' + it.acceptance.done + '/' + it.acceptance.total + '</span>' : '';
+  const labels = (it.labels || []).map(function (l) { return '<span class="bl-tag">' + esc(l) + '</span>'; }).join('');
+  const deps = (it.dependencies || []).length ? '<span class="bl-tag" title="依赖: ' + esc(it.dependencies.join('、')) + '">⛓ ' + it.dependencies.length + '</span>' : '';
+  const done = !blIsOpenStatus(it.status);
+  return '<div class="bl-card" data-item="' + esc(it.itemId) + '">' +
+    '<input type="checkbox" class="bl-pick" data-pick="' + esc(it.itemId) + '" style="width:auto">' +
+    ' <span class="bl-title" data-detail="' + esc(it.itemId) + '">' + esc(it.itemId) + ' ' + esc(it.title || '') + '</span>' +
+    '<div class="meta"><span class="bl-tag">' + esc(it.status || '—') + '</span>' + labels + deps + ac + blBadgeOf(it.tasks) + '</div>' +
+    '<div class="ops"><button class="mini-btn bl-dispatch" data-dispatch="' + esc(it.itemId) + '">▶ 派发</button>' +
+    '<button class="mini-btn bl-edit" data-edit="' + esc(it.itemId) + '">✎ 编辑</button>' +
+    '<button class="mini-btn bl-del" data-del="' + esc(it.itemId) + '">🗑</button></div>' +
+    '</div>';
+}
+
+function blBoardHtml() {
+  const b = blState.board; if (!b) return '';
+  const d = b.data;
+  const cols = (d.statuses && d.statuses.length ? d.statuses : ['To Do', 'In Progress', 'Done']);
+  const picked = blPickedCount();
+  return '<div class="bl-head">' +
+    '<button class="mini-btn" id="bl-back">← 返回我的待办</button>' +
+    '<b>📦 ' + esc(b.name) + ' · 看板</b>' +
+    (d.archived ? '<span class="bl-tag">归档只读</span>' : '') +
+    '<span class="hspacer"></span>' +
+    '<button class="mini-btn" id="bl-batch" ' + (picked ? '' : 'disabled') + '>派发选中 (' + picked + ')</button>' +
+    '<button class="mini-btn pri" id="bl-new" ' + (d.archived ? 'disabled' : '') + '>＋ 新建待办</button>' +
+    '</div>' +
+    (d.truncated ? '<div class="bl-empty">目录列表被截断，仅显示部分待办</div>' : '') +
+    '<div class="bl-board">' + cols.map(function (st) {
+      const items = (d.items || []).filter(function (it) { return (it.status || d.defaultStatus) === st; });
+      return '<div class="bl-col"><div class="bl-col-h">' + esc(st) + ' <span class="cnt">' + items.length + '</span></div><div class="bl-col-b">' +
+        (items.map(function (it) { return blCardHtml(it, cols); }).join('') || '<div class="bl-empty">空</div>') +
+        '</div></div>';
+    }).join('') + '</div>';
+}
+
+function blPickedCount() { return document.querySelectorAll('#bl-root .bl-pick:checked').length; }
+
+/** 重渲染后同步批量派发按钮的文案/禁用态（内联 HTML 固定渲染的是「派发选中 (N)」，N 为渲染时勾选数） */
+function blSyncBatchBtn() {
+  const b = document.getElementById('bl-batch');
+  if (!b) return;
+  const n = blPickedCount();
+  b.disabled = !n;
+  b.textContent = '派发选中 (' + n + ')';
+}
+
+function blRender() {
+  const root = document.getElementById('bl-root'); if (!root) return;
+  root.innerHTML = blState.board ? blBoardHtml() : blOverviewHtml();
+  blSyncBatchBtn();
+  root.querySelectorAll('[data-bl-retry]').forEach(function (el) {
+    el.addEventListener('click', function () { toast('正在重试该项目的节点连接…'); renderBacklogView(true); });
+  });
+  root.querySelectorAll('[data-init]').forEach(function (el) {
+    el.addEventListener('click', async function () {
+      const pid = el.dataset.init;
+      const r = await api('/projects/' + pid + '/backlog/init', { method: 'POST', body: JSON.stringify({ sample: false, updateInstruction: true }) });
+      toast(r.ok ? '✓ backlog 已初始化（协作约定已追加到项目指令）' : '初始化失败: ' + (r.error || ''), !r.ok);
+      if (r.ok) { blState.data = null; renderBacklogView(true); }
+    });
+  });
+  root.querySelectorAll('[data-board]').forEach(function (el) {
+    el.addEventListener('click', async function () {
+      const pid = el.dataset.board;
+      const g = ((blState.data || {}).data || []).find(function (x) { return x.projectId === pid; });
+      const r = await api('/projects/' + pid + '/backlog');
+      if (!r.ok) { toast('看板加载失败: ' + (r.error || ''), true); return; }
+      blState.board = { projectId: pid, name: (g && g.projectName) || pid, data: r.data };
+      blRender();
+    });
+  });
+  root.querySelectorAll('[data-grp-h]').forEach(function (el) {
+    el.addEventListener('click', function (e) {
+      if (e.target.closest('button')) return;
+      const pid = el.dataset.grpH;
+      blState.expanded[pid] = blState.expanded[pid] === false;
+      blRender();
+    });
+  });
+  const fo = document.getElementById('bl-f-open');
+  if (fo) fo.addEventListener('click', function () { blState.filters.openOnly = !blState.filters.openOnly; blRender(); });
+  const fm = document.getElementById('bl-f-mine');
+  if (fm) fm.addEventListener('click', function () { blState.filters.mine = !blState.filters.mine; blState.data = null; renderBacklogView(true); });
+  const back = document.getElementById('bl-back');
+  if (back) back.addEventListener('click', function () { blState.board = null; blState.data = null; renderBacklogView(true); });
+  const nw = document.getElementById('bl-new');
+  if (nw) nw.addEventListener('click', function () { blOpenEditor(null); });
+  const batch = document.getElementById('bl-batch');
+  if (batch) batch.addEventListener('click', blBatchDispatch);
+  root.querySelectorAll('[data-detail]').forEach(function (el) {
+    el.addEventListener('click', function () { blOpenDetail(el.dataset.detail); });
+  });
+  root.querySelectorAll('[data-dispatch]').forEach(function (el) {
+    el.addEventListener('click', async function () {
+      const itemId = el.dataset.dispatch;
+      const pid = blState.board ? blState.board.projectId : el.closest('[data-grp]').dataset.grp;
+      await blDispatch(pid, itemId, false);
+    });
+  });
+  root.querySelectorAll('[data-edit]').forEach(function (el) {
+    el.addEventListener('click', function () { blOpenEditor(el.dataset.edit); });
+  });
+  root.querySelectorAll('[data-del]').forEach(function (el) {
+    el.addEventListener('click', async function () {
+      const itemId = el.dataset.del;
+      if (!confirm('物理删除待办 ' + itemId + '？（推荐改用 cancelled 状态保留历史）')) return;
+      if (!confirm('再次确认：删除后不可恢复。')) return;
+      const r = await api('/projects/' + blState.board.projectId + '/backlog/items/' + encodeURIComponent(itemId), { method: 'DELETE' });
+      toast(r.ok ? '✓ 已删除' : '删除失败: ' + (r.error || ''), !r.ok);
+      if (r.ok) blReloadBoard();
+    });
+  });
+  root.querySelectorAll('[data-task]').forEach(function (el) {
+    el.addEventListener('click', function () { blOpenItem({ id: el.dataset.task }); });
+  });
+  root.querySelectorAll('[data-rt]').forEach(function (el) {
+    el.addEventListener('click', async function (e) {
+      e.stopPropagation();
+      const taskId = el.dataset.rt;
+      const pid = blState.board ? blState.board.projectId : (el.closest('[data-grp]') ? el.closest('[data-grp]').dataset.grp : null);
+      if (!pid) return;
+      const r = await api('/projects/' + pid + '/backlog/retry-writeback/' + encodeURIComponent(taskId), { method: 'POST', body: '{}' });
+      toast(r.ok ? '✓ 回写成功' : '重试失败: ' + (r.error || ''), !r.ok);
+      if (r.ok) { if (blState.board) blReloadBoard(); else renderBacklogView(true); }
+    });
+  });
+  root.querySelectorAll('.bl-pick').forEach(function (el) {
+    el.addEventListener('change', function () {
+      const b = document.getElementById('bl-batch');
+      if (b) { b.disabled = !blPickedCount(); b.textContent = '派发选中 (' + blPickedCount() + ')'; }
+    });
+  });
+}
+
+function blBoardItem(itemId) {
+  const b = blState.board; if (!b) return null;
+  return (b.data.items || []).find(function (it) { return it.itemId === itemId; });
+}
+
+async function blReloadBoard() {
+  const b = blState.board; if (!b) return;
+  const r = await api('/projects/' + b.projectId + '/backlog');
+  if (r.ok) { b.data = r.data; blRender(); }
+}
+
+async function blDispatch(pid, itemId, force) {
+  const r = await api('/projects/' + pid + '/backlog/items/' + encodeURIComponent(itemId) + '/dispatch', { method: 'POST', body: JSON.stringify({ force: Boolean(force) }) });
+  if (r.ok) {
+    toast('✓ 已派发为任务 ' + (r.data && r.data.task ? r.data.task.id : ''));
+    if (blState.board) blReloadBoard(); else renderBacklogView(true);
+    return;
+  }
+  if (r.code === 'DEPS_BLOCKED' && confirm(String(r.error || '存在未完成依赖') + '\\n\\n忽略依赖并强制派发？')) {
+    return blDispatch(pid, itemId, true);
+  }
+  toast('派发失败: ' + (r.error || ''), true);
+}
+
+async function blBatchDispatch() {
+  const b = blState.board; if (!b) return;
+  const ids = [...document.querySelectorAll('#bl-root .bl-pick:checked')].map(function (el) { return el.dataset.pick; });
+  if (!ids.length) return;
+  if (!confirm('将选中的 ' + ids.length + ' 条待办逐条派发为任务？')) return;
+  const r = await api('/projects/' + b.projectId + '/backlog/dispatch-batch', { method: 'POST', body: JSON.stringify({ itemIds: ids }) });
+  if (r.ok) {
+    const ok = (r.data || []).filter(function (x) { return x.ok; }).length;
+    const fail = (r.data || []).filter(function (x) { return !x.ok; });
+    toast('批量派发：成功 ' + ok + ' / 失败 ' + fail.length + (fail.length ? '（首例: ' + fail[0].error + '）' : ''), fail.length > 0);
+    blReloadBoard();
+  } else toast('批量派发失败: ' + (r.error || ''), true);
+}
+
+async function blOpenDetail(itemId) {
+  const b = blState.board;
+  const pid = b ? b.projectId : (function () {
+    const row = document.querySelector('[data-item="' + itemId + '"]'); return row ? row.dataset.grp : null;
+  })();
+  if (!pid) return;
+  const r = await api('/projects/' + pid + '/backlog/items/' + encodeURIComponent(itemId));
+  if (!r.ok) { toast('详情加载失败: ' + (r.error || ''), true); return; }
+  const d = r.data;
+  const tasksHtml = (d.tasks || []).map(function (t) {
+    return '<div>· <a href="#" onclick="return false" class="bl-badge" data-open-task="' + esc(t.id) + '">' + esc(t.id) + '</a> ' + esc(t.status) + (t.summaryStatus ? ' / ' + esc(t.summaryStatus) : '') +
+      (t.writebackFailed ? ' <span class="bl-warn" data-rt="' + esc(t.id) + '">⚠ 回写未确认（点击重试）</span>' : '') + '</div>';
+  }).join('') || '<div class="bl-empty">尚无关联任务</div>';
+  openModal('待办 ' + d.item.itemId + ' · ' + (d.item.title || ''),
+    '<div style="max-height:56vh;overflow:auto;font-size:12.5px;line-height:1.6">' +
+    '<div class="bl-head"><span class="bl-tag">' + esc(d.item.status || '') + '</span>' +
+    (d.item.labels || []).map(function (l) { return '<span class="bl-tag">' + esc(l) + '</span>'; }).join('') +
+    (d.item.acceptance ? '<span class="bl-ac">AC ' + d.item.acceptance.done + '/' + d.item.acceptance.total + '</span>' : '') + '</div>' +
+    '<pre style="white-space:pre-wrap;background:var(--bg2);padding:10px;border-radius:8px;max-height:34vh;overflow:auto">' + esc(d.raw || '') + '</pre>' +
+    '<b style="font-size:12.5px">关联任务</b>' + tasksHtml + '</div>',
+    [{ label: '关闭' }]);
+  document.querySelectorAll('#modal-body [data-open-task]').forEach(function (el) {
+    el.addEventListener('click', function () { closeModal(); blOpenItem({ id: el.dataset.openTask }); });
+  });
+  document.querySelectorAll('#modal-body [data-rt]').forEach(function (el) {
+    el.addEventListener('click', async function () {
+      const rr = await api('/projects/' + pid + '/backlog/retry-writeback/' + encodeURIComponent(el.dataset.rt), { method: 'POST', body: '{}' });
+      toast(rr.ok ? '✓ 回写成功' : '重试失败: ' + (rr.error || ''), !rr.ok);
+      if (rr.ok) { closeModal(); if (blState.board) blReloadBoard(); else renderBacklogView(true); }
+    });
+  });
+}
+
+async function blOpenEditor(itemId) {
+  const b = blState.board; if (!b) return;
+  let it = itemId ? blBoardItem(itemId) : null;
+  let raw = '';
+  if (it) {
+    const r = await api('/projects/' + b.projectId + '/backlog/items/' + encodeURIComponent(it.itemId));
+    if (!r.ok) { toast('读取失败: ' + (r.error || ''), true); return; }
+    raw = r.data.raw || '';
+  }
+  const statuses = (b.data.statuses || ['To Do', 'In Progress', 'Done']);
+  const descMatch = /<!--\\s*SECTION:DESCRIPTION:BEGIN\\s*-->\\s?([\\s\\S]*?)\\s?<!--\\s*SECTION:DESCRIPTION:END\\s*-->/.exec(raw);
+  const acBlock = /<!--\\s*AC:BEGIN\\s*-->\\s?([\\s\\S]*?)\\s?<!--\\s*AC:END\\s*-->/.exec(raw);
+  // 注意：本文件主体在模板字符串内，'\\n' 求值为页面里的真换行；'\\\\n' 会变成字面反斜杠+n，
+  // 导致多行验收清单既拆不开也拼不回（线上 BUG：编辑抽屉回填为空 + 新建多行验收被塞成一条）
+  const acLines = acBlock ? acBlock[1].split('\\n').map(function (l) { return l.replace(/^-\\s*\\[[ xX]\\]\\s*#\\d+\\s*/, ''); }).filter(Boolean) : [];
+  const escAttr = function (s) { return esc(s); };
+  openModal(it ? '编辑待办 ' + it.itemId : '新建待办',
+    '<div style="display:flex;flex-direction:column;gap:8px;font-size:12.5px">' +
+    '<div class="field"><label>标题 *</label><input id="bl-f-title" value="' + escAttr(it ? it.title || '' : '') + '"></div>' +
+    '<div class="field"><label>描述</label><textarea id="bl-f-desc" rows="4">' + esc(descMatch ? descMatch[1] : '') + '</textarea></div>' +
+    '<div class="field"><label>验收清单（每行一条）</label><textarea id="bl-f-ac" rows="3">' + esc(acLines.join('\\n')) + '</textarea></div>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+    '<div class="field" style="flex:1;min-width:130px"><label>状态</label><select id="bl-f-status">' + statuses.map(function (s) { return '<option ' + (it && it.status === s ? 'selected' : '') + '>' + esc(s) + '</option>'; }).join('') + '</select></div>' +
+    '<div class="field" style="flex:1;min-width:130px"><label>优先级（可选）</label><input id="bl-f-pri" value="' + escAttr(it && it.priority || '') + '"></div>' +
+    '</div>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+    '<div class="field" style="flex:1;min-width:130px"><label>标签（逗号分隔）</label><input id="bl-f-labels" value="' + escAttr((it && it.labels || []).join(',')) + '"></div>' +
+    '<div class="field" style="flex:1;min-width:130px"><label>依赖（itemId 逗号分隔）</label><input id="bl-f-deps" value="' + escAttr((it && it.dependencies || []).join(',')) + '"></div>' +
+    '</div></div>',
+    [{ label: '取消' }, {
+      label: it ? '保存' : '创建', cls: 'pri', act: async function () {
+        const body = {
+          title: document.getElementById('bl-f-title').value.trim(),
+          description: document.getElementById('bl-f-desc').value,
+          acceptance: document.getElementById('bl-f-ac').value.split('\\n').map(function (s) { return s.trim(); }).filter(Boolean),
+          status: document.getElementById('bl-f-status').value,
+          priority: document.getElementById('bl-f-pri').value.trim(),
+          labels: document.getElementById('bl-f-labels').value.split(/[,，]/).map(function (s) { return s.trim(); }).filter(Boolean),
+          dependencies: document.getElementById('bl-f-deps').value.split(/[,，]/).map(function (s) { return s.trim(); }).filter(Boolean),
+        };
+        if (!body.title) { toast('标题必填', true); return; }
+        const r = it
+          ? await api('/projects/' + b.projectId + '/backlog/items/' + encodeURIComponent(it.itemId), { method: 'PUT', body: JSON.stringify(body) })
+          : await api('/projects/' + b.projectId + '/backlog/items', { method: 'POST', body: JSON.stringify(body) });
+        if (r.ok) { closeModal(); toast(it ? '✓ 已保存' : '✓ 待办已创建: ' + (r.data && r.data.itemId)); blReloadBoard(); }
+        else if (r.code === 'CONFLICT') { toast('内容已被其他人/agent 更新，将刷新看板', true); blReloadBoard(); }
+        else toast((it ? '保存失败: ' : '创建失败: ') + (r.error || ''), true);
+      }
+    }]);
+}
+
+var blRefreshBtn = document.getElementById('btn-bl-refresh');
+if (blRefreshBtn && !blRefreshBtn._wired) {
+  blRefreshBtn._wired = true;
+  // 看板打开时刷新必须重载看板本身（此前固定走 overview，看板停在旧数据：
+  // 任务终态回写已在节点生效，界面却仍显 In Progress）
+  blRefreshBtn.addEventListener('click', function () {
+    if (blState.board) { blReloadBoard(); return; }
+    blState.data = null; renderBacklogView(true);
+  });
+}
 
 boot();
 </script>

@@ -222,7 +222,9 @@ export async function parseTeamInput(
       members,
       coordinatorPrompt: opt(raw?.coordinatorPrompt),
       ...(templateId ? { templateId } : {}),
-      enabled: raw?.enabled === undefined ? false : Boolean(raw.enabled),
+      // 默认启用：停用是高级操作而非默认态——停用团在 @ 词典与候选弹层里双过滤，
+      // 用户新建团后 @ 团名会被当普通文本静默直发（线上评审确认的可用性陷阱）
+      enabled: raw?.enabled === undefined ? true : Boolean(raw.enabled),
     },
   }
 }

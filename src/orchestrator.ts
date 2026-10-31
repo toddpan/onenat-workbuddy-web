@@ -292,9 +292,11 @@ export function buildPlannerUserMessage(
     })
     .join('\n')
 
-  const priorityHint = opts?.priorityAgentIds?.length
-    ? `\n重要分工约束: 用户在本轮消息中显式 @ 指定了 ${members.filter(m => opts.priorityAgentIds!.includes(m.agent.id)).map(m => `${m.agent.name}(id=${m.agent.id})`).join('、')}。被 @ 成员只承担与其角色/职责/技能匹配的子任务（例如消息通知类成员只做消息发送，且该子任务依赖产出它的前置子任务）；其余全部子任务分配给主智能体自己执行。禁止把非被 @ 成员职责的工作塞给它，也禁止主智能体只当旁观者。\n`
-    : ''
+  const priorityHint = !opts?.priorityAgentIds?.length
+    ? ''
+    : opts.priorityAgentIds.length === 1
+      ? `\n重要分工约束（单成员聚焦轮）: 用户本轮只显式 @ 了一位成员（${members.filter(m => opts.priorityAgentIds!.includes(m.agent.id)).map(m => `${m.agent.name}(id=${m.agent.id})`).join('、')}）。恰好拆解为 1 个子任务并全部分配给该成员；禁止为主智能体（调度方）自留任何核验/汇总/复核类子任务——核验与最终汇总由系统统一生成，自留子任务属于重复劳动，会被系统直接裁掉。\n`
+      : `\n重要分工约束: 用户在本轮消息中显式 @ 指定了 ${members.filter(m => opts.priorityAgentIds!.includes(m.agent.id)).map(m => `${m.agent.name}(id=${m.agent.id})`).join('、')}。被 @ 成员只承担与其角色/职责/技能匹配的子任务（例如消息通知类成员只做消息发送，且该子任务依赖产出它的前置子任务）；其余全部子任务分配给主智能体自己执行。禁止把非被 @ 成员职责的工作塞给它，也禁止主智能体只当旁观者。\n`
 
   return [
     '你是多智能体任务规划器。你的唯一产出是一份 JSON 计划，绝对不要亲自执行或回答主任务本身；不要输出思考/推理过程文字，直接给出 JSON 本体。',
@@ -699,7 +701,9 @@ export class Orchestrator {
           const key = teamMemberKey(m)
           return { id: key, name: nameOf(key), duty: m.duty }
         })
-      : [...new Set(subtasks.map((s) => s.agentId))].map((id) => ({ id, name: nameOf(id) }))
+      // 普通轮剔除主智能体伪成员：__node__ 是调度方本身，不是「成员」——计入覆盖度会让
+      // 单专家任务显示 2/2 的虚胖口径（线上评审确认），成员覆盖只统计真实参与者
+      : [...new Set(subtasks.map((s) => s.agentId).filter((id) => id !== NODE_AGENT_ID))].map((id) => ({ id, name: nameOf(id) }))
     const coverage: TaskCoverage | undefined = subtasks.length || team
       ? buildCoverage(memberKeys, subtasks)
       : undefined
@@ -792,7 +796,21 @@ export function buildCoverage(
   const completedMembers = members.filter((m) => (completedBy.get(m.id) || 0) > 0)
   const missing = members
     .filter((m) => !(completedBy.get(m.id) || 0))
-    .map((m) => ({ id: m.id, name: m.name, ...(m.duty ? { duty: m.duty } : {}), error: errorBy.get(m.id) || '未分配到子任务或未返回有效产出' }))
+    .map((m) => {
+      const assignedSub = subtasks.find((x) => x.agentId === m.id)
+      const reason: 'unassigned' | 'failed' | 'skipped' = !assignedSub
+        ? 'unassigned'
+        : assignedSub.status === 'skipped'
+          ? 'skipped'
+          : 'failed'
+      return {
+        id: m.id,
+        name: m.name,
+        ...(m.duty ? { duty: m.duty } : {}),
+        error: errorBy.get(m.id) || '未分配到子任务或未返回有效产出',
+        reason,
+      }
+    })
   const total = members.length
   const completed = completedMembers.length
   return {

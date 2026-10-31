@@ -19,6 +19,7 @@ import type { OnenatDirectory } from './onenat.js'
 import type { WorkStore } from './store.js'
 import type { SubtaskLogEntry, AgentResourceBinding, DshRef, ExtractedFileMention, ExtractedMentions, ExpertTeam, PlanSubtask, Project, ResolvedDshTarget, SubAgent, TaskEvent, TaskPlanScope, TaskTurn, TurnToolCall, WorkTask } from './types.js'
 import { teamMemberKey, makeExpertAgentId, expertIdFromAgentId, projectDefaultAgentIds, MAIN_AGENT_LABEL, NODE_AGENT_ID } from './types.js'
+import { appendExecutionRecord, encodeFrontmatter, findItem, readItem, resolveDoneStatus, writeItem } from './backlog.js'
 import type { SshResourceStore } from './ssh-store.js'
 import { expertPersona, type ExpertRegistry, type ExpertProfile } from './expert-registry.js'
 import { teamMemberContract } from './expert-teams.js'
@@ -61,6 +62,8 @@ export interface CreateTaskInput {
   agentPreset?: string
   /** 专家团任务：按团队合同展开成员并注入规划/派工/汇总（memberAgentIds 未显式给定时以团队名册为准） */
   teamId?: string
+  /** backlog 派发来源（B4）：由项目 backlog 待办派发时随任务持久化，终态钩子据此回写 */
+  backlogRef?: WorkTask['backlogRef']
 }
 
 /** 取 prompt 尾部片段：降级轮询时供远端 history 定位本次回合的起点 user 消息（注入消息不含用户文本，天然排除） */
@@ -122,6 +125,26 @@ export function extractToolPaths(name: unknown, args: unknown): string[] | undef
   return out.length ? out.slice(0, 50) : undefined
 }
 
+/**
+ * @ 提及的起始边界判定：只有「独立 @」才算提及候选。
+ *
+ * 背景（线上事故）：消息「把仓库跟 git clone ssh://zuji.pan@10.2.12.43:29418/... 绑定」里的 @
+ * 是 git SSH URL 的 user@host 分隔符，曾被 extractMentions 当成提及解析成伪文件引用
+ * （@host/path 落到兜底文件分支、挂到 agents[0] 头上），进而把普通直通消息升级成编排。
+ * 同类还有邮箱（user@example.com）、URL 路径（https://x.com/@org）、CLI 字面量（curl -F f=@file）。
+ *
+ * 规则：@ 前一个字符是 ASCII 字母数字，或属于邮箱/URL/路径/CLI 参数的连接符
+ * （. _ + - / = ~）时，判定为「嵌在 token 里」→ 不是提及；其余（文本开头、空白、
+ * 中日韩文字、全角标点、ASCII 句读括号等）均为合法提及起点，不影响
+ * 「帮我@brain 看看」「（@brain）」「@brain:logs/app.log」等既有用法。
+ */
+const AT_MENTION_EMBEDDED_PREV = /[A-Za-z0-9._+~/=-]/
+
+export function isAtMentionBoundary(text: string, at: number): boolean {
+  if (at <= 0) return true
+  return !AT_MENTION_EMBEDDED_PREV.test(text[at - 1])
+}
+
 /** 给控制面紧急操作（停止）加时限：ONENAT 抖动时不能让"停止"按钮等十几秒才返回 */
 function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
   return Promise.race([
@@ -136,6 +159,11 @@ function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
 /** 节点不可达类错误（用于把 "fetch failed" 翻译成可操作提示，而不是原样丢给用户） */
 function isUnreachableError(msg: string | undefined): boolean {
   return /fetch failed|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH|ENOTFOUND|ETIMEDOUT|timed? ?out|socket hang up|EPIPE/i.test(String(msg || ''))
+}
+
+/** 远端会话已不存在（natpass 端口漂移串端口/远端重启清理/串到别节点引擎）——可重建会话重发 */
+function isSessionLostError(msg: string | undefined): boolean {
+  return /session\s*'?\s*[\w:-]+\s*'?\s+not found/i.test(String(msg || ''))
 }
 
 export class TaskEngine {
@@ -231,7 +259,11 @@ export class TaskEngine {
           const key = String(nm || '').trim().toLowerCase()
           if (!key) continue
           const hit = byName.get(key)
-          if (hit) hit.experts.push(e)
+          // 同一专家的 name 与 nameEn 常相同（内置团队角色 nameEn 直接复用中文名）：
+          // 按专家 id 去重，避免把单个专家误判成「同名多角色」而拒绝召唤
+          if (hit) {
+            if (!hit.experts.some((x) => x.id === e.id)) hit.experts.push(e)
+          }
           else byName.set(key, { name: String(nm).trim(), experts: [e] })
         }
       }
@@ -253,10 +285,10 @@ export class TaskEngine {
 
     dict.sort((a, b) => b.name.length - a.name.length)
 
-    // 2. 扫描文本中所有的 '@' 索引位置
+    // 2. 扫描文本中所有的 '@' 索引位置（嵌入 token 的 @ 除外：邮箱 / URL user@host / CLI @file 字面量，见 isAtMentionBoundary）
     let i = 0
     while (i < text.length) {
-      if (text[i] === '@') {
+      if (text[i] === '@' && isAtMentionBoundary(text, i)) {
         const startPos = i
         const rest = text.slice(i + 1)
         let matched = false
@@ -647,6 +679,7 @@ export class TaskEngine {
       ...(input.workDir ? { workDir: input.workDir } : {}),
       ...(team ? { teamId: team.id } : {}),
       ...(expertMembers?.length ? { expertMembers } : {}),
+      ...(input.backlogRef ? { backlogRef: input.backlogRef } : {}),
     }
     this.store.upsertTask(task)
     if (inheritedDefaults) this.taskLog(task.id, 'info', `已继承项目默认协作成员（${memberAgentIds.length} 名）：编排与 @ 均可按需使用，不被限死为唯一执行者`)
@@ -668,6 +701,72 @@ export class TaskEngine {
       task.mode = task.memberAgentIds.length > 1 ? 'orchestrate' : task.mode
       return task
     })
+  }
+
+  // ---------- backlog 终态回写（B4，docs/design-backlog-integration.md §6.3） ----------
+
+  /** 任务终态出口的 fire-and-forget 钩子：有 backlogRef 且已产出 summary 才回写；失败标记任务供 UI 重试。
+   *  chatFallback=true 时（主会话直发完成、无编排汇总）以合成汇总回写 —— 完成本身即完成信号。 */
+  private backlogWritebackFire(taskId: string, opts?: { chatFallback?: boolean }): void {
+    const task = this.store.getTask(taskId)
+    if (!task?.backlogRef) return
+    if (!task.summary && !(opts?.chatFallback && task.status === 'completed')) return
+    // chat 兜底仅在首轮完成时回写：后续追问轮不重复追加「派发执行」记录（防噪声；状态已是 Done）
+    if (opts?.chatFallback && !task.summary && task.turns.filter((t) => t.role === 'user').length > 1) return
+    this.runBacklogWriteback(task).catch((err: unknown) => {
+      try {
+        this.store.mutateTask(taskId, (t) => {
+          t.backlogWritebackFailed = { at: Date.now(), error: String((err as Error)?.message || err).slice(0, 300) }
+        })
+      } catch {
+        // 标记失败不影响任务终态事件
+      }
+    })
+  }
+
+  /**
+   * 执行一次 backlog 回写：按 summary.status 迁移待办状态（§4.2）并文末追加执行记录。
+   * success → done；partial_success → 保持现状；failed → 回 default（open）。
+   * 无编排汇总的主会话任务按 completed 合成成功汇总（§6.3：完成即信号，记录中注明）。
+   * 回写权威在服务端 —— agent 是否自觉维护不影响闭环正确性。
+   */
+  public async runBacklogWriteback(task: WorkTask): Promise<void> {
+    const ref = task.backlogRef
+    if (!ref) throw new Error('任务无 backlog 来源')
+    const summary =
+      task.summary ||
+      (task.status === 'completed'
+        ? {
+            status: 'success' as const,
+            overview: '主会话直发完成（无编排汇总）',
+            subtaskSummaries: [],
+            finalConclusion: [...task.turns].reverse().find((t) => t.role === 'agent')?.text?.slice(0, 500) || '',
+            completedAt: Date.now(),
+          }
+        : undefined)
+    if (!summary) throw new Error('任务尚无汇总')
+    const proj = this.store.getProject(ref.projectId)
+    if (!proj?.workspace) throw new Error('项目不存在或未配置工作目录')
+    const target = await this.resolver.resolveRef(proj.dshRef, proj.apiKey, 'backlog-writeback')
+    if (!target.online || !target.baseUrl) throw new Error(target.error || '节点不可达，无法回写')
+    const found = await findItem(this.client, target, proj.workspace, ref.itemId)
+    if (!found) throw new Error(`待办 ${ref.itemId} 不存在（可能已被删除或改名）`)
+    const raw = await readItem(this.client, target, proj.workspace, found.item.fileName)
+    const doneStatus = resolveDoneStatus(found.list.config.statuses)
+    const success = summary.status === 'success'
+    const failed = summary.status === 'failed'
+    const nextStatus = success ? doneStatus : failed ? found.list.config.defaultStatus : found.item.status
+    const outcome = success ? '成功' : failed ? '失败' : '部分成功（覆盖度未全回传）'
+    const time = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+    const lines = [`任务 ${task.id} · 结果=${outcome}`, summary.finalConclusion || summary.overview || '（无汇总文本）']
+    if (task.backlogWritebackFailed) lines.push('（本次为重试回写）')
+    const next = appendExecutionRecord(encodeFrontmatter(raw, { status: nextStatus }), { time, title: `派发执行（${outcome}）`, lines })
+    await writeItem(this.client, target, proj.workspace, found.item.fileName, () => next, { base: raw })
+    if (task.backlogWritebackFailed) {
+      this.store.mutateTask(task.id, (t) => {
+        delete t.backlogWritebackFailed
+      })
+    }
   }
 
   /**
@@ -938,6 +1037,7 @@ export class TaskEngine {
         t.summary = summary
         t.status = summary.status
       })
+      this.backlogWritebackFire(taskId)
       this.emit(taskId, { type: 'task_end', task: this.store.getTask(taskId)! })
       return { ok: true }
     } finally {
@@ -951,9 +1051,18 @@ export class TaskEngine {
     const task = this.store.getTask(taskId)
     if (!task) return { ok: false, error: '任务不存在' }
     if (!text.trim()) return { ok: false, error: '消息为空' }
+    const clean = text.trim()
+    // 提及解析提前：团队首句桥接（teamFirstTurn）必须让位显式 @ —— 团队草稿首句带
+    // @成员/@专家/@项目 时按用户意图聚焦，不吃掉成团队合同轮（评审确认的语义冲突）。
+    const mentions = await this.extractMentions(clean)
+    const hasExplicitMention = mentions.mentionedAgentIds.length > 0
+      || (mentions.mentionedExpertIds?.length || 0) > 0
+      || Boolean(mentions.mentionedTeamId)
+      || Boolean(mentions.mentionedProjectId)
     // 团队任务的「第一条用户消息」= 创建团队任务（POST {teamId} 无消息 → 草稿 + teamId）输入的首句：
-    // 显式确认为团队合同轮（本轮全员编排），否则新语义会把无 @ 首句路由到主会话直发、团队合同失效。
-    const teamFirstTurn = Boolean(task.teamId) && !opts?.teamId && !task.turns.some((t) => t.role === 'user')
+    // 仅当首句无任何显式提及（也无选择器 teamId）时才桥接为团队合同轮，否则新语义会把
+    // 无 @ 首句路由到主会话直发、团队合同失效。
+    const teamFirstTurn = Boolean(task.teamId) && !opts?.teamId && !hasExplicitMention && !task.turns.some((t) => t.role === 'user')
     if (teamFirstTurn) opts = { ...(opts || {}), teamId: task.teamId }
     // 执行中 → 排队：登记为 queued 轮次，本轮结束后自动补发（queue/send 可立即插话）
     if (this.activeJobs.has(taskId)) {
@@ -961,7 +1070,7 @@ export class TaskEngine {
       this.store.appendTurn(taskId, turn)
       this.store.mutateTask(taskId, (t) => {
         t.queue = t.queue || []
-        t.queue.push({ text: text.trim(), at: Date.now(), turnId: turn.id, ...(opts?.teamId ? { teamId: opts.teamId } : {}) })
+        t.queue.push({ text: clean, at: Date.now(), turnId: turn.id, ...(opts?.teamId ? { teamId: opts.teamId } : {}) })
       })
       // 推送排队轮：多标签页/重连后也能立刻看到「⏳ 已排队」气泡（旧实现只落库不广播，
       // 发送方也不渲染 → 消息像丢了，刷新后又与补发轮重复出现）
@@ -973,15 +1082,15 @@ export class TaskEngine {
     const reused = opts?.reuseTurnId ? this.store.getTask(taskId)?.turns.find((t) => t.id === opts.reuseTurnId) : undefined
     let turn: TaskTurn
     if (reused) {
-      turn = { ...reused, text: text.trim(), queued: false }
+      turn = { ...reused, text: clean, queued: false }
       delete (turn as any).queued
       this.store.mutateTask(taskId, (t) => {
         const x = t.turns.find((y) => y.id === turn.id)
-        if (x) { delete x.queued; x.text = text.trim() }
+        if (x) { delete x.queued; x.text = clean }
       })
       this.emit(taskId, { type: 'turn_start', turn })
     } else {
-      turn = { id: `turn-${randomUUID().slice(0, 8)}`, seq: 0, role: 'user', text: text.trim(), at: Date.now() }
+      turn = { id: `turn-${randomUUID().slice(0, 8)}`, seq: 0, role: 'user', text: clean, at: Date.now() }
       this.store.appendTurn(taskId, turn)
       this.emit(taskId, { type: 'turn_start', turn })
     }
@@ -989,9 +1098,6 @@ export class TaskEngine {
       t.status = 'running'
     })
     this.emit(taskId, { type: 'turn_start', turn })
-
-    // 提取 @ 提及的智能体与资源（@专家团 / @专家库角色 也在其中）
-    const mentions = await this.extractMentions(text.trim())
 
     // 若提及了当前任务之外的新智能体，自动纳入任务成员
     if (mentions.mentionedAgentIds.length > 0) {
@@ -1013,9 +1119,6 @@ export class TaskEngine {
 
     // @专家库角色：登记为任务动态成员（expert-<id> 伪 id，不落子智能体实体）
     const mentionedExpertIds = mentions.mentionedExpertIds || []
-    if (mentions.mentionedExpertAmbiguous) {
-      this.appendSystemTurn(taskId, `⚠️ 专家库中存在多个同名角色「${mentions.mentionedExpertAmbiguous}」，已拒绝召唤；请改用 @名称#id 指定具体专家、使用子智能体或指定其他专家`)
-    }
     if (mentionedExpertIds.length) {
       const added: NonNullable<WorkTask['expertMembers']> = []
       for (const eid of mentionedExpertIds) {
@@ -1191,6 +1294,16 @@ export class TaskEngine {
   private async processUserMessage(taskId: string, text: string, mentions: ExtractedMentions, signal: AbortSignal, opts?: { teamId?: string }): Promise<void> {
     let task = this.store.getTask(taskId)
     if (!task) return
+
+    // @ 歧义拒绝后必须阻断本轮（在一切路由之前）：若继续走默认分支，消息会按「无 @」
+    // 静默降级为主会话直发，用户看到的是无关的节点执行结果，完全看不出是 @ 写法问题
+    //（线上实测踩坑：@同名专家 → 拒绝提示 → 主会话直发失败）。
+    if (mentions.mentionedExpertAmbiguous) {
+      this.appendSystemTurn(taskId, `⚠️ @「${mentions.mentionedExpertAmbiguous}」命中专家库多个同名角色，本轮已停止派发；请改用 @名称#id 指定具体专家，或从输入框 @ 弹层选择后重新发送`)
+      this.store.mutateTask(taskId, (t) => { t.status = 'failed' })
+      this.emit(taskId, { type: 'task_status', status: 'failed' })
+      return
+    }
 
     // 消息级专家团意图（composer 选择器显式传入 / @团队名 提及）：
     // 命中后把团队固化为任务语义（teamId/mode/成员账本），本轮起按团队合同编排；
@@ -1707,6 +1820,17 @@ export class TaskEngine {
     }
 
     let result = await this.dispatchWithFallback(target, session.remoteSessionId!, fullPrompt, streamHandlers, streamCtrl.signal)
+    // 会话在远端丢失（natpass 端口漂移串端口/远端重启清理）：重建会话并原样重发一次，
+    // 不再把 "Session not found" 裸报给用户（ensureSession 内部 getSession 失败即自动重建）
+    if (!signal.aborted && isSessionLostError(result.error)) {
+      this.taskLog(taskId, 'warn', `远端会话不存在（${agent.name}）: ${String(result.error).slice(0, 140)} — 重建会话重发`)
+      const rebuilt = await this.ensureSession(taskId, agent, target)
+      if (rebuilt.target) target = rebuilt.target
+      if (rebuilt.ok && rebuilt.remoteSessionId) {
+        session.remoteSessionId = rebuilt.remoteSessionId
+        result = await this.dispatchWithFallback(target, rebuilt.remoteSessionId, fullPrompt, streamHandlers, streamCtrl.signal)
+      }
+    }
     // 空结果自愈：远端收到指令但零内容零工具（LLM 上游瞬时异常/流丢失）——
     // 自动重发一次；有工具调用的回合绝不重发（避免发飞书等副作用重复执行）；
     // ask 挂起终结的回合也绝不重发（重发只会经 followup 排队在挂起 run 后面，制造孤儿消息）
@@ -1784,6 +1908,7 @@ export class TaskEngine {
     this.store.mutateTask(taskId, (t) => {
       t.status = 'completed'
     })
+    this.backlogWritebackFire(taskId, { chatFallback: true })
     this.emit(taskId, { type: 'task_status', status: 'completed' })
   }
 
@@ -2397,6 +2522,21 @@ export class TaskEngine {
       }
     }
 
+    // 单成员聚焦轮（delegate）合同执行：用户显式 @ 恰好一名成员时，只保留指派给该成员的
+    // 子任务 —— 调度方自留的「核验/汇总」跳与最终 summarize 职责重复（线上实测每轮多耗
+    // ~90s）。规划提示词已要求单成员轮恰好 1 个子任务；此处执行裁剪保证合同成立。
+    // 裁剪后没有任何该成员子任务时维持原计划（不凭空造任务）。
+    const isDelegateRound = !teamTurn && Array.isArray(focusIds) && focusIds.length === 1
+    if (isDelegateRound && draft.subtasks.length > 1) {
+      const focusId = focusIds![0]
+      const kept = draft.subtasks.filter((x) => x.agentId === focusId)
+      if (kept.length >= 1 && kept.length < draft.subtasks.length) {
+        const focusName = rosterMembers.find((m) => m.agent.id === focusId)?.agent.name || focusId
+        draft = { ...draft, subtasks: kept }
+        this.emit(taskId, { type: 'log', level: 'info', msg: `单成员聚焦轮：仅保留「${focusName}」的 ${kept.length} 个子任务（调度方核验/汇总由最终汇总统一承担）` })
+      }
+    }
+
     // 3. title 依赖 → 子任务 id 依赖
     const idByTitle = new Map<string, string>()
     const subtasks: PlanSubtask[] = draft.subtasks.map((s) => {
@@ -2462,6 +2602,7 @@ export class TaskEngine {
       t.summary = summary
       t.status = summary.status
     })
+    this.backlogWritebackFire(taskId)
     this.emit(taskId, { type: 'task_status', status: summary.status })
     // 成员覆盖度并入汇总文本（移植 dsh-agency-agents coverage 语义：返回覆盖 ≠ 验收通过）
     const cov = summary.coverage
@@ -2509,12 +2650,22 @@ export class TaskEngine {
     return visited !== subtasks.length
   }
 
+  /** 每节点并行回合预算（NodeCapacity）：同一节点同时执行的子任务回合上限。
+   *  专家团 = N 个纯人格成员全部实例化在任务节点，无预算时 N 个会话挤同一上游，
+   *  首 token 延迟成倍恶化（线上实测 3 并发把 253.8s 首增量的成员挤到 300s 停滞）。
+   *  WB_NODE_MAX_CONCURRENT_TURNS 可覆盖，默认 2。 */
+  private maxTurnsPerNode(): number {
+    const n = Number(process.env.WB_NODE_MAX_CONCURRENT_TURNS || 0)
+    return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 2
+  }
+
   private async executeDag(
     taskId: string,
     mentions: ExtractedMentions,
     targets: Map<string, DshTarget>,
     signal: AbortSignal,
   ): Promise<void> {
+    const maxPerNode = this.maxTurnsPerNode()
     for (;;) {
       if (signal.aborted) return
       const task = this.store.getTask(taskId)
@@ -2533,7 +2684,23 @@ export class TaskEngine {
         }
         break
       }
-      await Promise.all(ready.map((sub) => this.launchSubtask(taskId, sub.id, mentions, targets, signal)))
+      // 按目标节点预算分批派发：超预算的成员保持 pending，待本批完成后下轮循环再启动
+      // （计划卡如实呈现分段并行；预算按目标 baseUrl 划分，同一节点同批至多 maxPerNode 个回合）
+      const launched: Array<Promise<void>> = []
+      const inflight = new Map<string, number>()
+      for (const sub of ready) {
+        const key = targets.get(sub.agentId)?.baseUrl || '__unknown__'
+        const used = inflight.get(key) || 0
+        if (used >= maxPerNode) continue
+        inflight.set(key, used + 1)
+        launched.push(
+          this.launchSubtask(taskId, sub.id, mentions, targets, signal).finally(() => {
+            const left = (inflight.get(key) || 1) - 1
+            inflight.set(key, left)
+          }),
+        )
+      }
+      await Promise.all(launched)
     }
   }
 
@@ -2621,6 +2788,13 @@ export class TaskEngine {
     if (scopeTeam && teamMember) {
       parts.push(teamMemberContract(scopeTeam, teamMember, (key) => this.memberNameOf(task, key)))
     }
+    // 项目指令（TaskContext 段）：与聊天直发 sysPrefix 同源。项目任务一旦走编排
+    //（@专家/@团队/@多成员），成员此前拿不到项目规范——工作目录有、指令无（评审确认的缺口）。
+    if (exec.instruction?.trim()) {
+      parts.push(`[项目指令]（本任务所属项目的工作规范，与本子任务一同遵守）:\n${exec.instruction.trim()}`)
+      // 可观测：线上验证靠任务日志确认注入（派发 prompt 本身不落库）
+      subLog(`已随子任务注入项目指令（${exec.instruction.trim().length} 字）`)
+    }
     const hasDynamicResources = (extraResources && extraResources.length > 0) || (mentions?.mentionedFiles && mentions.mentionedFiles.length > 0)
     const cachedBlock = hasDynamicResources ? null : this.blockCacheFresh(taskId, agent, 'unattended')
 
@@ -2690,6 +2864,16 @@ export class TaskEngine {
       },
     })
     let result = await this.dispatchWithFallback(target, activeSession.remoteSessionId!, fullPrompt, makeHandlers(), signal)
+    // 会话在远端丢失（natpass 端口漂移/远端清理）：重建会话并原样重发一次（同主会话轮路径）
+    if (!signal.aborted && isSessionLostError(result.error)) {
+      subLog(`远端会话不存在: ${String(result.error).slice(0, 140)} — 重建会话重发`, 'warn')
+      const rebuilt = await this.ensureSession(taskId, agent, target, { cwd: exec.workspace, workspace: exec.workspace })
+      if (rebuilt.target) target = rebuilt.target
+      if (rebuilt.ok && rebuilt.remoteSessionId) {
+        activeSession = rebuilt
+        result = await this.dispatchWithFallback(target, rebuilt.remoteSessionId, fullPrompt, makeHandlers(), signal)
+      }
+    }
 
     // 模型回退自愈：sub agent 自带 provider/model 首轮零产出（含对账后 ok=true 但整轮无文本——
     // 远端轮次 error 结束时对账也拿不到内容）→ 丢弃该会话，按调度模型重建重试一次。
@@ -3342,12 +3526,23 @@ export class TaskEngine {
       }
       return sync
     }
+    // 远端显式 error 帧（Session not found / TURN_TIMEOUT / 上游错误）＝回合已终结，
+    // 对账长轮询拿不回内容 —— 快速失败交回调用方（not-found 由其重建会话重发）。
+    // 有部分产出时仍走对账（尽量捞回已生成内容）。
+    // 例外：远端「停滞看门狗」error（turn stalled / no session events）只是节点侧
+    // 收流，底层回合多半仍在跑（慢模型首 token 前零事件）——不判死，转入下面的
+    // 轮询对账等远端终态（Turn Job 语义：传输层观测 ≠ 执行层终态）。
+    const stallLike = /turn stalled|no session events/i.test(sse.error || '')
+    if (sse.remoteError && !sse.content && !stallLike) return sse
     // SSE 断损兜底（D5）：断流时已产出部分内容、或流被提前收掉未收到 turn_end、
     // 或提交后流异常终结 —— 远端回合多半仍在继续，轮询对账拿回完整整轮结果。
     // 网络层错误（fetch failed / 连接被重置 / 静默看门狗断开等）同样兜底：远端回合往往还在跑，
     // 只对齐 /SSE 流/ 前缀会漏掉「零内容 + 网络错误」的形态，导致回复彻底不同步到 UI。
     const networkLike = /fetch failed|terminated|TimeoutError|aborted|socket|ECONN|EPIPE|EHOST|upstream|静默超时|网络/i
-    if (!signal.aborted && (sse.content || sse.complete === false || /SSE 流|静默超时/.test(sse.error || '') || networkLike.test(sse.error || ''))) {
+    if (!signal.aborted && (sse.content || sse.complete === false || stallLike || /SSE 流|静默超时/.test(sse.error || '') || networkLike.test(sse.error || ''))) {
+      if (stallLike && !sse.content) {
+        handlers.onLog?.(`远端停滞收流（${String(sse.error).slice(0, 80)}），底层回合可能仍在执行，转轮询对账等待远端终态...`, 'warn')
+      }
       // 挂起防御：远端被 ask_user_question 挂起时会话状态恒为 running，下面的轮询只会空转满额超时
       // （实测表现 = 静默 10min + 对账 30min 的假 running）。先查一次挂起批次，命中立即快速失败。
       const parked = await this.client.listPendingQuestions(target, sessionId).catch(() => undefined)

@@ -19,7 +19,7 @@ import { join } from 'node:path'
 // 测试进程内禁止构造函数自带的 30s 启动归档扫描（对齐 store.test 做法）
 process.env.WORKBUDDY_ARCHIVE_BOOT_DELAY_MS = '3600000'
 
-import { TaskEngine, extractToolPaths } from './engine.js'
+import { TaskEngine, extractToolPaths, isAtMentionBoundary } from './engine.js'
 import { WorkStore } from './store.js'
 import type { AgentResolver } from './resolver.js'
 import type { PromptComposer, ComposeContext, ComposeResult } from './prompt-composer.js'
@@ -65,6 +65,8 @@ class StubComposer {
 /** 远端 HTTP stub：会话即时成功 + 流式回写固定文本（engine 只会走 createSession/streamPrompt 主干） */
 class StubDshClient {
   created = 0
+  /** 收到的派发 prompt（按序），供断言上下文段注入 */
+  prompts: string[] = []
   async createSession(_target: DshTarget, _title: string, _options?: any) {
     this.created++
     return { ok: true, sessionId: `sess-${this.created}` }
@@ -88,7 +90,8 @@ class StubDshClient {
   async listPendingQuestions() {
     return { ok: true, supported: true, count: 0, batches: [] }
   }
-  async streamPrompt(_t: DshTarget, _sid: string, _prompt: string, handlers: any, _opts?: any): Promise<PromptResult> {
+  async streamPrompt(_t: DshTarget, _sid: string, prompt: string, handlers: any, _opts?: any): Promise<PromptResult> {
+    this.prompts.push(prompt)
     await Promise.resolve()
     handlers?.onLog?.('stub stream start')
     const text = 'stub-output'
@@ -171,25 +174,27 @@ class StubPlanner {
   }
 }
 
-/** 专家库 stub：一个内置专家 alameda（「阿拉米达」按中/英文匹配可提） */
+/** 专家库 stub：默认一个内置专家 alameda（「阿拉米达」按中/英文匹配可提）；可注入额外专家（测同名/假同名） */
 class StubRegistry {
-  private expert: Expert & ExpertProfile
-  constructor() {
-    this.expert = {
+  private experts: Array<Expert & ExpertProfile>
+  constructor(extra?: Array<Partial<Expert & ExpertProfile> & { id: string }>) {
+    const base: Expert & ExpertProfile = {
       id: 'alameda', name: '阿拉米达', nameEn: 'alameda', source: 'roster', division: 'team', divisionZh: '团队',
       icon: '🧩', description: 'stub 专家描述', tags: ['stub'],
       systemPrompt: 'stub system prompt', executionPrompt: 'stub execution', role: 'stub role',
     }
+    this.experts = [base, ...(extra || []).map((e) => ({ ...base, ...e }))]
   }
   async search(): Promise<Expert[]> {
-    return [this.expert]
+    return this.experts
   }
   async get(id: string): Promise<Expert | undefined> {
-    return id === this.expert.id ? this.expert : undefined
+    return this.experts.find((e) => e.id === id)
   }
   async getProfile(id: string): Promise<ExpertProfile> {
-    if (id !== this.expert.id) throw new Error('专家不存在')
-    return this.expert
+    const hit = this.experts.find((e) => e.id === id)
+    if (!hit) throw new Error('专家不存在')
+    return hit
   }
 }
 
@@ -205,7 +210,7 @@ interface Fixture {
   resolver: StubResolver
 }
 
-function makeFixture(opts?: { failResolver?: boolean; plannerFactory?: (objective: string, members: PlannerMember[]) => PlanDraft; summary?: TaskSummary }): Fixture {
+function makeFixture(opts?: { failResolver?: boolean; plannerFactory?: (objective: string, members: PlannerMember[]) => PlanDraft; summary?: TaskSummary; registryExperts?: Array<Partial<Expert & ExpertProfile> & { id: string }> }): Fixture {
   const dir = mkdtempSync(join(tmpdir(), 'wb-engine-test-'))
   const store = new WorkStore(join(dir, 'store.json'))
   const client = new StubDshClient()
@@ -218,10 +223,10 @@ function makeFixture(opts?: { failResolver?: boolean; plannerFactory?: (objectiv
     new StubComposer() as unknown as PromptComposer,
     planners as unknown as Orchestrator,
     undefined,
-    new StubRegistry() as unknown as ExpertRegistry,
+    new StubRegistry(opts?.registryExperts) as unknown as ExpertRegistry,
     client as unknown as DshClient,
   )
-  return { store, dir, client, engine, planners, registry: new StubRegistry(), resolver }
+  return { store, dir, client, engine, planners, registry: new StubRegistry(opts?.registryExperts), resolver }
 }
 
 /** store 直接造启用子智能体（store.upsertAgent 新建实体不保留外部 id：先随机建再改名） */
@@ -533,6 +538,211 @@ test('团队快照合同不随后续团队修改漂移（同任务换团队后�
     const t3 = await settle(f.engine, f.store, t.id)
     assert.equal(t3.teamId, team2.id, '任务 teamId 切换到团队 B')
     assert.ok(t3.plan!.scope && (t3.plan!.scope!.team?.goal === 'goal-B' || (t3.plan!.scope!.team?.goal === undefined)), '新一轮 scope 使用团队 B 合同')
+  } finally {
+    f.store.flush()
+    rmSync(f.dir, { recursive: true, force: true })
+  }
+})
+
+// ---------- @ 提及边界（BUG 回归：URL/邮箱里的 @ 不得触发编排） ----------
+
+test('isAtMentionBoundary：嵌入 token 的 @（邮箱/URL/CLI）不是提及起点，独立 @ 是', () => {
+  // 非提及：@ 前是字母数字或邮箱/URL/路径/CLI 连接符
+  for (const [text, at] of [
+    ['ssh://zuji.pan@10.2.12.43:29418/x', 14], // zuji.pan@ ← user@host 分隔符
+    ['git@github.com:a/b.git', 3],
+    ['a@b.com', 1],
+    ['curl -F f=@/tmp/a.json', 10],
+    ['https://x.com/@org/settings', 14],
+  ] as Array<[string, number]>) {
+    assert.equal(text[at], '@', `用例下标错位: ${text}`)
+    assert.equal(isAtMentionBoundary(text, at), false, `应判定为嵌入 @: ${text}`)
+  }
+  // 合法提及起点：文本开头 / 空白 / 中日韩 / 全角标点 / ASCII 句读
+  for (const [text, at] of [
+    ['@brain 开始', 0],
+    ['请 @brain 开始', 2],
+    ['帮我@brain 看看', 2],
+    ['（@brain）负责', 1],
+    ['参考:@brain 处理', 3],
+  ] as Array<[string, number]>) {
+    assert.equal(text[at], '@', `用例下标错位: ${text}`)
+    assert.equal(isAtMentionBoundary(text, at), true, `应判定为提及起点: ${text}`)
+  }
+})
+
+test('extractMentions：git SSH URL / 邮箱 / CLI @file 字面量不产生任何提及（线上事故回归）', async () => {
+  const f = makeFixture()
+  try {
+    seedAgent(f.store, 'ag-git', { name: 'brain' })
+    const cases = [
+      '把仓库跟git clone ssh://zuji.pan@10.2.12.43:29418/general/robotic-knewlab-server 绑定',
+      'git clone ssh://zuji.pan@10.2.12.43/general/robotic-knewlab-server 绑定', // 无端口变体（旧逻辑伪文件提及重灾区）
+      'git clone ssh://git@github.com/toddpan/onenat-workbuddy.git 然后编译',
+      '给 zhangsan@example.com 发一封邮件',
+      'curl -F upload=@/tmp/a.json http://x',
+      '看下 https://x.com/@tenant/settings 配置',
+      'scp backup.tar.gz admin@192.168.1.10:/data/backup/',
+    ]
+    for (const text of cases) {
+      const m = await f.engine.extractMentions(text)
+      assert.deepEqual(m.mentionedAgentIds, [], `不应提及智能体: ${text}`)
+      assert.deepEqual(m.mentionedResourceBindings, [], `不应提及资源: ${text}`)
+      assert.equal(m.mentionedFiles, undefined, `不应伪文件提及: ${text} → ${JSON.stringify(m.mentionedFiles)}`)
+      assert.equal(m.mentionedExpertIds?.length ?? 0, 0, `不应提及专家: ${text}`)
+    }
+    // 既有合法提及用法不受影响
+    const ok1 = await f.engine.extractMentions('@brain 把仓库绑定到 origin')
+    assert.deepEqual(ok1.mentionedAgentIds, ['ag-git'])
+    const ok2 = await f.engine.extractMentions('帮我@brain 看下进展')
+    assert.deepEqual(ok2.mentionedAgentIds, ['ag-git'], '中文紧邻 @ 仍可提及')
+    const ok3 = await f.engine.extractMentions('（@brain）负责绑定')
+    assert.deepEqual(ok3.mentionedAgentIds, ['ag-git'], '全角括号紧邻 @ 仍可提及')
+    const ok4 = await f.engine.extractMentions('帮我看下 @brain:logs/app.log 的报错')
+    assert.deepEqual(ok4.mentionedAgentIds, ['ag-git'], '@智能体:文件 语法不受影响')
+    assert.ok(ok4.mentionedFiles?.[0]?.path === 'logs/app.log')
+    const ok5 = await f.engine.extractMentions('@[brain:logs/app.log] 有报错')
+    assert.deepEqual(ok5.mentionedAgentIds, ['ag-git'], '@[智能体:文件] 方括号语法不受影响')
+    const ok6 = await f.engine.extractMentions('注意 @src/index.ts 这个文件')
+    assert.ok(ok6.mentionedFiles?.length === 1, '独立 @文件 提及仍按原语义解析')
+  } finally {
+    f.store.flush()
+    rmSync(f.dir, { recursive: true, force: true })
+  }
+})
+
+test('git SSH URL 消息保持直通：不因 URL 里的 @ 升级编排模式', async () => {
+  const f = makeFixture()
+  try {
+    seedAgent(f.store, 'ag-git', { name: 'brain' })
+    const t = await f.engine.createTask({ title: '绑定仓库', memberAgentIds: ['ag-git'] })
+    const ok = await f.engine.sendUserMessage(t.id, '把仓库跟git clone ssh://zuji.pan@10.2.12.43:29418/general/robotic-knewlab-server 绑定')
+    assert.ok(ok.ok)
+    const settled = await settle(f.engine, f.store, t.id)
+    assert.equal(settled.mode, 'chat', '不得升级为编排模式')
+    assert.equal(settled.plan, undefined, '不得产生编排计划')
+    assert.equal(settled.lastRoute?.kind, 'chat', '路由应为直通')
+    assert.equal(settled.lastRoute?.agentId, 'ag-git', '直通目标为任务成员')
+  } finally {
+    f.store.flush()
+    rmSync(f.dir, { recursive: true, force: true })
+  }
+})
+
+test('extractMentions：name==nameEn 的内置团队角色不再误判同名（假同名回归）', async () => {
+  const f = makeFixture({ registryExperts: [{ id: 'expert-researcher', name: '调研专家', nameEn: '调研专家' }] })
+  try {
+    const m = await f.engine.extractMentions('@调研专家 帮我做一次调研')
+    assert.deepEqual(m.mentionedExpertIds, ['expert-researcher'], '同一专家 name/nameEn 双注册应去重为单命中')
+    assert.equal(m.mentionedExpertAmbiguous, undefined, '不得触发同名歧义')
+  } finally {
+    f.store.flush()
+    rmSync(f.dir, { recursive: true, force: true })
+  }
+})
+
+test('extractMentions：真同名两位专家仍判歧义', async () => {
+  const f = makeFixture({
+    registryExperts: [
+      { id: 'reviewer-a', name: '评审专家', nameEn: 'reviewer-a' },
+      { id: 'reviewer-b', name: '评审专家', nameEn: 'reviewer-b' },
+    ],
+  })
+  try {
+    const m = await f.engine.extractMentions('@评审专家 评审一下')
+    assert.deepEqual(m.mentionedExpertIds || [], [], '未带 #id 时不指派任何专家（字段可缺省）')
+    assert.equal(m.mentionedExpertAmbiguous, '评审专家')
+    // 带 #id 精确直派不受影响
+    const ok = await f.engine.extractMentions('@评审专家#reviewer-b 评审一下')
+    assert.deepEqual(ok.mentionedExpertIds, ['reviewer-b'])
+    assert.equal(ok.mentionedExpertAmbiguous, undefined)
+  } finally {
+    f.store.flush()
+    rmSync(f.dir, { recursive: true, force: true })
+  }
+})
+
+test('歧义 @ 阻断本轮：不降级主会话直发，任务标 failed', async () => {
+  const f = makeFixture({
+    registryExperts: [
+      { id: 'reviewer-a', name: '评审专家', nameEn: 'reviewer-a' },
+      { id: 'reviewer-b', name: '评审专家', nameEn: 'reviewer-b' },
+    ],
+  })
+  try {
+    const t = await f.engine.createTask({
+      title: '歧义阻断',
+      nodeRef: { kind: 'direct', apiBaseUrl: 'http://stub-node' },
+      message: '@评审专家 请只回复 ok',
+    })
+    await delay(30)
+    const after = f.store.getTask(t.id)!
+    assert.equal(after.status, 'failed', '歧义轮应标记 failed（阻断而非静默直发）')
+    const blocked = after.turns.find((x) => x.role === 'system' && /本轮已停止派发/.test(x.text))
+    assert.ok(blocked, '应有阻断指引系统轮')
+    assert.ok(!after.sessions['__node__'], '不得产生主会话直发')
+  } finally {
+    f.store.flush()
+    rmSync(f.dir, { recursive: true, force: true })
+  }
+})
+
+test('单成员聚焦轮裁剪：规划器多拆的调度方核验跳被移除，仅保留被 @ 成员子任务', async () => {
+  const f = makeFixture({
+    // 模拟规划器违规多拆：成员 1 个 + 调度方核验 1 个
+    plannerFactory: (_objective, members) => ({
+      strategy: 'sequential',
+      subtasks: members.map((m) => ({
+        title: m.agent.id === '__node__' ? '核验并汇总最终报告' : '执行评审',
+        prompt: 'stub prompt',
+        agentId: m.agent.id,
+        dependsOn: m.agent.id === '__node__' ? ['执行评审'] : [],
+      })),
+    }),
+  })
+  try {
+    const t = await f.engine.createTask({ title: '单专家单跳', nodeRef: { kind: 'direct', apiBaseUrl: 'http://stub-node' } })
+    const ok = await f.engine.sendUserMessage(t.id, '@alameda 只读评审这段设计')
+    assert.ok(ok.ok)
+    const settled = await settle(f.engine, f.store, t.id)
+    assert.equal(settled.plan?.subtasks.length, 1, 'delegate 轮只保留 1 个子任务')
+    assert.equal(settled.plan?.subtasks[0].agentId, '__expert__:alameda', '保留的是被 @ 专家的子任务')
+    assert.ok(!settled.plan?.subtasks.some((s) => s.agentId === '__node__'), '调度方核验跳已被裁剪')
+    assert.equal(settled.summary?.coverage?.total, 1, 'coverage 只按真实成员计（不含 __node__）')
+  } finally {
+    f.store.flush()
+    rmSync(f.dir, { recursive: true, force: true })
+  }
+})
+
+test('编排子任务注入项目指令：chat 与编排同源（TaskContext 段）', async () => {
+  const f = makeFixture({
+    plannerFactory: (_o, members) => ({
+      strategy: 'parallel',
+      subtasks: members.filter((m) => m.agent.id !== '__node__').map((m) => ({ title: '执行', prompt: 'stub 执行', agentId: m.agent.id, dependsOn: [] })),
+    }),
+  })
+  try {
+    const proj = f.store.upsertProject({
+      id: 'proj-rules',
+      name: '规范项目',
+      workspace: '/tmp/wb-rules',
+      instruction: 'PROJECT-RULES-MARKER：所有产出必须中文并附验收对照。',
+      dshRef: { kind: 'direct', apiBaseUrl: 'http://stub-node' },
+    } as any)
+    seedAgent(f.store, 'ag-rules', { name: '规则成员' })
+    const t = await f.engine.createTask({ title: '项目编排', projectId: proj.id })
+    // 显式 @ 成员进入编排派工路径（无 @ 会走主会话直发，覆盖不到 runSubtask）
+    const ok = await f.engine.sendUserMessage(t.id, '@规则成员 按项目规范做一轮检查')
+    assert.ok(ok.ok)
+    const settled = await settle(f.engine, f.store, t.id)
+    assert.equal(settled.plan?.scope?.kind, 'members')
+    const dispatched = f.client.prompts.filter((p) => p.includes('[当前子任务指令]'))
+    assert.ok(dispatched.length >= 1, '至少派发一个子任务')
+    for (const p of dispatched) {
+      assert.ok(p.includes('[项目指令]'), '编排子任务 prompt 含项目指令段')
+      assert.ok(p.includes('PROJECT-RULES-MARKER'), '项目指令内容注入子任务')
+    }
   } finally {
     f.store.flush()
     rmSync(f.dir, { recursive: true, force: true })

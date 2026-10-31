@@ -282,7 +282,7 @@ async function main() {
   // ---------- 6. 工具 HTTP 通道 ----------
   const toolList = await req('GET', `${PREFIX}/api/tools`)
   const toolNames = (toolList.json?.tools || []).map((t) => t.name)
-  check('工具清单暴露 14 个工具', toolList.status === 200 && toolNames.length === 14 && toolNames.includes('workbuddy_project_manage') && toolNames.includes('workbuddy_task_ask_answer') && toolNames.includes('workbuddy_expert_manage'), toolNames.join(','))
+  check('工具清单暴露 15 个工具（含 team_manage）', toolList.status === 200 && toolNames.length === 15 && toolNames.includes('workbuddy_project_manage') && toolNames.includes('workbuddy_task_ask_answer') && toolNames.includes('workbuddy_expert_manage') && toolNames.includes('workbuddy_team_manage'), toolNames.join(','))
   check('工具清单含参数 schema', (toolList.json?.tools || []).every((t) => t.parameters && typeof t.parameters === 'object'))
 
   const toolListCall = await req('POST', `${PREFIX}/api/tools/workbuddy_resource_manage`, { action: 'list' })
@@ -336,12 +336,14 @@ async function main() {
     ],
   })
   const teamId = teamCreated.json?.data?.id
-  check('创建专家团（合同字段回读，enabled 默认 false）', teamCreated.status === 200 && Boolean(teamId) && teamCreated.json?.data?.members?.length === 2 && teamCreated.json?.data?.goal === '评审冒烟方案并定位交付风险' && teamCreated.json?.data?.enabled === false)
+  // v2026.11.1 起新建团默认启用（停用是高级操作；停用团在 @ 词典双过滤会让 @ 名静默直发）
+  check('创建专家团（合同字段回读，enabled 默认 true）', teamCreated.status === 200 && Boolean(teamId) && teamCreated.json?.data?.members?.length === 2 && teamCreated.json?.data?.goal === '评审冒烟方案并定位交付风险' && teamCreated.json?.data?.enabled === true)
   const teamsList = await req('GET', `${PREFIX}/api/teams`)
   check('专家团列表回读', (teamsList.json?.data || []).some((t) => t.id === teamId))
-  // Phase 5：enabled 默认 false —— 停用团队发任务被拒；显式启用后放行
+  // 停用是显式操作：显式停用后发任务被拒；再启用放行
+  const teamDisable = await req('POST', `${PREFIX}/api/teams`, { ...teamCreated.json.data, enabled: false })
   const teamTaskDisabled = await req('POST', `${PREFIX}/api/tasks`, { title: '冒烟团队任务', teamId })
-  check('停用专家团创建任务被拒（400）', teamTaskDisabled.status === 400)
+  check('停用专家团创建任务被拒（400）', teamDisable.status === 200 && teamTaskDisabled.status === 400)
   const teamEnable = await req('POST', `${PREFIX}/api/teams`, { ...teamCreated.json.data, enabled: true })
   check('专家团启用', teamEnable.status === 200 && teamEnable.json?.data?.enabled === true)
   const teamTask = await req('POST', `${PREFIX}/api/tasks`, { title: '冒烟团队任务', teamId })

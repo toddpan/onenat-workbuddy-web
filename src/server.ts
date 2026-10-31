@@ -588,7 +588,7 @@ engine.startPendingAskSweeper()
         return
       }
       // 令牌已放行但路径不在 AI 开放面内（如设置、智能体写接口）→ 一律拒绝
-      if (!sessionUser && aiTokenOk && !isAiTokenAllowedPath(url.pathname, cfg.prefix)) {
+      if (!sessionUser && aiTokenOk && !isAiTokenAllowedPath(url.pathname, cfg.prefix, method)) {
         sendJson(res, 403, { ok: false, error: 'AI 令牌无权访问该接口（仅开放工具通道/监控/定时任务/规划器/文件/资源目录）' })
         return
       }
@@ -687,8 +687,15 @@ function extractAiToken(req: http.IncomingMessage, url: URL): string {
 }
 
 /** AI 令牌可访问的开放面：工具通道 / 监控 / 定时任务 / 规划器 / 远端文件 / 资源目录只读 */
-function isAiTokenAllowedPath(pathname: string, prefix: string): boolean {
+function isAiTokenAllowedPath(pathname: string, prefix: string, method = 'GET'): boolean {
   const p = prefix && pathname.startsWith(prefix) ? pathname.slice(prefix.length) || '/' : pathname
+  // AI 令牌只读面（M6）：团队/专家/提及候选 GET 放行——AI 发任务前可自查「有哪些团/哪些专家」，
+  // 不再靠猜名字；写面（POST/PUT/DELETE）仍走控制台会话，工具通道的 team_manage 另行守卫
+  if (method === 'GET') {
+    if (p === '/api/mentions/candidates') return true
+    if (p === '/api/teams' || /^\/api\/teams\/[^/]+$/.test(p)) return true
+    if (p === '/api/experts' || /^\/api\/experts\/[^/]+$/.test(p)) return true
+  }
   if (p === '/api/tools' || p.startsWith('/api/tools/')) return true
   // 对外 MCP Server（Streamable HTTP）与运行状态
   if (p === '/mcp' || p === '/mcp/') return true

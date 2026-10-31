@@ -24,6 +24,26 @@ import type { Orchestrator } from './orchestrator.js'
 import type { WorkStore } from './store.js'
 import { isNodeAbsolutePath, WORK_DIR_NOT_ABSOLUTE_MSG } from './store.js'
 import { DshClient } from './remote-client.js'
+import {
+  appendExecutionRecord,
+  backlogInstructionSnippet,
+  createItem,
+  decodeFrontmatter,
+  deleteItem,
+  encodeFrontmatter,
+  extractAcceptanceText,
+  extractDescription,
+  findItem,
+  initBacklog,
+  listBacklog,
+  normalizeItemId,
+  readItem,
+  replaceAcceptance,
+  replaceDescription,
+  resolveDoneStatus,
+  resolveInProgressStatus,
+  writeItem,
+} from './backlog.js'
 import { SshInputError, execOnSshResource, maskSshResource, normalizeSshResource, testSshResource } from './ssh-resources.js'
 import type { SshResourceStore } from './ssh-store.js'
 import type { ScheduleRunner } from './scheduler.js'
@@ -121,6 +141,64 @@ export class WorkBuddyRouter {
     if (!uid) return false
     if (proj.owner === uid) return true
     return Boolean(proj.projectMembers?.some((m) => m.userId === uid && m.role === 'owner'))
+  }
+
+  /**
+   * backlog 待办 → WorkTask 一键派发（B4，docs/design-backlog-integration.md §6.1）。
+   * 复用 engine.createTask（projectId 继承项目节点/工作区/成员/连接器/技能）；
+   * 验收清单原文直达 planner；依赖未完成默认阻止（D5，可 force）；成功后置进行中并追加派发记录。
+   */
+  private async dispatchBacklogItem(
+    proj: Project,
+    target: any,
+    workspace: string,
+    itemId: string,
+    opts: { force?: boolean; instruction?: string } = {},
+  ): Promise<{ task: { id: string; title: string; mode: string; status: string }; item: { itemId: string; status: string } }> {
+    const found = await findItem(this.client, target, workspace, itemId)
+    if (!found) throw Object.assign(new Error(`待办 ${itemId} 不存在`), { status: 404 })
+    const item = found.item
+    const doneStatus = resolveDoneStatus(found.list.config.statuses)
+    if (!opts.force && item.dependencies?.length) {
+      const byId = new Map(found.list.items.map((it) => [normalizeItemId(it.itemId), it]))
+      const blocked = item.dependencies
+        .map((d) => byId.get(normalizeItemId(d)))
+        .filter((d): d is NonNullable<typeof d> => Boolean(d) && d!.status !== doneStatus)
+      if (blocked.length) {
+        throw Object.assign(new Error(`存在未完成依赖：${blocked.map((b) => b!.itemId).join('、')}（可勾选「忽略依赖」强制派发）`), { status: 409, code: 'DEPS_BLOCKED' })
+      }
+    }
+    const raw = await readItem(this.client, target, workspace, item.fileName)
+    const desc = extractDescription(raw)
+    const ac = extractAcceptanceText(raw)
+    const message = [
+      `【来自 backlog 待办 ${item.itemId}】${item.title || ''}`,
+      '',
+      '## 描述',
+      desc || '（待办未填写描述）',
+      '',
+      '## 验收清单',
+      ac || '（待办未填写验收清单，请按描述自拟可验证的完成标准）',
+      ...(opts.instruction ? ['', '## 附加说明', opts.instruction] : []),
+    ].join('\n')
+    const task = await this.engine.createTask({
+      title: item.title || String(item.itemId),
+      projectId: proj.id,
+      message,
+      creator: 'console',
+      backlogRef: { projectId: proj.id, itemId: item.itemId, itemTitle: item.title || '', dispatchedAt: Date.now() },
+    })
+    // 置进行中（状态可配置：resolveInProgressStatus 判定；已是该状态则不动）+ 追加派发记录
+    const inProgress = resolveInProgressStatus(found.list.config.statuses)
+    const nextStatus = inProgress && inProgress !== item.status ? inProgress : undefined
+    const time = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+    const next = appendExecutionRecord(encodeFrontmatter(raw, { status: nextStatus }), {
+      time,
+      title: '派发为任务',
+      lines: [`${task.id} · mode=${task.mode} · 成员=${task.memberAgentIds.length}`],
+    })
+    await writeItem(this.client, target, workspace, item.fileName, () => next, { base: raw })
+    return { task: { id: task.id, title: task.title, mode: String(task.mode || 'chat'), status: String(task.status || 'draft') }, item: { itemId: item.itemId, status: nextStatus || item.status || '' } }
   }
 
   /** 发送用户邀请邮件：结果随响应返回（sent/status/error）供 UI 提示；失败不抛错，inviteLink 仍可手动复制 */
@@ -1451,6 +1529,217 @@ export class WorkBuddyRouter {
           this.sendJson(res, 201, { ok: true, data: { email: emailRaw, role, emailSent: email.sent, emailStatus: email.status, emailError: email.error, inviteLink: email.inviteLink, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 } })
           return true
         }
+      }
+    }
+
+    // ---------- Backlog 集成（B1-B7，docs/design-backlog-integration.md §5.2/§6/§7.3） ----------
+    // 全部过既有鉴权（外层 dispatch）+ 项目可见性门（canSeeProject）；写操作过归档只读拦截（P-08 语义同 /api/tasks）。
+    if (p === '/api/backlog/overview' && method === 'GET') {
+      const projects = this.store.getProjects().filter((pr) => this.canSeeProject(pr))
+      const cap = <T, R>(items: T[], limit: number, fn: (x: T) => Promise<R>): Promise<R[]> => {
+        const out: R[] = new Array(items.length)
+        let next = 0
+        return Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+          while (next < items.length) { const i = next++; out[i] = await fn(items[i]) }
+        })).then(() => out)
+      }
+      const data = await cap(projects, 3, async (pr) => {
+        const base = { projectId: pr.id, projectName: pr.name, archived: Boolean(pr.archivedAt), workspace: pr.workspace || '' }
+        if (pr.archivedAt) return { ...base, nodeStatus: 'archived', initialized: false, truncated: false, statuses: [], defaultStatus: '', error: '', items: [] }
+        try {
+          if (!pr.workspace) return { ...base, nodeStatus: 'unreachable', initialized: false, truncated: false, statuses: [], defaultStatus: '', error: '项目未配置工作目录', items: [] }
+          const target = await this.resolver.resolveRef(pr.dshRef, pr.apiKey, 'backlog-overview')
+          if (!target.online || !target.baseUrl) return { ...base, nodeStatus: 'unreachable', initialized: false, truncated: false, statuses: [], defaultStatus: '', error: target.error || '节点不可达', items: [] }
+          const list = await listBacklog(this.client, target, pr.workspace)
+          const linked = this.store.getTasks().filter((t) => t.backlogRef?.projectId === pr.id)
+          return {
+            ...base,
+            nodeStatus: 'ok',
+            initialized: list.initialized,
+            truncated: list.truncated,
+            statuses: list.config.statuses,
+            defaultStatus: list.config.defaultStatus,
+            error: '',
+            items: list.items.map((it) => ({
+              ...it,
+              tasks: linked
+                .filter((t) => normalizeItemId(t.backlogRef!.itemId) === normalizeItemId(it.itemId))
+                .sort((a, b) => b.updatedAt - a.updatedAt)
+                .map((t) => ({ id: t.id, status: t.status, summaryStatus: t.summary?.status || '', writebackFailed: t.backlogWritebackFailed || null, updatedAt: t.updatedAt })),
+            })),
+          }
+        } catch (err: any) {
+          return { ...base, nodeStatus: 'unreachable', initialized: true, truncated: false, statuses: [], defaultStatus: '', error: String(err?.message || err).slice(0, 200), items: [] }
+        }
+      })
+      this.sendJson(res, 200, { ok: true, data })
+      return true
+    }
+
+    if (p.startsWith('/api/projects/') && p.includes('/backlog')) {
+      const segs = p.split('/').filter(Boolean) // ['api','projects',<id>,'backlog',...]
+      const proj = this.store.getProject(segs[2])
+      if (!proj || !this.canSeeProject(proj)) { this.sendJson(res, 404, { ok: false, error: '项目不存在或不可见' }); return true }
+      const rest = segs.slice(4)
+      const projectId = proj.id
+      const readOnly = Boolean(proj.archivedAt)
+      const rejectArchived = () => {
+        this.sendJson(res, 400, { ok: false, error: '项目已归档（只读），请先恢复再操作 backlog' })
+      }
+      const nodeCtx = async (): Promise<{ ok: true; target: any; workspace: string } | { ok: false; status: number; error: string }> => {
+        if (!proj.workspace) return { ok: false, status: 400, error: '项目未配置工作目录（workspace），无法使用 backlog' }
+        const target = await this.resolver.resolveRef(proj.dshRef, proj.apiKey, 'project-backlog')
+        if (!target.online || !target.baseUrl) return { ok: false, status: 502, error: target.error || '节点不可达' }
+        return { ok: true, target, workspace: proj.workspace }
+      }
+      try {
+        // GET 列表（读：归档项目也允许只读查看）
+        if (rest.length === 0 && method === 'GET') {
+          const ctx = await nodeCtx()
+          if (!ctx.ok) { this.sendJson(res, ctx.status, { ok: false, error: ctx.error }); return true }
+          const list = await listBacklog(this.client, ctx.target, ctx.workspace)
+          const linked = this.store.getTasks().filter((t) => t.backlogRef?.projectId === projectId)
+          const items = list.items.map((it) => ({
+            ...it,
+            tasks: linked
+              .filter((t) => normalizeItemId(t.backlogRef!.itemId) === normalizeItemId(it.itemId))
+              .sort((a, b) => b.updatedAt - a.updatedAt)
+              .map((t) => ({ id: t.id, status: t.status, summaryStatus: t.summary?.status || '', writebackFailed: t.backlogWritebackFailed || null, updatedAt: t.updatedAt })),
+          }))
+          this.sendJson(res, 200, { ok: true, data: { ...list, items, archived: readOnly, statuses: list.config.statuses, defaultStatus: list.config.defaultStatus, instructionSnippet: backlogInstructionSnippet() } })
+          return true
+        }
+        // POST 初始化（途径 A，幂等）
+        if (rest.length === 1 && rest[0] === 'init' && method === 'POST') {
+          if (readOnly) { rejectArchived(); return true }
+          const body = await this.parseBody(req)
+          const ctx = await nodeCtx()
+          if (!ctx.ok) { this.sendJson(res, ctx.status, { ok: false, error: ctx.error }); return true }
+          const out = await initBacklog(this.client, ctx.target, ctx.workspace, { projectName: proj.name, sample: Boolean(body?.sample) })
+          if (body?.updateInstruction && !`${proj.instruction || ''}`.includes('## Backlog 待办协作约定')) {
+            this.store.upsertProject({ id: projectId, instruction: `${proj.instruction ? proj.instruction + '\n\n' : ''}${backlogInstructionSnippet()}` } as any)
+          }
+          this.audit('backlog.init', 'project', projectId, `sample=${Boolean(body?.sample)}`)
+          this.sendJson(res, 200, { ok: true, data: out })
+          return true
+        }
+        // POST 新建
+        if (rest.length === 1 && rest[0] === 'items' && method === 'POST') {
+          if (readOnly) { rejectArchived(); return true }
+          const body = await this.parseBody(req)
+          if (!String(body?.title || '').trim()) { this.sendJson(res, 400, { ok: false, error: '标题必填' }); return true }
+          const ctx = await nodeCtx()
+          if (!ctx.ok) { this.sendJson(res, ctx.status, { ok: false, error: ctx.error }); return true }
+          const item = await createItem(this.client, ctx.target, ctx.workspace, {
+            title: String(body.title).trim(),
+            description: body.description ? String(body.description) : undefined,
+            acceptance: Array.isArray(body.acceptance) ? body.acceptance.map(String).filter(Boolean) : undefined,
+            labels: Array.isArray(body.labels) ? body.labels.map(String).filter(Boolean) : undefined,
+            dependencies: Array.isArray(body.dependencies) ? body.dependencies.map(String).filter(Boolean) : undefined,
+            assignees: Array.isArray(body.assignees) ? body.assignees.map(String).filter(Boolean) : undefined,
+            priority: body.priority ? String(body.priority) : undefined,
+            dueDate: body.dueDate ? String(body.dueDate) : undefined,
+          })
+          this.audit('backlog.create', 'project', projectId, item.itemId)
+          this.sendJson(res, 201, { ok: true, data: item })
+          return true
+        }
+        // POST 批量派发
+        if (rest.length === 1 && rest[0] === 'dispatch-batch' && method === 'POST') {
+          if (readOnly) { rejectArchived(); return true }
+          const body = await this.parseBody(req)
+          const itemIds = Array.isArray(body?.itemIds) ? body.itemIds.map(String) : []
+          if (!itemIds.length) { this.sendJson(res, 400, { ok: false, error: 'itemIds 不能为空' }); return true }
+          const ctx = await nodeCtx()
+          if (!ctx.ok) { this.sendJson(res, ctx.status, { ok: false, error: ctx.error }); return true }
+          const results: Array<{ itemId: string; ok: boolean; taskId?: string; error?: string }> = []
+          for (const itemId of itemIds) {
+            try {
+              const r = await this.dispatchBacklogItem(proj, ctx.target, ctx.workspace, itemId, { force: Boolean(body?.force) })
+              results.push({ itemId, ok: true, taskId: r.task.id })
+            } catch (err: any) {
+              results.push({ itemId, ok: false, error: String(err?.message || err).slice(0, 200) })
+            }
+          }
+          this.audit('backlog.dispatch-batch', 'project', projectId, `${results.filter((r) => r.ok).length}/${results.length}`)
+          this.sendJson(res, 200, { ok: true, data: results })
+          return true
+        }
+        // /items/<itemId>[/<action>]
+        if (rest.length >= 2 && rest[0] === 'items') {
+          const itemId = decodeURIComponent(rest[1])
+          const action = rest[2] || ''
+          const ctx = await nodeCtx()
+          if (!ctx.ok) { this.sendJson(res, ctx.status, { ok: false, error: ctx.error }); return true }
+          const found = await findItem(this.client, ctx.target, ctx.workspace, itemId)
+          if (!found) { this.sendJson(res, 404, { ok: false, error: `待办 ${itemId} 不存在` }); return true }
+          const { item } = found
+          if (!action && method === 'GET') {
+            const raw = await readItem(this.client, ctx.target, ctx.workspace, item.fileName)
+            const linked = this.store.getTasks()
+              .filter((t) => t.backlogRef?.projectId === projectId && normalizeItemId(t.backlogRef!.itemId) === normalizeItemId(item.itemId))
+              .sort((a, b) => b.updatedAt - a.updatedAt)
+            this.sendJson(res, 200, {
+              ok: true,
+              data: { item, raw, statuses: found.list.config.statuses, tasks: linked.map((t) => ({ id: t.id, status: t.status, summaryStatus: t.summary?.status || '', summary: t.summary ? { overview: t.summary.overview, finalConclusion: t.summary.finalConclusion, completedAt: t.summary.completedAt } : null, writebackFailed: t.backlogWritebackFailed || null, updatedAt: t.updatedAt })) },
+            })
+            return true
+          }
+          if (!action && (method === 'PUT' || method === 'PATCH')) {
+            if (readOnly) { rejectArchived(); return true }
+            const body = await this.parseBody(req)
+            const raw = await readItem(this.client, ctx.target, ctx.workspace, item.fileName)
+            let next = encodeFrontmatter(raw, {
+              title: body?.title !== undefined ? String(body.title).trim() : undefined,
+              status: body?.status !== undefined ? String(body.status) : undefined,
+              priority: body?.priority !== undefined ? String(body.priority) : undefined,
+              dueDate: body?.dueDate !== undefined ? String(body.dueDate) : undefined,
+              ordinal: body?.ordinal !== undefined ? Number(body.ordinal) : undefined,
+              labels: Array.isArray(body?.labels) ? body.labels.map(String).filter(Boolean) : undefined,
+              dependencies: Array.isArray(body?.dependencies) ? body.dependencies.map(String).filter(Boolean) : undefined,
+              assignees: Array.isArray(body?.assignees) ? body.assignees.map(String).filter(Boolean) : undefined,
+            })
+            if (typeof body?.description === 'string') next = replaceDescription(next, body.description)
+            if (Array.isArray(body?.acceptance)) next = replaceAcceptance(next, body.acceptance.map(String))
+            await writeItem(this.client, ctx.target, ctx.workspace, item.fileName, () => next, { base: raw })
+            this.audit('backlog.edit', 'project', projectId, item.itemId)
+            this.sendJson(res, 200, { ok: true, data: { itemId: item.itemId } })
+            return true
+          }
+          if (!action && method === 'DELETE') {
+            if (readOnly) { rejectArchived(); return true }
+            await deleteItem(this.client, ctx.target, ctx.workspace, item.fileName)
+            this.audit('backlog.delete', 'project', projectId, item.itemId)
+            this.sendJson(res, 200, { ok: true })
+            return true
+          }
+          if (action === 'dispatch' && method === 'POST') {
+            if (readOnly) { rejectArchived(); return true }
+            const body = await this.parseBody(req)
+            const r = await this.dispatchBacklogItem(proj, ctx.target, ctx.workspace, item.itemId, { force: Boolean(body?.force), instruction: body?.instruction ? String(body.instruction) : undefined })
+            this.audit('backlog.dispatch', 'project', projectId, `${item.itemId} → ${r.task.id}`)
+            this.sendJson(res, 200, { ok: true, data: r })
+            return true
+          }
+        }
+        // POST 重试回写：/backlog/retry-writeback/<taskId>
+        if (rest.length === 2 && rest[0] === 'retry-writeback' && method === 'POST') {
+          if (readOnly) { rejectArchived(); return true }
+          const task = this.store.getTask(rest[1])
+          if (!task || task.backlogRef?.projectId !== projectId) { this.sendJson(res, 404, { ok: false, error: '任务不存在或无 backlog 来源' }); return true }
+          try {
+            await this.engine.runBacklogWriteback(task)
+            this.sendJson(res, 200, { ok: true })
+          } catch (err: any) {
+            this.store.mutateTask(task.id, (t) => { t.backlogWritebackFailed = { at: Date.now(), error: String(err?.message || err).slice(0, 300) } })
+            this.sendJson(res, 502, { ok: false, error: String(err?.message || err).slice(0, 300) })
+          }
+          return true
+        }
+      } catch (err: any) {
+        const conflict = err?.name === 'BacklogConflictError'
+        this.sendJson(res, conflict ? 409 : err?.status && Number(err.status) >= 400 ? Number(err.status) : 400, { ok: false, error: String(err?.message || err), code: conflict ? 'CONFLICT' : err?.code || undefined })
+        return true
       }
     }
 

@@ -420,7 +420,8 @@ export interface TaskCoverage {
   status: 'complete' | 'partial' | 'failed'
   completed: number
   total: number
-  missing: Array<{ id: string; name: string; duty?: string; error?: string }>
+  /** 缺口三分类：unassigned=规划未分配（团队轮名册成员无子任务）；failed/skipped=已分配但未成功 */
+  missing: Array<{ id: string; name: string; duty?: string; error?: string; reason?: 'unassigned' | 'failed' | 'skipped' }>
 }
 
 export interface WorkTask {
@@ -454,6 +455,10 @@ export interface WorkTask {
   forkedFrom?: { taskId: string; at: number }
   /** 被续接记录（P4-1）：本任务被 fork 到其它节点/项目时，原任务上追加的新任务清单 */
   forks?: Array<{ taskId: string; at: number }>
+  /** backlog 派发来源（docs/design-backlog-integration.md §4.3）：本任务由项目 backlog 待办一键派发 */
+  backlogRef?: { projectId: string; itemId: string; itemTitle: string; dispatchedAt: number }
+  /** backlog 回写失败标记（§6.3）：终态钩子写节点失败（节点不可达等）；UI 显「回写未确认」并经重试清除 */
+  backlogWritebackFailed?: { at: number; error: string }
   /** 会话附件（上传到各成员远端工作区后的登记） */
   attachments?: TaskAttachment[]
   /** 由定时任务派生时记录来源（调度删除/滚动出窗口后类型标识仍可恢复） */

@@ -64,6 +64,8 @@ export interface PromptResult {
   streamDone?: boolean
   /** 远端不支持 prompt-stream（旧版）⇒ 调用方降级同步 prompt */
   sseUnsupported?: boolean
+  /** 远端流内显式 error 帧（回合已终结）⇒ 调用方快速失败，不进对账长轮询 */
+  remoteError?: boolean
   /** 远端会话被 ask_user_question 挂起（等待答复桥解锁），错误为快速失败而非真失败 */
   pendingAsk?: boolean
   /** 远端返回的真实 token 账本（含缓存命中），供前端展示缓存率 */
@@ -1317,16 +1319,21 @@ export class DshClient {
     sessionId: string,
     prompt: string,
     handlers: StreamEventHandlers,
-    options?: { remoteTimeoutMs?: number; signal?: AbortSignal },
+    options?: { remoteTimeoutMs?: number; stallTimeoutMs?: number; signal?: AbortSignal },
   ): Promise<PromptResult> {
     let content = ''
     let reasoning = ''
     try {
       const dispatcher = await getLongIdleDispatcher()
+      // stallTimeoutMs：远端「持续无会话事件」的停滞阈值（prompt-stream 只认这个字段；
+      // 此前只传 timeoutMs，远端流式路径读不到 → 恒用 300s 默认值，慢模型首 token
+      // 超过 300s 即被远端看门狗误杀）。与 remoteTimeoutMs 对齐，配合客户端侧
+      // reconciling（停滞只切观察通道、不判死）语义。
+      const stallTimeoutMs = options?.stallTimeoutMs ?? options?.remoteTimeoutMs ?? 1_800_000
       const res = await fetch(`${clean(target.baseUrl)}/sessions/${encodeURIComponent(sessionId)}/prompt-stream`, {
         method: 'POST',
         headers: this.headers(target.apiKey),
-        body: JSON.stringify({ prompt, timeoutMs: options?.remoteTimeoutMs ?? 1_800_000 }),
+        body: JSON.stringify({ prompt, timeoutMs: options?.remoteTimeoutMs ?? 1_800_000, stallTimeoutMs }),
         signal: options?.signal,
         // bodyTimeout=0：长工具执行/压缩期间无帧的静默段不断流（undici 缺失时无此键，退回默认）
         ...(dispatcher ? { dispatcher } : {}),
@@ -1408,7 +1415,7 @@ export class DshClient {
               }
               break
             case 'error':
-              return { ok: false, content, reasoning, complete: false, error: data?.message || '远端执行错误' }
+              return { ok: false, content, reasoning, complete: false, remoteError: true, error: data?.message || '远端执行错误' }
             case 'turn_end': {
               const r = data?.reason
               const reason = typeof r === 'string' ? r : r && typeof r === 'object' && typeof r.kind === 'string' ? r.kind : r != null ? JSON.stringify(r) : 'completed'

@@ -22,6 +22,7 @@ import { normalizeRule, nextRun, ruleText } from './scheduler.js'
 import { execOnSshResource, maskSshResource, normalizeSshResource, testSshResource } from './ssh-resources.js'
 import { normalizeDshRef } from './router.js'
 import type { ExpertRegistry } from './expert-registry.js'
+import { BUILTIN_TEAMS, parseTeamInput } from './expert-teams.js'
 import { projectDefaultAgentIds, projectDefaultAgentIdsFromInput } from './types.js'
 
 export type ToolParamType = 'string' | 'json'
@@ -1398,7 +1399,91 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
 
   // consoleUrl 回显统一跟随调用方：服务端自视角（127.0.0.1:3081）在反代/公网入口下对调用方不可达，
   // 通道层带 requestBase 时把响应里的 consoleUrl 字符串整体替换为调用方基址（小智等无请求上下文通道保持原样）
-  const defs: WorkBuddyToolDef[] = [resourceManage, agentManage, taskManage, taskStatus, taskChat, taskEvaluate, taskAskAnswer, sshResourceManage, monitorRead, scheduleManage, plannerManage, fileManage, projectManage, expertManage]
+
+  // 15. 专家团管理（内置 5 团只读；自定义团 CRUD + 启停）
+  const teamManage: WorkBuddyToolDef = {
+    name: 'workbuddy_team_manage',
+    description:
+      '管理 WorkBuddy 专家团（合同式多成员协作单元）: list（全部团队+成员职责）/ get（单个团队含合同全文）/ upsert（创建或整体更新，内置团只读）/ delete（仅自定义团）/ toggle（启停）。' +
+      '用法：task_manage create 的 message 里 @团队名 即按团队合同全员编排；发任务前先用 list 确认团名与成员职责，避免猜名字',
+    parameters: {
+      action: { type: 'string', description: '操作: list / get / upsert / delete / toggle' },
+      teamId: { type: 'string', description: '团队 ID（get / delete / toggle 用；list 可见）' },
+      team: {
+        type: 'json',
+        description:
+          'upsert 用: {id?(带 id=整体更新), name, goal, description?, constraints?, deliveryRequirements?, coordinatorPrompt?, templateId?(general|product|technical|content|data|research), enabled?, members:[{agentId?|expertId?, duty, instructions?}]}' +
+          '（成员 2~8 人，duty 必填；expertId 引用专家库角色，执行时动态实例化在任务节点；agentId 引用既有子智能体，跑各自绑定节点）',
+      },
+    },
+    async execute(args) {
+      const action = args.action || 'list'
+      try {
+        if (action === 'list') {
+          const all = store.getTeams()
+          return JSON.stringify({
+            ok: true,
+            total: all.length,
+            teams: all.map((t) => ({
+              id: t.id,
+              name: t.name,
+              builtin: Boolean(t.builtin),
+              enabled: t.enabled !== false,
+              templateId: t.templateId || 'general',
+              description: t.description,
+              goal: t.goal,
+              members: t.members.map((m) => ({ key: m.agentId || m.expertId, kind: m.agentId ? 'agent' : 'expert', duty: m.duty })),
+            })),
+            usage: '发任务：task_manage create 的 message 写 @团队名（按合同全员编排）；内置团 team-builtin-* 只读，可复制后改',
+          }, null, 2)
+        }
+        if (action === 'get') {
+          const id = String(args.teamId || '').trim()
+          if (!id) return JSON.stringify({ ok: false, error: '缺少 teamId' }, null, 2)
+          const t = store.getTeams().find((x) => x.id === id)
+          if (!t) return JSON.stringify({ ok: false, error: `团队不存在: ${id}` }, null, 2)
+          return JSON.stringify({ ok: true, team: t }, null, 2)
+        }
+        if (action === 'upsert') {
+          const body = asJson(args.team)
+          if (!body || typeof body !== 'object') return JSON.stringify({ ok: false, error: 'upsert 需要 team 参数（JSON）' }, null, 2)
+          if (body.id && BUILTIN_TEAMS.some((t) => t.id === String(body.id))) {
+            return JSON.stringify({ ok: false, error: '内置专家团只读；要改请不带 id 新建一个自定义团（复制成员后修改）' }, null, 2)
+          }
+          const parsed = await parseTeamInput(body, {
+            getAgent: (id) => store.getAgent(id),
+            getExpert: async (id) => await deps.expertRegistry?.get(id).catch(() => undefined),
+            teams: store.getTeams(),
+            currentId: body.id ? String(body.id) : undefined,
+          })
+          if (!parsed.ok) return JSON.stringify({ ok: false, error: parsed.error }, null, 2)
+          const saved = store.upsertTeam({ ...parsed.value, id: body.id || undefined })
+          return JSON.stringify({ ok: true, team: saved, usage: '@团队名 发起全员编排' }, null, 2)
+        }
+        if (action === 'delete') {
+          const id = String(args.teamId || '').trim()
+          if (!id) return JSON.stringify({ ok: false, error: '缺少 teamId' }, null, 2)
+          if (BUILTIN_TEAMS.some((t) => t.id === id)) return JSON.stringify({ ok: false, error: '内置专家团只读，不可删除' }, null, 2)
+          const ok = store.deleteTeam(id)
+          return JSON.stringify(ok ? { ok: true, deleted: id } : { ok: false, error: '团队不存在' }, null, 2)
+        }
+        if (action === 'toggle') {
+          const id = String(args.teamId || '').trim()
+          if (!id) return JSON.stringify({ ok: false, error: '缺少 teamId' }, null, 2)
+          const t = store.getTeams().find((x) => x.id === id)
+          if (!t) return JSON.stringify({ ok: false, error: `团队不存在: ${id}` }, null, 2)
+          if (t.builtin) return JSON.stringify({ ok: false, error: '内置专家团始终可用，不可停用' }, null, 2)
+          const saved = store.upsertTeam({ ...t, enabled: t.enabled === false })
+          return JSON.stringify({ ok: true, team: { id: saved.id, name: saved.name, enabled: saved.enabled !== false } }, null, 2)
+        }
+        return JSON.stringify({ ok: false, error: `不支持的 action: ${action}` }, null, 2)
+      } catch (err: any) {
+        return JSON.stringify({ ok: false, error: err?.message || String(err) }, null, 2)
+      }
+    },
+  }
+
+  const defs: WorkBuddyToolDef[] = [resourceManage, agentManage, taskManage, taskStatus, taskChat, taskEvaluate, taskAskAnswer, sshResourceManage, monitorRead, scheduleManage, plannerManage, fileManage, projectManage, expertManage, teamManage]
   return defs.map((def) => ({
     ...def,
     execute: async (args: Record<string, any>, ctx?: ToolCallContext) => {
