@@ -16,6 +16,10 @@ import {
   countAcceptance,
   appendExecutionRecord,
   hasExecutionRecord,
+  parseAcceptanceEntries,
+  setAcceptance,
+  appendAcceptance,
+  replaceAcceptance,
   itemIdFromFileName,
   normalizeItemId,
   slugifyTitle,
@@ -134,6 +138,74 @@ test('appendExecutionRecord: 追加在文末且不动既有内容', () => {
   assert.match(out, /任务 wt-9 完成/)
   assert.ok(hasExecutionRecord(out))
   assert.ok(!hasExecutionRecord(SAMPLE))
+})
+
+test('parseAcceptanceEntries: 解析条目并保留勾选状态（兼容 #n 与无编号）', () => {
+  assert.deepEqual(parseAcceptanceEntries(SAMPLE), [
+    { text: '支持账号密码登录', done: false },
+    { text: '返回 JWT', done: true },
+  ])
+  // 上游手写格式（无 #n）同样解析；[X] 视为已勾选
+  assert.deepEqual(parseAcceptanceEntries('<!-- AC:BEGIN -->\n- [X] a\n- [ ] b\n<!-- AC:END -->\n'), [
+    { text: 'a', done: true },
+    { text: 'b', done: false },
+  ])
+  assert.deepEqual(parseAcceptanceEntries('没有验收段'), [])
+})
+
+test('setAcceptance: 按文本匹配保留旧勾选、新增项默认未勾选、序号重编', () => {
+  // 既有 #2「返回 JWT」已勾选 → 重排后仍保留勾选
+  const kept = setAcceptance(SAMPLE, [
+    { text: '返回 JWT', done: false },
+    { text: '支持账号密码登录', done: false },
+    { text: '新增一项', done: false },
+  ])
+  assert.match(kept, /- \[x\] #1 返回 JWT/)
+  assert.match(kept, /- \[ \] #2 支持账号密码登录/)
+  assert.match(kept, /- \[ \] #3 新增一项/)
+  // 只重写 AC 段：正文与段标记原样保留
+  assert.match(kept, /<!-- SECTION:DESCRIPTION:BEGIN -->\n需求描述原文\n<!-- SECTION:DESCRIPTION:END -->/)
+  assert.deepEqual(countAcceptance(kept), { total: 3, done: 1 })
+  // 无 AC 段的文件：追加一整段（含段标记）
+  const appended = setAcceptance('# 标题\n\n正文\n', [{ text: 'a', done: false }])
+  assert.match(appended, /<!-- AC:BEGIN -->\n- \[ \] #1 a\n<!-- AC:END -->/)
+})
+
+test('replaceAcceptance: 整体替换时全部重置为未勾选（编辑抽屉语义）', () => {
+  // 用**既有已勾选文本**替换，验证抽屉路径确实不继承旧勾选（否则该回归测不出来）
+  const out = replaceAcceptance(SAMPLE, ['返回 JWT'])
+  assert.deepEqual(countAcceptance(out), { total: 1, done: 0 })
+  assert.match(out, /- \[ \] #1 返回 JWT/)
+})
+
+test('setAcceptance: 保留 AC 段内无法识别的行（缩进续行 / 星号列表 / 说明文字）', () => {
+  const raw = [
+    '---', 'id: TASK-9', 'title: t', 'status: To Do', '---', '',
+    '## Acceptance Criteria',
+    '<!-- AC:BEGIN -->',
+    '- [ ] #1 支持登录',
+    '  - 续行：必须覆盖 2FA',
+    '* [ ] 星号项（上游手写格式）',
+    '说明：这一行是给人看的',
+    '<!-- AC:END -->',
+    '',
+  ].join('\n')
+  const out = setAcceptance(raw, [{ text: '支持登录', done: false }, { text: '新增项', done: false }])
+  assert.match(out, /- \[ \] #1 支持登录/)
+  assert.match(out, /- \[ \] #2 新增项/)
+  // 无法识别的三行原样保留（不静默丢字）
+  assert.match(out, /  - 续行：必须覆盖 2FA/)
+  assert.match(out, /\* \[ \] 星号项（上游手写格式）/)
+  assert.match(out, /说明：这一行是给人看的/)
+})
+
+test('appendAcceptance: 追加不动既有任何行（只插新条目、序号接续）', () => {
+  const out = appendAcceptance(SAMPLE, ['新增项 A'])
+  // 既有两行完全不变（含已勾选的 [x]）
+  assert.match(out, /- \[ \] #1 支持账号密码登录/)
+  assert.match(out, /- \[x\] #2 返回 JWT/)
+  assert.match(out, /- \[ \] #3 新增项 A/)
+  assert.deepEqual(countAcceptance(out), { total: 3, done: 1 })
 })
 
 test('itemId: 文件名解析与大小写归一', () => {

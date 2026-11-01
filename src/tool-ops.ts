@@ -24,6 +24,7 @@ import { normalizeDshRef } from './router.js'
 import type { ExpertRegistry } from './expert-registry.js'
 import { BUILTIN_TEAMS, parseTeamInput } from './expert-teams.js'
 import { projectDefaultAgentIds, projectDefaultAgentIdsFromInput } from './types.js'
+import { createBacklogManageTool } from './backlog-tool.js'
 
 export type ToolParamType = 'string' | 'json'
 
@@ -1483,7 +1484,22 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
     },
   }
 
-  const defs: WorkBuddyToolDef[] = [resourceManage, agentManage, taskManage, taskStatus, taskChat, taskEvaluate, taskAskAnswer, sshResourceManage, monitorRead, scheduleManage, plannerManage, fileManage, projectManage, expertManage, teamManage]
+  // 16. backlog 待办管理（Backlog.md 兼容：项目工作区 backlog/tasks/*.md 的门面，契约见
+  // docs/design-backlog-mcp-tool.md）。派发/聚合复用 backlog-service，与 HTTP 看板同一条写路径。
+  const backlogManage = createBacklogManageTool({
+    store,
+    resolver,
+    engine,
+    client,
+    nodeTitle: (p) => {
+      const ref = p.dshRef
+      if (ref.kind === 'mapping') return directory.resolveMapping(ref.mappingId)?.tunnelName || ref.mappingId
+      if (ref.kind === 'app') return directory.resolveApp(ref.appId)?.appName || ref.appId
+      return ref.apiBaseUrl
+    },
+  })
+
+  const defs: WorkBuddyToolDef[] = [resourceManage, agentManage, taskManage, taskStatus, taskChat, taskEvaluate, taskAskAnswer, sshResourceManage, monitorRead, scheduleManage, plannerManage, fileManage, projectManage, expertManage, teamManage, backlogManage]
   return defs.map((def) => ({
     ...def,
     execute: async (args: Record<string, any>, ctx?: ToolCallContext) => {

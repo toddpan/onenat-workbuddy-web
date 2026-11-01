@@ -11,8 +11,9 @@
  *  1. 鉴权：无令牌访问 /mcp → 401；错误令牌 → 401
  *  2. GET /mcp → 405（无服务端主动推送）；DELETE /mcp → 204 会话结束
  *  3. initialize 握手：协议版本 / serverInfo / Mcp-Session-Id 签发；SSE Accept 下以 event-stream 回包
- *  4. tools/list：与工具通道全量同步（数量一致、同名、inputSchema 存在）
+ *  4. tools/list：与工具通道全量同步（数量一致、同名、inputSchema 存在）；含 workbuddy_backlog_manage
  *  5. tools/call：真实调用 workbuddy_task_manage(list) 结构化回包；未知工具 → isError
+ *     tools/call：workbuddy_backlog_manage(projects) 返回可解析 JSON 且 ok=true（无项目环境为空数组）
  *  6. 幂等回放：同会话 + 同 JSON-RPC id + 同参数重复投递 → 不重复执行（/api/mcp/status 的 replays 递增）
  *  7. 未知方法 → -32601；会话校验：假会话 id → -32001
  */
@@ -137,6 +138,7 @@ async function main() {
   check('tools/list：与 HTTP 工具通道全量同步', tools.length === httpTools.length && httpTools.every((t) => tools.some((m) => m.name === t.name)), `mcp=${tools.length} http=${httpTools.length}`)
   check('tools/list：inputSchema 为 object 且含 required=[action]', tools.every((t) => t.inputSchema?.type === 'object' && Array.isArray(t.inputSchema?.required) && t.inputSchema.required.includes('action')))
   check('tools/list：会话管理工具在列（task_manage/task_chat/task_status）', ['workbuddy_task_manage', 'workbuddy_task_chat', 'workbuddy_task_status'].every((n) => tools.some((t) => t.name === n)))
+  check('tools/list：含 backlog 工具 workbuddy_backlog_manage', tools.some((t) => t.name === 'workbuddy_backlog_manage'))
 
   // 5. tools/call：真实调用（任务列表，无需真实 LLM）
   const call = await rawReq('POST', `${PREFIX}/mcp`, {
@@ -149,6 +151,20 @@ async function main() {
   check('tools/call：200 + content[0].type=text', call.status === 200 && call.json?.result?.content?.[0]?.type === 'text')
   check('tools/call：workbuddy_task_manage(list) 结构化成功', callParsed?.ok === true, `isError=${call.json?.result?.isError} 前缀=${callText.slice(0, 60)}`)
   check('tools/call：isError=false', call.json?.result?.isError === false)
+
+  // 5b. tools/call：backlog 工具（该环境无项目 → projects 应为空数组，空数组同样是 ok:true）
+  const backlogCall = await rawReq('POST', `${PREFIX}/mcp`, {
+    jsonrpc: '2.0', id: 'bl-1', method: 'tools/call',
+    params: { name: 'workbuddy_backlog_manage', arguments: { action: 'projects' } },
+  }, authHeaders({ 'Mcp-Session-Id': sessionId }))
+  const backlogText = backlogCall.json?.result?.content?.[0]?.text || ''
+  let backlogParsed
+  try { backlogParsed = JSON.parse(backlogText) } catch { /* ignore */ }
+  check('tools/call：backlog projects 返回可解析 JSON 且 ok=true',
+    backlogCall.json?.result?.isError === false && backlogParsed?.ok === true,
+    `isError=${backlogCall.json?.result?.isError} 前缀=${backlogText.slice(0, 80)}`)
+  check('tools/call：无项目环境 projects 为空数组', Array.isArray(backlogParsed?.projects) && backlogParsed.projects.length === 0,
+    `projects=${JSON.stringify(backlogParsed?.projects)?.slice(0, 80)}`)
 
   // 未知工具 → isError
   const badCall = await rawReq('POST', `${PREFIX}/mcp`, {

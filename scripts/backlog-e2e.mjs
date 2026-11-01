@@ -11,6 +11,11 @@
  *   5. 失败隔离：P2 指向不可达节点，overview 中 P1 正常渲染
  *   6. 归档项目只读：写操作被拒
  *   7. 重试回写端点幂等可用；删除待办
+ *   8. 工具通道 workbuddy_backlog_manage（契约 docs/design-backlog-mcp-tool.md，Bearer 令牌）：
+ *      projects / config / list（search+labels 过滤）/ search（描述正文命中）/ view /
+ *      create / edit（含 acceptAdd、note、非法 status）/ delete（二次确认 + force）/
+ *      dispatch（DEPS_BLOCKED + force + itemIds 批量部分失败）/ overview（P2 不可达失败隔离）/
+ *      retry-writeback / 归档项目写操作被拒
  */
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'
@@ -25,6 +30,9 @@ const STUB_PORT = Number(process.env.BL_E2E_STUB_PORT || 18103)
 const PREFIX = '/onenat-workbuddy'
 const BASE = `http://127.0.0.1:${PORT}`
 const STUB_BASE = `http://127.0.0.1:${STUB_PORT}/api/v1`
+// 工具通道 AI APIKEY：未配置令牌时服务端 fail-closed 拒绝一切工具调用，
+// 因此拉起 dist/server.js 时必须用 env WORKBUDDY_TOKEN 播种（与 smoke-mcp-server.mjs 一致）
+const TOKEN = process.env.BL_E2E_TOKEN || 'bl-e2e-tool-token-0123456789abcdef'
 
 let failures = 0
 function check(name, cond, detail = '') {
@@ -178,12 +186,54 @@ async function req(method, path, body) {
   return { status: res.status, json }
 }
 
+// ---------------- 工具通道（workbuddy_backlog_manage）调用封装 ----------------
+// 契约唯一权威：docs/design-backlog-mcp-tool.md。
+// HTTP 工具通道统一回包 {ok:true, tool, result}（工具自身结果在 result；工具抛错时服务端回
+// {ok:false, tool, error}，无 result 键，此时直接把回包当结果用）。MCP 通道同源，只是外面再包一层 content[0].text。
+const TOOL_NAME = 'workbuddy_backlog_manage'
+async function tool(action, args = {}) {
+  const res = await fetch(`${BASE}${PREFIX}/api/tools/${TOOL_NAME}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN}` },
+    body: JSON.stringify({ action, ...args }),
+  })
+  const text = await res.text()
+  let json; try { json = JSON.parse(text) } catch { json = undefined }
+  const hasResult = json && typeof json === 'object' && Object.prototype.hasOwnProperty.call(json, 'result')
+  return { status: res.status, json, result: hasResult ? json.result : json }
+}
+const asArray = (v) => (Array.isArray(v) ? v : [])
+/** 列表类 action 的数组字段：契约未硬点名 key，按实现约定（projects/items/results）取值 */
+function pickedArray(result, keys) {
+  for (const k of keys) if (Array.isArray(result?.[k])) return result[k]
+  return []
+}
+/** create/view 回包里的 itemId（契约：itemId 服务端分配，`<task_prefix>-<n>`） */
+function pickItemId(res) {
+  const r = res?.result || {}
+  return r.itemId || r.item?.itemId || r.created?.itemId || r.item?.id
+}
+/** dispatch 回包里的 WorkBuddy 任务 ID */
+function pickTaskId(res) {
+  const r = res?.result || {}
+  return r.taskId || r.task?.id || r.task?.taskId
+}
+/** view 回包里的待办字段（契约：字段 + 完整 Markdown 原文 + 关联任务） */
+function viewItem(res) {
+  const r = res?.result || {}
+  return r.item || (r.itemId ? r : undefined)
+}
+function viewRaw(res) {
+  const r = res?.result || {}
+  return String(r.raw || r.item?.raw || '')
+}
+
 async function main() {
   const dataDir = mkdtempSync(join(tmpdir(), 'workbuddy-backlog-e2e-'))
   console.log(`\n== Backlog 集成 E2E ==\n`)
   await new Promise((r) => stub.listen(STUB_PORT, '127.0.0.1', r))
   const server = spawn(process.execPath, [join(ROOT, 'dist', 'server.js'), '--port', String(PORT), '--data', dataDir, '--quiet'],
-    { cwd: ROOT, stdio: ['ignore', 'ignore', 'pipe'] })
+    { cwd: ROOT, env: { ...process.env, WORKBUDDY_TOKEN: TOKEN }, stdio: ['ignore', 'ignore', 'pipe'] })
   server.stderr.on('data', (d) => process.stderr.write(`[server] ${d}`))
   procs.push(server)
   await waitFor(async () => (await fetch(`${BASE}/healthz`)).ok, 'server 就绪')
@@ -212,6 +262,9 @@ async function main() {
   check('项目指令已追加协作约定（B6）', /Backlog 待办协作约定/.test(projAfter?.instruction || ''))
   const init2 = await req('POST', `${PREFIX}/api/projects/${p1.id}/backlog/init`, {})
   check('重复初始化幂等', init2.json?.ok === true)
+  // 真实 DSH 节点同名上传会生成 -1 副本：重复 init 不得重传 config.yml（否则目录被 config-1.yml 污染）
+  const dupConfigs = [...fsFiles.keys()].filter((k) => /\/backlog\/(config-1|config-2)(\.yml)?$/.test(k))
+  check('重复初始化不产生 config-N.yml 副本', dupConfigs.length === 0, dupConfigs.join(','))
   list = (await req('GET', `${PREFIX}/api/projects/${p1.id}/backlog`)).json?.data
   check('列表就绪：initialized + statuses + 示例 1 条', list?.initialized === true && list?.statuses?.length === 3 && list?.items?.length === 1, `items=${list?.items?.length}`)
   const sampleId = list?.items?.[0]?.itemId
@@ -277,6 +330,209 @@ async function main() {
   const del = await req('DELETE', `${PREFIX}/api/projects/${p1.id}/backlog/items/${sampleId}`)
   const afterDel = (await req('GET', `${PREFIX}/api/projects/${p1.id}/backlog`)).json?.data
   check('删除待办生效', del.json?.ok === true && !afterDel?.items?.some((x) => x.itemId === sampleId))
+
+  // ================= 8. 工具通道 workbuddy_backlog_manage =================
+  // 契约：docs/design-backlog-mcp-tool.md（工具签名/12 action/入参/返回/错误码唯一权威）。
+  console.log('\n  -- 工具通道 workbuddy_backlog_manage --')
+
+  // 8.0 令牌门禁：未配置令牌时工具通道 fail-closed；这里反向验证 WORKBUDDY_TOKEN 已生效
+  const bareTool = await fetch(`${BASE}${PREFIX}/api/tools/${TOOL_NAME}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'projects' }),
+  })
+  check('工具通道：无令牌 → 401（WORKBUDDY_TOKEN 生效）', bareTool.status === 401, `status=${bareTool.status}`)
+
+  // 8.1 projects：返回项目列表且含已初始化的 P1
+  const toolProjects = await tool('projects')
+  const projectRows = pickedArray(toolProjects.result, ['projects', 'items'])
+  const p1Row = projectRows.find((x) => x?.id === p1.id)
+  check('tools projects：返回项目列表且 P1 在列（initialized=true）',
+    toolProjects.result?.ok === true && Boolean(p1Row) && p1Row?.initialized === true,
+    `projects=${projectRows.length} initialized=${p1Row?.initialized}`)
+  check('tools projects：P1 未归档且带 workspace/name', p1Row?.archived === false && p1Row?.workspace === '/tmp/bl-e2e-ws' && Boolean(p1Row?.name))
+
+  // 8.2 config：statuses(3)/defaultStatus/taskPrefix
+  const toolConfig = await tool('config', { projectId: p1.id })
+  const cfgRes = toolConfig.result || {}
+  check('tools config：statuses 3 个 / defaultStatus / taskPrefix',
+    cfgRes.ok === true && asArray(cfgRes.statuses).length === 3 && Boolean(cfgRes.defaultStatus) && cfgRes.taskPrefix === 'task',
+    `statuses=${JSON.stringify(cfgRes.statuses)} default=${cfgRes.defaultStatus} prefix=${cfgRes.taskPrefix}`)
+  const cfgDefaultStatus = cfgRes.defaultStatus
+
+  // 8.3 list：条目 + statuses + total；filter.search 命中；filter.labels 过滤
+  const toolList = await tool('list', { projectId: p1.id })
+  const listRes = toolList.result || {}
+  const listItems = asArray(listRes.items)
+  check('tools list：返回条目 + statuses + total',
+    listRes.ok === true && listItems.length >= 1 && asArray(listRes.statuses).length === 3 && listRes.total === listItems.length,
+    `items=${listItems.length} total=${listRes.total}`)
+  const listHit = await tool('list', { projectId: p1.id, filter: { search: '集成验证' } })
+  const listHitItems = asArray(listHit.result?.items)
+  check('tools list：filter.search 命中（标题）',
+    listHit.result?.ok === true && listHitItems.some((x) => x.itemId === itemId) && listHitItems.every((x) => /集成验证/.test(`${x.title || ''}${(x.labels || []).join(' ')}`)),
+    `hit=${listHitItems.map((x) => x.itemId).join(',')}`)
+  const listLabelled = await tool('list', { projectId: p1.id, filter: { labels: ['e2e'] } })
+  const labelledItems = asArray(listLabelled.result?.items)
+  check('tools list：filter.labels=["e2e"] 过滤（全部命中 label）',
+    listLabelled.result?.ok === true && labelledItems.length >= 1 && labelledItems.every((x) => asArray(x.labels).includes('e2e')) && labelledItems.some((x) => x.itemId === itemId),
+    `items=${labelledItems.length}`)
+  const maxNumBefore = Math.max(0, ...listItems.map((x) => Number(/-(\d+)$/.exec(String(x.itemId || ''))?.[1])).filter((n) => Number.isFinite(n)))
+
+  // 8.4 search：按描述正文命中（与 list 的差异点 —— 描述里的词也能搜到）
+  const toolSearch = await tool('search', { projectId: p1.id, filter: { search: '端到端' } })
+  const searchItems = asArray(toolSearch.result?.items)
+  check('tools search：按描述正文命中（描述里的词也能搜到）',
+    toolSearch.result?.ok === true && searchItems.some((x) => x.itemId === itemId),
+    `items=${searchItems.map((x) => x.itemId).join(',')}`)
+  check('tools search：命中的不是标题词（标题不含「端到端」）', !/端到端/.test(String(listItems.find((x) => x.itemId === itemId)?.title || '')))
+  // 契约 §3「search 需 filter.search」：缺参不得静默返回全量
+  const searchNoFilter = await tool('search', { projectId: p1.id })
+  check('tools search：缺 filter.search → ok:false（契约要求必填）',
+    searchNoFilter.result?.ok === false && /filter\.search|search/.test(String(searchNoFilter.result?.error || '')),
+    `error=${String(searchNoFilter.result?.error || '').slice(0, 100)}`)
+
+  // 8.5 view：完整 raw（frontmatter + AC 段标记）
+  const toolView = await tool('view', { projectId: p1.id, itemId })
+  const viewItemRow = viewItem(toolView)
+  const viewRawText = viewRaw(toolView)
+  check('tools view：返回字段 + 完整 raw（frontmatter 与 AC 段标记）',
+    toolView.result?.ok === true && viewItemRow?.itemId === itemId && /^---/.test(viewRawText) && /<!-- AC:BEGIN -->/.test(viewRawText),
+    `rawLen=${viewRawText.length}`)
+  check('tools view：raw 含描述正文（段标记原样保留）', /端到端链路验证/.test(viewRawText) && /<!-- SECTION:DESCRIPTION:BEGIN -->/.test(viewRawText))
+
+  // 8.6 create：itemId 递增、status=defaultStatus、acceptance 计数正确
+  const toolCreate = await tool('create', {
+    projectId: p1.id,
+    item: { title: '工具通道新建待办', description: '工具通道建单验证', labels: ['tool-e2e'], acceptance: ['验收项一', '验收项二'] },
+  })
+  const newId = pickItemId(toolCreate)
+  const newNum = Number(/-(\d+)$/.exec(String(newId || ''))?.[1])
+  check('tools create：新建成功且 itemId 递增（max+1）',
+    toolCreate.result?.ok === true && Boolean(newId) && newNum === maxNumBefore + 1,
+    `id=${newId} maxBefore=${maxNumBefore}`)
+  const newView = await tool('view', { projectId: p1.id, itemId: newId })
+  const newItem = viewItem(newView)
+  check('tools create：status=defaultStatus 且 acceptance 计数正确（view 复核）',
+    newView.result?.ok === true && newItem?.status === cfgDefaultStatus && newItem?.acceptance?.total === 2 && newItem?.acceptance?.done === 0,
+    `status=${newItem?.status} acceptance=${JSON.stringify(newItem?.acceptance)}`)
+
+  // 8.7 edit：status/priority/labels/acceptance/description + acceptAdd + note；view 复核；非法 status 被拒
+  const toolEdit = await tool('edit', {
+    projectId: p1.id,
+    itemId: newId,
+    item: {
+      status: 'In Progress',
+      priority: 'High',
+      labels: ['tool-e2e', 'edited'],
+      acceptance: ['验收项一（改）', '验收项二（改）', '验收项三'],
+      acceptAdd: ['验收项四（追加）'],
+      description: '编辑后的描述正文',
+      note: { title: '人工备注', lines: ['这是一条工具通道追加的执行记录'] },
+    },
+  })
+  const editView = await tool('view', { projectId: p1.id, itemId: newId })
+  const editItem = viewItem(editView)
+  const editRaw = viewRaw(editView)
+  check('tools edit：edit 回包 ok=true', toolEdit.result?.ok === true, toolEdit.result?.error || '')
+  check('tools edit：status/priority/labels 生效（view 复核）',
+    editItem?.status === 'In Progress' && editItem?.priority === 'High'
+      && asArray(editItem?.labels).includes('edited') && asArray(editItem?.labels).includes('tool-e2e'),
+    `status=${editItem?.status} pri=${editItem?.priority} labels=${JSON.stringify(editItem?.labels)}`)
+  check('tools edit：acceptance 替换 + acceptAdd 追加（共 4 项）',
+    editItem?.acceptance?.total === 4 && editItem?.acceptance?.done === 0,
+    `acceptance=${JSON.stringify(editItem?.acceptance)}`)
+  check('tools edit：description 替换 + note 追加执行记录（view raw 复核）',
+    /编辑后的描述正文/.test(editRaw) && /人工备注/.test(editRaw) && /工具通道追加的执行记录/.test(editRaw))
+  const badStatus = await tool('edit', { projectId: p1.id, itemId: newId, item: { status: '不存在的状态' } })
+  check('tools edit：非法 status → ok:false + code=INVALID_STATUS + error 列出可选值',
+    badStatus.result?.ok === false && badStatus.result?.code === 'INVALID_STATUS'
+      && asArray(badStatus.result?.statuses).length === 3
+      && /非法|可选/.test(String(badStatus.result?.error || '')) && /To Do/.test(String(badStatus.result?.error || '')),
+    `code=${badStatus.result?.code} error=${String(badStatus.result?.error || '').slice(0, 100)}`)
+
+  // 8.8 delete：无 force → 二次确认提示；force=true → 删除成功且再 view 不存在
+  const delNoForce = await tool('delete', { projectId: p1.id, itemId: newId })
+  check('tools delete：不带 force → ok:false + code=CONFIRM_REQUIRED（二次确认提示）',
+    delNoForce.result?.ok === false && delNoForce.result?.code === 'CONFIRM_REQUIRED'
+      && /force|确认/.test(String(delNoForce.result?.error || '')),
+    `code=${delNoForce.result?.code} error=${String(delNoForce.result?.error || '').slice(0, 100)}`)
+  const delForced = await tool('delete', { projectId: p1.id, itemId: newId, force: 'true' })
+  check('tools delete：force="true" → 删除成功', delForced.result?.ok === true, delForced.result?.error || '')
+  const afterDeleteView = await tool('view', { projectId: p1.id, itemId: newId })
+  check('tools delete：再 view 返回不存在（200 + ok:false + code=NOT_FOUND）',
+    afterDeleteView.status === 200 && afterDeleteView.result?.ok === false
+      && afterDeleteView.result?.code === 'NOT_FOUND' && /不存在/.test(String(afterDeleteView.result?.error || '')),
+    `status=${afterDeleteView.status} code=${afterDeleteView.result?.code}`)
+
+  // 8.9 dispatch：依赖未完成 → DEPS_BLOCKED；force → taskId；itemIds 批量逐条结果
+  const blocker = await tool('create', { projectId: p1.id, item: { title: '工具通道阻塞项', description: '供依赖阻止断言使用' } })
+  const blockerId = pickItemId(blocker)
+  const dependent = await tool('create', { projectId: p1.id, item: { title: '工具通道依赖项', description: '依赖阻塞项', dependencies: [blockerId] } })
+  const dependentId = pickItemId(dependent)
+  check('tools dispatch（前置）：阻塞项/依赖项创建成功', Boolean(blockerId) && Boolean(dependentId), `blocker=${blockerId} dependent=${dependentId}`)
+  const depsBlocked = await tool('dispatch', { projectId: p1.id, itemId: dependentId })
+  check('tools dispatch：依赖未完成 → ok:false + code=DEPS_BLOCKED',
+    depsBlocked.result?.ok === false && depsBlocked.result?.code === 'DEPS_BLOCKED' && asArray(depsBlocked.result?.blocked).length >= 1,
+    `code=${depsBlocked.result?.code} blocked=${JSON.stringify(depsBlocked.result?.blocked)}`)
+  const forcedDispatch = await tool('dispatch', { projectId: p1.id, itemId: dependentId, force: 'true' })
+  const toolTaskId = pickTaskId(forcedDispatch)
+  check('tools dispatch：force="true" → 返回 taskId', forcedDispatch.result?.ok === true && Boolean(toolTaskId), `taskId=${toolTaskId}`)
+  const batchDispatch = await tool('dispatch', { projectId: p1.id, itemIds: [blockerId, 'task-999999'] })
+  const batchEntries = pickedArray(batchDispatch.result, ['results', 'items', 'dispatched'])
+  check('tools dispatch：itemIds 批量返回逐条结果（部分失败不整体报错）',
+    batchDispatch.result?.ok === true && batchEntries.length === 2
+      && batchEntries.some((e) => e?.ok === true) && batchEntries.some((e) => e?.ok === false),
+    `entries=${JSON.stringify(batchEntries.map((e) => ({ itemId: e?.itemId, ok: e?.ok })))}`)
+
+  // 8.10 overview：跨项目聚合，P2 不可达失败隔离
+  // 注意：overview 默认只返回未完成项（契约 §6 includeDone 默认 false），而派发/终态回写是异步的，
+  // 若按默认断言「items>=1」会随回写完成时机抖动（实测两次分别 3/1）；故显式 includeDone:"true" 断言全量聚合。
+  const toolOverview = await tool('overview', { filter: { includeDone: true } })
+  const ovRows = pickedArray(toolOverview.result, ['projects', 'overview'])
+  const ovP1 = ovRows.find((x) => x?.projectId === p1.id)
+  const ovP2 = ovRows.find((x) => x?.projectId === p2.id)
+  check('tools overview：P1 正常聚合（nodeStatus=ok + 全量条目）',
+    toolOverview.result?.ok === true && ovP1?.nodeStatus === 'ok'
+      && asArray(ovP1?.items).length >= 3 && ovP1?.total === asArray(ovP1?.items).length,
+    `items=${asArray(ovP1?.items).length} total=${ovP1?.total}`)
+  check('tools overview：P2 不可达时失败隔离（P1 正常、P2 带 error、summary.unreachable=1）',
+    ovP2?.nodeStatus === 'unreachable' && Boolean(ovP2?.error) && ovP1?.nodeStatus === 'ok'
+      && toolOverview.result?.summary?.projects === 2 && toolOverview.result?.summary?.unreachable === 1,
+    `P2=${ovP2?.nodeStatus} err=${String(ovP2?.error || '').slice(0, 60)} summary=${JSON.stringify(toolOverview.result?.summary)}`)
+
+  // 8.11 retry-writeback：对已回写任务重试 → ok:true
+  const toolRetry = await tool('retry-writeback', { taskId })
+  check('tools retry-writeback：对已回写任务重试 → ok:true', toolRetry.result?.ok === true, toolRetry.result?.error || '')
+
+  // 8.12 归档项目：写类 action 被拒、读类放行
+  await req('POST', `${PREFIX}/api/projects/${p1.id}/archive`)
+  const archCreate = await tool('create', { projectId: p1.id, item: { title: '归档后不应成功（工具通道）' } })
+  check('tools 归档：create 被拒（写操作一律拒绝）',
+    archCreate.result?.ok === false && archCreate.result?.code === 'PROJECT_ARCHIVED' && /归档|archived/i.test(String(archCreate.result?.error || '')),
+    `code=${archCreate.result?.code} error=${String(archCreate.result?.error || '').slice(0, 100)}`)
+  const archEdit = await tool('edit', { projectId: p1.id, itemId: dependentId, item: { priority: 'Low' } })
+  check('tools 归档：edit 被拒（写操作一律拒绝）',
+    archEdit.result?.ok === false && archEdit.result?.code === 'PROJECT_ARCHIVED',
+    `code=${archEdit.result?.code}`)
+  const archConfig = await tool('config', { projectId: p1.id })
+  check('tools 归档：config 读操作放行', archConfig.result?.ok === true)
+  await req('POST', `${PREFIX}/api/projects/${p1.id}/restore`)
+
+  // 8.13 init：工具通道初始化（补全覆盖契约 §3 的全部 12 个 action；放末尾，避免影响前面 projects/overview 断言）
+  const p3 = (await req('POST', `${PREFIX}/api/projects`, {
+    name: '工具通道初始化项目',
+    dshRef: { kind: 'direct', apiBaseUrl: STUB_BASE },
+    workspace: '/tmp/bl-e2e-ws3',
+  })).json?.data
+  check('tools init（前置）：P3 创建成功', Boolean(p3?.id))
+  const toolInit = await tool('init', { projectId: p3.id, sample: 'true' })
+  check('tools init：初始化成功（initialized=true / statuses 3 个 / 带示例待办）',
+    toolInit.result?.ok === true && toolInit.result?.initialized === true && asArray(toolInit.result?.statuses).length === 3 && Boolean(toolInit.result?.sampleItemId),
+    `initialized=${toolInit.result?.initialized} sample=${toolInit.result?.sampleItemId}`)
+  const toolInitAgain = await tool('init', { projectId: p3.id })
+  check('tools init：重复初始化幂等（ok=true）', toolInitAgain.result?.ok === true)
+  const toolInitList = await tool('list', { projectId: p3.id })
+  check('tools init：初始化后可 list 到示例待办', toolInitList.result?.ok === true && asArray(toolInitList.result?.items).length === 1,
+    `items=${asArray(toolInitList.result?.items).length}`)
 
   console.log(`\n== 结果：${failures === 0 ? '全部通过 ✅' : `${failures} 项失败 ❌`} ==\n`)
   cleanup()

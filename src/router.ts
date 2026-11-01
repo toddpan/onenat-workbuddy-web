@@ -25,14 +25,10 @@ import type { WorkStore } from './store.js'
 import { isNodeAbsolutePath, WORK_DIR_NOT_ABSOLUTE_MSG } from './store.js'
 import { DshClient } from './remote-client.js'
 import {
-  appendExecutionRecord,
   backlogInstructionSnippet,
   createItem,
-  decodeFrontmatter,
   deleteItem,
   encodeFrontmatter,
-  extractAcceptanceText,
-  extractDescription,
   findItem,
   initBacklog,
   listBacklog,
@@ -40,10 +36,14 @@ import {
   readItem,
   replaceAcceptance,
   replaceDescription,
-  resolveDoneStatus,
-  resolveInProgressStatus,
   writeItem,
 } from './backlog.js'
+import {
+  dispatchBacklogItem,
+  listBacklogWithTasks,
+  overviewBacklog,
+  type BacklogDispatchResult,
+} from './backlog-service.js'
 import { SshInputError, execOnSshResource, maskSshResource, normalizeSshResource, testSshResource } from './ssh-resources.js'
 import type { SshResourceStore } from './ssh-store.js'
 import type { ScheduleRunner } from './scheduler.js'
@@ -63,6 +63,8 @@ import { NODE_AGENT_ID, MAIN_AGENT_LABEL, projectDefaultAgentIds, projectDefault
 import type { MonitorService } from './monitor.js'
 import { SkillPluginLibrary, buildSkillInstallPrompt, buildPluginInstallPrompt, buildPluginExportPrompt, buildPluginListExportPrompt, buildProjectImportPrompt, extractExportedPaths } from './library.js'
 import type { LibKind } from './library.js'
+import { requestPublicBase } from './mcp-server.js'
+import { buildAiInstallPayload, normalizeInstallBase } from './ai-install.js'
 import { renderWebUi } from './web-ui.js'
 import { renderMonitorUi } from './monitor-ui.js'
 import { formatDateVersion, parseDateVersion, readPackageVersion } from './date-version.js'
@@ -145,8 +147,7 @@ export class WorkBuddyRouter {
 
   /**
    * backlog 待办 → WorkTask 一键派发（B4，docs/design-backlog-integration.md §6.1）。
-   * 复用 engine.createTask（projectId 继承项目节点/工作区/成员/连接器/技能）；
-   * 验收清单原文直达 planner；依赖未完成默认阻止（D5，可 force）；成功后置进行中并追加派发记录。
+   * 实现在 backlog-service（工具通道复用同一段派发+回写关联逻辑，避免分叉）。
    */
   private async dispatchBacklogItem(
     proj: Project,
@@ -154,51 +155,8 @@ export class WorkBuddyRouter {
     workspace: string,
     itemId: string,
     opts: { force?: boolean; instruction?: string } = {},
-  ): Promise<{ task: { id: string; title: string; mode: string; status: string }; item: { itemId: string; status: string } }> {
-    const found = await findItem(this.client, target, workspace, itemId)
-    if (!found) throw Object.assign(new Error(`待办 ${itemId} 不存在`), { status: 404 })
-    const item = found.item
-    const doneStatus = resolveDoneStatus(found.list.config.statuses)
-    if (!opts.force && item.dependencies?.length) {
-      const byId = new Map(found.list.items.map((it) => [normalizeItemId(it.itemId), it]))
-      const blocked = item.dependencies
-        .map((d) => byId.get(normalizeItemId(d)))
-        .filter((d): d is NonNullable<typeof d> => Boolean(d) && d!.status !== doneStatus)
-      if (blocked.length) {
-        throw Object.assign(new Error(`存在未完成依赖：${blocked.map((b) => b!.itemId).join('、')}（可勾选「忽略依赖」强制派发）`), { status: 409, code: 'DEPS_BLOCKED' })
-      }
-    }
-    const raw = await readItem(this.client, target, workspace, item.fileName)
-    const desc = extractDescription(raw)
-    const ac = extractAcceptanceText(raw)
-    const message = [
-      `【来自 backlog 待办 ${item.itemId}】${item.title || ''}`,
-      '',
-      '## 描述',
-      desc || '（待办未填写描述）',
-      '',
-      '## 验收清单',
-      ac || '（待办未填写验收清单，请按描述自拟可验证的完成标准）',
-      ...(opts.instruction ? ['', '## 附加说明', opts.instruction] : []),
-    ].join('\n')
-    const task = await this.engine.createTask({
-      title: item.title || String(item.itemId),
-      projectId: proj.id,
-      message,
-      creator: 'console',
-      backlogRef: { projectId: proj.id, itemId: item.itemId, itemTitle: item.title || '', dispatchedAt: Date.now() },
-    })
-    // 置进行中（状态可配置：resolveInProgressStatus 判定；已是该状态则不动）+ 追加派发记录
-    const inProgress = resolveInProgressStatus(found.list.config.statuses)
-    const nextStatus = inProgress && inProgress !== item.status ? inProgress : undefined
-    const time = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
-    const next = appendExecutionRecord(encodeFrontmatter(raw, { status: nextStatus }), {
-      time,
-      title: '派发为任务',
-      lines: [`${task.id} · mode=${task.mode} · 成员=${task.memberAgentIds.length}`],
-    })
-    await writeItem(this.client, target, workspace, item.fileName, () => next, { base: raw })
-    return { task: { id: task.id, title: task.title, mode: String(task.mode || 'chat'), status: String(task.status || 'draft') }, item: { itemId: item.itemId, status: nextStatus || item.status || '' } }
+  ): Promise<BacklogDispatchResult> {
+    return dispatchBacklogItem({ client: this.client, engine: this.engine }, proj, target, workspace, itemId, opts)
   }
 
   /** 发送用户邀请邮件：结果随响应返回（sent/status/error）供 UI 提示；失败不抛错，inviteLink 仍可手动复制 */
@@ -1535,43 +1493,11 @@ export class WorkBuddyRouter {
     // ---------- Backlog 集成（B1-B7，docs/design-backlog-integration.md §5.2/§6/§7.3） ----------
     // 全部过既有鉴权（外层 dispatch）+ 项目可见性门（canSeeProject）；写操作过归档只读拦截（P-08 语义同 /api/tasks）。
     if (p === '/api/backlog/overview' && method === 'GET') {
-      const projects = this.store.getProjects().filter((pr) => this.canSeeProject(pr))
-      const cap = <T, R>(items: T[], limit: number, fn: (x: T) => Promise<R>): Promise<R[]> => {
-        const out: R[] = new Array(items.length)
-        let next = 0
-        return Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
-          while (next < items.length) { const i = next++; out[i] = await fn(items[i]) }
-        })).then(() => out)
-      }
-      const data = await cap(projects, 3, async (pr) => {
-        const base = { projectId: pr.id, projectName: pr.name, archived: Boolean(pr.archivedAt), workspace: pr.workspace || '' }
-        if (pr.archivedAt) return { ...base, nodeStatus: 'archived', initialized: false, truncated: false, statuses: [], defaultStatus: '', error: '', items: [] }
-        try {
-          if (!pr.workspace) return { ...base, nodeStatus: 'unreachable', initialized: false, truncated: false, statuses: [], defaultStatus: '', error: '项目未配置工作目录', items: [] }
-          const target = await this.resolver.resolveRef(pr.dshRef, pr.apiKey, 'backlog-overview')
-          if (!target.online || !target.baseUrl) return { ...base, nodeStatus: 'unreachable', initialized: false, truncated: false, statuses: [], defaultStatus: '', error: target.error || '节点不可达', items: [] }
-          const list = await listBacklog(this.client, target, pr.workspace)
-          const linked = this.store.getTasks().filter((t) => t.backlogRef?.projectId === pr.id)
-          return {
-            ...base,
-            nodeStatus: 'ok',
-            initialized: list.initialized,
-            truncated: list.truncated,
-            statuses: list.config.statuses,
-            defaultStatus: list.config.defaultStatus,
-            error: '',
-            items: list.items.map((it) => ({
-              ...it,
-              tasks: linked
-                .filter((t) => normalizeItemId(t.backlogRef!.itemId) === normalizeItemId(it.itemId))
-                .sort((a, b) => b.updatedAt - a.updatedAt)
-                .map((t) => ({ id: t.id, status: t.status, summaryStatus: t.summary?.status || '', writebackFailed: t.backlogWritebackFailed || null, updatedAt: t.updatedAt })),
-            })),
-          }
-        } catch (err: any) {
-          return { ...base, nodeStatus: 'unreachable', initialized: true, truncated: false, statuses: [], defaultStatus: '', error: String(err?.message || err).slice(0, 200), items: [] }
-        }
-      })
+      // 聚合与失败隔离逻辑收敛在 backlog-service（工具通道 overview 复用同一实现）
+      const data = await overviewBacklog(
+        { client: this.client, store: this.store, resolver: this.resolver },
+        this.store.getProjects().filter((pr) => this.canSeeProject(pr)),
+      )
       this.sendJson(res, 200, { ok: true, data })
       return true
     }
@@ -1597,16 +1523,8 @@ export class WorkBuddyRouter {
         if (rest.length === 0 && method === 'GET') {
           const ctx = await nodeCtx()
           if (!ctx.ok) { this.sendJson(res, ctx.status, { ok: false, error: ctx.error }); return true }
-          const list = await listBacklog(this.client, ctx.target, ctx.workspace)
-          const linked = this.store.getTasks().filter((t) => t.backlogRef?.projectId === projectId)
-          const items = list.items.map((it) => ({
-            ...it,
-            tasks: linked
-              .filter((t) => normalizeItemId(t.backlogRef!.itemId) === normalizeItemId(it.itemId))
-              .sort((a, b) => b.updatedAt - a.updatedAt)
-              .map((t) => ({ id: t.id, status: t.status, summaryStatus: t.summary?.status || '', writebackFailed: t.backlogWritebackFailed || null, updatedAt: t.updatedAt })),
-          }))
-          this.sendJson(res, 200, { ok: true, data: { ...list, items, archived: readOnly, statuses: list.config.statuses, defaultStatus: list.config.defaultStatus, instructionSnippet: backlogInstructionSnippet() } })
+          const list = await listBacklogWithTasks({ client: this.client, store: this.store }, ctx.target, ctx.workspace, projectId)
+          this.sendJson(res, 200, { ok: true, data: { ...list, archived: readOnly, statuses: list.config.statuses, defaultStatus: list.config.defaultStatus, instructionSnippet: backlogInstructionSnippet() } })
           return true
         }
         // POST 初始化（途径 A，幂等）
@@ -2213,6 +2131,27 @@ export class WorkBuddyRouter {
     if (p === '/api/settings' && method === 'GET') {
       const s = this.store.getSettings()
       this.sendJson(res, 200, { ok: true, data: { ...s, onenat: { ...s.onenat, apiKey: s.onenat.apiKey ? s.onenat.apiKey.slice(0, 8) + '…' : '' }, aiToken: this.auth?.getAiToken() || '' } })
+      return true
+    }
+    // AI 接入安装提示词：服务端统一来源（Web 控制台与安卓客户端共用同一份正文，禁止客户端另拼）
+    // 仅控制台登录会话；AI 令牌不在开放面内（由 server.ts 门禁统一回 403）
+    if (p === '/api/ai/install-prompt' && method === 'GET') {
+      const urlObj = new URL(req.url || '/', 'http://localhost')
+      const rawBase = urlObj.searchParams.get('base')
+      let base: string
+      if (rawBase === null) {
+        // 未指定：按本次请求头推导调用方视角基址（反代优先 x-forwarded-*），去尾部 `/`
+        base = requestPublicBase(req, prefix).replace(/\/+$/, '')
+      } else {
+        const normalized = normalizeInstallBase(rawBase)
+        if (!normalized) {
+          this.sendJson(res, 400, { ok: false, error: 'base 参数非法：需为 http(s):// 绝对地址（长度 ≤512，无控制字符）' })
+          return true
+        }
+        base = normalized
+      }
+      const token = this.auth?.getAiToken() || ''
+      this.sendJson(res, 200, { ok: true, data: buildAiInstallPayload(base, token) })
       return true
     }
     // AI APIKEY 重置（仅登录会话；旧令牌立即失效，无需重启）

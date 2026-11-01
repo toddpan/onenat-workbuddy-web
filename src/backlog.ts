@@ -57,6 +57,11 @@ export interface BacklogItem extends BacklogFields {
   acceptance?: { total: number; done: number }
   /** 有 Final Summary 或文末执行记录条目（启发：出现 `### ` 执行记录标题行） */
   hasExecutionRecord?: boolean
+  /**
+   * 描述正文（仅 `listBacklog({ withBodies: true })` 时填充）。
+   * 默认不填：列表只要元数据；正文段解析是 search 这类全量检索才需要的额外成本。
+   */
+  description?: string
 }
 
 export interface BacklogConfig {
@@ -367,6 +372,7 @@ export async function listBacklog(client: DshClient, target: DshTarget, workspac
       filePath: e.path || `${paths.tasks}/${e.name}`,
       acceptance: countAcceptance(raw),
       hasExecutionRecord: hasExecutionRecord(raw),
+      ...(opts?.withBodies ? { description: extractDescription(raw) } : {}),
     } satisfies BacklogItem
   })
   const list = items.filter((x): x is BacklogItem => Boolean(x))
@@ -393,11 +399,16 @@ export async function writeItem(
   if (opts?.base !== undefined && current !== opts.base) throw new BacklogConflictError()
   const next = mutate(current)
   // 真实 DSH 节点 /fs/upload 对已存在文件名生成 -N 副本而非覆盖（QA 20261031 实测），
-  // 必须先删后写，否则更新会落到副本且 verify 读原文件必然冲突
-  const rm = await client.fsRemove(target, `${backlogPaths(workspace).tasks}/${fileName}`)
+  // 必须先删后写，否则更新会落到副本且 verify 读原文件必然冲突。
+  // 代价：删成功、写失败时会短暂没有该文件 —— 用读到的 current 回写兜底（§3.4 结构性约束）。
+  const dir = backlogPaths(workspace).tasks
+  const rm = await client.fsRemove(target, `${dir}/${fileName}`)
   if (!rm.ok && !/no such|not found|不存在|enoent/i.test(rm.error || '')) throw new Error(rm.error || '待办清理失败')
-  const up = await client.fsUpload(target, backlogPaths(workspace).tasks, [{ filename: fileName, data: Buffer.from(next, 'utf8'), mimeType: 'text/markdown' }])
-  if (!up.ok) throw new Error(up.error || '待办写回失败')
+  const up = await client.fsUpload(target, dir, [{ filename: fileName, data: Buffer.from(next, 'utf8'), mimeType: 'text/markdown' }])
+  if (!up.ok) {
+    const restore = await client.fsUpload(target, dir, [{ filename: fileName, data: Buffer.from(current, 'utf8'), mimeType: 'text/markdown' }]).catch(() => ({ ok: false }))
+    throw new Error(`${up.error || '待办写回失败'}${restore.ok ? '（已回滚原内容）' : '（回滚失败，条目可能已丢失，请检查节点工作区）'}`)
+  }
   const verify = await readItem(client, target, workspace, fileName)
   if (verify !== next) throw new BacklogConflictError()
   return { raw: next, base }
@@ -540,11 +551,86 @@ export function replaceDescription(raw: string, text: string): string {
 }
 
 export function replaceAcceptance(raw: string, items: string[]): string {
-  const body = items.map((a, i) => `- [ ] #${i + 1} ${a}`).join('\n')
+  // 编辑抽屉语义：整体替换 = 全部重置为未勾选（不继承旧勾选；测试见 backlog.test.ts）
+  return setAcceptance(raw, items.map((text) => ({ text, done: false })), { preserveChecks: false })
+}
+
+/** 验收清单条目（写回时保留勾选状态） */
+export interface AcceptanceEntry {
+  text: string
+  done: boolean
+}
+
+/** 验收条目行（本仓库写入格式 `- [ ] #1 文本` 与上游手写格式 `- [x] 文本`） */
+const AC_ITEM_LINE = /^\s*-\s+\[( |x|X)\]\s*(?:#\d+\s*)?(.*)$/
+
+/**
+ * 解析验收清单条目：兼容 `- [ ] #1 文本`（本仓库写入格式）与 `- [x] 文本`（上游手写格式）。
+ * 无 AC 段或无条目返回空数组。
+ */
+export function parseAcceptanceEntries(raw: string): AcceptanceEntry[] {
+  const section = extractAcceptanceText(raw)
+  if (!section) return []
+  const out: AcceptanceEntry[] = []
+  for (const line of section.split(/\r?\n/)) {
+    const m = AC_ITEM_LINE.exec(line)
+    if (!m) continue
+    const text = m[2].trim()
+    if (text) out.push({ text, done: /[xX]/.test(m[1]) })
+  }
+  return out
+}
+
+/**
+ * AC 段内**无法识别为用户条目**的非空行（缩进续行、`*` 星号列表、说明文字等）。
+ * 重写 AC 段时必须原样保留，否则人会认为「我只改了验收项，怎么别的字没了」。
+ */
+function unknownAcceptanceLines(raw: string): string[] {
+  const section = extractAcceptanceText(raw)
+  if (!section) return []
+  return section.split(/\r?\n/).filter((l) => l.trim() !== '' && !AC_ITEM_LINE.test(l))
+}
+
+/** 写 AC 段（段标记优先，其次 `## Acceptance Criteria`，都没有则文末新增） */
+function writeAcceptanceBlock(raw: string, body: string): string {
   if (raw.includes(AC_BEGIN) && raw.includes(AC_END)) return spliceBetween(raw, AC_BEGIN, AC_END, body)
   const m = /(^|\r?\n)(##\s*Acceptance Criteria\s*(?:\r?\n)?)[\s\S]*?((?=\r?\n##\s)|$)/i.exec(raw)
   if (m) return raw.slice(0, m.index) + m[1] + m[2] + `${AC_BEGIN}\n${body}\n${AC_END}` + raw.slice(m.index + m[0].length)
   return `${raw.replace(/\s*$/, '')}\n\n## Acceptance Criteria\n${AC_BEGIN}\n${body}\n${AC_END}\n`
+}
+
+/**
+ * 整体写验收清单：默认**保留勾选状态**（上游语义：按 trim 后文本匹配，命中则沿用旧勾选）。
+ * 新增条目默认未勾选；顺序按入参重排，序号重编为 #1..#n；无法解析的既有行原样保留在段末。
+ */
+export function setAcceptance(raw: string, entries: AcceptanceEntry[], opts?: { preserveChecks?: boolean }): string {
+  const prev = new Map<string, boolean>()
+  if (opts?.preserveChecks !== false) {
+    for (const e of parseAcceptanceEntries(raw)) if (!prev.has(e.text.trim())) prev.set(e.text.trim(), e.done)
+  }
+  const lines = entries.map(
+    (e, i) => `- [${e.done || prev.get(e.text.trim()) ? 'x' : ' '}] #${i + 1} ${e.text.trim()}`,
+  )
+  lines.push(...unknownAcceptanceLines(raw))
+  return writeAcceptanceBlock(raw, lines.join('\n'))
+}
+
+/**
+ * 追加验收项：**不动既有任何行**（含无法识别的行），只把新条目插到 AC 段末尾。
+ * 与 `setAcceptance` 分开的原因：追加是最常见的 AI 动作，必须零丢字风险。
+ */
+export function appendAcceptance(raw: string, texts: string[]): string {
+  const items = texts.map((t) => t.trim()).filter(Boolean)
+  if (!items.length) return raw
+  const start = parseAcceptanceEntries(raw).length
+  const lines = items.map((t, i) => `- [ ] #${start + i + 1} ${t}`)
+  if (raw.includes(AC_BEGIN) && raw.includes(AC_END)) {
+    const ei = raw.indexOf(AC_END)
+    const before = raw.slice(0, ei)
+    const tail = raw.slice(ei)
+    return `${before}${before.endsWith('\n') ? '' : '\n'}${lines.join('\n')}\n${tail}`
+  }
+  return writeAcceptanceBlock(raw, lines.join('\n'))
 }
 
 /**
@@ -564,6 +650,11 @@ export async function initBacklog(
   }
   await mkdirTolerant(workspace, BACKLOG_DIR)
   await mkdirTolerant(p.root, 'tasks')
+  // 幂等：已初始化（目录在 + config.yml 可读）直接返回，**不重传 config.yml**。
+  // 真实 DSH 节点同名上传会生成 config-1.yml 副本（QA 20261031 实测），重复 init 会污染目录。
+  if (await probeBacklog(client, target, workspace)) {
+    if ((await downloadText(client, target, p.config)) !== undefined) return { initialized: true }
+  }
   const cfgText = [
     `project_name: ${opts?.projectName ? quoteIfNeeded(opts.projectName) : '""'}`,
     `default_status: "${DEFAULT_STATUSES[0]}"`,

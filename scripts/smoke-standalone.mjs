@@ -143,6 +143,8 @@ async function main() {
   // ---------- 登录鉴权 ----------
   const anonApi = await req('GET', `${PREFIX}/api/resources`)
   check('未登录访问业务 API 被拒（401）', anonApi.status === 401 && anonApi.json?.authRequired === true)
+  const anonAiPrompt = await req('GET', `${PREFIX}/api/ai/install-prompt`)
+  check('未登录访问 AI 安装提示词接口被拒（401）', anonAiPrompt.status === 401 && anonAiPrompt.json?.authRequired === true, `status=${anonAiPrompt.status}`)
   const anonConsole = await req('GET', `${PREFIX}/`)
   check('未登录访问控制台返回登录页', anonConsole.status === 200 && anonConsole.text.includes('请登录后使用'))
   const badLogin = await login('workbuddy', 'wrong-password')
@@ -163,6 +165,19 @@ async function main() {
   const consoleRes = await req('GET', `${PREFIX}/`)
   check('GET 控制台返回 HTML 单页', consoleRes.status === 200 && consoleRes.text.includes('OneNat WorkBuddy') && consoleRes.text.includes('</html>'))
 
+  // TASK-8：待办聚合总览分组头「进入工作台」入口（静态渲染 + 跳转/回退/移动端热区实现都在控制台 HTML 内联 JS/CSS 里）
+  const blEnterIdx = consoleRes.text.indexOf('<button class="mini-btn bl-enter-btn"')
+  const blBoardIdx = consoleRes.text.indexOf('<button class="mini-btn bl-board-btn"')
+  check('待办分组头含「进入工作台」按钮且在「看板」之前', blEnterIdx > 0 && blBoardIdx > blEnterIdx, `enter=${blEnterIdx} board=${blBoardIdx}`)
+  // 「按钮在但点击无反应」「离线条目被 disabled」两类回归：静态断言绑定存在 + 进入按钮不带 disabled
+  check('进入工作台已绑定 [data-enter] 且离线条目不禁用',
+    consoleRes.text.includes("querySelectorAll('[data-enter]')")
+      && !/<button class="mini-btn bl-enter-btn"[^>]*\sdisabled/.test(consoleRes.text))
+  const blNavOk = consoleRes.text.includes('function enterProjectWorkspace')
+    && consoleRes.text.includes("history.pushState(null, '', '#work')")
+    && /\.bl-group-h \.bl-enter-btn[^{}]*\{[^}]*min-height: 44px/.test(consoleRes.text)
+  check('进入工作台复用跳转入口 + 可回退路由 + 移动端 44px 热区', blNavOk, blNavOk ? '' : '缺少 enterProjectWorkspace / pushState / 44px 热区')
+
   const notFound = await req('GET', '/nope')
   check('未知路径返回 404 JSON', notFound.status === 404 && notFound.json?.ok === false)
 
@@ -180,6 +195,33 @@ async function main() {
   // ---------- 3. 设置（Key 打码） ----------
   const settings = await req('GET', `${PREFIX}/api/settings`)
   check('设置读取且 API Key 打码', settings.status === 200 && String(settings.json?.data?.onenat?.apiKey || '').includes('…'))
+
+  // ---------- 3.1 AI 安装提示词：服务端统一来源（Web/安卓共用同一份正文） ----------
+  const aiPrompt = await req('GET', `${PREFIX}/api/ai/install-prompt`)
+  const aiData = aiPrompt.json?.data || {}
+  const expectBase = `${BASE}${PREFIX}`
+  check('AI 安装提示词接口 200，base 以 PREFIX 结尾', aiPrompt.status === 200 && aiPrompt.json?.ok === true && aiData.base === expectBase, `base=${aiData.base}`)
+  check('AI 安装提示词 URL 拼接正确（mcp / 专家 MCP / 安装脚本）',
+    aiData.mcpUrl === `${expectBase}/mcp` && aiData.expertMcpUrl === `${expectBase}/api/experts/mcp` && aiData.installScriptUrl === `${expectBase}/install-skill.sh`,
+    `mcp=${aiData.mcpUrl} expert=${aiData.expertMcpUrl} script=${aiData.installScriptUrl}`)
+  check('未生成令牌：hasToken=false 且正文含占位符与三段标题',
+    aiData.hasToken === false && aiData.token === ''
+      && String(aiData.installPrompt || '').includes('<先生成APIKEY>')
+      && String(aiData.installPrompt || '').includes('【第 1 步')
+      && String(aiData.installPrompt || '').includes('【第 2 步')
+      && String(aiData.installPrompt || '').includes('【使用约定（两通道一致）】'),
+    `hasToken=${aiData.hasToken} len=${String(aiData.installPrompt || '').length}`)
+  const overrideBase = 'https://override.example.com/custom/path'
+  const aiOverride = await req('GET', `${PREFIX}/api/ai/install-prompt?base=${encodeURIComponent(overrideBase + '/')}`)
+  const ovData = aiOverride.json?.data || {}
+  check('?base= 覆盖生效且归一化（去尾斜杠，curl 行内嵌该 base）',
+    aiOverride.status === 200 && ovData.base === overrideBase
+      && ovData.mcpUrl === `${overrideBase}/mcp`
+      && String(ovData.installPrompt || '').includes(`curl -fsSL ${overrideBase}/install-skill.sh | bash -s -- --base-url ${overrideBase} `),
+    `base=${ovData.base}`)
+  const badBaseFtp = await req('GET', `${PREFIX}/api/ai/install-prompt?base=${encodeURIComponent('ftp://evil.example.com/x')}`)
+  const badBaseUrl = await req('GET', `${PREFIX}/api/ai/install-prompt?base=${encodeURIComponent('not-a-url')}`)
+  check('非法 base 参数被拒（400）', badBaseFtp.status === 400 && badBaseUrl.status === 400 && badBaseFtp.json?.ok === false, `ftp=${badBaseFtp.status} raw=${badBaseUrl.status}`)
 
   // ---------- 4. 子智能体 CRUD ----------
   const created = await req('POST', `${PREFIX}/api/agents`, {
@@ -282,7 +324,7 @@ async function main() {
   // ---------- 6. 工具 HTTP 通道 ----------
   const toolList = await req('GET', `${PREFIX}/api/tools`)
   const toolNames = (toolList.json?.tools || []).map((t) => t.name)
-  check('工具清单暴露 15 个工具（含 team_manage）', toolList.status === 200 && toolNames.length === 15 && toolNames.includes('workbuddy_project_manage') && toolNames.includes('workbuddy_task_ask_answer') && toolNames.includes('workbuddy_expert_manage') && toolNames.includes('workbuddy_team_manage'), toolNames.join(','))
+  check('工具清单暴露 16 个工具（含 team_manage / backlog_manage）', toolList.status === 200 && toolNames.length === 16 && toolNames.includes('workbuddy_project_manage') && toolNames.includes('workbuddy_task_ask_answer') && toolNames.includes('workbuddy_expert_manage') && toolNames.includes('workbuddy_team_manage') && toolNames.includes('workbuddy_backlog_manage'), toolNames.join(','))
   check('工具清单含参数 schema', (toolList.json?.tools || []).every((t) => t.parameters && typeof t.parameters === 'object'))
 
   const toolListCall = await req('POST', `${PREFIX}/api/tools/workbuddy_resource_manage`, { action: 'list' })

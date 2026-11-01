@@ -8,7 +8,7 @@
  * workbuddy 服务以 --xiaozhi-mcp 连入。平台侧行为对齐真实平台：连接建立后主动下发 initialize，
  * 随后 tools/list；并按需发 ping / tools/call。覆盖：
  *   1. initialize 握手（serverInfo=onenat-workbuddy + notifications/initialized）
- *   2. tools/list 动态映射工具通道（11 个工具，inputSchema 含 action required）
+ *   2. tools/list 动态映射工具通道（16 个工具，inputSchema 含 action required）
  *   3. ping 应答（id 原样回显）
  *   4. tools/call 真实调用（planner/monitor/未知工具 isError）
  *   5. /api/xiaozhi/status 状态联动
@@ -233,7 +233,7 @@ async function main() {
   const listResp = await waitForWire((m) => m.id === 2 && m.result?.tools, 'tools/list 应答')
   const tools = listResp.result?.tools || []
   const toolNames = tools.map((t) => t.name)
-  check('tools/list 动态映射 11 个工具', toolNames.length === 11, toolNames.join(','))
+  check('tools/list 动态映射 16 个工具', toolNames.length === 16, toolNames.join(','))
   const schema = tools.find((t) => t.name === 'workbuddy_task_manage')?.inputSchema
   check('inputSchema 由参数表生成（action required）', Boolean(schema?.properties?.action) && Array.isArray(schema?.required) && schema.required.includes('action'))
 

@@ -126,6 +126,17 @@ const HELP = `WorkBuddy CLI — AI 管理 OneNat WorkBuddy（配置: ${CFG.cfgPa
            download: --agent a --path p [--out ./local] [--encoding base64]
            delete:   --agent a --path p    mkdir: --agent a --path dir --name sub
   ssh      [list|get|upsert|delete|test|exec] [--json '{...}'] [--id x|name] [--command cmd]
+  backlog  [list|search|view|create|edit|delete|dispatch|overview|projects|config|init|retry-writeback]
+           projects/overview: 无参（overview 可带 --filter）
+           list/search: --project id --filter '{status,assignee,labels,search,ready,limit}'
+           create:      --project id --json '{title,description,labels,acceptance,...}'
+           edit:        --project id --id itemId --json '{status,labels,...}'
+           view:        --project id --id itemId
+           delete:      --project id --id itemId（--force 才物理删除，否则只回二次确认提示）
+           dispatch:    --project id --id TASK-1[,TASK-2…] [--force 忽略未完成依赖]
+           config:      --project id
+           init:        --project id [--json '{sample:true,updateInstruction:true}']
+           retry-writeback: --task taskId
   tools                                     列出服务端全部工具（连通性自检）
   help                                      本帮助`
 
@@ -257,6 +268,35 @@ async function main() {
       if (['get', 'delete', 'test', 'exec'].includes(action)) args.resourceId = flags.id
       if (action === 'exec') args.command = flags.command
       await tool('workbuddy_ssh_resource_manage', args)
+      return
+    }
+    case 'backlog': {
+      const action = sub || 'list'
+      const args = { action }
+      if (flags.project !== undefined) args.projectId = String(flags.project)
+      if (flags.task !== undefined) args.taskId = String(flags.task)
+      if (action === 'create' || action === 'edit') args.item = flagsJson(flags, 'json')
+      if (['list', 'search', 'overview'].includes(action)) {
+        const filter = flagsJson(flags, 'filter')
+        if (filter !== undefined) args.filter = filter
+      }
+      if (action === 'init') {
+        // init 的开关在工具契约里是字符串 'true'（工具参数只有 string/json 两种类型）
+        const extra = flagsJson(flags, 'json')
+        if (extra && extra.sample) args.sample = 'true'
+        if (extra && extra.updateInstruction) args.updateInstruction = 'true'
+      }
+      if (action === 'delete' && flags.force) args.force = 'true'
+      if (action === 'dispatch') {
+        if (flags.force) args.force = 'true'
+        // --id 支持逗号分隔批量：多个 → itemIds（JSON 数组），单个 → itemId
+        const ids = flags.id !== undefined ? String(flags.id).split(',').map((s) => s.trim()).filter(Boolean) : []
+        if (ids.length > 1) args.itemIds = ids
+        else if (ids.length === 1) args.itemId = ids[0]
+      } else if (['view', 'edit', 'delete'].includes(action) && flags.id !== undefined) {
+        args.itemId = String(flags.id)
+      }
+      await tool('workbuddy_backlog_manage', args)
       return
     }
     case 'project': {

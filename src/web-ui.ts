@@ -2242,6 +2242,15 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .bl-empty { color: var(--tx3); font-size: 12px; padding: 10px; }
 .bl-ac { color: var(--tx3); font-size: 11px; }
 .bl-warn { color: var(--err); font-size: 11px; cursor: pointer; }
+/* 分组头右侧操作区「进入工作台 · 看板」：与 .mini-btn 同款，禁止压缩/换行（X5 旧内核 flex 收缩会把文案挤断） */
+.bl-group-h .bl-enter-btn, .bl-group-h .bl-board-btn { flex: none; white-space: nowrap; }
+@media (max-width: 768px) {
+  /* 移动端热区 ≥44px（AC#4）；分组头本身 flex-wrap，窄屏自然换行不横向溢出。
+     换行时 hspacer 留在首行，用 margin-left:auto 把按钮组推回右侧，保持「标题行右侧操作区」的层级。 */
+  .bl-group-h { padding: 8px 10px; }
+  .bl-group-h .bl-enter-btn, .bl-group-h .bl-board-btn { min-height: 44px; padding: 10px 14px; font-size: 12.5px; touch-action: manipulation; }
+  .bl-group-h .bl-enter-btn { margin-left: auto; }
+}
 </style>
 </head>
 <body>
@@ -2453,7 +2462,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
       <div class="panel">
         <div class="panel-head">
           <h2>🎙 语音助手</h2>
-          <span class="sub">小智平台 MCP 接入（可多实例）· 工作台全部工具注册为语音可调用的 MCP 工具（动态同步，当前 14 个） · 变更即时生效（免重启）</span>
+          <span class="sub">小智平台 MCP 接入（可多实例）· 工作台全部工具注册为语音可调用的 MCP 工具（动态同步，当前 16 个） · 变更即时生效（免重启）</span>
           <span class="hspacer"></span>
           <button class="btn pri" id="btn-xz-add">＋ 添加接入点</button>
         </div>
@@ -4441,10 +4450,7 @@ function wireProjectCard(card) {
   const pid = card.dataset.proj;
   card.querySelector('.pj-enter').addEventListener('click', function () {
     // P3-1：项目不再是模式 —— 切到工作台、展开该项目分组、在组内新建草稿
-    switchView('work');
-    state.groupCollapsed['proj:' + pid] = false;
-    saveGroupPrefs();
-    startDraft({ projectId: pid });
+    enterProjectWorkspace(pid);
   });
   card.querySelector('.pj-edit').addEventListener('click', function () { openProjectDrawer(pid); });
   card.querySelector('.pj-copy').addEventListener('click', function () {
@@ -4467,6 +4473,51 @@ function wireProjectCard(card) {
     if (r.ok) { toast('✓ 项目已删除'); loadProjects(); renderProjects(); }
     else toast(r.error || '删除失败', true);
   });
+}
+
+/**
+ * 进入项目工作台（P3-1 语义：切到工作台 + 展开该项目分组 + 组内新建草稿）。
+ * 项目卡片、⌘K 项目命令、待办聚合页分组头「进入工作台」共用本入口，避免三份实现漂移。
+ * fromView='backlog'：先压一条历史（#work），浏览器/手机返回键可回到待办聚合页（AC#2）；
+ * 项目列表未加载/加载失败时刷新一次并给出明确错误提示（AC#3），不静默失败。
+ */
+function enterProjectWorkspace(projectId, fromView) {
+  var pid = String(projectId || '');
+  if (!pid) { toast('无法进入工作台：项目 ID 为空', true); return; }
+  var pj = (state.projects || []).find(function (x) { return x.id === pid; });
+  if (!pj) {
+    // 防连点：重试期间再点会被忽略（否则两条 loadProjects 各成功一次 → 压出两条 #work 历史，
+    // 浏览器返回键第一次「无效」，要按两次才回到待办聚合页）
+    if (enterProjectWorkspace._loading) return;
+    enterProjectWorkspace._loading = true;
+    toast('项目列表尚未就绪，正在刷新后重试…');
+    Promise.resolve(loadProjects()).then(function () {
+      enterProjectWorkspace._loading = false;
+      if ((state.projects || []).some(function (x) { return x.id === pid; })) {
+        var tEl = $('toast'); if (tEl) tEl.style.display = 'none'; // 重试成功：撤掉「正在刷新」提示，避免进工作台后残留
+        enterProjectWorkspace(pid, fromView);
+        return;
+      }
+      // 空列表 = 拉取失败/未登录（概览页仍显示该项目说明它确实存在）；非空 = 已被删除或不可见
+      var why = (state.projects || []).length
+        ? '项目不存在或已被删除（' + pid + '）'
+        : '项目列表加载失败（请检查登录状态与网络后重试）';
+      toast('无法进入工作台：' + why, true);
+    }).catch(function (e) {
+      enterProjectWorkspace._loading = false;
+      toast('无法进入工作台：项目列表加载失败（' + String(e && e.message || e) + '）', true);
+    });
+    return;
+  }
+  // 幂等：hash 已是 #work 说明本次进入已压过历史（连点/重试成功后的第二次调用），不再重复 push
+  if (fromView === 'backlog' && location.hash !== '#work') {
+    // 旧内核（微信 X5）不支持 pushState 时仍进入工作台，仅回退不可用，不做前置拦截
+    try { history.pushState(null, '', '#work'); } catch (e) { /* ignore */ }
+  }
+  switchView('work');
+  state.groupCollapsed['proj:' + pid] = false;
+  saveGroupPrefs();
+  startDraft({ projectId: pid });
 }
 
 // 通用模态按钮助手（openModal 只支持静态 footer，这里手动绑定）
@@ -4920,6 +4971,9 @@ function switchView(v) {
   if (v === 'backlog') renderBacklogView();
   if (v === 'library' || v === 'plugins') libLoad();
   // 当前页签写入 hash：刷新/分享链接都停留在原页签（replaceState 不产生历史噪音）
+  // 注意：这里必须保留 location.hash !== h 的条件，不能无条件 replaceState ——
+  // enterProjectWorkspace 从待办页进入时已先 pushState('#work')，靠此处 hash 相等而跳过，
+  // 否则刚压入的回退条目会被覆盖，浏览器/手机返回键回不到待办聚合页。
   var h = '#' + v;
   if (location.hash !== h) { try { history.replaceState(null, '', h); } catch (e) { location.hash = h; } }
 }
@@ -13710,36 +13764,24 @@ async function sshDeleteResource(item) {
   toast('✓ 已删除');
   loadSshResources();
 }
-/** AI 安装提示词（合并版）：以浏览器当前访问地址为准（反代/远程场景自动匹配），内嵌 APIKEY。
- *  两步接入——第 1 步一键脚本（所有有终端的 AI）：双通道技能 + 自检；第 2 步 MCP 原生注册（仅 MCP 宿主叠加）。
- *  同卡同时填充 ② 接口地址行（手工配 mcpServers 的极简用户用）。 */
-function renderAiInstall() {
-  const token = $('set-ai-token').value;
+/** AI 接入安装提示词：正文统一由服务端 GET /api/ai/install-prompt 生成（Web 与安卓共用同一份，客户端不另拼文案）。
+ *  同卡同时填充 ② 接口地址行（手工配 mcpServers 的极简用户用）与 APIKEY（服务端权威值）。 */
+async function renderAiInstall() {
+  const ta = $('set-ai-install');
+  if (!ta) return;
   const base = location.origin + PREFIX;
-  const tok = token || '<先生成APIKEY>';
-  const mcpUrl = base + '/mcp';
-  const expertUrl = base + '/api/experts/mcp';
-  $('set-mcp-url').value = mcpUrl;
-  $('set-mcp-expert-url').textContent = expertUrl;
-  $('set-ai-install').value =
-    '请把「OneNat WorkBuddy 多智能体工作台」接入为你的工具平台并验证可用。它提供 14 个工具：任务创建/管理/查询/答复提问、监控态势、定时任务、项目管理、文件管理、专家库、SSH 资源池等（接入后 tools/list 查看全部）。\\n' +
-    '\\n【第 1 步 · 一键安装（有终端就先做这步）】\\n' +
-    'curl -fsSL ' + base + '/install-skill.sh | bash -s -- --base-url ' + base + ' --token ' + tok + '\\n' +
-    '自动装两套技能到本机 AI 技能目录（DSH/ZCode/Claude/agents）：HTTP 通道 wb.mjs + MCP 通道 workbuddy-mcp（共用 ~/.workbuddy-skill.json），并双通道自检。完成后即已可用：bash <技能目录>/workbuddy-mcp/scripts/wbmcp.sh tools 验证（脚本通道与 MCP 等价）。\\n' +
-    '\\n【第 2 步 · MCP 原生注册（仅宿主支持 MCP 时叠加，否则跳过）】\\n' +
-    '服务地址（Streamable HTTP，JSON-RPC over POST）：' + mcpUrl + '\\n' +
-    '鉴权：Authorization: Bearer ' + tok + '（也支持 X-WorkBuddy-Token 请求头或 ?token= 查询参数）。\\n' +
-    'mcpServers 条目：\\n' +
-    '{ "mcpServers": { "onenat-workbuddy": { "url": "' + mcpUrl + '", "headers": { "Authorization": "Bearer ' + tok + '" } } } }\\n' +
-    '生效后 tools/list 应能看到 workbuddy_task_manage 等工具。说明：MCP 只提供工具签名，大文件三步流程、@ 派活等使用知识在技能 SKILL.md 里，操作前先读。\\n' +
-    '\\n【使用约定（两通道一致）】\\n' +
-    '1. 发任务前先调用 project_manage list 判断需求归属的项目：能确定项目就从该项目发起并带 projectId。\\n' +
-    '2. 需求有歧义时先向用户问清，再创建任务。\\n' +
-    '3. 在 message 中用 @子智能体名 / @专家名 / @专家团名 / @资源名 派活；@ 多个即编排协作。\\n' +
-    '4. 任务创建后用 task_manage wait 或 task_status 轮询获取结果，不要重复 create。\\n' +
-    '5. 带大文件（≤2GB）必须三步走：create 不带 message（draft 不执行）→ putfile 直传 → send 引用路径启动；create 带 message 任务会立即开跑。\\n' +
-    '\\n【完成汇报】\\n' +
-    '说明：宿主类型与所选通道（脚本/MCP/两者）、安装与注册写入的位置、验证结果；若失败，给出原因。';
+  const r = await api('/ai/install-prompt?base=' + encodeURIComponent(base));
+  if (!r || !r.ok || !r.data) {
+    const msg = (r && r.error) || '安装提示词加载失败';
+    ta.value = '✗ ' + msg;
+    toast(msg, true);
+    return;
+  }
+  const d = r.data;
+  $('set-ai-token').value = d.token || '';
+  $('set-mcp-url').value = d.mcpUrl || '';
+  $('set-mcp-expert-url').textContent = d.expertMcpUrl || '';
+  ta.value = d.installPrompt || '';
 }
 $('btn-copy-ai-install').addEventListener('click', () => {
   if (!$('set-ai-token').value) { toast('请先「生成 / 重置」APIKEY', true); return; }
@@ -14668,7 +14710,8 @@ function cmdkCommands(query) {
     cmds.push({ g: '子智能体', ic: '🤖', lb: a.name || a.id, kw: describeDshRef(a), ord: 40, act: function () { switchView('agents'); openAgentDrawer(a); } });
   });
   state.projects.forEach(function (p) {
-    cmds.push({ g: '项目', ic: '📦', lb: p.name || p.id, sub: p.archived ? '已归档' : '', ord: 50, act: function () { switchView('work'); state.groupCollapsed['proj:' + p.id] = false; saveGroupPrefs(); startDraft({ projectId: p.id }); } });
+    // 从待办聚合页用 ⌘K 进入项目也压历史，返回键同样能回到 #backlog
+    cmds.push({ g: '项目', ic: '📦', lb: p.name || p.id, sub: p.archived ? '已归档' : '', ord: 50, act: function () { enterProjectWorkspace(p.id, currentView === 'backlog' ? 'backlog' : undefined); } });
   });
   return cmds;
 }
@@ -14831,6 +14874,8 @@ function blOverviewHtml() {
       '<span class="cnt">待办 ' + openItems.length + ' / 完成 ' + doneCount + '</span>' + nodeChip +
       (g.truncated ? '<span class="cnt" title="目录列表被截断，仅显示部分">仅显示前若干条</span>' : '') +
       '<span class="hspacer"></span>' +
+      // 离线条目不禁用（AC#3）：误点进工作台由工作台承接节点错误态，按钮层不预判
+      '<button class="mini-btn bl-enter-btn" data-enter="' + esc(g.projectId) + '" title="进入「' + esc(g.projectName) + '」工作台">进入工作台</button>' +
       '<button class="mini-btn bl-board-btn" data-board="' + esc(g.projectId) + '" ' + (g.nodeStatus !== 'ok' ? 'disabled' : '') + '>看板</button>' +
       '</div>' + (expanded ? rows : '') + '</div>';
   }).join('');
@@ -14903,6 +14948,9 @@ function blRender() {
       toast(r.ok ? '✓ backlog 已初始化（协作约定已追加到项目指令）' : '初始化失败: ' + (r.error || ''), !r.ok);
       if (r.ok) { blState.data = null; renderBacklogView(true); }
     });
+  });
+  root.querySelectorAll('[data-enter]').forEach(function (el) {
+    el.addEventListener('click', function () { enterProjectWorkspace(el.dataset.enter, 'backlog'); });
   });
   root.querySelectorAll('[data-board]').forEach(function (el) {
     el.addEventListener('click', async function () {

@@ -1,6 +1,6 @@
 ---
 name: workbuddy-mcp
-description: 调用 OneNat WorkBuddy 多智能体工作台：任务创建/管理/查询/答复提问、监控态势、定时任务、项目管理、文件管理、专家库、SSH 资源、子智能体管理等 14 个工具。支持两种通道——MCP Server（Streamable HTTP，供 MCP 原生宿主注册）与 wbmcp.sh 脚本直连（无 MCP 宿主时的等价通道）。当用户要派任务给 WorkBuddy/子智能体/专家、查任务进度、看监控大屏、管项目或定时任务、传大文件时使用。
+description: 调用 OneNat WorkBuddy 多智能体工作台：任务创建/管理/查询/答复提问、监控态势、定时任务、项目管理、文件管理、专家库、SSH 资源、子智能体管理、项目待办（backlog/todo/看板）等 16 个工具。支持两种通道——MCP Server（Streamable HTTP，供 MCP 原生宿主注册）与 wbmcp.sh 脚本直连（无 MCP 宿主时的等价通道）。当用户要派任务给 WorkBuddy/子智能体/专家、查任务进度、看监控大屏、管项目或定时任务、传大文件、管理待办/backlog/todo/看板时使用。
 ---
 
 # OneNat WorkBuddy MCP Skill
@@ -62,7 +62,7 @@ bash $WB call workbuddy_task_manage '{"action":"send","taskId":"task-xxxx","mess
 
 `putfile` 会在 init 时回显任务状态；任务非 draft 时服务端返回 warning（说明附件很可能传了也读不到），看到 warning 应停手改走三步流程。
 
-## 工具清单（14 个）
+## 工具清单（16 个）
 
 | 工具 | 用途 |
 |---|---|
@@ -80,6 +80,55 @@ bash $WB call workbuddy_task_manage '{"action":"send","taskId":"task-xxxx","mess
 | workbuddy_planner_manage | 主调度：get / set / options（拆解器兜底 + 调度模型） |
 | workbuddy_resource_manage | ONENAT 隧道资源：list / dsh / resolve / refresh |
 | workbuddy_ssh_resource_manage | SSH 连接资源池：list / get / upsert / delete / test / exec |
+| workbuddy_team_manage | 专家团（合同式多成员协作单元）：list / get / upsert / delete / toggle（内置团只读） |
+| workbuddy_backlog_manage | 项目待办 backlog（Backlog.md 兼容）：projects / config / init / list / search / view / create / edit / delete / dispatch / overview / retry-writeback |
+
+## Backlog 待办管理
+
+**backlog 是什么**：项目工作区 `<workspace>/backlog/tasks/*.md` 里的待办清单文件（Backlog.md 兼容：frontmatter 存 id/title/status/labels/dependencies/assignee/priority/due_date/ordinal，正文含 Description / Acceptance Criteria / 执行记录段）。唯一事实源是节点上的 md 文件——人在终端改、agent 在会话里改、Web 看板改，改的都是同一批文件；WorkBuddy 不复制数据。**别把它和任务内的执行清单混淆**：backlog 是项目的待办池，派发后变成普通 WorkBuddy 任务。
+
+工具 `workbuddy_backlog_manage` 的 12 个 action：
+
+- `projects` 列可管项目（id/name/节点/workspace/archived/initialized；会探测各项目 backlog 初始化状态，是拿 `projectId` 的入口）
+- `config` 读项目配置（statuses / defaultStatus / taskPrefix / projectName）
+- `init` 初始化 backlog 目录（幂等；`sample:"true"` 附带示例待办，`updateInstruction:"true"` 把协作约定写进项目指令）
+- `list` 待办列表（元数据 + 验收进度 + 关联任务）；`search` 全文检索（**必须**带 `filter.search`）；`view` 单条详情（字段 + 完整 Markdown + 关联任务）
+- `create` / `edit` / `delete`（物理删除必须 `force:"true"`）
+- `dispatch` 派发为任务；`overview` 跨项目「我的待办」；`retry-writeback` 回写失败重试
+
+**三个典型配方**
+
+① AI 接到需求 → 先查重 → 再登记
+
+```
+workbuddy_backlog_manage {"action":"projects"}
+workbuddy_backlog_manage {"action":"search","projectId":"proj-x","filter":{"search":"支付回调"}}
+workbuddy_backlog_manage {"action":"create","projectId":"proj-x","item":{"title":"接入支付回调","labels":["backend"],"acceptance":["回调签名校验通过"]}}
+```
+
+② 挑可开工项 → 派发 → 用任务工具跟进
+
+```
+workbuddy_backlog_manage {"action":"list","projectId":"proj-x","filter":{"ready":true,"status":"To Do"}}
+workbuddy_backlog_manage {"action":"dispatch","projectId":"proj-x","itemId":"TASK-3"}
+workbuddy_task_status {"taskId":"<dispatch 返回的 taskId>"}
+```
+
+③ 看跨项目我的待办
+
+```
+workbuddy_backlog_manage {"action":"overview","filter":{"includeDone":false,"assignee":"alice"}}
+```
+
+**dispatch 的语义（重要）**：派发建出来的**就是普通 WorkBuddy 任务**——继承项目节点/工作区/成员/技能，可继续对话、看进度、取产出；验收清单原文直达编排拆解。任务终态由服务端自动回写待办状态（success → Done、failed → 回默认状态、partial_success → 保持）并追加执行记录。**不要手工 `edit` 待办状态冒充完成**；回写失败用 `retry-writeback` 补写。
+
+**dispatch 回包形状**：单条派发是**扁平**的（顶层 `taskId` / `itemId` / `itemStatus` / `mode`；`itemIds` 只有 1 条时也走这个形状）；批量派发回 `{results:[{ok,itemId,taskId?|code,error?}…], succeeded, failed}`，跟进用 `results[i].taskId`——**别在批量回包里找顶层 `taskId`**。依赖未完成的条目默认拒绝派发（`code:"DEPS_BLOCKED"` + `blocked`），确认可忽略才 `force:"true"`。
+
+**`taskCreated:"true"` = 任务已建但待办没写回（`code:"WRITEBACK_FAILED"`）**：这是「看起来失败、其实已经派发成功」的状态，**绝不能重新 dispatch**（会造出重复任务）；改用 `edit` 把状态置为进行中，或等任务跑完用 `retry-writeback` 补写。
+
+**参数类型**：工具参数只有 `string` / `json` 两种。数组与对象一律放进 JSON 参数（`item` / `filter` / `itemIds`），布尔用字符串 `"true"` / `"false"`（如 `force`）。
+
+**与上游 Backlog.md MCP 的差距（勿幻想不存在的 action）**：archive/restore（本仓库用状态迁移表达归档）、documents、milestones、DoD 默认值均未集成，原因见 `docs/design-backlog-mcp-tool.md` §8；每个 action 的必填项、item/filter 字段与错误码以该契约为准。
 
 ## 大文件上传（分片直传，≤2GB）
 

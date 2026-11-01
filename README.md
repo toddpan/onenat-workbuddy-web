@@ -171,9 +171,11 @@ GET  {prefix}/monitor               独立暗色全屏投屏页（登录门与�
 
 ## HTTP 工具通道（AI 接入）
 
-11 个工具：`workbuddy_resource_manage` / `workbuddy_agent_manage` / `workbuddy_task_manage` /
-`workbuddy_task_status` / `workbuddy_task_chat` / `workbuddy_task_evaluate` / `workbuddy_ssh_resource_manage` /
-`workbuddy_monitor_read` / `workbuddy_schedule_manage` / `workbuddy_planner_manage` / `workbuddy_file_manage`
+16 个工具：`workbuddy_resource_manage` / `workbuddy_agent_manage` / `workbuddy_task_manage` /
+`workbuddy_task_status` / `workbuddy_task_chat` / `workbuddy_task_ask_answer` / `workbuddy_task_evaluate` /
+`workbuddy_ssh_resource_manage` / `workbuddy_monitor_read` / `workbuddy_schedule_manage` /
+`workbuddy_planner_manage` / `workbuddy_file_manage` / `workbuddy_project_manage` / `workbuddy_expert_manage` /
+`workbuddy_team_manage` / `workbuddy_backlog_manage`
 （用法见 `skills/onenat-workbuddy/SKILL.md`。）
 工具能力定义在 `src/tool-ops.ts`（宿主无关），由 `src/server.ts` 适配成 HTTP 工具通道
 `GET/POST /api/tools[/:name]`。
@@ -183,6 +185,10 @@ GET  {prefix}/monitor               独立暗色全屏投屏页（登录门与�
 AI 开放面拒绝一切调用（fail-closed）**。令牌开放面：工具通道、监控（/api/monitor/*）、定时任务、规划器、
 远端文件（agents/fs、tasks/:id/files|attachments）、资源目录只读；设置/登录接口不接受令牌。
 
+**安装提示词（统一来源）**：控制台「设置 → AI 接入」展示的安装提示词正文由服务端
+`GET {prefix}/api/ai/install-prompt` 统一生成（控制台登录会话鉴权，AI 令牌不开放；支持 `?base=<访问基址>`
+覆盖，非法值 400）——**提示词正文由服务端统一生成，Web/安卓共用**，客户端不再各自拼装。
+
 **SKILL 一键安装**（到 DSH / ZCode / Claude 技能目录，含 wb.mjs 命令行脚本与配置自检）：
 
 ```bash
@@ -191,7 +197,7 @@ curl -fsSL http://127.0.0.1:3081/onenat-workbuddy/install-skill.sh | bash -s -- 
   [--dir ~/.dsh/skills|~/.zcode/skills|~/.claude/skills]   # 默认 ~/.dsh/skills；--uninstall 卸载
 ```
 
-冒烟测试：`npm run smoke:ai`（双实例覆盖 fail-closed / 令牌种子与重置 / 11 工具 / 安装资源端点 / wb.mjs 实跑，36 项断言）。
+冒烟测试：`npm run smoke:ai`（双实例覆盖 fail-closed / 令牌种子与重置 / 16 工具 / 安装资源端点 / 安装提示词接口 / wb.mjs 实跑，43 项断言）。
 
 ## MCP Server（对外接入）
 
@@ -214,7 +220,7 @@ WorkBuddy 自身作为一个标准 **MCP Server**（Streamable HTTP，协议版�
 
 ## 小智语音助手（MCP 接入）
 
-把工作台全部 11 个工具注册到小智平台的 MCP 插件：协议对齐 `xiaozhi-esp32-mcp`（WebSocket MCP 客户端，
+把工作台全部 16 个工具注册到小智平台的 MCP 插件：协议对齐 `xiaozhi-esp32-mcp`（WebSocket MCP 客户端，
 JSON-RPC 2024-11-05，平台下发 initialize / tools/list / tools/call / ping，本端应答，断线指数退避重连）。
 注册后小智语音即可 **发任务（指定子智能体）/ 等结果 / 管理任务 / 看监控态势 / 管理定时任务 / 切主调度 /
 传文件** 等。支持 **多实例同时接入**。
@@ -227,7 +233,7 @@ JSON-RPC 2024-11-05，平台下发 initialize / tools/list / tools/call / ping�
   按工具结果 `ok:false` 自动标 `isError`。
 - 实现 `src/xiaozhi-mcp.ts`；状态查询 `GET /api/xiaozhi/status`（含每接入点 `stats`）、接入点 CRUD
   `POST /api/xiaozhi/endpoints`（upsert）/ `DELETE /api/xiaozhi/endpoints/:id`（控制台会话）。
-- 冒烟测试：`npm run smoke:xiaozhi`（内置最小 RFC6455 模拟平台，覆盖握手 / 11 工具注册 / 真实工具调用 /
+- 冒烟测试：`npm run smoke:xiaozhi`（内置最小 RFC6455 模拟平台，覆盖握手 / 16 工具注册 / 真实工具调用 /
   ping / 多实例同时连接 / 停用与删除 / 幂等回放 / **断链重连后重投不重复建单** / 立即回执 / 非阻塞 wait /
   超大结果单帧兜底，30 项断言）。
 

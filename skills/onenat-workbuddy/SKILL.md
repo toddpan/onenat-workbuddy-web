@@ -5,7 +5,7 @@ description: OneNat WorkBuddy 多智能体工作台 AI 管理技能：发任务�
 
 # OneNat WorkBuddy 工作台技能
 
-通过 **14 个工具**操作多智能体工作台。本文件是总入口：先看核心概念与路由表，**细节按需读子技能文件**（`skills/` 目录，相对本文件所在目录）。
+通过 **16 个工具**操作多智能体工作台。本文件是总入口：先看核心概念与路由表，**细节按需读子技能文件**（`skills/` 目录，相对本文件所在目录）。
 
 **鉴权**：HTTP 调用带 `Authorization: Bearer <APIKEY>`（控制台「设置 → AI 接入」生成）。未配置令牌时服务端拒绝一切调用；设置/登录接口不接受令牌。
 
@@ -22,6 +22,7 @@ description: OneNat WorkBuddy 多智能体工作台 AI 管理技能：发任务�
 | 你要做什么 | 读哪个文件 |
 |---|---|
 | 发任务/追问/看进度/等结果；@ 提及完整语法；选节点(nodeRef)/项目任务 | `skills/tasks.md` |
+| 建/查/改/派发 backlog 待办（Backlog.md 兼容，人/agent/Web 同一批文件） | `skills/backlog.md` |
 | 查/建/改/删专家、修专家模板数据、专家 vs 子智能体选型 | `skills/experts.md` |
 | 建/改子智能体（绑定节点）、建/改项目 | `skills/agents-projects.md` |
 | 看监控/值守、告警增量、定时任务、主调度(规划器)配置 | `skills/ops-monitoring.md` |
@@ -55,6 +56,8 @@ description: OneNat WorkBuddy 多智能体工作台 AI 管理技能：发任务�
 | `workbuddy_file_manage` | 工作区文件：list / mkdir / upload / download / delete |
 | `workbuddy_resource_manage` | 资源目录：list / dsh / resolve / refresh |
 | `workbuddy_ssh_resource_manage` | SSH 资源池：list / get / upsert / delete / test / exec |
+| `workbuddy_team_manage` | 专家团（合同式协作）：list / get / upsert / delete / toggle（内置团只读） |
+| `workbuddy_backlog_manage` | 项目待办 backlog：projects / config / init / list / search / view / create / edit / delete / dispatch / overview / retry-writeback |
 
 ## 行为约定
 
@@ -69,7 +72,7 @@ description: OneNat WorkBuddy 多智能体工作台 AI 管理技能：发任务�
 
 ## 双通道：HTTP 与 MCP
 
-本技能走 HTTP 工具通道（wb.mjs / 直接 HTTP 调用）。宿主支持 MCP 时可改走/并走 MCP 通道：把 `$BASE_URL/mcp` 注册为 MCP Server（Streamable HTTP），工具与 HTTP 通道**同源同步**（同一 14 个工具、同一套约定）。**通道只解决传输，使用知识（三步大文件流程、@ 派活、轮询约定）以技能文档为准**——MCP 通道的完整说明见 `workbuddy-mcp/SKILL.md`（同一安装脚本一并装入）。
+本技能走 HTTP 工具通道（wb.mjs / 直接 HTTP 调用）。宿主支持 MCP 时可改走/并走 MCP 通道：把 `$BASE_URL/mcp` 注册为 MCP Server（Streamable HTTP），工具与 HTTP 通道**同源同步**（同一 16 个工具、同一套约定）。**通道只解决传输，使用知识（三步大文件流程、@ 派活、轮询约定）以技能文档为准**——MCP 通道的完整说明见 `workbuddy-mcp/SKILL.md`（同一安装脚本一并装入）。
 
 ## 无工具宿主
 
