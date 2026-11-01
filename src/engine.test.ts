@@ -67,6 +67,14 @@ class StubDshClient {
   created = 0
   /** 收到的派发 prompt（按序），供断言上下文段注入 */
   prompts: string[] = []
+  /** 流式正文（默认 stub-output）；丢尾回归用它构造「流式短、历史长」 */
+  streamText = 'stub-output'
+  /** 流内先发一次工具调用（触发 verifyTail 尾部复核路径） */
+  emitTool = false
+  /** reconcileTurn 返回的历史全文（空串 = 不对账成功） */
+  reconcileText = ''
+  /** reconcileTurn 调用次数（断言复核只发一次历史请求） */
+  reconcileCalls = 0
   async createSession(_target: DshTarget, _title: string, _options?: any) {
     this.created++
     return { ok: true, sessionId: `sess-${this.created}` }
@@ -94,7 +102,11 @@ class StubDshClient {
     this.prompts.push(prompt)
     await Promise.resolve()
     handlers?.onLog?.('stub stream start')
-    const text = 'stub-output'
+    if (this.emitTool) {
+      handlers?.onToolCall?.({ id: 'call-stub', name: 'bash', arguments: { command: 'ls' } })
+      handlers?.onToolResult?.({ id: 'call-stub', name: 'bash', result: 'ok' })
+    }
+    const text = this.streamText
     handlers?.onDelta?.(text)
     handlers?.onLog?.('stub turn_end')
     return { ok: true, content: text, complete: true, via: 'sse' } as PromptResult
@@ -103,6 +115,8 @@ class StubDshClient {
     return { ok: true, content: 'stub-output', via: 'sync' } as PromptResult
   }
   async reconcileTurn(): Promise<PromptResult> {
+    this.reconcileCalls++
+    if (this.reconcileText) return { ok: true, content: this.reconcileText, via: 'poll', complete: true } as PromptResult
     return { ok: false, error: 'stub reconcile unused' } as PromptResult
   }
   async waitForSessionResult(): Promise<PromptResult> {
@@ -743,6 +757,48 @@ test('编排子任务注入项目指令：chat 与编排同源（TaskContext 段
       assert.ok(p.includes('[项目指令]'), '编排子任务 prompt 含项目指令段')
       assert.ok(p.includes('PROJECT-RULES-MARKER'), '项目指令内容注入子任务')
     }
+  } finally {
+    f.store.flush()
+    rmSync(f.dir, { recursive: true, force: true })
+  }
+})
+
+test('流式丢尾自愈：多步回合 complete=true 但历史文本更长时，按会话历史补全正文（只复核一次）', async () => {
+  const f = makeFixture()
+  try {
+    // 多步回合（流内出现工具调用）→ 收尾触发尾部复核
+    f.client.emitTool = true
+    f.client.streamText = '前半段结论：'
+    // 历史里同一回合的完整文本：流式文本是它的真前缀 = 纯尾部丢失
+    f.client.reconcileText = '前半段结论：\n\n| ID | 名称 |\n|---|---|\n| T1 | x |\n\n全部完成 END'
+    seedAgent(f.store, 'ag-tail', { name: '尾巴成员' })
+    const t = await f.engine.createTask({ title: '丢尾自愈', memberAgentIds: ['ag-tail'] })
+    const sent = await f.engine.sendUserMessage(t.id, '给我一个表格')
+    assert.ok(sent.ok, '发送成功')
+    const done = await settle(f.engine, f.store, t.id)
+    const agent = done.turns.filter((x) => x.role === 'agent').pop()!
+    assert.equal(agent.text, f.client.reconcileText, '历史全文覆盖流式半截')
+    assert.equal(f.client.reconcileCalls, 1, '尾部复核只发一次历史请求')
+  } finally {
+    f.store.flush()
+    rmSync(f.dir, { recursive: true, force: true })
+  }
+})
+
+test('流式丢尾自愈：单步回合（无工具）不做额外历史复核，保留流式正文', async () => {
+  const f = makeFixture()
+  try {
+    f.client.emitTool = false
+    f.client.streamText = 'stub-output'
+    f.client.reconcileText = 'stub-output + 历史多出来的尾巴'
+    seedAgent(f.store, 'ag-tail2', { name: '尾巴成员二' })
+    const t = await f.engine.createTask({ title: '单步不复核', memberAgentIds: ['ag-tail2'] })
+    const sent = await f.engine.sendUserMessage(t.id, '简单回答一句')
+    assert.ok(sent.ok, '发送成功')
+    const done = await settle(f.engine, f.store, t.id)
+    const agent = done.turns.filter((x) => x.role === 'agent').pop()!
+    assert.equal(agent.text, 'stub-output', '单步回合不额外拉历史')
+    assert.equal(f.client.reconcileCalls, 0, '不应发起历史复核请求')
   } finally {
     f.store.flush()
     rmSync(f.dir, { recursive: true, force: true })

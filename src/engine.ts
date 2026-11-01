@@ -1819,7 +1819,11 @@ export class TaskEngine {
       },
     }
 
-    let result = await this.dispatchWithFallback(target, session.remoteSessionId!, fullPrompt, streamHandlers, streamCtrl.signal)
+    // 多步回合（本回合出现过工具调用）才复核流式尾部是否丢字：单步短回答无需额外历史请求
+    const shouldVerifyTail = () =>
+      ((this.store.getTask(taskId)?.turns.find((x) => x.id === turn.id)?.tools || []).length) > 0
+
+    let result = await this.dispatchWithFallback(target, session.remoteSessionId!, fullPrompt, streamHandlers, streamCtrl.signal, { verifyTail: shouldVerifyTail })
     // 会话在远端丢失（natpass 端口漂移串端口/远端重启清理）：重建会话并原样重发一次，
     // 不再把 "Session not found" 裸报给用户（ensureSession 内部 getSession 失败即自动重建）
     if (!signal.aborted && isSessionLostError(result.error)) {
@@ -1828,7 +1832,7 @@ export class TaskEngine {
       if (rebuilt.target) target = rebuilt.target
       if (rebuilt.ok && rebuilt.remoteSessionId) {
         session.remoteSessionId = rebuilt.remoteSessionId
-        result = await this.dispatchWithFallback(target, rebuilt.remoteSessionId, fullPrompt, streamHandlers, streamCtrl.signal)
+        result = await this.dispatchWithFallback(target, rebuilt.remoteSessionId, fullPrompt, streamHandlers, streamCtrl.signal, { verifyTail: shouldVerifyTail })
       }
     }
     // 空结果自愈：远端收到指令但零内容零工具（LLM 上游瞬时异常/流丢失）——
@@ -1841,7 +1845,7 @@ export class TaskEngine {
       //   对账内容已带回，重发会把同一指令打两遍、正文在历史对账时拼成双份）
       if (!signal.aborted && !(turnNow?.tools || []).length && !(streamSeq > 1) && !(result.content && result.content.trim())) {
         this.taskLog(taskId, 'warn', `${agent.name} 本轮无任何内容产出（远端流为空），自动重发一次`)
-        result = await this.dispatchWithFallback(target, session.remoteSessionId!, fullPrompt, streamHandlers, streamCtrl.signal)
+        result = await this.dispatchWithFallback(target, session.remoteSessionId!, fullPrompt, streamHandlers, streamCtrl.signal, { verifyTail: shouldVerifyTail })
       }
     }
 
@@ -3494,6 +3498,33 @@ export class TaskEngine {
     return `[运行权限]: ${want}`
   }
 
+  /**
+   * SSE 流式尾部复核（丢尾自愈）：流完整收尾时默认直接采用流式正文，但长回合（多步工具）的末段
+   * `assistant/message` 差量若在隧道抖动/网关截断中丢失，回合文本会永久停在半截（用户可见
+   * 「回答说到一半」，且因为 complete=true 不再走对账）。这里做一次**单次**历史对账：
+   * 只采纳「历史文本以流式文本为真前缀且更长」的结果 —— 那是纯尾部丢失，而不是另一回合的内容。
+   */
+  private async verifyStreamTail(
+    target: DshTarget,
+    sessionId: string,
+    prompt: string,
+    sse: PromptResult,
+    handlers: Parameters<DshClient['streamPrompt']>[3],
+    signal: AbortSignal,
+  ): Promise<PromptResult> {
+    const streamed = sse.content || ''
+    if (!streamed.trim()) return sse
+    // attempts=1：此刻回合已结束，历史要么已有全文要么读不到；不重试，避免给每轮加 12s 延迟
+    const rec = await this.client
+      .reconcileTurn(target, sessionId, turnFragment(prompt), { attempts: 1, intervalMs: 0, signal })
+      .catch(() => undefined)
+    const hist = rec?.ok ? String(rec.content || '') : ''
+    if (!hist || hist.length <= streamed.length) return sse
+    if (!hist.startsWith(streamed)) return sse
+    handlers.onLog?.(`流式正文疑似丢尾（${streamed.length} → ${hist.length} 字），已按会话历史补全`, 'warn')
+    return { ...rec!, content: hist, via: 'poll', complete: true, usage: sse.usage ?? rec!.usage }
+  }
+
   /** SSE 流式优先；不支持降级同步；同步超时转轮询（D5） */
   private async dispatchWithFallback(
     target: DshTarget,
@@ -3501,10 +3532,13 @@ export class TaskEngine {
     prompt: string,
     handlers: Parameters<DshClient['streamPrompt']>[3],
     signal: AbortSignal,
+    opts?: { verifyTail?: () => boolean },
   ): Promise<PromptResult> {
     const sse = await this.client.streamPrompt(target, sessionId, prompt, handlers, { signal })
-    // 完整收到 turn_end 且有文本：流式结果即整轮内容，直接采用
-    if (sse.ok && sse.complete !== false && sse.content) return sse
+    // 完整收到 turn_end 且有文本：流式结果即整轮内容；多步回合再复核一次尾部是否丢字
+    if (sse.ok && sse.complete !== false && sse.content) {
+      return opts?.verifyTail?.() ? await this.verifyStreamTail(target, sessionId, prompt, sse, handlers, signal) : sse
+    }
     // 流完整结束但零文本：远端只发了 usage/turn_end（部分 provider 不推 assistant/chunk text-delta，
     // dsh-web-service 也不把 assistant/message 正文放进流）⇒ 回查 history 对账整轮文本
     if (sse.ok && sse.complete !== false && !sse.content) {
