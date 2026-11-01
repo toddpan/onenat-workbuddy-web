@@ -1,6 +1,6 @@
 # 线上部署与验证报告 —— 看板「扫描未完成」采集（2026-11-01）
 
-> 结论一句话：**代码已提交并推送、本地质量门全过、线上 dist 已上传就位；生产进程重启激活未完成**——线上当时有任务在流式执行，随后宿主（natpass.yikaihui.com / 123.57.138.43）SSH/HTTP userland 失联（ping 通、TCP SYN 可建、banner/HTTP 无响应）。功能验证改由**同一份 dist 的侧载实例 + 生产数据副本 + 真实 DSH 节点**完成（19/19 通过），生产重启与重启后复验留待宿主恢复（守望脚本/人工，见 §6）。
+> 结论一句话：**代码已提交推送；线上 dist 已激活并完成线上复验**——宿主 15:44 重启后 systemd 自动以新 dist 拉起，侧载实例 19/19 功能验证 + 生产实测（dist md5 / HTML / 接口 / 真实浏览器点选）全部通过。期间线上长任务 `task-94a2e9bc` 因**宿主重启**中断（14 轮记录保留，状态 failed），非本次代码/部署导致；线上首次采集预览的 401 是 ONENAT 凭证接口限速所致，冷却后即恢复（见 §4.1 备注）。
 > 关联：`docs/feat-backlog-collect-mvp.md`（功能实现说明）、`docs/design-backlog-auto-collect.md`（完整方案）。
 
 ## 1. 代码提交
@@ -56,6 +56,21 @@ bash scripts/deploy-standalone.sh root@natpass.yikaihui.com --no-restart
 
 > 说明：第 14 项首次用 AI 令牌建的项目验证时，`archive` 因「仅 owner/管理员可归档」返回 403（令牌无 owner），并非功能缺陷；改用 wb-qa 会话建项目后复验：archive 200 → collect 400（`项目已归档（只读）`）→ restore 200 → collect 200，符合预期。
 
+### 4.1 生产进程激活与复验（15:45 起）
+
+宿主在 **15:44:38 完成重启**（此前 userland 冻结：ping/TCP 正常但 SSH/HTTP 无响应），systemd 以**新 dist 自动拉起**；守望脚本随后确认 `running=0` 并显式 restart 一次，服务健康。生产复验：
+
+| # | 检查 | 结果 |
+|---|---|---|
+| 1 | dist 完整性：4 个变更文件本地/远端 md5 完全一致（web-ui / backlog-collect / backlog / router） | ✅ |
+| 2 | 控制台 HTML（登录态）：`id="bl-collect"`、`blCollectDialog`、`blCollectApply`、`/backlog/collect` ×2、`mode: 'preview'/'create'` | ✅ |
+| 3 | 生产接口只读预览：`POST /api/projects/proj-eec3rnr4/backlog/collect {mode:"preview"}` → 200 / 3.4s / 14 目录 / 86 文件 / 10 候选 | ✅ |
+| 4 | 真实浏览器点选（ego-browser，wb-qa 登录）：待办 → 项目看板「DSH Web Service 插件」→ 顶部「🔍 扫描未完成」→ 点击弹窗「10 条候选」（任务账本 0 / 工作区 10；默认勾选 10/10；底部「取消 / 创建选中（10 条）」），关闭弹窗未落盘 | ✅ 截图 `qa-20261101/online-collect/01-prod-board-collect-modal.png` |
+| 5 | 未登录 HTML 检查的「缺按钮」为误判（返回登录页），登录态复核通过 | ✅ |
+
+> **排障备注（限速，不是缺陷）**：生产首次预览返回 `backlog 目录读取失败：Unauthorized: Invalid or missing API key`——ONENAT 映射凭证接口限速 **5 次/分**，短时间多次解析（侧载验证 + 生产复验叠加）把配额打满，解析器拿不到 apiKey；等待 90s 后单次调用即恢复 200。日志可佐证：`15:45:44 collect → 400`、`15:48:46 collect → 200`。高频/批量采集时需要节流或缓存凭证。
+
+
 ## 5. 事件时间线（含宿主失联）
 
 | 时间 | 事件 |
@@ -66,10 +81,15 @@ bash scripts/deploy-standalone.sh root@natpass.yikaihui.com --no-restart
 | 14:17–14:29 | 线上 `running=1`（task-94a2e9bc 持续流式，updatedAt 秒级刷新） |
 | 14:25 起 | SSH / HTTPS 开始间歇超时 |
 | 14:28–14:50 | 线上完全不可达：ping 0% 丢包、TCP 22/443 SYN 可建，但 SSH banner / HTTP 无响应（userland 冻结或磁盘/内存压力）；侧载实例同宿主，亦不可达 |
+| 15:44:38 | **宿主重启完成**（先前 userland 冻结）；systemd 以新 dist 自动拉起服务 |
+| 15:45:05 | 守望脚本确认 healthz 200 + running=0 → 显式 `systemctl restart`，服务 active |
+| 15:48:46 | 生产 `collect preview` 200（3.4s / 10 候选）；此前一次 400 为凭证限速（见 §4.1） |
+| 15:5x | ego-browser 生产浏览器点选通过；侧载实例与 `/tmp/wb-qa-data` 已清理；DSH 节点 `/tmp/wb-collect-qa`（5 文件 + 5 目录）已清理 |
+| 15:4x | 长任务 `task-94a2e9bc` 因宿主重启中断：状态 failed、14 轮记录保留（非部署导致） |
 
 未观察到服务端返回错误码，属宿主层故障；可能诱因（待恢复后核实）：生产长任务 + 侧载实例同时持有 18MB store 的内存/落盘压力。恢复后建议 `dmesg -T | tail`、`uptime`、`df -h` 核查 OOM/磁盘。
 
-## 6. 恢复与激活步骤
+## 6. 恢复与激活步骤（已完成，留档备查）
 
 **自动守望（已启动，后台）**：本地 `/tmp/wb-activate-long.sh`，日志 `/tmp/wb-activate-status.txt`——等宿主恢复 → 等 `running=0` → `systemctl restart onenat-workbuddy` → 校验 healthz / HTML 含按钮与接线 → 清理侧载实例与 `/tmp/wb-qa-data`。
 
@@ -94,14 +114,16 @@ curl -s -X POST -H "Authorization: Bearer <AI_APIKEY>" -H 'Content-Type: applica
   https://natpass.yikaihui.com/onenat-workbuddy/api/projects/<projectId>/backlog/collect
 ```
 
-## 7. 待清理
+## 7. 清理状态
 
-1. 宿主侧载实例与临时数据：`pkill -f wb-qa-data; rm -rf /tmp/wb-qa-data /tmp/wb-qa-3099.log`（守望脚本会自动做）。
-2. DSH 节点（mapping `0c93ebda`）临时目录残留 `/tmp/wb-collect-qa/`（src/docs/backlog 三个文件 + 目录）：宿主恢复后可按需删除（侧载实例验证时已删除文件失败——SSH 断开，未完成）。
-3. 线上生产 `dist.bak-*` 备份可保留，回滚时使用。
+1. **已完成**：宿主侧载实例进程与 `/tmp/wb-qa-data`、`/tmp/wb-qa-3099.log`（守望脚本清理，已复核不存在）。
+2. **已完成**：DSH 节点（mapping `0c93ebda`）临时目录 `/tmp/wb-collect-qa/`——5 个文件（backlog 2 条 + config.yml + src/docs 两个样例）+ 5 个目录全部删除。
+3. **保留**：线上 `dist.bak-*` 备份（回滚点），按需清理。
 
 ## 8. 教训（下次同类部署）
 
 - 长任务在跑时应优先使用**独立宿主**做线上验证，避免与生产进程共用内存/IO（本次事故的一个可能诱因）。
 - 侧载实例应限制数据规模（只复制必要文件/精简 store），避免 18MB store 双份持有与落盘。
 - 部署后激活建议放到「宿主可控」窗口，并保留 `--no-restart` + 守望脚本的组合。
+- **ONENAT 映射凭证接口限速 5 次/分**：批量/高频派发与采集会把配额打满，解析拿不到 apiKey 时表现为节点 401；要么节流，要么在解析器侧做短 TTL 缓存。
+- 宿主仅 1.6GB 内存：生产长任务 + 第二实例/大 store 容易触发内存压力（本次重启时间点与长任务叠加，具体 OOM 证据在重启后 dmesg 已清空，未能确认）；同类验证建议放独立机器。
