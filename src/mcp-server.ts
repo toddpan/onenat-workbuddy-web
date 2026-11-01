@@ -119,7 +119,7 @@ export class WorkBuddyMcpServer {
    * 处理一条 MCP HTTP 请求（server.ts 挂载于 {prefix}/mcp；鉴权已由 server.ts 完成）。
    * 返回 true 表示请求已应答。
    */
-  public async handleRequest(req: http.IncomingMessage, res: http.ServerResponse, method: string): Promise<boolean> {
+  public async handleRequest(req: http.IncomingMessage, res: http.ServerResponse, method: string, opts?: { aiTokenOnly?: boolean }): Promise<boolean> {
     if (method === 'DELETE') {
       const sid = String(req.headers['mcp-session-id'] || '')
       if (sid && this.sessions.delete(sid)) this.deps.log(`MCP Server：会话 ${sid.slice(0, 8)}… 已由客户端显式结束`)
@@ -164,7 +164,7 @@ export class WorkBuddyMcpServer {
     let sawNotification = false
     let needsInitHandshake = false
     for (const item of items) {
-      const r = await this.dispatch(item, sessionId, requestBase)
+      const r = await this.dispatch(item, sessionId, requestBase, opts)
       if (r === undefined) sawNotification = true
       else {
         responses.push(r)
@@ -195,7 +195,7 @@ export class WorkBuddyMcpServer {
   }
 
   /** 单条 JSON-RPC 分发；通知（无 id）返回 undefined */
-  private async dispatch(msg: JsonRpcMessage, sessionId: string | undefined, requestBase?: string): Promise<JsonRpcMessage | undefined> {
+  private async dispatch(msg: JsonRpcMessage, sessionId: string | undefined, requestBase?: string, opts?: { aiTokenOnly?: boolean }): Promise<JsonRpcMessage | undefined> {
     const id = msg?.id
     const rpcMethod = String(msg?.method || '')
     const isResponse = rpcMethod === '' && (msg?.result !== undefined || msg?.error !== undefined)
@@ -259,7 +259,7 @@ export class WorkBuddyMcpServer {
         return reply({ tools })
       }
 
-      if (rpcMethod === 'tools/call') return await this.handleToolCall(msg, sessionId || 'anonymous', requestBase)
+      if (rpcMethod === 'tools/call') return await this.handleToolCall(msg, sessionId || 'anonymous', requestBase, opts)
       return fail(-32601, `Method not found: ${rpcMethod}`)
     } catch (err: any) {
       if (isNotification) return undefined
@@ -268,7 +268,7 @@ export class WorkBuddyMcpServer {
   }
 
   /** tools/call：幂等回放 → 进程内执行 → 单帧上限兜底 → 记账（与小智客户端同构） */
-  private async handleToolCall(msg: JsonRpcMessage, sessionId: string, requestBase?: string): Promise<JsonRpcMessage> {
+  private async handleToolCall(msg: JsonRpcMessage, sessionId: string, requestBase?: string, opts?: { aiTokenOnly?: boolean }): Promise<JsonRpcMessage> {
     const id = msg?.id
     const name = String(msg?.params?.name || '')
     const args = (msg?.params?.arguments || {}) as Record<string, any>
@@ -296,7 +296,7 @@ export class WorkBuddyMcpServer {
       text = JSON.stringify({ ok: false, error: `工具不存在: ${name}`, available: this.deps.getTools().map((t) => t.name) })
       isError = true
     } else {
-      const ctx: ToolCallContext = { channel: 'mcp', callerId: `mcp:${sessionId}`, rpcId: (id ?? null) as any, maxBlockMs: MCP_SERVER_MAX_BLOCK_MS, ...(requestBase ? { requestBase } : {}) }
+      const ctx: ToolCallContext = { channel: 'mcp', callerId: `mcp:${sessionId}`, rpcId: (id ?? null) as any, maxBlockMs: MCP_SERVER_MAX_BLOCK_MS, ...(requestBase ? { requestBase } : {}), ...(opts?.aiTokenOnly ? { aiTokenOnly: true } : {}) }
       try {
         text = await def.execute(args, ctx)
       } catch (err: any) {

@@ -56,6 +56,11 @@ export interface ToolCallContext {
    * consoleUrl 是服务端自视角，反代/公网入口下对调用方不可达。
    */
   requestBase?: string
+  /**
+   * 调用方仅持 AI 令牌（无控制台登录会话）：低信任通道。
+   * 安全基线（task-51 V7）：AI 令牌禁止读取 SSH 明文凭据、禁止经 SSH 通道任意 exec。
+   */
+  aiTokenOnly?: boolean
 }
 
 /** 默认上下文：HTTP 工具通道（AI 技能）按老行为可长阻塞 */
@@ -63,6 +68,16 @@ export const HTTP_TOOL_CTX: ToolCallContext = { channel: 'http', maxBlockMs: 600
 
 function ctxOf(ctx?: ToolCallContext): ToolCallContext {
   return ctx && typeof ctx.maxBlockMs === 'number' ? ctx : HTTP_TOOL_CTX
+}
+
+/** AI 令牌（低信任）调用 SSH 高危操作时的统一拒绝（task-51 V7 安全基线） */
+function denyAiTokenSsh(action: string, resourceId: string): string {
+  console.warn(`[安全审计] AI 令牌尝试 SSH ${action} 已拒绝（resource=${resourceId || 'unknown'}）`)
+  return JSON.stringify({
+    ok: false,
+    error: `AI 令牌无权执行 SSH ${action}（安全基线：AI 令牌禁止读取 SSH 明文凭据与远程执行；请在控制台登录后操作）`,
+    denied: 'ai-token-ssh-guard',
+  })
 }
 
 /** 数值区间收敛 */
@@ -742,6 +757,13 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       const key = String(args.resourceId || '')
       const r = sshStore.get(key) || sshStore.list().find((x) => x.name === key)
       if (!r) return JSON.stringify({ ok: false, error: 'SSH 资源不存在' })
+      // 安全基线（task-51 V7）：AI 令牌是低信任调用方——
+      //  ① get 返回明文凭据 → 拒绝；② exec 可在远端主机任意执行命令 → 拒绝。
+      // 两者均需控制台登录会话（人工二次授权）方可操作。
+      if (ctxOf(rawCtx).aiTokenOnly) {
+        if (action === 'get') return denyAiTokenSsh('get(明文凭据读取)', r.id)
+        if (action === 'exec') return denyAiTokenSsh('exec(远程命令执行)', r.id)
+      }
       if (action === 'get') return JSON.stringify({ ok: true, resource: r }, null, 2)
       if (action === 'delete') return JSON.stringify({ ok: true, deleted: sshStore.delete(r.id) })
       if (action === 'test') {

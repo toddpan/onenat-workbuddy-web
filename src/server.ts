@@ -621,7 +621,7 @@ engine.startPendingAskSweeper()
         try {
           // HTTP 工具通道：调用方（AI 技能 / wb.mjs / 三方系统）可承受长阻塞，按既有语义放行；
           // requestBase 按本次请求头推导（反代优先 x-forwarded-*），工具回传的绝对端点对调用方可达
-          const raw = await def.execute(args || {}, { ...HTTP_TOOL_CTX, requestBase: requestPublicBase(req, cfg.prefix || '') })
+          const raw = await def.execute(args || {}, { ...HTTP_TOOL_CTX, requestBase: requestPublicBase(req, cfg.prefix || ''), ...(sessionUser ? {} : { aiTokenOnly: true }) })
           sendJson(res, 200, { ok: true, tool: name, result: tryParse(raw) })
         } catch (err: any) {
           sendJson(res, 500, { ok: false, tool: name, error: err?.message || String(err) })
@@ -632,7 +632,7 @@ engine.startPendingAskSweeper()
       // ---------- 对外 MCP Server（Streamable HTTP；登录会话或 AI 令牌，门禁已在上方统一完成） ----------
       const mcpPath = `${prefix}/mcp`
       if (underPrefix && (url.pathname === mcpPath || url.pathname === `${mcpPath}/`)) {
-        await mcpServer.handleRequest(req, res, method)
+        await mcpServer.handleRequest(req, res, method, sessionUser ? undefined : { aiTokenOnly: true })
         return
       }
       // MCP 运行状态（诊断 / 冒烟）
