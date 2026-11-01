@@ -1,10 +1,10 @@
 ---
 id: TASK-2
 title: "backlog 回写失败自动重试（退避补偿）"
-status: "To Do"
+status: Done
 assignee:
 created_date: '2026-11-01T00:00:00Z'
-updated_date: '2026-11-01T00:00:00Z'
+updated_date: '2026-11-01T10:41:38Z'
 labels:
   - "backlog"
   - "reliability"
@@ -35,3 +35,15 @@ ordinal: 2000
 - [ ] #4 单测覆盖「失败→重试→成功清除」与「达上限停止」两条路径
 - [ ] #5 npm run build / typecheck / test:unit / smoke 全通过
 <!-- AC:END -->
+
+### 2026-11-01T10:35:32Z 派发为任务
+task-176a53be · mode=orchestrate · 成员=2
+
+### 2026-11-01T10:41:38Z 派发执行（成功）
+任务 task-176a53be · 结果=成功
+现在我已经了解整体情况了。正在实现补偿器：现在来看 `engine.ts`。首先，在 `backlogWritebackFire` 附近添加补偿器：Now the success path in `runBacklogWriteback` — clear retry state and write audit:Wire into server.ts lifecycle:让手动重试路由共享同一个失败记录器：接下来是测试。让我查看一下测试夹具（test fixture）：All 123 unit tests pass (including the 3 new compensation tests). Now build + smoke:All green. Add a brief note to the design doc (§6.3 area):TASK-2 完成。全部验收项通过：
+
+## 改动摘要
+
+**核心实现 — [src/engine.ts](src/engine.ts#L720-L793)**
+- 新增后台补偿器：`startBacklogWritebackRetrySwee
