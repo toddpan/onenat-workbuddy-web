@@ -44,6 +44,7 @@ import {
   overviewBacklog,
   type BacklogDispatchResult,
 } from './backlog-service.js'
+import { applyProjectCollect, previewProjectCollect } from './backlog-collect.js'
 import { SshInputError, execOnSshResource, maskSshResource, normalizeSshResource, testSshResource } from './ssh-resources.js'
 import type { SshResourceStore } from './ssh-store.js'
 import type { ScheduleRunner } from './scheduler.js'
@@ -1525,6 +1526,27 @@ export class WorkBuddyRouter {
           if (!ctx.ok) { this.sendJson(res, ctx.status, { ok: false, error: ctx.error }); return true }
           const list = await listBacklogWithTasks({ client: this.client, store: this.store }, ctx.target, ctx.workspace, projectId)
           this.sendJson(res, 200, { ok: true, data: { ...list, archived: readOnly, statuses: list.config.statuses, defaultStatus: list.config.defaultStatus, instructionSnippet: backlogInstructionSnippet() } })
+          return true
+        }
+        // POST 未完成事项采集（简版：A 任务账本 + B 工作区代码/文档确定性扫描）
+        // mode=preview（缺省）：只算候选、不写节点；mode=create：按 keys 落盘为 backlog 待办（keys 省略 = 全建）。
+        // 幂等靠条目正文 sourceKey 对账 —— 重复点击不会重复登记；docs/design-backlog-auto-collect.md
+        if (rest.length === 1 && rest[0] === 'collect' && method === 'POST') {
+          if (readOnly) { rejectArchived(); return true }
+          const body = await this.parseBody(req)
+          const mode = body?.mode === 'create' ? 'create' : 'preview'
+          const ctx = await nodeCtx()
+          if (!ctx.ok) { this.sendJson(res, ctx.status, { ok: false, error: ctx.error }); return true }
+          if (mode === 'preview') {
+            const data = await previewProjectCollect(this.client, this.store, proj, ctx.target, ctx.workspace)
+            this.audit('backlog.collect.preview', 'project', projectId, `candidates=${data.candidates.length}`)
+            this.sendJson(res, 200, { ok: true, data })
+            return true
+          }
+          const keys = Array.isArray(body?.keys) ? body.keys.map(String).filter(Boolean) : undefined
+          const data = await applyProjectCollect(this.client, this.store, proj, ctx.target, ctx.workspace, keys)
+          this.audit('backlog.collect', 'project', projectId, `created=${data.created.length}/${data.candidates}`)
+          this.sendJson(res, 200, { ok: true, data })
           return true
         }
         // POST 初始化（途径 A，幂等）

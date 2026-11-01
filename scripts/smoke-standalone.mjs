@@ -178,6 +178,44 @@ async function main() {
     && /\.bl-group-h \.bl-enter-btn[^{}]*\{[^}]*min-height: 44px/.test(consoleRes.text)
   check('进入工作台复用跳转入口 + 可回退路由 + 移动端 44px 热区', blNavOk, blNavOk ? '' : '缺少 enterProjectWorkspace / pushState / 44px 热区')
 
+  // TASK-1：backlog 条目接入 ⌘K 全局检索（overview 懒加载 + 过滤未初始化/不可达项目 + 跳看板并开条目详情）
+  const blCmdIdx = consoleRes.text.indexOf('// ---------- ⌘K × Backlog 条目检索')
+  const blCmdEnd = consoleRes.text.indexOf('async function blOpenEditor')
+  const blCmdBlock = blCmdIdx > 0 && blCmdEnd > blCmdIdx ? consoleRes.text.slice(blCmdIdx, blCmdEnd) : ''
+  const cmdkBacklogOk = Boolean(blCmdBlock)
+    && consoleRes.text.includes("cmdkViewCmd('backlog', '待办 · Backlog', '✅')")
+    && consoleRes.text.includes('待办条目标题或状态')
+    && /function cmdkOpen\(\)[\s\S]{0,400}?cmdkBacklogPrefetch\(\);/.test(consoleRes.text)
+    && consoleRes.text.includes('if (query) { var blCmds = cmdkBacklogCmds();')
+    && blCmdBlock.includes("g.nodeStatus !== 'ok' || !g.initialized")
+    && blCmdBlock.includes("api('/backlog/overview')")
+    && blCmdBlock.includes("switchView('backlog')")
+    && blCmdBlock.includes('blOpenDetail(itemId)')
+  check('⌘K 接入 backlog 条目（跨项目聚合懒加载 / 过滤未初始化 / 跳看板并开条目详情）', cmdkBacklogOk,
+    cmdkBacklogOk ? '' : '缺少命令源 / 懒加载 / 过滤 / 跳转接线')
+  // 微信 X5 旧内核：新增代码段只允许 var/function/字符串拼接，不得出现可选链或空值合并
+  const blCmdLegacyOk = Boolean(blCmdBlock) && !/[?]\.[A-Za-z_$]/.test(blCmdBlock) && !blCmdBlock.includes('??')
+  check('⌘K backlog 代码段兼容旧内核（无 ?. / ??）', blCmdLegacyOk, blCmdLegacyOk ? '' : '新增段出现可选链/空值合并')
+
+  // 未完成事项采集（简版）：看板窗口顶部「扫描未完成」→ 候选预览（勾选）→ 建待办；服务端路由同源
+  const blCollectIdx = consoleRes.text.indexOf('/** 未完成事项采集（简版）：扫描本项目')
+  const blCollectEnd = consoleRes.text.indexOf('async function blOpenDetail')
+  const blCollectBlock = blCollectIdx > 0 && blCollectEnd > blCollectIdx ? consoleRes.text.slice(blCollectIdx, blCollectEnd) : ''
+  const blCollectOk = Boolean(blCollectBlock)
+    && consoleRes.text.includes('id="bl-collect"')
+    && consoleRes.text.includes('🔍 扫描未完成')
+    && consoleRes.text.includes("if (collectBtn) collectBtn.addEventListener('click', blCollect)")
+    && blCollectBlock.includes("'/backlog/collect'")
+    && blCollectBlock.includes("mode: 'preview'")
+    && blCollectBlock.includes("mode: 'create'")
+    && blCollectBlock.includes('function blCollectDialog(')
+    && blCollectBlock.includes('async function blCollectApply(')
+    && blCollectBlock.includes('blReloadBoard()')
+  check('看板顶部「扫描未完成」（预览勾选 → create keys → 刷新看板）', blCollectOk,
+    blCollectOk ? '' : '缺少按钮 / 预览弹窗 / 落盘 / 刷新接线')
+  const blCollectLegacyOk = Boolean(blCollectBlock) && !/[?]\.[A-Za-z_$]/.test(blCollectBlock) && !blCollectBlock.includes('??')
+  check('采集代码段兼容旧内核（无 ?. / ??）', blCollectLegacyOk, blCollectLegacyOk ? '' : '采集段出现可选链/空值合并')
+
   const notFound = await req('GET', '/nope')
   check('未知路径返回 404 JSON', notFound.status === 404 && notFound.json?.ok === false)
 

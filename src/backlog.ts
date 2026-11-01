@@ -58,6 +58,11 @@ export interface BacklogItem extends BacklogFields {
   /** 有 Final Summary 或文末执行记录条目（启发：出现 `### ` 执行记录标题行） */
   hasExecutionRecord?: boolean
   /**
+   * 正文里的来源标记（`<!-- wb:source=<key> -->`）：未完成事项采集用来跨轮去重。
+   * 列表阶段就从已下载的 raw 里正则提取，不额外拉文件；无标记的条目该字段缺省。
+   */
+  sourceKeys?: string[]
+  /**
    * 描述正文（仅 `listBacklog({ withBodies: true })` 时填充）。
    * 默认不填：列表只要元数据；正文段解析是 search 这类全量检索才需要的额外成本。
    */
@@ -365,6 +370,7 @@ export async function listBacklog(client: DshClient, target: DshTarget, workspac
     const fmId = fields.id
     const prefixId = itemIdFromFileName(e.name || '', cfg.taskPrefix)
     const itemId = fmId || prefixId || (e.name || '').replace(/\.md$/i, '')
+    const sourceKeys = parseSourceKeys(raw)
     return {
       ...fields,
       itemId,
@@ -372,6 +378,7 @@ export async function listBacklog(client: DshClient, target: DshTarget, workspac
       filePath: e.path || `${paths.tasks}/${e.name}`,
       acceptance: countAcceptance(raw),
       hasExecutionRecord: hasExecutionRecord(raw),
+      ...(sourceKeys.length ? { sourceKeys } : {}),
       ...(opts?.withBodies ? { description: extractDescription(raw) } : {}),
     } satisfies BacklogItem
   })
@@ -414,37 +421,51 @@ export async function writeItem(
   return { raw: next, base }
 }
 
-/** 新建条目：分配下一个 itemId（对既有 frontmatter id 与文件名前缀取 max+1） */
-export async function createItem(
-  client: DshClient,
-  target: DshTarget,
-  workspace: string,
-  spec: { title: string; description?: string; acceptance?: string[]; labels?: string[]; dependencies?: string[]; assignees?: string[]; priority?: string; dueDate?: string },
-): Promise<BacklogItem> {
-  const cfg = await readConfig(client, target, workspace)
-  const list = await listBacklog(client, target, workspace)
-  const nums = list.items
-    .map((it) => Number(/-(\d+)$/.exec(it.itemId)?.[1]))
-    .filter((n) => Number.isFinite(n) && n > 0)
-  const nextNum = (nums.length ? Math.max(...nums) : 0) + 1
-  const id = `${cfg.taskPrefix}-${nextNum}`
-  const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
-  const fm = [
+// ---------- 来源标记（未完成事项采集的去重锚点） ----------
+
+const SOURCE_KEY_RE = /<!--\s*wb:source=([^\s<>]+)\s*-->/g
+
+/** 从条目正文提取来源标记（`<!-- wb:source=task:wt-x -->` → `task:wt-x`） */
+export function parseSourceKeys(raw: string): string[] {
+  const out: string[] = []
+  SOURCE_KEY_RE.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = SOURCE_KEY_RE.exec(raw))) out.push(m[1])
+  return out
+}
+
+// ---------- 新建条目（单条 / 批量） ----------
+
+/** 新建条目的入参（createItem / createItems 共用） */
+export interface CreateItemSpec {
+  title: string
+  description?: string
+  acceptance?: string[]
+  labels?: string[]
+  dependencies?: string[]
+  assignees?: string[]
+  priority?: string
+  dueDate?: string
+}
+
+/** 生成条目 Markdown（字段顺序对齐上游 v1.55.3 实测样本，§3.2） */
+function buildItemMarkdown(cfg: BacklogConfig, id: string, num: number, spec: CreateItemSpec, now: string): string {
+  return [
     '---',
     `id: ${id}`,
     `title: ${quoteIfNeeded(spec.title)}`,
     `status: ${quoteIfNeeded(cfg.defaultStatus)}`,
-    `assignee:`,
+    'assignee:',
     ...(spec.assignees || []).map((a) => `  - ${quoteIfNeeded(a)}`),
     `created_date: '${now}'`,
     `updated_date: '${now}'`,
-    `labels:`,
+    'labels:',
     ...(spec.labels || []).map((l) => `  - ${quoteIfNeeded(l)}`),
-    `dependencies:`,
+    'dependencies:',
     ...(spec.dependencies || []).map((d) => `  - ${quoteIfNeeded(d)}`),
     ...(spec.priority ? [`priority: ${quoteIfNeeded(spec.priority)}`] : []),
     ...(spec.dueDate ? [`due_date: '${spec.dueDate}'`] : []),
-    `ordinal: ${nextNum * 1000}`,
+    `ordinal: ${num * 1000}`,
     '---',
     '',
     '## Description',
@@ -458,14 +479,14 @@ export async function createItem(
     ...(spec.acceptance || []).map((a, i) => `- [ ] #${i + 1} ${a}`),
     '<!-- AC:END -->',
     '',
-  ]
-  const fileName = `${id} - ${slugifyTitle(spec.title)}.md`
-  const up = await client.fsUpload(target, backlogPaths(workspace).tasks, [{ filename: fileName, data: Buffer.from(fm.join('\n'), 'utf8'), mimeType: 'text/markdown' }])
-  if (!up.ok) throw new Error(up.error || '待办创建失败')
+  ].join('\n')
+}
+
+function itemFromSpec(id: string, num: number, fileName: string, tasksDir: string, cfg: BacklogConfig, spec: CreateItemSpec, now: string): BacklogItem {
   return {
     itemId: id,
     fileName,
-    filePath: `${backlogPaths(workspace).tasks}/${fileName}`,
+    filePath: `${tasksDir}/${fileName}`,
     title: spec.title,
     status: cfg.defaultStatus,
     assignees: spec.assignees || [],
@@ -473,11 +494,54 @@ export async function createItem(
     dependencies: spec.dependencies || [],
     createdDate: now,
     updatedDate: now,
-    ordinal: nextNum * 1000,
+    ordinal: num * 1000,
     priority: spec.priority,
     dueDate: spec.dueDate,
     acceptance: spec.acceptance?.length ? { total: spec.acceptance.length, done: 0 } : undefined,
   }
+}
+
+/**
+ * 批量新建条目：**只做一次** readConfig + listBacklog（itemId 一次算好），再逐条上传。
+ * 采集器一次登记多条时必须走这里 —— createItem 每条都全量列目录，N 条会把请求放大 N 倍。
+ */
+export async function createItems(
+  client: DshClient,
+  target: DshTarget,
+  workspace: string,
+  specs: CreateItemSpec[],
+): Promise<BacklogItem[]> {
+  if (!specs.length) return []
+  const cfg = await readConfig(client, target, workspace)
+  const list = await listBacklog(client, target, workspace)
+  const nums = list.items
+    .map((it) => Number(/-(\d+)$/.exec(it.itemId)?.[1]))
+    .filter((n) => Number.isFinite(n) && n > 0)
+  let nextNum = (nums.length ? Math.max(...nums) : 0) + 1
+  const tasksDir = backlogPaths(workspace).tasks
+  const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+  const out: BacklogItem[] = []
+  for (const spec of specs) {
+    const num = nextNum++
+    const id = `${cfg.taskPrefix}-${num}`
+    const fileName = `${id} - ${slugifyTitle(spec.title)}.md`
+    const md = buildItemMarkdown(cfg, id, num, spec, now)
+    const up = await client.fsUpload(target, tasksDir, [{ filename: fileName, data: Buffer.from(md, 'utf8'), mimeType: 'text/markdown' }])
+    if (!up.ok) throw new Error(`${up.error || '待办创建失败'}（${out.length}/${specs.length} 条已创建，${id} 失败）`)
+    out.push(itemFromSpec(id, num, fileName, tasksDir, cfg, spec, now))
+  }
+  return out
+}
+
+/** 新建单条（分配下一个 itemId：对既有 frontmatter id 与文件名前缀取 max+1） */
+export async function createItem(
+  client: DshClient,
+  target: DshTarget,
+  workspace: string,
+  spec: CreateItemSpec,
+): Promise<BacklogItem> {
+  const items = await createItems(client, target, workspace, [spec])
+  return items[0]
 }
 
 /** 按 itemId 找条目（列表后归一比对；文件名可能被 agent 改过） */

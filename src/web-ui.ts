@@ -14917,6 +14917,7 @@ function blBoardHtml() {
     '<b>📦 ' + esc(b.name) + ' · 看板</b>' +
     (d.archived ? '<span class="bl-tag">归档只读</span>' : '') +
     '<span class="hspacer"></span>' +
+    '<button class="mini-btn" id="bl-collect" ' + (d.archived ? 'disabled' : '') + ' title="扫描本项目执行过的未完成任务 + 工作区代码/文档里的 TODO/未勾选项，生成待办候选">🔍 扫描未完成</button>' +
     '<button class="mini-btn" id="bl-batch" ' + (picked ? '' : 'disabled') + '>派发选中 (' + picked + ')</button>' +
     '<button class="mini-btn pri" id="bl-new" ' + (d.archived ? 'disabled' : '') + '>＋ 新建待办</button>' +
     '</div>' +
@@ -14986,6 +14987,8 @@ function blRender() {
   if (nw) nw.addEventListener('click', function () { blOpenEditor(null); });
   const batch = document.getElementById('bl-batch');
   if (batch) batch.addEventListener('click', blBatchDispatch);
+  const collectBtn = document.getElementById('bl-collect');
+  if (collectBtn) collectBtn.addEventListener('click', blCollect);
   root.querySelectorAll('[data-detail]').forEach(function (el) {
     el.addEventListener('click', function () { blOpenDetail(el.dataset.detail); });
   });
@@ -15067,6 +15070,71 @@ async function blBatchDispatch() {
     toast('批量派发：成功 ' + ok + ' / 失败 ' + fail.length + (fail.length ? '（首例: ' + fail[0].error + '）' : ''), fail.length > 0);
     blReloadBoard();
   } else toast('批量派发失败: ' + (r.error || ''), true);
+}
+
+/** 未完成事项采集（简版）：扫描本项目「执行过的未完成任务 + 工作区代码/文档标记」→ 候选预览 */
+async function blCollect() {
+  const b = blState.board; if (!b) return;
+  const btn = document.getElementById('bl-collect');
+  const oldText = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '扫描中…'; }
+  let r = null;
+  try {
+    r = await api('/projects/' + b.projectId + '/backlog/collect', { method: 'POST', body: JSON.stringify({ mode: 'preview' }) });
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = oldText || '🔍 扫描未完成'; }
+  }
+  if (!r || !r.ok) { toast('扫描失败: ' + ((r && r.error) || '请求失败'), true); return; }
+  blCollectDialog(b.projectId, r.data || {});
+}
+
+function blCollectDialog(pid, d) {
+  const st = d.stats || {};
+  const cands = d.candidates || [];
+  const srcName = { task: '任务', code: '代码', doc: '文档' };
+  const head = '<div class="hint" style="margin-bottom:8px">扫描到：任务账本 ' + (st.taskCandidates || 0) + ' 条 · 工作区标记 ' + (st.workspaceCandidates || 0) + ' 条（目录 ' + (st.dirsScanned || 0) + ' / 文件 ' + (st.filesScanned || 0) + '）' +
+    ' · 已登记跳过 ' + (st.skippedKnown || 0) + (st.truncated ? ' · ⚠ 已达扫描上限，结果可能不完整' : '') +
+    (st.scanError ? ' · ⚠ 工作区扫描失败：' + esc(st.scanError) : '') + '</div>';
+  if (!cands.length) {
+    openModal('🔍 扫描未完成', head + '<div class="bl-empty">没有发现新的未完成事项（已登记过的不会重复出现）。</div>', [{ label: '关闭', act: function () { closeModal(); } }]);
+    return;
+  }
+  const rows = cands.map(function (c) {
+    const detail = (c.detail || []).map(function (x) { return esc(x); }).join('<br>');
+    return '<label class="bl-col-row" style="display:flex;gap:8px;align-items:flex-start;padding:7px 4px;border-bottom:1px solid var(--line);cursor:pointer">' +
+      '<input type="checkbox" class="bl-col-pick" data-key="' + esc(c.key) + '" checked style="width:auto;margin-top:3px">' +
+      '<span style="min-width:0;flex:1"><span class="bl-tag">' + esc(srcName[c.source] || c.source) + '</span> ' + esc(c.title || '') +
+      (detail ? '<div style="color:var(--tx3);font-size:11.5px;line-height:1.55;margin-top:2px">' + detail + '</div>' : '') +
+      '</span></label>';
+  }).join('');
+  openModal('🔍 扫描未完成 · ' + cands.length + ' 条候选', '<div style="max-height:52vh;overflow:auto">' + head + rows + '</div>' +
+    '<div class="hint" style="margin-top:8px">勾选后点「创建待办」写入 backlog（同一条不会重复登记）' + (d.initialized ? '' : '；该项目尚未初始化 backlog，将自动初始化') + '</div>',
+    [{ label: '取消', act: function () { closeModal(); } }, { label: '创建选中（' + cands.length + ' 条）', cls: 'pri', act: function () { blCollectApply(pid); } }]);
+  const sync = function () {
+    const n = document.querySelectorAll('#modal-body .bl-col-pick:checked').length;
+    const btn = document.querySelector('#modal-foot [data-mact="1"]');
+    if (btn) { btn.disabled = !n; btn.textContent = '创建选中（' + n + ' 条）'; }
+  };
+  document.querySelectorAll('#modal-body .bl-col-pick').forEach(function (el) { el.addEventListener('change', sync); });
+  sync();
+}
+
+async function blCollectApply(pid) {
+  const keys = [...document.querySelectorAll('#modal-body .bl-col-pick:checked')].map(function (el) { return el.dataset.key; });
+  if (!keys.length) { toast('请先勾选要创建的条目', true); return; }
+  const btn = document.querySelector('#modal-foot [data-mact="1"]');
+  if (btn) { btn.disabled = true; btn.textContent = '创建中…'; }
+  const r = await api('/projects/' + pid + '/backlog/collect', { method: 'POST', body: JSON.stringify({ mode: 'create', keys: keys }) });
+  if (!r || !r.ok) {
+    toast('创建失败: ' + ((r && r.error) || '请求失败'), true);
+    if (btn) { btn.disabled = false; btn.textContent = '创建选中（' + keys.length + ' 条）'; }
+    return;
+  }
+  const created = (r.data && r.data.created) || [];
+  const skipped = (r.data && r.data.skippedKeys) || [];
+  closeModal();
+  toast('✓ 已创建 ' + created.length + ' 条待办' + (skipped.length ? '（另有 ' + skipped.length + ' 条超出单次上限，请再次扫描）' : ''));
+  blReloadBoard();
 }
 
 async function blOpenDetail(itemId) {

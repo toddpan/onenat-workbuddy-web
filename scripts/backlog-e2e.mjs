@@ -72,14 +72,19 @@ const stub = createServer((req, res) => {
     // /fs/list?path=...
     if (req.method === 'GET' && url.startsWith('/api/v1/fs/list')) {
       const dir = decodeURIComponent((url.match(/[?&]path=([^&]*)/) || [])[1] || '')
-      if (!fsDirs.has(dir.replace(/\/+$/, ''))) return json(200, { ok: false, error: `no such file or directory: ${dir}` })
-      const prefix = dir.replace(/\/+$/, '') + '/'
+      const clean = dir.replace(/\/+$/, '')
+      if (!fsDirs.has(clean)) return json(200, { ok: false, error: `no such file or directory: ${dir}` })
+      const prefix = clean + '/'
       // 真实 DSH 节点语义（QA 20261031 实测）：无 all=1 时含文件目录也返回空 entries
       if (!/[?&]all=1/.test(url)) return json(200, { ok: true, data: { path: dir, home: '', entries: [], truncated: false } })
-      const entries = [...fsFiles.keys()]
+      // 与真实节点对齐：entries 含子目录（type=dir）与文件元数据（size/mtime）；采集器 BFS 依赖 dir 条目下钻
+      const dirEntries = [...fsDirs]
+        .filter((d) => d !== clean && d.startsWith(prefix) && !d.slice(prefix.length).includes('/'))
+        .map((d) => ({ name: d.slice(prefix.length), path: d, type: 'dir', mtime: 1700000000000, hidden: false }))
+      const fileEntries = [...fsFiles.keys()]
         .filter((k) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/'))
-        .map((k) => ({ name: k.slice(prefix.length), path: k, type: 'file', hidden: false }))
-      return json(200, { ok: true, data: { path: dir, home: '', entries, truncated: false } })
+        .map((k) => ({ name: k.slice(prefix.length), path: k, type: 'file', size: String(fsFiles.get(k) || '').length, mtime: 1700000000000, hidden: false }))
+      return json(200, { ok: true, data: { path: dir, home: '', entries: dirEntries.concat(fileEntries), truncated: false } })
     }
     // /fs/download?path=...
     if (req.method === 'GET' && url.startsWith('/api/v1/fs/download')) {
@@ -533,6 +538,47 @@ async function main() {
   const toolInitList = await tool('list', { projectId: p3.id })
   check('tools init：初始化后可 list 到示例待办', toolInitList.result?.ok === true && asArray(toolInitList.result?.items).length === 1,
     `items=${asArray(toolInitList.result?.items).length}`)
+
+  // ================= 9. 未完成事项采集（简版：任务账本 + 工作区代码/文档扫描） =================
+  console.log('\n  -- 未完成事项采集（简版） --')
+  const p4 = (await req('POST', `${PREFIX}/api/projects`, {
+    name: '采集演示项目', dshRef: { kind: 'direct', apiBaseUrl: STUB_BASE }, workspace: '/tmp/bl-e2e-ws4',
+  })).json?.data
+  check('采集：P4 创建', Boolean(p4?.id))
+  check('采集：backlog 初始化成功', (await req('POST', `${PREFIX}/api/projects/${p4.id}/backlog/init`, {})).json?.ok === true)
+  const putWs = (p, text) => { ensureDir(p.split('/').slice(0, -1).join('/')); fsFiles.set(p, text) }
+  putWs('/tmp/bl-e2e-ws4/src/auth.ts', 'export const a = 1\n// TODO 补充刷新 token 的并发保护\n')
+  putWs('/tmp/bl-e2e-ws4/docs/design.md', '# 设计\n- [ ] 灰度回滚验证\n')
+  putWs('/tmp/bl-e2e-ws4/node_modules/dep/index.js', '// TODO 依赖里的标记不应采\n')
+  putWs('/tmp/bl-e2e-ws4/backlog/tasks/task-99 - 自身.md', '- [ ] backlog 自身条目不应采\n')
+  const pv = (await req('POST', `${PREFIX}/api/projects/${p4.id}/backlog/collect`, { mode: 'preview' })).json?.data
+  const pvCands = pv?.candidates || []
+  const pvPaths = pvCands.map((c) => c.filePath)
+  check('采集预览：发现代码 TODO + 文档未勾选（2 条；排除 node_modules / backlog 自身）',
+    pvCands.length === 2 && pvPaths.includes('src/auth.ts') && pvPaths.includes('docs/design.md') && !pvPaths.some((p) => String(p).includes('node_modules')),
+    `candidates=${JSON.stringify(pvPaths)} stats=${JSON.stringify(pv?.stats)}`)
+  const pvKeys = pvCands.map((c) => c.key)
+  const made = (await req('POST', `${PREFIX}/api/projects/${p4.id}/backlog/collect`, { mode: 'create', keys: pvKeys })).json?.data
+  check('采集落盘：按 keys 创建 2 条待办', made?.created?.length === 2, made?.error || '')
+  const list4 = (await req('GET', `${PREFIX}/api/projects/${p4.id}/backlog`)).json?.data
+  const autoItems = (list4?.items || []).filter((x) => Array.isArray(x.labels) && x.labels.includes('auto-collect'))
+  const codeItem = autoItems.find((x) => x.labels.includes('source-code'))
+  const docItem = autoItems.find((x) => x.labels.includes('source-doc'))
+  check('采集条目：labels 正确（auto-collect + source-code / source-doc）',
+    autoItems.length === 2 && Boolean(codeItem) && Boolean(docItem), `items=${autoItems.length}`)
+  check('采集条目：sourceKeys 从正文解析（去重锚点）', autoItems.every((x) => Array.isArray(x.sourceKeys) && x.sourceKeys.length === 1))
+  const codeRaw = codeItem ? (await req('GET', `${PREFIX}/api/projects/${p4.id}/backlog/items/${codeItem.itemId}`)).json?.data?.raw : ''
+  check('采集条目：正文带 wb:source 标记 + 验收清单', /<!-- wb:source=code:[0-9a-f]{16} -->/.test(codeRaw) && /AC:BEGIN/.test(codeRaw))
+  const pv2 = (await req('POST', `${PREFIX}/api/projects/${p4.id}/backlog/collect`, { mode: 'preview' })).json?.data
+  check('采集幂等：再次预览 0 条新候选（已登记被跳过）',
+    (pv2?.candidates || []).length === 0 && (pv2?.stats?.skippedKnown || 0) >= 2,
+    `candidates=${(pv2?.candidates || []).length} skippedKnown=${pv2?.stats?.skippedKnown}`)
+  const made2 = (await req('POST', `${PREFIX}/api/projects/${p4.id}/backlog/collect`, { mode: 'create' })).json?.data
+  check('采集幂等：重复 create 不产生新条目', (made2?.created || []).length === 0)
+  await req('POST', `${PREFIX}/api/projects/${p4.id}/archive`)
+  const archCollect = await req('POST', `${PREFIX}/api/projects/${p4.id}/backlog/collect`, { mode: 'preview' })
+  check('采集：归档项目被拒（只读拦截）', archCollect.status === 400, `status=${archCollect.status}`)
+  await req('POST', `${PREFIX}/api/projects/${p4.id}/restore`)
 
   console.log(`\n== 结果：${failures === 0 ? '全部通过 ✅' : `${failures} 项失败 ❌`} ==\n`)
   cleanup()
