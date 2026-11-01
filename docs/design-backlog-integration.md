@@ -188,7 +188,7 @@ open ──(用户一键/批量派发)──▶ in-progress(运行中) ──任
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/projects/:id/backlog` | 列表（元数据聚合：id/标题/状态/标签/依赖/验收进度/关联任务徽标；含 initialized、truncated） |
+| GET | `/api/projects/:id/backlog` | 列表（元数据聚合：id/标题/状态/标签/依赖/验收进度/关联任务徽标；含 initialized、truncated）。排序（TASK-SORT-2）：查询参数 `orderBy=priority\|status\|createdAt\|updatedAt\|ordinal` + `order=asc\|desc`，缺省 `createdAt` 倒序（最新在前）；服务端与前端共用同一比较规则（`sortBacklogItemsBy` / `blSortItems`） |
 | POST | `/api/projects/:id/backlog/init` | 初始化（途径 A） |
 | GET | `/api/projects/:id/backlog/items/:itemId` | 详情（含正文、执行记录） |
 | POST | `/api/projects/:id/backlog/items` | 新建（服务端分配下一个 itemId；标题必填，其余可空） |

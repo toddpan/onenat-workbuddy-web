@@ -29,6 +29,8 @@ import {
   findItem,
   initBacklog,
   normalizeItemId,
+  parseBacklogOrderBy,
+  parseBacklogOrder,
   probeBacklog,
   readConfig,
   readItem,
@@ -36,10 +38,12 @@ import {
   resolveDoneStatus,
   appendAcceptance,
   setAcceptance,
+  sortBacklogItemsBy,
   writeItem,
   type BacklogConfig,
   type BacklogFields,
   type BacklogItem,
+  type BacklogOrderBy,
 } from './backlog.js'
 import {
   dispatchBacklogItem,
@@ -117,11 +121,6 @@ function nowIso(): string {
   return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
 }
 
-function itemNum(itemId: string): number {
-  const m = /-(\d+)$/.exec(itemId)
-  return m ? Number(m[1]) : Number.MAX_SAFE_INTEGER
-}
-
 function errorText(err: unknown): string {
   return String((err as any)?.message || err).slice(0, 400)
 }
@@ -138,6 +137,11 @@ export interface BacklogFilter {
   includeDone?: boolean
   limit?: number
   projectIds?: string[]
+  /** 排序维度（TASK-SORT-2）：缺省 createdAt（与 REST 列表默认一致） */
+  orderBy?: BacklogOrderBy
+  order?: 'asc' | 'desc'
+  /** statuses 配置顺序（orderBy:"status" 时使用） */
+  statuses?: string[]
 }
 
 export function parseBacklogFilter(raw: unknown): BacklogFilter {
@@ -156,6 +160,10 @@ export function parseBacklogFilter(raw: unknown): BacklogFilter {
     if (Number.isFinite(n)) f.limit = Math.max(1, Math.min(MAX_LIMIT, Math.floor(n)))
   }
   if (src.projectIds !== undefined) f.projectIds = toStrArray(src.projectIds)
+  // 排序（TASK-SORT-2）：非法值走 parse 兜底，与 REST 列表同规则
+  f.orderBy = parseBacklogOrderBy(typeof src.orderBy === 'string' ? src.orderBy : undefined)
+  f.order = parseBacklogOrder(typeof src.order === 'string' ? src.order : undefined)
+  if (Array.isArray(src.statuses)) f.statuses = toStrArray(src.statuses)
   return f
 }
 
@@ -193,14 +201,11 @@ export function applyBacklogFilter(
       return !dep || dep.status === doneStatus
     })
   const matched = items.filter((it) => matchFilter(it, f, doneStatus, isReady))
-  matched.sort((a, b) => {
-    const ao = a.ordinal ?? Number.MAX_SAFE_INTEGER
-    const bo = b.ordinal ?? Number.MAX_SAFE_INTEGER
-    if (ao !== bo) return ao - bo
-    return itemNum(a.itemId) - itemNum(b.itemId)
-  })
+  // 排序（TASK-SORT-2）：orderBy + asc/desc，与 REST 列表/前端共用 sortBacklogItemsBy 同一规则；
+  // 缺省 createdAt desc（最新在前），兼容旧默认改由显式 orderBy:"ordinal" 获得
+  const sorted = sortBacklogItemsBy(matched, f.statuses || [], f.orderBy || 'createdAt', f.order || 'desc')
   const limit = f.limit ?? DEFAULT_LIMIT
-  return { items: matched.slice(0, limit), total: matched.length }
+  return { items: sorted.slice(0, limit), total: sorted.length }
 }
 
 // ---------------------------------------------------------------- 视图投影
@@ -288,7 +293,7 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
       filter: {
         type: 'json',
         description:
-          'list / search / overview 过滤: {status?, assignee?, unassigned?:bool, labels?:[], search?:string, ready?:bool, includeDone?:bool, limit?:number, projectIds?:[]}',
+          'list / search / overview 过滤: {status?, assignee?, unassigned?:bool, labels?:[], search?:string, ready?:bool, includeDone?:bool, limit?:number, projectIds?:[], orderBy?:"priority"|"status"|"createdAt"|"updatedAt"|"ordinal", order?:"asc"|"desc"}（orderBy 缺省 createdAt 倒序=最新在前）',
       },
       force: { type: 'string', description: '布尔字符串 "true"：忽略未完成依赖强制派发 / 确认待办物理删除' },
       sample: { type: 'string', description: 'init 用："true" = 一并创建一条示例待办' },
@@ -365,7 +370,8 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
           let openTotal = 0
           const projectsOut = rows.map((r) => {
             const doneStatus = resolveDoneStatus(r.statuses.length ? r.statuses : [r.defaultStatus || 'Done'])
-            const filtered = r.nodeStatus === 'ok' ? applyBacklogFilter(r.items, overviewFilter, doneStatus) : { items: [], total: 0 }
+            // 每项目各自的 statuses 传入，orderBy:"status" 时按该项目配置顺序排
+            const filtered = r.nodeStatus === 'ok' ? applyBacklogFilter(r.items, { ...overviewFilter, statuses: r.statuses }, doneStatus) : { items: [], total: 0 }
             // open 与 includeDone 解耦：显式 includeDone:"true" 时 total 含已完成，但 open 只数进行中的
             const open = r.nodeStatus === 'ok'
               ? applyBacklogFilter(r.items, { ...overviewFilter, includeDone: false }, doneStatus).total
@@ -486,7 +492,7 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
             })
           }
           const doneStatus = resolveDoneStatus(list.config.statuses)
-          const { items, total } = applyBacklogFilter(list.items, filter, doneStatus)
+          const { items, total } = applyBacklogFilter(list.items, { ...filter, statuses: list.config.statuses }, doneStatus)
           return ok({
             projectId: proj.id,
             projectName: proj.name,

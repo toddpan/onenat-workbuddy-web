@@ -165,7 +165,7 @@ export async function listBacklogWithTasks(
   target: DshTarget,
   workspace: string,
   projectId: string,
-  opts?: { withBodies?: boolean },
+  opts?: { withBodies?: boolean; orderBy?: string; order?: string },
 ): Promise<BacklogListResult & { items: BacklogItemWithTasks[] }> {
   const list = await listBacklog(deps.client, target, workspace, opts)
   return {
@@ -227,7 +227,60 @@ export async function overviewBacklog(
       }
     }),
   )
-  return out
+  // 活动项目置顶 → 有 open 待办按数量降序 → 无待办垫底 → 归档沉底（task-52）
+  return sortBacklogOverviewProjects(out, projects, deps.store)
+}
+
+/** 「活动项目」判定窗口：7 天内有任务/待办活动视为活动项目（task-52） */
+const ACTIVITY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
+
+/**
+ * 项目最近活动时间：项目自身 updatedAt、该项目全部 WorkBuddy 任务 updatedAt、
+ * 待办条目 updated_date（ISO 字符串，解析失败忽略）三者取最大；缺省 0。
+ */
+export function backlogProjectActivityAt(
+  store: WorkStore,
+  pr: Project,
+  items: BacklogItemWithTasks[],
+): number {
+  let latest = pr.updatedAt || 0
+  for (const t of store.getTasks()) {
+    if (t.projectId === pr.id && t.updatedAt > latest) latest = t.updatedAt
+  }
+  for (const it of items) {
+    const ts = it.updatedDate ? Date.parse(it.updatedDate) : NaN
+    if (Number.isFinite(ts) && ts > latest) latest = ts
+  }
+  return latest
+}
+
+/**
+ * 跨项目待办列表排序（task-52）：
+ *   0 = 活动项目（未归档且 7 天内有任务/待办活动）排最上；
+ *   1 = 有未完成（open）待办的项目，按 open 数量降序；
+ *   2 = 无未完成待办的项目垫底；
+ *   3 = 归档项目（只读，永沉底）。
+ * 同组内按最近活动时间倒序。不可达/未初始化项目 items 为空（open=0），自然落组 2。
+ */
+export function sortBacklogOverviewProjects(
+  rows: BacklogOverviewProject[],
+  projects: Project[],
+  store: WorkStore,
+): BacklogOverviewProject[] {
+  const byId = new Map(projects.map((pr) => [pr.id, pr]))
+  const ranked = rows.map((row) => {
+    const pr = byId.get(row.projectId)
+    const doneStatus = resolveDoneStatus(row.statuses.length ? row.statuses : [row.defaultStatus || 'Done'])
+    const open = row.items.filter((it) => it.status !== doneStatus).length
+    const activityAt = pr ? backlogProjectActivityAt(store, pr, row.items) : 0
+    const archived = row.nodeStatus === 'archived' || Boolean(pr?.archivedAt)
+    const rank = archived ? 3 : activityAt > 0 && Date.now() - activityAt <= ACTIVITY_WINDOW_MS ? 0 : open > 0 ? 1 : 2
+    return { row, rank, open, activityAt }
+  })
+  return ranked
+    // rank0（活动项目）组内按最近活动倒序（open 数量降序只用于 rank1 组），再以活动时间兜底
+    .sort((a, b) => a.rank - b.rank || (a.rank === 0 ? b.activityAt - a.activityAt : b.open - a.open) || b.activityAt - a.activityAt)
+    .map((r) => r.row)
 }
 
 async function overviewOne(deps: BacklogOverviewDeps, pr: Project, withItems: boolean): Promise<BacklogOverviewProject> {

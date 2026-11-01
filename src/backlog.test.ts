@@ -29,6 +29,9 @@ import {
   findItem,
   probeBacklog,
   sortBacklogItems,
+  sortBacklogItemsBy,
+  parseBacklogOrderBy,
+  parseBacklogOrder,
   backlogPriorityWeight,
 } from './backlog.js'
 import type { DshClient, DshTarget } from './remote-client.js'
@@ -372,7 +375,7 @@ test('sortBacklogItems: 状态优先 → 优先级 → 创建时间；未知状�
   assert.equal(input[0].itemId, 'TASK-4') // 原数组不被修改
 })
 
-test('listBacklog: 返回条目已按 状态→优先级→创建时间 排序（TASK-SORT-1 验收 #2）', async () => {
+test('listBacklog: 默认按创建时间倒序（最新在前；平级按 itemId 序号倒序兜底）——TASK-SORT-2 验收 #1', async () => {
   const target: DshTarget = { baseUrl: 'http://x' }
   const mk = (id: string, status: string, priority: string, createdDate: string) =>
     SAMPLE.replace('TASK-1', id)
@@ -386,5 +389,49 @@ test('listBacklog: 返回条目已按 状态→优先级→创建时间 排序�
     [`${WS}/backlog/tasks/task-4 - d.md`]: mk('TASK-4', 'To Do', 'P0', '2026-01-02'),
   })
   const list = await listBacklog(client, target, WS)
-  assert.deepEqual(list.items.map((x) => x.itemId), ['TASK-4', 'TASK-3', 'TASK-2', 'TASK-1'])
+  assert.deepEqual(list.items.map((x) => x.itemId), ['TASK-3', 'TASK-4', 'TASK-2', 'TASK-1'])
+  // 显式 orderBy=priority 覆盖默认
+  const byPri = await listBacklog(client, target, WS, { orderBy: 'priority', order: 'asc' })
+  assert.deepEqual(byPri.items.map((x) => x.itemId), ['TASK-1', 'TASK-3', 'TASK-4', 'TASK-2'])
 })
+
+test('parseBacklogOrderBy / parseBacklogOrder: 非法与缺省回退默认（createdAt desc）', () => {
+  assert.equal(parseBacklogOrderBy(), 'createdAt')
+  assert.equal(parseBacklogOrderBy('PRIORITY'), 'priority')
+  assert.equal(parseBacklogOrderBy('bogus'), 'createdAt')
+  assert.equal(parseBacklogOrder(), 'desc')
+  assert.equal(parseBacklogOrder('asc'), 'asc')
+  assert.equal(parseBacklogOrder('nonsense'), 'desc')
+})
+
+test('sortBacklogItemsBy: 五种维度 × asc/desc（TASK-SORT-2 验收 #2）', () => {
+  const statuses = ['To Do', 'In Progress', 'Done']
+  const mk = (itemId: string, over: Partial<{ status: string; priority: string; createdDate: string; updatedDate: string; ordinal: number }>) => ({
+    itemId,
+    status: 'To Do',
+    createdDate: '2026-01-01',
+    ...over,
+  })
+  const items = [
+    mk('TASK-1', { priority: 'P2', createdDate: '2026-01-03', updatedDate: '2026-02-01', ordinal: 3000 }),
+    mk('TASK-2', { priority: 'P0', createdDate: '2026-01-02', updatedDate: '2026-01-05', ordinal: 1000 }),
+    mk('TASK-3', { priority: 'P1', createdDate: '2026-01-04', ordinal: 2000 }),
+    mk('TASK-4', { status: 'Done', priority: 'P3', createdDate: '2026-01-01' }),
+  ]
+  const ids = (xs: { itemId: string }[]) => xs.map((x) => x.itemId)
+  // createdAt desc 默认（最新在前）
+  assert.deepEqual(ids(sortBacklogItemsBy(items, statuses)), ['TASK-3', 'TASK-1', 'TASK-2', 'TASK-4'])
+  assert.deepEqual(ids(sortBacklogItemsBy(items, statuses, 'createdAt', 'asc')), ['TASK-4', 'TASK-2', 'TASK-1', 'TASK-3'])
+  // updatedAt：TASK-3 无 updatedDate 恒排尾
+  assert.deepEqual(ids(sortBacklogItemsBy(items, statuses, 'updatedAt')), ['TASK-1', 'TASK-2', 'TASK-4', 'TASK-3'])
+  // priority：P0→P1→P2→P3（asc）
+  assert.deepEqual(ids(sortBacklogItemsBy(items, statuses, 'priority', 'asc')), ['TASK-2', 'TASK-3', 'TASK-1', 'TASK-4'])
+  // status：按 statuses 配置顺序（asc）；desc 时 Done 在前
+  assert.deepEqual(ids(sortBacklogItemsBy(items, statuses, 'status', 'asc')), ['TASK-1', 'TASK-2', 'TASK-3', 'TASK-4'])
+  assert.deepEqual(ids(sortBacklogItemsBy(items, statuses, 'status', 'desc'))[0], 'TASK-4')
+  // ordinal：1000→2000→3000（asc），缺 ordinal 的 TASK-4 恒排尾
+  assert.deepEqual(ids(sortBacklogItemsBy(items, statuses, 'ordinal', 'asc')), ['TASK-2', 'TASK-3', 'TASK-1', 'TASK-4'])
+  // 不改原数组
+  assert.equal(items[0].itemId, 'TASK-1')
+})
+

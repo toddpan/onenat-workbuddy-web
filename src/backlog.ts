@@ -322,6 +322,71 @@ export function backlogPriorityWeight(priority?: string): number {
   return 5
 }
 
+// ---------- 列表排序（TASK-SORT-2）：orderBy + asc/desc（API/工具/前端共用） ----------
+
+/** 列表排序维度：createdAt 映射 frontmatter createdDate，updatedAt 映射 updatedDate */
+export type BacklogOrderBy = 'createdAt' | 'updatedAt' | 'priority' | 'status' | 'ordinal'
+
+export const BACKLOG_ORDER_BY_VALUES: BacklogOrderBy[] = ['createdAt', 'updatedAt', 'priority', 'status', 'ordinal']
+
+/** 解析 orderBy 参数：非法/缺省回退默认 createdAt */
+export function parseBacklogOrderBy(raw?: string | null): BacklogOrderBy {
+  const v = (raw || '').trim().toLowerCase()
+  return (BACKLOG_ORDER_BY_VALUES as string[]).includes(v) ? (v as BacklogOrderBy) : 'createdAt'
+}
+
+/** 解析 asc/desc 参数：缺省 desc（创建时间倒序=最新在前），非法值回退默认 */
+export function parseBacklogOrder(raw?: string | null): 'asc' | 'desc' {
+  const v = (raw || '').trim().toLowerCase()
+  return v === 'asc' ? 'asc' : 'desc'
+}
+
+/**
+ * 按 orderBy + asc/desc 排序（TASK-SORT-2）：服务端 API / 工具通道 / 前端共用同一规则。
+ * - createdAt/updatedAt：ISO 日期字典序即时间序；空日期恒排尾（不受方向影响）；
+ * - priority：backlogPriorityWeight（P0→P4→未知）；
+ * - status：config.statuses 配置顺序（未收录排最后）；
+ * - ordinal：数值（缺省排最后）。
+ * 平级兜底 itemId 序号（方向跟随 asc/desc）；不修改原数组，稳定排序。
+ */
+export function sortBacklogItemsBy<
+  T extends { status?: string; priority?: string; createdDate?: string; updatedDate?: string; ordinal?: number; itemId: string },
+>(items: T[], statuses: string[], orderBy: BacklogOrderBy = 'createdAt', order: 'asc' | 'desc' = 'desc'): T[] {
+  const dir = order === 'asc' ? 1 : -1
+  const statusIdx = new Map(statuses.map((s, i) => [s.trim().toLowerCase(), i]))
+  const seqOf = (itemId: string): number => {
+    const m = /(\d+)\s*$/.exec(itemId)
+    return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER
+  }
+  return [...items].sort((a, b) => {
+    if (orderBy === 'priority') {
+      const pa = backlogPriorityWeight(a.priority)
+      const pb = backlogPriorityWeight(b.priority)
+      if (pa !== pb) return (pa - pb) * dir
+      return (seqOf(a.itemId) - seqOf(b.itemId)) * dir
+    }
+    if (orderBy === 'status') {
+      const sa = statusIdx.get((a.status || '').trim().toLowerCase()) ?? statuses.length
+      const sb = statusIdx.get((b.status || '').trim().toLowerCase()) ?? statuses.length
+      if (sa !== sb) return (sa - sb) * dir
+      return (seqOf(a.itemId) - seqOf(b.itemId)) * dir
+    }
+    if (orderBy === 'ordinal') {
+      const ao = a.ordinal ?? Number.MAX_SAFE_INTEGER
+      const bo = b.ordinal ?? Number.MAX_SAFE_INTEGER
+      if (ao !== bo) return (ao - bo) * dir
+      return (seqOf(a.itemId) - seqOf(b.itemId)) * dir
+    }
+    const key = orderBy === 'updatedAt' ? 'updatedDate' : 'createdDate'
+    const da = a[key] || ''
+    const db = b[key] || ''
+    if (!da && db) return 1
+    if (da && !db) return -1
+    if (da !== db) return (da < db ? -1 : 1) * dir
+    return (seqOf(a.itemId) - seqOf(b.itemId)) * dir
+  })
+}
+
 /**
  * 待办列表展示排序：状态优先级（按 config.statuses 顺序，未收录状态排最后）→
  * 优先级权重 → 创建时间（createdDate 升序，老条目在前；缺 createdDate 时按
@@ -396,7 +461,12 @@ export async function readConfig(client: DshClient, target: DshTarget, workspace
 }
 
 /** 列表：目录枚举 → 并发下载逐文件解析（AC 进度同源计算；正文不二次拉） */
-export async function listBacklog(client: DshClient, target: DshTarget, workspace: string, opts?: { withBodies?: boolean }): Promise<BacklogListResult> {
+export async function listBacklog(
+  client: DshClient,
+  target: DshTarget,
+  workspace: string,
+  opts?: { withBodies?: boolean; orderBy?: string; order?: string },
+): Promise<BacklogListResult> {
   const paths = backlogPaths(workspace)
   const cfg = await readConfig(client, target, workspace)
   // 必须带 all=1：真实 DSH 节点在无 all 时对含文件目录返回空 entries（QA 20261031 实测）
@@ -429,8 +499,14 @@ export async function listBacklog(client: DshClient, target: DshTarget, workspac
     } satisfies BacklogItem
   })
   const list = items.filter((x): x is BacklogItem => Boolean(x))
-  // 展示排序（TASK-SORT-1）：状态 → 优先级 → 创建时间；API/工具/前端共用同一顺序
-  return { initialized: true, truncated: Boolean(listing.data.truncated), config: cfg, items: sortBacklogItems(list, cfg.statuses) }
+  // 展示排序（TASK-SORT-2）：默认按创建时间倒序（最新在前）；可用 orderBy/order 覆盖；
+  // API/工具/前端共用 sortBacklogItemsBy 同一规则，保证排序一致
+  return {
+    initialized: true,
+    truncated: Boolean(listing.data.truncated),
+    config: cfg,
+    items: sortBacklogItemsBy(list, cfg.statuses, parseBacklogOrderBy(opts?.orderBy), parseBacklogOrder(opts?.order)),
+  }
 }
 
 export async function readItem(client: DshClient, target: DshTarget, workspace: string, fileName: string): Promise<string> {

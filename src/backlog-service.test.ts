@@ -144,3 +144,66 @@ test('dispatch：建任务后写待办彻底失败 → 抛错带 taskId/taskCrea
   assert.match(restored!, /status: To Do/)
   assert.doesNotMatch(restored!, /派发为任务/)
 })
+
+// ---------------- task-52：跨项目待办列表排序 ----------------
+import { sortBacklogOverviewProjects, type BacklogOverviewProject } from './backlog-service.js'
+import type { WorkStore } from './store.js'
+import type { WorkTask } from './types.js'
+
+const DAY = 24 * 60 * 60 * 1000
+
+function storeOf(tasks: Partial<WorkTask>[]): WorkStore {
+  return { getTasks: () => tasks as WorkTask[] } as unknown as WorkStore
+}
+
+function pr(id: string, updatedAt: number): Project {
+  return { id, name: id, dshRef: { kind: 'direct', apiBaseUrl: 'http://stub' }, createdAt: 0, updatedAt } as unknown as Project
+}
+
+function row(projectId: string, opts: { nodeStatus?: BacklogOverviewProject['nodeStatus']; items?: Array<{ status: string; updatedDate?: string }> } = {}): BacklogOverviewProject {
+  const items = (opts.items || []).map((it) => ({ ...it })) as BacklogOverviewProject['items']
+  return {
+    projectId, projectName: projectId, archived: opts.nodeStatus === 'archived',
+    workspace: '/ws', nodeStatus: opts.nodeStatus || 'ok', initialized: true, truncated: false,
+    statuses: ['To Do', 'Done'], defaultStatus: 'To Do', error: '', items,
+  } as BacklogOverviewProject
+}
+
+test('排序：活动项目置顶，有 open 待办按数量降序，无待办垫底，归档沉底', () => {
+  const now = Date.now()
+  const rows = [
+    row('no-bl'),                                                    // 无待办
+    row('open-3', { items: [{ status: 'To Do' }, { status: 'To Do' }, { status: 'To Do' }] }),
+    row('archived', { nodeStatus: 'archived' }),                     // 归档
+    row('active', { items: [{ status: 'Done' }] }),                  // 活动项目（1 open）
+    row('open-1', { items: [{ status: 'Done' }, { status: 'To Do' }] }),
+  ]
+  const projects = [
+    pr('no-bl', now - 30 * DAY),
+    pr('open-3', now - 30 * DAY),
+    pr('archived', now - 2 * DAY),   // 归档但近期改过 → 仍必须沉底
+    pr('active', now - 1 * DAY),     // 项目近期更新 → 活动项目
+    pr('open-1', now - 30 * DAY),
+  ]
+  const store = storeOf([
+    { id: 't1', projectId: 'open-3', updatedAt: now - 3 * DAY },     // 近 7 天有任务 → open-3 也是活动项目
+    { id: 't2', projectId: 'no-bl', updatedAt: now - 90 * DAY },
+  ])
+  const out = sortBacklogOverviewProjects(rows, projects, store)
+  assert.deepEqual(out.map((r) => r.projectId), ['active', 'open-3', 'open-1', 'no-bl', 'archived'])
+})
+
+test('排序：同组内按最近活动时间倒序（任务/待办活动均可作为活动来源）', () => {
+  const now = Date.now()
+  const rows = [
+    row('a', { items: [{ status: 'To Do', updatedDate: new Date(now - 5 * DAY).toISOString() }] }),
+    row('b', { items: [{ status: 'To Do', updatedDate: new Date(now - 2 * DAY).toISOString() }] }),
+    row('c', { items: [{ status: 'To Do' }] }),                       // 无 updated_date → 看任务活动
+    row('d', { items: [{ status: 'To Do', updatedDate: 'not-a-date' }] }),
+  ]
+  const projects = [pr('a', now - 40 * DAY), pr('b', now - 40 * DAY), pr('c', now - 40 * DAY), pr('d', now - 40 * DAY)]
+  const store = storeOf([{ id: 't1', projectId: 'c', updatedAt: now - 8 * DAY }])
+  const out = sortBacklogOverviewProjects(rows, projects, store)
+  // 同为 open=1 组：b（2 天前待办活动）> a（5 天前）；c/d 无 7 天内活动（8 天前任务不活跃）按 activity 倒序 c > d
+  assert.deepEqual(out.map((r) => r.projectId), ['b', 'a', 'c', 'd'])
+})

@@ -33,6 +33,8 @@ import {
   initBacklog,
   listBacklog,
   normalizeItemId,
+  parseBacklogOrderBy,
+  parseBacklogOrder,
   readItem,
   replaceAcceptance,
   replaceDescription,
@@ -1520,11 +1522,18 @@ export class WorkBuddyRouter {
         return { ok: true, target, workspace: proj.workspace }
       }
       try {
-        // GET 列表（读：归档项目也允许只读查看）
+        // GET 列表（读：归档项目也允许只读查看）；排序：?orderBy=priority|status|createdAt|updatedAt|ordinal&order=asc|desc
         if (rest.length === 0 && method === 'GET') {
           const ctx = await nodeCtx()
           if (!ctx.ok) { this.sendJson(res, ctx.status, { ok: false, error: ctx.error }); return true }
-          const list = await listBacklogWithTasks({ client: this.client, store: this.store }, ctx.target, ctx.workspace, projectId)
+          const q = new URL(req.url || '/', 'http://localhost').searchParams
+          const list = await listBacklogWithTasks(
+            { client: this.client, store: this.store },
+            ctx.target,
+            ctx.workspace,
+            projectId,
+            { orderBy: parseBacklogOrderBy(q.get('orderBy')), order: parseBacklogOrder(q.get('order')) },
+          )
           this.sendJson(res, 200, { ok: true, data: { ...list, archived: readOnly, statuses: list.config.statuses, defaultStatus: list.config.defaultStatus, instructionSnippet: backlogInstructionSnippet() } })
           return true
         }
