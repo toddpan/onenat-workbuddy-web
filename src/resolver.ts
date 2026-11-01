@@ -9,6 +9,7 @@ import type { WorkStore } from './store.js'
 import { OnenatDirectory } from './onenat.js'
 import { DshClient } from './remote-client.js'
 import type { ResolvedDshTarget, SubAgent } from './types.js'
+import { assertDirectBaseUrlAllowed, SsrfBlockedError } from './ssrf-guard.js'
 
 export class AgentResolver {
   constructor(
@@ -42,7 +43,17 @@ export class AgentResolver {
     let credMappingId: string | undefined
 
     if (dshRef.kind === 'direct') {
-      endpointBaseUrl = dshRef.apiBaseUrl
+      // task-53 V5 SSRF 防护：直连 base 由用户任意填写，出站前强制校验
+      // （禁内网段/云元数据；WORKBUDDY_ALLOW_PRIVATE_DIRECT=1 可放开本机/内网单机部署）
+      try {
+        endpointBaseUrl = (await assertDirectBaseUrlAllowed(dshRef.apiBaseUrl)).normalized
+      } catch (err: any) {
+        if (err instanceof SsrfBlockedError) {
+          console.warn(`[安全审计] 直连节点地址被 SSRF 防护拒绝（agent=${agentId}）: ${err.message}`)
+          return { ...base, error: `直连节点地址被安全策略拒绝: ${err.message}` }
+        }
+        throw err
+      }
     } else if (dshRef.kind === 'mapping') {
       const ep = this.directory.resolveMapping(dshRef.mappingId)
       if (!ep) return { ...base, error: `映射 ${dshRef.mappingId} 已不存在（请重新绑定 DSH 节点）` }
