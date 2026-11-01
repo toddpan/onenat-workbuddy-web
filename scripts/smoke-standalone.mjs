@@ -129,7 +129,7 @@ async function main() {
     '--data', dataDir,
     '--onenat-base-url', `http://127.0.0.1:${MOCK_PORT}`,
     '--onenat-api-key', 'onk-mock-key-000',
-  ])
+  ], { WORKBUDDY_ALLOW_PRIVATE_DIRECT: '1' })
   await waitFor(async () => (await fetch(`${BASE}/healthz`)).ok, 'standalone server 就绪')
 
   // ---------- 1. 基础可达性 ----------

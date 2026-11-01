@@ -238,7 +238,7 @@ async function main() {
   console.log(`\n== Backlog 集成 E2E ==\n`)
   await new Promise((r) => stub.listen(STUB_PORT, '127.0.0.1', r))
   const server = spawn(process.execPath, [join(ROOT, 'dist', 'server.js'), '--port', String(PORT), '--data', dataDir, '--quiet'],
-    { cwd: ROOT, env: { ...process.env, WORKBUDDY_TOKEN: TOKEN }, stdio: ['ignore', 'ignore', 'pipe'] })
+    { cwd: ROOT, env: { ...process.env, WORKBUDDY_TOKEN: TOKEN, WORKBUDDY_ALLOW_PRIVATE_DIRECT: '1' }, stdio: ['ignore', 'ignore', 'pipe'] })
   server.stderr.on('data', (d) => process.stderr.write(`[server] ${d}`))
   procs.push(server)
   await waitFor(async () => (await fetch(`${BASE}/healthz`)).ok, 'server 就绪')
