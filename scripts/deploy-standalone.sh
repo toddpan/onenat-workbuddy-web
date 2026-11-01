@@ -2,14 +2,17 @@
 # onenat-workbuddy-web - 独立服务标准部署脚本（本地构建 → 冒烟 → 上传 → 备份替换 → 重启 → 验证）
 #
 # 用法:
-#   scripts/deploy-standalone.sh user@host [--port 22] [--key ~/.ssh/id_rsa] [--skip-smoke] [--files a.js,b.js]
+#   scripts/deploy-standalone.sh user@host [--port 22] [--key ~/.ssh/id_rsa] [--skip-smoke] [--files a.js,b.js] [--no-restart]
 #
 # 行为:
 #   1. npm run build（页面内联脚本语法关卡内置）
 #   2. npm run smoke:mcp（可用 --skip-smoke 跳过；默认再跑 smoke:monitor）
 #   3. 计算 dist/*.js 与远端 md5 差异，只上传有变化的文件（全量一致则直接退出）
 #   4. 远端：变更文件逐一备份为 dist.bak-<ts>-<file> → 覆盖 → node --check → systemctl restart onenat-workbuddy
-#   5. 验证 healthz / {prefix}/monitor / MCP 匿名 401（fail-closed）
+#   5. 验证 healthz / MCP 匿名 401（fail-closed）；--no-restart 时只上传不重启（新代码待重启生效）
+#
+# 注意：服务端从「工作目录」直接读取 skills/ 与 scripts/install-skill.sh（技能安装端点），
+#       它们不随 dist 发布，故本脚本单独做差异同步（否则线上 SKILL 会长期停在旧版）。
 #
 # 依赖: 本地 sshpass（密码登录时）或 SSH 私钥；远端 systemd 单元名默认 onenat-workbuddy（UNIT 可覆盖）。
 set -euo pipefail
@@ -17,7 +20,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-TARGET="" SSH_PORT=22 SSH_KEY="" SKIP_SMOKE=0 FILES=""
+TARGET="" SSH_PORT=22 SSH_KEY="" SKIP_SMOKE=0 FILES="" NO_RESTART=0
 UNIT="${UNIT:-onenat-workbuddy}"
 PREFIX="${PREFIX:-/onenat-workbuddy}"
 PORT="${PORT:-3081}"
@@ -28,8 +31,9 @@ while [ $# -gt 0 ]; do
     --port) SSH_PORT="$2"; shift 2 ;;
     --key) SSH_KEY="-i $2"; shift 2 ;;
     --skip-smoke) SKIP_SMOKE=1; shift ;;
+    --no-restart) NO_RESTART=1; shift ;;
     --files) FILES="$2"; shift 2 ;;
-    -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
     *) TARGET="$1"; shift ;;
   esac
 done
@@ -65,8 +69,14 @@ if [ -n "$FILES" ]; then
   # 显式指定文件（逗号分隔），跳过差异计算
   CHANGED="$(echo "$FILES" | tr ',' ' ')"
 fi
+# 技能与安装脚本漂移（服务从工作目录读取 skills/ 与 scripts/install-skill.sh，不随 dist 发布）
+SKILL_DRIFT=0
+LOCAL_SKILL_HASH="$(find skills scripts/install-skill.sh -type f ! -name '.DS_Store' -exec md5 -q {} \; | sort | md5 -q)"
+REMOTE_SKILL_HASH="$(ssh_wrap "cd $REMOTE_DIR/.. && find skills scripts/install-skill.sh -type f 2>/dev/null -exec md5sum {} \; | awk '{print \$1}' | sort | md5sum | awk '{print \$1}'")"
+if [ "$LOCAL_SKILL_HASH" != "$REMOTE_SKILL_HASH" ]; then SKILL_DRIFT=1; fi
+
 if [ -z "$CHANGED" ]; then
-  # dist 无漂移时仍需检查附属目录（assets/experts、dist/mcp）是否漂移
+  # dist 无漂移时仍需检查附属目录（assets/experts、dist/mcp）与 skills/ 是否漂移
   LOCAL_ASSET_INDEX="$(md5 -q assets/experts/index.json 2>/dev/null || true)"
   REMOTE_ASSET_INDEX="$(ssh_wrap "md5sum $REMOTE_DIR/../assets/experts/index.json 2>/dev/null | awk '{print \$1}' || true")"
   MCP_DRIFT=0
@@ -74,10 +84,10 @@ if [ -z "$CHANGED" ]; then
     REMOTE_MCP_HASHES0="$(ssh_wrap "cd $REMOTE_DIR/mcp 2>/dev/null && md5sum *.js | awk '{print \$1}' | sort || true")"
     [ "$(cd dist/mcp && md5 -q *.js | sort)" != "$REMOTE_MCP_HASHES0" ] && MCP_DRIFT=1
   fi
-  if [ -z "$LOCAL_ASSET_INDEX" ] || [ "$LOCAL_ASSET_INDEX" != "$REMOTE_ASSET_INDEX" ] || [ "$MCP_DRIFT" = 1 ]; then
-    echo "dist 无漂移，但附属目录（assets/experts / dist/mcp）有差异，继续部署。"
+  if [ -z "$LOCAL_ASSET_INDEX" ] || [ "$LOCAL_ASSET_INDEX" != "$REMOTE_ASSET_INDEX" ] || [ "$MCP_DRIFT" = 1 ] || [ "$SKILL_DRIFT" = 1 ]; then
+    echo "dist 无漂移，但附属目录（assets/experts / dist/mcp / skills）有差异，继续部署。"
   else
-    echo "dist 与附属目录均与远端一致，无需部署。"
+    echo "dist、附属目录与 skills 均与远端一致，无需部署。"
     exit 0
   fi
 fi
@@ -127,6 +137,28 @@ if [ -n "$ASSET_TARBALL" ]; then
   ssh_wrap "set -e; cd $REMOTE_DIR/..; mkdir -p assets; tar -xzf /tmp/wb-extra-assets.tgz -C assets --exclude='._*'; rm -f /tmp/wb-extra-assets.tgz"
 fi
 rm -f "$TARBALL" "$MCP_TARBALL" "$ASSET_TARBALL"
+
+# --- 技能与安装脚本同步：服务从工作目录读取（skills/、scripts/install-skill.sh），不随 dist 发布 ---
+echo "=== 4.6/5 同步技能与安装资源（skills/、scripts/install-skill.sh）==="
+SKILL_TARBALL=""
+if [ "$SKILL_DRIFT" = 1 ]; then
+  SKILL_TARBALL="/tmp/wb-extra-skills-$(date +%Y%m%d-%H%M%S).tgz"
+  # 注意：bsdtar（macOS）要求 --exclude 在文件列表之前，否则会把选项当文件名
+  tar -czf "$SKILL_TARBALL" --exclude='.DS_Store' --exclude='._*' skills scripts/install-skill.sh
+  echo "skills/ 有变更（本地 ${LOCAL_SKILL_HASH} != 远端 ${REMOTE_SKILL_HASH}）"
+  scp_wrap "$SKILL_TARBALL" "$TARGET:/tmp/wb-extra-skills.tgz"
+  ssh_wrap "set -e; cd $REMOTE_DIR/..; tar -xzf /tmp/wb-extra-skills.tgz --exclude='._*' --exclude='.DS_Store'; rm -f /tmp/wb-extra-skills.tgz"
+else
+  echo "skills/ 与远端一致，跳过"
+fi
+rm -f "$SKILL_TARBALL"
+
+if [ "$NO_RESTART" = 1 ]; then
+  echo "=== 5/5 未重启（--no-restart）：新 dist 已就位，技能静态资源已生效 ==="
+  ssh_wrap "echo '激活命令: systemctl restart $UNIT'"
+  exit 0
+fi
+
 ssh_wrap "systemctl restart $UNIT; sleep 2; systemctl is-active $UNIT"
 
 echo "=== 5/5 部署后验证 ==="
@@ -134,5 +166,5 @@ HEALTH="$(ssh_wrap "curl -s http://127.0.0.1:$PORT/healthz")"
 echo "$HEALTH" | grep -q '"ok":true' || { echo "❌ healthz 异常: $HEALTH"; exit 1; }
 echo "$HEALTH"
 CODE="$(ssh_wrap "curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:$PORT$PREFIX/mcp -H 'Content-Type: application/json' -d '{}'")"
-[ "$CODE" = "401" ] || { echo "❌ MCP 匿名应答 $CODE（期望 401 fail-closed）"; exit 1; }
+[ "$CODE" = "401" ] || { echo "❌ MCP 匿名应答 ${CODE}（期望 401 fail-closed）"; exit 1; }
 echo "✅ 部署完成：$(echo "$CHANGED" | wc -w | tr -d ' ') 个文件已更新，healthz/MCP 验证通过（回滚点: $REMOTE_DIR/dist.bak-<ts>-<file>）"
