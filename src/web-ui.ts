@@ -2283,7 +2283,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
     <div class="hspacer"></div>
     <div class="chip" id="onenat-chip"><span class="dot" id="onenat-dot"></span><span id="onenat-text">ONENAT 连接中…</span></div>
     <div class="chip" id="version-chip" title="OneNat WorkBuddy 版本（日期发布）"><span class="ver-ic">🏷</span><span id="version-text">v${VERSION}</span></div>
-    <button class="mini-btn" id="cmdk-btn" title="命令面板（⌘K / Ctrl+K）：搜索视图、会话、子智能体、项目与操作">⌘K</button>
+    <button class="mini-btn" id="cmdk-btn" title="命令面板（⌘K / Ctrl+K）：搜索视图、会话、待办条目、子智能体、项目与操作">⌘K</button>
     ${AUTH_ENABLED ? '<button class="mini-btn" id="logout-btn" title="退出登录">⎋ 退出</button>' : ''}
   </header>
   <main>
@@ -2812,7 +2812,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
   <div class="cmdk" role="dialog" aria-modal="true" aria-label="命令面板">
     <div class="cmdk-input-row">
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="7" cy="7" r="4.6"/><path d="M10.4 10.4L14 14" stroke-linecap="round"/></svg>
-      <input id="cmdk-input" class="cmdk-input" placeholder="搜索视图 / 会话 / 子智能体 / 项目 / 操作…" autocomplete="off" spellcheck="false" />
+      <input id="cmdk-input" class="cmdk-input" placeholder="搜索视图 / 会话 / 待办条目标题或状态 / 子智能体 / 项目 / 操作…" autocomplete="off" spellcheck="false" />
       <span class="cmdk-kbd">Esc 关闭</span>
     </div>
     <div class="cmdk-list" id="cmdk-list" role="listbox"></div>
@@ -14690,6 +14690,7 @@ function cmdkCommands(query) {
   cmds.push({ g: '操作', ic: '🎛', lb: '运行配置', kw: 'run config 专家 连接器 技能 节点 模型', ord: 2, act: function () { switchView('work'); openRunConfig('top'); } });
   cmds.push(cmdkViewCmd('work', '工作台 · 任务会话', '💬'));
   cmds.push(cmdkViewCmd('projects', '项目', '📦'));
+  cmds.push(cmdkViewCmd('backlog', '待办 · Backlog', '✅'));
   cmds.push(cmdkViewCmd('monitor', '监控大屏', '📊'));
   cmds.push(cmdkViewCmd('agents', '子智能体', '🤖'));
   var moreViews = [
@@ -14713,6 +14714,9 @@ function cmdkCommands(query) {
     // 从待办聚合页用 ⌘K 进入项目也压历史，返回键同样能回到 #backlog
     cmds.push({ g: '项目', ic: '📦', lb: p.name || p.id, sub: p.archived ? '已归档' : '', ord: 50, act: function () { enterProjectWorkspace(p.id, currentView === 'backlog' ? 'backlog' : undefined); } });
   });
+  // 待办条目（TASK-1）：有查询词时才展开（空查询保持面板轻量，避免一次列出全部条目）。
+  // 数据由 cmdkOpen 时的 overview 懒加载补入；这里只收「节点正常 + backlog 已初始化」的项目。
+  if (query) { var blCmds = cmdkBacklogCmds(); for (var bi = 0; bi < blCmds.length; bi++) cmds.push(blCmds[bi]); }
   return cmds;
 }
 function cmdkHay(c) { return (String(c.lb || '') + ' ' + String(c.kw || '')).toLowerCase(); }
@@ -14761,6 +14765,8 @@ function cmdkOpen() {
   $('cmdk-mask').classList.add('on');
   cmdk.open = true; cmdk.sel = 0;
   var inp = $('cmdk-input'); inp.value = '';
+  // 后台预取跨项目待办聚合：不 await，面板先可用，回来后自动补「待办」组（AC#3 不阻塞打开）
+  cmdkBacklogPrefetch();
   cmdkRender();
   setTimeout(function () { inp.focus(); }, 20);
 }
@@ -15093,6 +15099,78 @@ async function blOpenDetail(itemId) {
       toast(rr.ok ? '✓ 回写成功' : '重试失败: ' + (rr.error || ''), !rr.ok);
       if (rr.ok) { closeModal(); if (blState.board) blReloadBoard(); else renderBacklogView(true); }
     });
+  });
+}
+
+// ---------- ⌘K × Backlog 条目检索（TASK-1）：跨项目待办进全局搜索 ----------
+// 数据来自跨项目聚合 GET /backlog/overview：服务端已按项目做失败隔离（nodeStatus 非 ok 的项目
+// 只体现在它自己那组），所以面板既不会等它、也不会因某节点不可达而打不开。
+// 打开面板时后台预取（不 await），回来时若面板仍开着再 cmdkRender() 把「待办」组补进去。
+// 待办视图已加载过的聚合结果（blState.data）优先复用，避免重复请求；30s TTL 兜底刷新。
+var cmdkBl = { cache: null, at: 0, loading: false };
+var CMDK_BL_TTL = 30000;
+function cmdkBacklogGroups() {
+  if (blState.data && blState.data.data) return blState.data.data;
+  return cmdkBl.cache || [];
+}
+function cmdkBacklogPrefetch() {
+  if (blState.data && blState.data.data) { cmdkBl.cache = blState.data.data; cmdkBl.at = Date.now(); return; }
+  if (cmdkBl.loading) return;
+  if (cmdkBl.at && Date.now() - cmdkBl.at < CMDK_BL_TTL) return;
+  cmdkBl.loading = true;
+  api('/backlog/overview').then(function (r) {
+    cmdkBl.loading = false;
+    cmdkBl.at = Date.now();
+    if (r && r.ok) { cmdkBl.cache = r.data || []; if (cmdk.open) cmdkRender(); }
+  }).catch(function () {
+    // 聚合接口整体失败（如未登录/网络错误）静默降级：面板其它命令照常可用，待办视图自身会暴露错误
+    cmdkBl.loading = false;
+    cmdkBl.at = Date.now();
+  });
+}
+function cmdkBacklogCmds() {
+  var out = [];
+  var groups = cmdkBacklogGroups();
+  for (var i = 0; i < groups.length; i++) {
+    var g = groups[i];
+    // 未初始化 backlog 或节点不可达（unreachable / archived）的项目不进结果（AC#3）
+    if (!g || g.nodeStatus !== 'ok' || !g.initialized) continue;
+    var items = g.items || [];
+    for (var j = 0; j < items.length; j++) out.push(cmdkBacklogCmd(g, items[j]));
+  }
+  return out;
+}
+function cmdkBacklogCmd(g, it) {
+  var status = it.status || '';
+  var kw = status + ' ' + (g.projectName || '') + ' ' + (it.labels || []).join(' ') + ' ' + (it.assignees || []).join(' ');
+  var pid = g.projectId, itemId = it.itemId;
+  return {
+    g: '待办', ic: '✅', lb: String(itemId || '') + ' ' + (it.title || ''),
+    sub: (g.projectName || '') + (status ? ' · ' + status : ''),
+    kw: kw, ord: 35,
+    act: function () { return cmdkOpenBacklogItem(pid, itemId); },
+  };
+}
+/** 打开某项目的待办看板并定位到指定条目：先切视图，再用聚合缓存即时上屏，最后拉权威列表刷新并开详情抽屉 */
+function cmdkOpenBacklogItem(projectId, itemId) {
+  var groups = cmdkBacklogGroups();
+  var g = null;
+  for (var i = 0; i < groups.length; i++) if (groups[i].projectId === projectId) { g = groups[i]; break; }
+  var name = (g && g.projectName) || projectId;
+  if (g && (g.items || []).length) {
+    // 聚合缓存里已有条目与状态列：先渲染看板，避免远端列表请求期间白屏或停留在上一个项目的看板
+    blState.board = {
+      projectId: projectId, name: name,
+      data: { initialized: true, items: g.items, statuses: g.statuses || [], defaultStatus: g.defaultStatus || '', truncated: Boolean(g.truncated) },
+    };
+  }
+  switchView('backlog');
+  // 权威刷新：列表可能比缓存新；失败时保留已渲染的缓存看板并明确提示，不静默失败
+  return api('/projects/' + encodeURIComponent(projectId) + '/backlog').then(function (r) {
+    if (!r || !r.ok) { toast('打开待办看板失败：' + ((r && r.error) || '未知错误'), true); return; }
+    blState.board = { projectId: projectId, name: name, data: r.data };
+    blRender();
+    return blOpenDetail(itemId);
   });
 }
 

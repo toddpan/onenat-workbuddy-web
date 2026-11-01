@@ -1,10 +1,10 @@
 ---
 id: TASK-1
 title: "backlog 条目接入 cmdk 全局检索"
-status: "To Do"
+status: In Progress
 assignee:
 created_date: '2026-11-01T00:00:00Z'
-updated_date: '2026-11-01T00:00:00Z'
+updated_date: '2026-11-01T05:00:27Z'
 labels:
   - "backlog"
   - "ui"
@@ -38,3 +38,6 @@ ordinal: 1000
 - [ ] #3 未初始化 backlog 的项目不出现在结果中，且该节点不可达时不阻塞面板打开
 - [ ] #4 npm run build 与 npm run smoke 通过（新增断言或明确说明仅做手测）
 <!-- AC:END -->
+
+### 2026-11-01T05:00:27Z 派发为任务
+task-3c3d653a · mode=orchestrate · 成员=2
