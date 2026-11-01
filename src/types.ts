@@ -459,6 +459,11 @@ export interface WorkTask {
   backlogRef?: { projectId: string; itemId: string; itemTitle: string; dispatchedAt: number }
   /** backlog 回写失败标记（§6.3）：终态钩子写节点失败（节点不可达等）；UI 显「回写未确认」并经重试清除 */
   backlogWritebackFailed?: { at: number; error: string }
+  /**
+   * backlog 回写自动重试退避状态（TASK-2 补偿器）：count=已自动重试次数，nextAt=下次重试时间。
+   * 随 store 落盘持久化，重启不重置；达上限后补偿器不再触碰（保留失败标记，交回人工重试）。
+   */
+  backlogWritebackRetry?: { count: number; nextAt: number }
   /** 会话附件（上传到各成员远端工作区后的登记） */
   attachments?: TaskAttachment[]
   /** 由定时任务派生时记录来源（调度删除/滚动出窗口后类型标识仍可恢复） */

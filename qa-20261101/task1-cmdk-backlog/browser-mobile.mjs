@@ -117,32 +117,50 @@ rec('M5', '无横向溢出：页面/mask scrollWidth ≤ innerWidth+1，面板�
 await page.screenshot({ path: OUTDIR + '/task1-07-mobile-cmdk-itemid.png' })
 
 // ---------------- 补充：移动端选中后看板 + 详情弹层 ----------------
+// 断言对象 = 面板当前实际选中的条目（query=TASK-1 时默认选中 C 项目同名条目），
+// 而不是硬编码 A 项目 —— 否则会等错标题超时，却仍被宽松的 task-1 文案断言放过。
+const selItem = hit.backlogGroup && hit.backlogGroup.items.find((it) => it.sel)
+const selItemId = selItem ? (String(selItem.lb).match(/task-\d+/) || [''])[0] : ''
+const selTitle = selItem ? String(selItem.lb).replace(/^task-\d+\s*/, '') : ''
+const selProject = selItem ? String(selItem.sub).split(' · ')[0] : ''
 await page.keyboard.press('Enter')
 let jumpErr = ''
 try {
-  await page.waitForFunction(() => location.hash === '#backlog' && document.getElementById('view-backlog').classList.contains('on') && !!document.querySelector('#bl-root .bl-board'), undefined, { timeout: 15000 })
+  await page.waitForFunction(({ project }) => {
+    try {
+      if (location.hash !== '#backlog' || !document.getElementById('view-backlog').classList.contains('on')) return false
+      if (!document.querySelector('#bl-root .bl-board')) return false
+      const head = document.querySelector('#bl-root .bl-head b')
+      return project ? Boolean(head) && head.textContent.indexOf(project) >= 0 : true
+    } catch (e) { return false }
+  }, { project: selProject }, { timeout: 25000 })
 } catch (e) { jumpErr = String(e && e.message ? e.message : e) }
 let modalErr = ''
 try {
-  await page.waitForFunction(() => {
+  await page.waitForFunction(({ itemId, title }) => {
     try {
       const m = document.getElementById('modal-mask')
       const t = document.getElementById('modal-title')
-      return m.classList.contains('on') && t && t.textContent.indexOf('接入 cmdk 全局检索入口') >= 0
+      if (!m.classList.contains('on') || !t) return false
+      return itemId ? t.textContent.indexOf(itemId) >= 0 && t.textContent.indexOf(title) >= 0 : true
     } catch (e) { return false }
-  }, undefined, { timeout: 20000 })
+  }, { itemId: selItemId, title: selTitle }, { timeout: 25000 })
 } catch (e) { modalErr = String(e && e.message ? e.message : e) }
 const mobileJump = await page.evaluate(() => ({
   hash: location.hash,
   backlogOn: document.getElementById('view-backlog').classList.contains('on'),
   hasBoard: !!document.querySelector('#bl-root .bl-board'),
+  boardTitle: (function () { const b = document.querySelector('#bl-root .bl-head b'); return b ? b.textContent : '' })(),
   cols: Array.prototype.slice.call(document.querySelectorAll('#bl-root .bl-col-h')).map((x) => (x.textContent || '').trim()),
   modalOn: document.getElementById('modal-mask').classList.contains('on'),
   modalTitle: document.getElementById('modal-title').textContent || '',
   overflowNow: { doc: document.documentElement.scrollWidth, inner: window.innerWidth, mask: document.getElementById('cmdk-mask').scrollWidth },
 }))
-rec('M6', '移动端选中后进入 #backlog 看板并打开条目详情弹层', mobileJump.hash === '#backlog' && mobileJump.backlogOn && mobileJump.hasBoard && mobileJump.modalOn && mobileJump.modalTitle.indexOf('task-1') >= 0,
-  jumpErr || modalErr || `hash=${mobileJump.hash} board=${mobileJump.hasBoard} modal=${mobileJump.modalTitle} cols=${JSON.stringify(mobileJump.cols)}`)
+const m6pass = mobileJump.hash === '#backlog' && mobileJump.backlogOn && mobileJump.hasBoard && mobileJump.modalOn
+  && Boolean(selItemId) && mobileJump.modalTitle.indexOf(selItemId) >= 0 && mobileJump.modalTitle.indexOf(selTitle) >= 0
+  && (!selProject || mobileJump.boardTitle.indexOf(selProject) >= 0)
+rec('M6', '移动端选中条目后进入其所属项目 #backlog 看板并打开该条目详情弹层', m6pass,
+  m6pass ? `selected=${selItemId} ${selTitle} @ ${selProject}; board=${mobileJump.boardTitle}; modal=${mobileJump.modalTitle}` : (jumpErr || modalErr || `hash=${mobileJump.hash} board=${mobileJump.boardTitle} modal=${mobileJump.modalTitle} cols=${JSON.stringify(mobileJump.cols)}`))
 rec('M7', '移动端看板/弹层打开后仍无横向溢出', mobileJump.overflowNow.doc <= mobileJump.overflowNow.inner + 1 && mobileJump.overflowNow.mask <= mobileJump.overflowNow.inner + 1,
   `doc=${mobileJump.overflowNow.doc} inner=${mobileJump.overflowNow.inner} mask=${mobileJump.overflowNow.mask}`)
 await page.screenshot({ path: OUTDIR + '/task1-08-mobile-backlog-board-modal.png' })

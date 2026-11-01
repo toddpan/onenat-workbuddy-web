@@ -1,10 +1,10 @@
 /**
- * onenat-workbuddy-web - 未完成事项采集（简版：手动触发，一次预览 → 勾选 → 落盘）
+ * onenat-workbuddy-web - 未竟事项采集（简版：手动触发，一次预览 → 勾选 → 落盘）
  *
  * 设计来源：`docs/design-backlog-auto-collect.md` v3 的 A+B 双源最小实现。
  *  - **A 任务账本**：本项目里 failed / partial_success / 卡死 running 的任务（纯内存，零节点 IO）；
- *  - **B 工作区代码/文档**：项目工作区目录里的明确标记（代码 TODO/FIXME/待办…、文档未勾选验收 /
- *    待确认 / TBD / WIP…），只认确定标记、不做语义猜测；
+ *  - **B 工作区代码/文档**：项目工作区目录里的明确标记（代码注释里的标记关键词、文档未勾选验收 /
+ *    文档状态行…），只认确定标记、不做语义猜测；
  *  - 去重：已在 backlog 条目正文里出现过的 `<!-- wb:source=<key> -->` 直接跳过（跨轮幂等）。
  *
  * 边界（如实声明，见设计 §4.3/§4.6）：
@@ -96,7 +96,12 @@ const CODE_EXTS = new Set([
 const DOC_EXTS = new Set(['.md', '.markdown', '.mdx', '.txt', '.rst', '.adoc'])
 
 const IGNORE_FILE_RE = /^(?:package-lock\.json|pnpm-lock\.yaml|yarn\.lock|Cargo\.lock|poetry\.lock|composer\.lock)$|\.min\.(?:js|css)$|\.map$|\.(?:png|jpe?g|gif|webp|svg|ico|bmp|pdf|zip|gz|tar|tgz|rar|7z|exe|dll|so|dylib|bin|woff2?|ttf|eot|mp[34]|wav|avi|mov|mp4|lock|snap)$/i
-const CODE_MARKER_RE = /\bTODO\b|\bFIXME\b|\bXXX\b|\bHACK\b|待办|待补充|未完成/i
+// 自激防线：本文件是采集器自身，下面两条正则的字面量、本文件注释与字符串里若裸写标记词，
+// 扫描项目工作区时会把自己登记成候选（QA 20261101 task-35 / backlog code:b1c5dfa7 误报实证）。
+// 约定：① 中文关键词只在注释行才算标记（标识符、UI 文案与错误消息字符串里大量出现，裸匹配必然误报）；
+// ② 本文件所有注释与字符串一律用「未竟/标记」等措辞，禁止裸写任何标记词（含标签常量）。
+const CODE_MARKER_EN_RE = /\bTODO\b|\bFIXME\b|\bXXX\b|\bHACK\b/i
+const CODE_MARKER_CN_RE = /待办|待补充|未完成/
 const DOC_STATUS_RE = /\bTBD\b|待确认|待定|\bWIP\b|状态[:：]\s*(?:草稿|进行中|待完成|未完成)/i
 const COMMENT_PREFIX_RE = /^\s*(?:\/\/+|\/\*+|\*+|#+|<!--|--|;+|%+)\s*/
 
@@ -130,7 +135,7 @@ function fmtTime(ms: number): string {
 
 // ---------- A：任务账本候选（纯内存，零节点 IO） ----------
 
-/** 从任务账本挑出本项目「未完成」的任务（D2：failed / partial_success / 卡死 running） */
+/** 从任务账本挑出本项目「未竟」的任务（D2：failed / partial_success / 卡死 running） */
 export function taskCandidatesFor(tasks: WorkTask[], projectId: string, now = Date.now()): CollectCandidate[] {
   const out: CollectCandidate[] = []
   for (const t of tasks) {
@@ -191,7 +196,7 @@ interface WorkspaceFileEntry {
   mtime?: number
 }
 
-/** 扫描项目工作区的代码/文档，找出明确标记的未完成事项（只认标记，不做语义猜测） */
+/** 扫描项目工作区的代码/文档，找出明确标记的未竟事项（只认标记，不做语义猜测） */
 export async function scanWorkspaceCandidates(
   client: DshClient,
   target: DshTarget,
@@ -279,7 +284,7 @@ export async function scanWorkspaceCandidates(
   return { candidates: candidates.slice(0, MAX_CANDIDATES), dirsScanned, filesScanned, filesSkipped, truncated }
 }
 
-/** 从一段文件文本里提取明确的未完成标记（代码注释标记 / 文档未勾选验收 / 文档状态标记） */
+/** 从一段文件文本里提取明确的未竟标记（代码注释标记 / 文档未勾选验收 / 文档状态标记） */
 export function parseWorkspaceMarkers(
   text: string,
   relPath: string,
@@ -289,10 +294,22 @@ export function parseWorkspaceMarkers(
   const maxPerFile = Math.max(1, opts?.maxPerFile ?? WS_MAX_MARKERS_PER_FILE)
   const isDoc = DOC_EXTS.has((/\.[^.]+$/.exec(relPath) || [''])[0].toLowerCase())
   const lines = String(text || '').split(/\r?\n/)
+  // 跳过 Markdown 围栏代码块（``` / ~~~）：示例模板里的未勾选项不是真实事项
+  let fence: string | null = null
   for (let i = 0; i < lines.length && out.length < maxPerFile; i++) {
     const raw = lines[i]
     if (!raw || raw.length > 400) continue
     const line = raw.trim()
+    if (isDoc) {
+      const fm = /^\s*(```+|~~~+)/.exec(raw)
+      if (fm) {
+        const marker = fm[1].slice(0, 3)
+        if (!fence) fence = marker
+        else if (fence === marker) fence = null
+        continue
+      }
+      if (fence) continue
+    }
     if (!line) continue
     if (isDoc) {
       const ac = /^[-*+]\s+\[\s\]\s+(.+)$/.exec(line)
@@ -303,7 +320,7 @@ export function parseWorkspaceMarkers(
           source: 'doc',
           title: `[文档] ${relPath}: 未勾选验收：${text}`,
           detail: [`文件：${relPath}（第 ${i + 1} 行）`, `未勾选：${clip(ac[1], 200)}`],
-          labels: ['auto-collect', 'source-doc', 'doc-todo'],
+          labels: ['auto-collect', 'source-doc', 'doc-marker'],
         })
         continue
       }
@@ -319,15 +336,17 @@ export function parseWorkspaceMarkers(
       }
       continue
     }
-    const m = CODE_MARKER_RE.exec(line)
-    if (!m) continue
+    const isComment = COMMENT_PREFIX_RE.test(line)
+    const en = CODE_MARKER_EN_RE.test(line)
+    const cn = isComment && CODE_MARKER_CN_RE.test(line.replace(COMMENT_PREFIX_RE, ''))
+    if (!en && !cn) continue
     const body = line.replace(COMMENT_PREFIX_RE, '')
     out.push({
       key: workspaceSourceKey('code', relPath, body),
       source: 'code',
       title: `[代码] ${relPath}: ${clip(body, 60)}`,
       detail: [`文件：${relPath}（第 ${i + 1} 行）`, `命中标记：${clip(body, 200)}`],
-      labels: ['auto-collect', 'source-code', 'todo'],
+      labels: ['auto-collect', 'source-code', 'code-marker'],
     })
   }
   return out
@@ -427,7 +446,7 @@ function candidateAcceptance(c: CollectCandidate): string[] {
     return ['确认该任务的失败/中断根因（任务详情与执行记录可回看）', '修复后复跑任务或明确关闭，并回写本条待办状态']
   }
   if (c.source === 'code') {
-    return ['确认该处 TODO/FIXME 是否仍需处理（保留 / 删除标记 / 转成正式待办）', '处理后同步删除或更新代码中的标记']
+    return ['确认该处标记是否仍需处理（保留 / 删除标记 / 转成正式待办）', '处理后同步删除或更新代码中的标记']
   }
   return ['确认该未勾选项/待确认内容是否仍需跟进', '处理后同步勾选或更新文档']
 }

@@ -165,7 +165,7 @@ async function main() {
   const consoleRes = await req('GET', `${PREFIX}/`)
   check('GET 控制台返回 HTML 单页', consoleRes.status === 200 && consoleRes.text.includes('OneNat WorkBuddy') && consoleRes.text.includes('</html>'))
 
-  // TASK-8：待办聚合总览分组头「进入工作台」入口（静态渲染 + 跳转/回退/移动端热区实现都在控制台 HTML 内联 JS/CSS 里）
+  // Backlog 聚合总览分组头「进入工作台」入口回归断言（静态渲染 + 跳转/回退/移动端热区实现都在控制台 HTML 内联 JS/CSS 里；功能已实现并经浏览器验收）
   const blEnterIdx = consoleRes.text.indexOf('<button class="mini-btn bl-enter-btn"')
   const blBoardIdx = consoleRes.text.indexOf('<button class="mini-btn bl-board-btn"')
   check('待办分组头含「进入工作台」按钮且在「看板」之前', blEnterIdx > 0 && blBoardIdx > blEnterIdx, `enter=${blEnterIdx} board=${blBoardIdx}`)
@@ -197,7 +197,7 @@ async function main() {
   const blCmdLegacyOk = Boolean(blCmdBlock) && !/[?]\.[A-Za-z_$]/.test(blCmdBlock) && !blCmdBlock.includes('??')
   check('⌘K backlog 代码段兼容旧内核（无 ?. / ??）', blCmdLegacyOk, blCmdLegacyOk ? '' : '新增段出现可选链/空值合并')
 
-  // 未完成事项采集（简版）：看板窗口顶部「扫描未完成」→ 候选预览（勾选）→ 建待办；服务端路由同源
+  // Backlog 事项采集（简版）：看板窗口顶部「扫描」→ 候选预览（勾选）→ 落 Backlog 条目；服务端路由同源
   const blCollectIdx = consoleRes.text.indexOf('/** 未完成事项采集（简版）：扫描本项目')
   const blCollectEnd = consoleRes.text.indexOf('async function blOpenDetail')
   const blCollectBlock = blCollectIdx > 0 && blCollectEnd > blCollectIdx ? consoleRes.text.slice(blCollectIdx, blCollectEnd) : ''

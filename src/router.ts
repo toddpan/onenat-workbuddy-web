@@ -1671,7 +1671,8 @@ export class WorkBuddyRouter {
             await this.engine.runBacklogWriteback(task)
             this.sendJson(res, 200, { ok: true })
           } catch (err: any) {
-            this.store.mutateTask(task.id, (t) => { t.backlogWritebackFailed = { at: Date.now(), error: String(err?.message || err).slice(0, 300) } })
+            // 统一走引擎的失败记账：失败标记 + 退避计数推进（TASK-2 补偿器共用同一退避序列）
+            this.engine.recordWritebackFailure(task.id, err)
             this.sendJson(res, 502, { ok: false, error: String(err?.message || err).slice(0, 300) })
           }
           return true

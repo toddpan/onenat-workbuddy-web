@@ -21,7 +21,11 @@
 | `npm run smoke` | ✅ 83 项 |
 | `npm run smoke:backlog`（stub 节点 e2e） | ✅ 全过，含采集 11 项 |
 
-## 3. 线上部署（上传完成、激活待定）
+## 3. 线上部署（上传完成，已激活 ✅）
+
+> 2026-11-01 复核更新：本节标题原为「上传完成、激活待定」。实际激活已于当日完成——宿主 15:44:38 重启后 systemd 以新 dist 自动拉起（见 §4.1），生产复验通过。11-01 晚间再次核实：`/healthz` 返回 `version 2026.11.1`、服务持续运行，激活结论成立。
+
+### 3.1 部署与激活过程（原始记录）
 
 ```
 bash scripts/deploy-standalone.sh root@natpass.yikaihui.com --no-restart

@@ -2233,6 +2233,9 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .bl-col-h { padding: 8px 10px; font-size: 12.5px; font-weight: 700; display: flex; gap: 6px; align-items: center; border-bottom: 1px solid var(--line); }
 .bl-col-b { overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
 .bl-card { border: 1px solid var(--line); border-radius: 10px; background: var(--bg); padding: 8px 10px; font-size: 12.5px; }
+.bl-card[draggable="true"] { cursor: grab; }
+.bl-card.bl-dragging { opacity: 0.45; }
+.bl-col.bl-drop-hint { outline: 2px dashed var(--pri); outline-offset: -2px; }
 .bl-card .bl-title { font-weight: 600; cursor: pointer; word-break: break-all; }
 .bl-card .bl-title:hover { color: var(--pri); }
 .bl-card .meta { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 5px; align-items: center; color: var(--tx3); font-size: 11px; }
@@ -14809,6 +14812,33 @@ var blState = { data: null, loading: false, filters: { openOnly: true, mine: fal
 function blIsOpenStatus(s) { return !(/done|完成/i.test(s || '') || /cancel|取消/i.test(s || '')); }
 function blOpenItem(t) { try { jumpToTask(t.id); } catch (e) { toast('无法打开任务: ' + t.id, true); } }
 
+/** 展示排序（TASK-SORT-1）：状态（statuses 顺序）→ 优先级 → 创建时间；与后端 sortBacklogItems 同规则，保证桌面/移动一致 */
+function blPriWeight(p) {
+  p = (p || '').trim().toLowerCase();
+  if (/^(p0|critical|urgent|highest|blocker|紧急|最高)$/.test(p)) return 0;
+  if (/^(p1|high|高|重要)$/.test(p)) return 1;
+  if (/^(p2|medium|mid|normal|中|普通)$/.test(p)) return 2;
+  if (/^(p3|low|低|minor)$/.test(p)) return 3;
+  if (/^(p4|lowest|最低)$/.test(p)) return 4;
+  return p ? 5 : 5;
+}
+function blSeqOf(id) { const m = /(\d+)\s*$/.exec(id || ''); return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER; }
+function blSortItems(items, statuses) {
+  const idx = {};
+  (statuses || []).forEach(function (s, i) { idx[String(s).trim().toLowerCase()] = i; });
+  const n = (statuses || []).length;
+  return (items || []).slice().sort(function (a, b) {
+    const sa = idx[String(a.status || '').trim().toLowerCase()]; const sb = idx[String(b.status || '').trim().toLowerCase()];
+    const da = sa === undefined ? n : sa; const db = sb === undefined ? n : sb;
+    if (da !== db) return da - db;
+    const pa = blPriWeight(a.priority); const pb = blPriWeight(b.priority);
+    if (pa !== pb) return pa - pb;
+    const ca = a.createdDate || ''; const cb = b.createdDate || '';
+    if (ca !== cb) return ca < cb ? -1 : 1;
+    return blSeqOf(a.itemId) - blSeqOf(b.itemId);
+  });
+}
+
 async function renderBacklogView(force) {
   if (blState.board && !force) { blRender(); return; }
   if (!blState.data || force) {
@@ -14872,7 +14902,7 @@ function blOverviewHtml() {
         : '<span class="node-err" data-bl-retry="' + esc(g.projectId) + '" title="' + esc(g.error || '节点不可达') + '（点击重试）">⚠ 节点不可达</span>';
     const rows = !g.initialized
       ? '<div class="bl-row"><span class="bl-empty">该项目尚未初始化 backlog。' + (g.nodeStatus === 'ok' ? '可在项目卡片「进入工作台」后让智能体建待办，或' : '') + '</span><button class="mini-btn bl-init" data-init="' + esc(g.projectId) + '" ' + (g.nodeStatus !== 'ok' ? 'disabled' : '') + '>初始化 backlog</button></div>'
-      : (g.items || []).map(function (it) { return blRowHtml(g, it); }).join('') || '<div class="bl-row"><span class="bl-empty">暂无待办</span></div>';
+      : blSortItems(g.items, g.statuses || []).map(function (it) { return blRowHtml(g, it); }).join('') || '<div class="bl-row"><span class="bl-empty">暂无待办</span></div>';
     return '<div class="bl-group">' +
       '<div class="bl-group-h" data-grp-h="' + esc(g.projectId) + '">' +
       '<span>' + (expanded ? '▾' : '▸') + '</span>' +
@@ -14892,12 +14922,12 @@ function blOverviewHtml() {
     '</div>' + (html || '<div class="bl-empty">没有可见项目</div>');
 }
 
-function blCardHtml(it, statuses) {
+function blCardHtml(it, statuses, drag) {
   const ac = it.acceptance ? '<span class="bl-ac">AC ' + it.acceptance.done + '/' + it.acceptance.total + '</span>' : '';
   const labels = (it.labels || []).map(function (l) { return '<span class="bl-tag">' + esc(l) + '</span>'; }).join('');
   const deps = (it.dependencies || []).length ? '<span class="bl-tag" title="依赖: ' + esc(it.dependencies.join('、')) + '">⛓ ' + it.dependencies.length + '</span>' : '';
   const done = !blIsOpenStatus(it.status);
-  return '<div class="bl-card" data-item="' + esc(it.itemId) + '">' +
+  return '<div class="bl-card" data-item="' + esc(it.itemId) + '"' + (drag ? ' draggable="true"' : '') + '>' +
     '<input type="checkbox" class="bl-pick" data-pick="' + esc(it.itemId) + '" style="width:auto">' +
     ' <span class="bl-title" data-detail="' + esc(it.itemId) + '">' + esc(it.itemId) + ' ' + esc(it.title || '') + '</span>' +
     '<div class="meta"><span class="bl-tag">' + esc(it.status || '—') + '</span>' + labels + deps + ac + blBadgeOf(it.tasks) + '</div>' +
@@ -14911,6 +14941,7 @@ function blBoardHtml() {
   const b = blState.board; if (!b) return '';
   const d = b.data;
   const cols = (d.statuses && d.statuses.length ? d.statuses : ['To Do', 'In Progress', 'Done']);
+  const drag = blDragEnabled() && !d.archived;
   const picked = blPickedCount();
   return '<div class="bl-head">' +
     '<button class="mini-btn" id="bl-back">← 返回我的待办</button>' +
@@ -14923,14 +14954,76 @@ function blBoardHtml() {
     '</div>' +
     (d.truncated ? '<div class="bl-empty">目录列表被截断，仅显示部分待办</div>' : '') +
     '<div class="bl-board">' + cols.map(function (st) {
-      const items = (d.items || []).filter(function (it) { return (it.status || d.defaultStatus) === st; });
-      return '<div class="bl-col"><div class="bl-col-h">' + esc(st) + ' <span class="cnt">' + items.length + '</span></div><div class="bl-col-b">' +
-        (items.map(function (it) { return blCardHtml(it, cols); }).join('') || '<div class="bl-empty">空</div>') +
+      const items = blSortItems(d.items, d.statuses).filter(function (it) { return (it.status || d.defaultStatus) === st; });
+      return '<div class="bl-col" data-st="' + esc(st) + '"><div class="bl-col-h">' + esc(st) + ' <span class="cnt">' + items.length + '</span></div><div class="bl-col-b">' +
+        (items.map(function (it) { return blCardHtml(it, cols, drag); }).join('') || '<div class="bl-empty">空</div>') +
         '</div></div>';
     }).join('') + '</div>';
 }
 
 function blPickedCount() { return document.querySelectorAll('#bl-root .bl-pick:checked').length; }
+
+/** 拖拽改状态仅在桌面端启用：≤768px 与微信 X5 内核（MQQBrowser/MicroMessenger UA）不启用，避免误触与事件兼容问题 */
+function blDragEnabled() {
+  if (typeof isMobile === 'function' && isMobile()) return false;
+  return !/MQQBrowser|MicroMessenger/i.test(navigator.userAgent || '');
+}
+
+/** 拖拽改状态：乐观更新 UI → PUT 落定；失败（尤其 CONFLICT 冲突）回滚并提示，绝不静默覆盖服务端内容 */
+async function blMoveCard(itemId, newStatus) {
+  const b = blState.board; if (!b) return;
+  const it = blBoardItem(itemId); if (!it) return;
+  const oldStatus = it.status || b.data.defaultStatus;
+  if (oldStatus === newStatus) return;
+  if ((b.data.statuses || []).indexOf(newStatus) < 0) return;
+  it.status = newStatus;
+  blRender();
+  const r = await api('/projects/' + b.projectId + '/backlog/items/' + encodeURIComponent(itemId), { method: 'PUT', body: JSON.stringify({ status: newStatus }) });
+  if (r.ok) { toast('✓ ' + itemId + ' 已移至「' + newStatus + '」'); blReloadBoard(); return; }
+  it.status = oldStatus;
+  blRender();
+  toast(r.code === 'CONFLICT' ? '内容已被他人更新，请刷新' : '状态更新失败: ' + (r.error || ''), true);
+}
+
+/** 看板拖拽事件委托：挂在 #bl-root 上，重渲染不影响 */
+function blBindDrag(root) {
+  if (root.dataset.blDragBound) return;
+  root.dataset.blDragBound = '1';
+  root.addEventListener('dragstart', function (e) {
+    const card = e.target && e.target.closest ? e.target.closest('.bl-card[draggable="true"]') : null;
+    if (!card) return;
+    try { e.dataTransfer.setData('text/plain', card.dataset.item); e.dataTransfer.effectAllowed = 'move'; } catch (err) {}
+    card.classList.add('bl-dragging');
+  });
+  root.addEventListener('dragend', function () {
+    root.querySelectorAll('.bl-dragging').forEach(function (el) { el.classList.remove('bl-dragging'); });
+    root.querySelectorAll('.bl-drop-hint').forEach(function (el) { el.classList.remove('bl-drop-hint'); });
+  });
+  root.addEventListener('dragover', function (e) {
+    const col = e.target && e.target.closest ? e.target.closest('.bl-col[data-st]') : null;
+    if (!col) return;
+    e.preventDefault();
+    try { e.dataTransfer.dropEffect = 'move'; } catch (err) {}
+    if (!col.classList.contains('bl-drop-hint')) {
+      root.querySelectorAll('.bl-drop-hint').forEach(function (el) { el.classList.remove('bl-drop-hint'); });
+      col.classList.add('bl-drop-hint');
+    }
+  });
+  root.addEventListener('dragleave', function (e) {
+    const col = e.target && e.target.closest ? e.target.closest('.bl-col[data-st]') : null;
+    if (col && !col.contains(e.relatedTarget)) col.classList.remove('bl-drop-hint');
+  });
+  root.addEventListener('drop', function (e) {
+    const col = e.target && e.target.closest ? e.target.closest('.bl-col[data-st]') : null;
+    if (!col) return;
+    e.preventDefault();
+    col.classList.remove('bl-drop-hint');
+    let itemId = '';
+    try { itemId = e.dataTransfer.getData('text/plain') || ''; } catch (err) {}
+    if (!itemId) return;
+    blMoveCard(itemId, col.dataset.st);
+  });
+}
 
 /** 重渲染后同步批量派发按钮的文案/禁用态（内联 HTML 固定渲染的是「派发选中 (N)」，N 为渲染时勾选数） */
 function blSyncBatchBtn() {
@@ -14945,6 +15038,7 @@ function blRender() {
   const root = document.getElementById('bl-root'); if (!root) return;
   root.innerHTML = blState.board ? blBoardHtml() : blOverviewHtml();
   blSyncBatchBtn();
+  if (blState.board) blBindDrag(root);
   root.querySelectorAll('[data-bl-retry]').forEach(function (el) {
     el.addEventListener('click', function () { toast('正在重试该项目的节点连接…'); renderBacklogView(true); });
   });
@@ -15242,6 +15336,14 @@ function cmdkOpenBacklogItem(projectId, itemId) {
   });
 }
 
+// DoD（验收清单）模板：仅作为「填充草稿」，用户可自由增删；不选模板不填充（TASK-4 / 文档 §11.2 轻量版）
+// 注意：本文件主体在模板字符串内，'\\n' 求值为页面里的真换行
+const BL_DOD_TEMPLATES = [
+  { id: 'general', label: '通用（功能）', lines: ['功能可用', '边界与错误路径已覆盖', '构建与 smoke 通过'] },
+  { id: 'bugfix', label: '缺陷修复', lines: ['复现步骤确认', '根因说明', '修复验证', '回归检查'] },
+  { id: 'docs', label: '文档', lines: ['内容准确', '链接与示例可运行', '表述清晰无歧义'] },
+];
+
 async function blOpenEditor(itemId) {
   const b = blState.board; if (!b) return;
   let it = itemId ? blBoardItem(itemId) : null;
@@ -15262,6 +15364,10 @@ async function blOpenEditor(itemId) {
     '<div style="display:flex;flex-direction:column;gap:8px;font-size:12.5px">' +
     '<div class="field"><label>标题 *</label><input id="bl-f-title" value="' + escAttr(it ? it.title || '' : '') + '"></div>' +
     '<div class="field"><label>描述</label><textarea id="bl-f-desc" rows="4">' + esc(descMatch ? descMatch[1] : '') + '</textarea></div>' +
+    (it ? '' : '<div class="field"><label>验收模板（DoD，可选）</label><select id="bl-f-dod">' +
+      '<option value="">不使用模板</option>' +
+      BL_DOD_TEMPLATES.map(function (t) { return '<option value="' + escAttr(t.id) + '">' + esc(t.label) + '</option>'; }).join('') +
+      '</select></div>') +
     '<div class="field"><label>验收清单（每行一条）</label><textarea id="bl-f-ac" rows="3">' + esc(acLines.join('\\n')) + '</textarea></div>' +
     '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
     '<div class="field" style="flex:1;min-width:130px"><label>状态</label><select id="bl-f-status">' + statuses.map(function (s) { return '<option ' + (it && it.status === s ? 'selected' : '') + '>' + esc(s) + '</option>'; }).join('') + '</select></div>' +
@@ -15291,6 +15397,18 @@ async function blOpenEditor(itemId) {
         else toast((it ? '保存失败: ' : '创建失败: ') + (r.error || ''), true);
       }
     }]);
+  // DoD 模板联动：仅新建抽屉渲染；AC 已有内容时不覆盖，保护用户手写/回填的草稿
+  const dodSel = document.getElementById('bl-f-dod');
+  if (dodSel) {
+    dodSel.addEventListener('change', function () {
+      let t = null;
+      for (let i = 0; i < BL_DOD_TEMPLATES.length; i++) if (BL_DOD_TEMPLATES[i].id === dodSel.value) t = BL_DOD_TEMPLATES[i];
+      const acEl = document.getElementById('bl-f-ac');
+      if (!t || !acEl) return;
+      if (acEl.value.trim()) { toast('验收清单已有内容，模板未覆盖', false); dodSel.value = ''; return; }
+      acEl.value = t.lines.join('\\n');
+    });
+  }
 }
 
 var blRefreshBtn = document.getElementById('btn-bl-refresh');

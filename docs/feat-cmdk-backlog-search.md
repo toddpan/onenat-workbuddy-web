@@ -32,8 +32,9 @@
 
 1. `npm run build`：tsc 通过 + 内联脚本 `node --check` 关卡 3 页全过（`page scripts extracted: 3`）
 2. `npm run typecheck`：通过
-3. `npm run smoke`：81 项全过（含上述 2 项新增断言）
+3. `npm run smoke`：83 项全过（含上述 2 项新增断言）
 4. 浏览器真实走查（独立 QA，真实 Chromium + stub DSH）：见 `docs/qa-cmdk-backlog-20261101.md`
    - 输入 itemId / 标题片段 / 状态词（To Do / In Progress / Done）均能命中「待办」组，且跨项目
    - 未初始化 / 节点不可达项目不出现在结果里；overview 慢时面板仍立即打开、返回后自动补组
    - 选中后进入对应项目看板并打开条目详情抽屉；≤768px 与微信 X5 UA 下可用、无横向溢出
+   - 复验结果：桌面 35/35 + 移动 8/8 + 环境种子 29/29 全 PASS（overview 5015ms 时面板 16ms 打开）

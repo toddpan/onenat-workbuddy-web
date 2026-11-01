@@ -236,6 +236,8 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
   // 启动自愈：重启导致中断的 running 任务标记失败（僵尸任务清理）
   const recovered = engine.recoverInterruptedTasks()
 engine.startPendingAskSweeper()
+  // backlog 回写失败后台补偿器（TASK-2）：指数退避自动重试，退避计数随 store 持久化（重启不清零）
+  engine.startBacklogWritebackRetrySweeper()
   if (recovered > 0) log(`启动自愈：${recovered} 个中断任务已标记失败`)
 
   const scheduler = new ScheduleRunner(store, engine, log, directory)
@@ -249,6 +251,7 @@ engine.startPendingAskSweeper()
   const mail = new MailService(cfg.dataDir)
   // 审计日志（B-03）与邮件接口限流（B-04）
   const auditLog = new AuditLog(cfg.dataDir)
+  engine.attachAuditLog(auditLog) // 回写重试成功的审计落账（TASK-2）
   const mailLimiter = new RateLimiter()
 
   // 小智平台 MCP 桥接：接入点优先级 命令行/env > 存储设置（存储为空时种子）；语音助手页可随时增删改（免重启）
@@ -671,6 +674,7 @@ engine.startPendingAskSweeper()
       monitor.stop()
       xiaozhi.stop()
       scheduler.stop()
+      engine.stopBacklogWritebackRetrySweeper()
       directory.stopAutoRefresh()
       await new Promise<void>((done) => server.close(() => done()))
     },

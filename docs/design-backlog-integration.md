@@ -229,6 +229,7 @@ router 侧不新增权限模型：复用项目可见性（private 仅成员/owne
 - 任务带 `backlogRef` 时，终态后调用 `backlog.appendExecutionRecord` + 状态机迁移（§4.2 表格规则）。
 - 回写失败（节点掉线/上传失败）：**任务侧标 `backlogWritebackFailed`**（taskLog 记录），待办保持 in-progress 且看板显示「回写未确认」徽标；页签提供「重试回写」按钮（重新按任务 summary 补写）。
 - 主会话（非编排直聊）同样回写：钩子挂在任务终态统一出口，不区分路由模式；无 summary（如被取消）时不改状态，仅追加「任务已取消」记录。
+- **后台补偿器（TASK-2）**：服务启动即开启（`startBacklogWritebackRetrySweeper`，随 server 生命周期注册/清理），周期扫描「带失败标记 + 已终态 + 已产出 summary + 有 backlogRef」的任务，按 1min → 5min → 15min 指数退避自动重试（复用 `runBacklogWriteback`，实时解析节点入口）；成功清除 `backlogWritebackFailed` 与退避状态并写审计 `backlog.writeback-retry`；达上限（3 次自动重试）停止，保留失败标记交回人工。退避状态 `backlogWritebackRetry { count, nextAt }` 持久化在任务上，重启不重置；终态钩子 / HTTP 人工重试 / 工具通道重试失败统一走 `recordWritebackFailure` 记账。
 
 ---
 

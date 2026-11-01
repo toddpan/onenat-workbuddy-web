@@ -4,7 +4,7 @@ title: "backlog 条目接入 cmdk 全局检索"
 status: Done
 assignee:
 created_date: '2026-11-01T00:00:00Z'
-updated_date: '2026-11-01T10:44:46Z'
+updated_date: '2026-11-01T11:20:33Z'
 labels:
   - "backlog"
   - "ui"
@@ -104,3 +104,43 @@ task-63851d5b · mode=orchestrate · 成员=2
 
 - **跨项目检索**（AC#1）：`cmdkBacklogCmds()` 基于 `GET /backlog/overview` 聚合结果，把每条待办生成为「待办」组命令；`lb` 含 itemId + 标题，`kw` 含状态 / 项目名 / 标签 / 负责人，走现有 `cmdkMatch` 分词过滤，任意关键词可命中。
 - **选中跳转**（AC#2）：`cmdkOpenBacklogItem(projectId, itemId)` 先用聚合缓存即时渲染看板（避免白屏），`switchView('backlog')` 后拉权威列表 `GET /projects/:id/backlog` 刷新，最后 `blOpenDetail(itemId)` 打开条目抽屉；列表拉取失败时保留缓存看板并 to
+
+### 2026-11-01T11:18:27Z 派发为任务
+task-72df00c3 · mode=orchestrate · 成员=2
+
+### 2026-11-01T11:18:32Z 派发为任务
+task-1bba5082 · mode=orchestrate · 成员=2
+
+### 2026-11-01T11:18:48Z 派发为任务
+task-9529694d · mode=orchestrate · 成员=2
+
+### 2026-11-01T11:19:38Z 派发执行（成功）
+任务 task-72df00c3 · 结果=成功
+看起来 TASK-1 的实现已经在工作区（未提交状态），我先核验实现完整性与验收清单，再跑构建与冒烟确认。实现与冒烟断言都已在位，现在跑构建、类型检查与冒烟做最终验证。TASK-1「backlog 条目接入 cmdk 全局检索」已完成并通过全部验证，汇总如下：
+
+## 实现核验（src/web-ui.ts，⌘K × Backlog 段落）
+
+- **跨项目检索（AC#1）**：`cmdkBacklogCmds()` 基于 `GET /backlog/overview` 聚合结果生成「待办」组命令，命中域覆盖 itemId、标题、状态、项目名、标签、指派人；查询含关键词时才并入结果列表。
+- **跳转与开抽屉（AC#2）**：`cmdkOpenBacklogItem()` 先用聚合缓存即时上屏该项目看板（避免白屏），`switchView('backlog')` → 拉权威列表 `/projects/:id/backlog` 刷新 → `blOpenDetail(itemId)` 打开条目抽屉；刷新失败保留缓存看板并明确 toast。
+- **失败隔离 + 不阻塞（AC#3）**：`no
+
+### 2026-11-01T11:20:13Z 派发执行（成功）
+任务 task-9529694d · 结果=成功
+实现似乎已经在 `src/web-ui.ts` 中就绪。让我确认它是否完整（检查 `blOpenDetail` 是否存在），检查工作树（worktree）状态，并运行构建/冒烟测试。在上一轮中，包括 QA 在内的实施工作已基本完成。现在我来验证构建和冒烟测试（AC #4），以实现闭环。第二次运行：全部 83 个 smoke assertions 均已通过（第一次运行时的失败是暂时的——是同一端口上残留的 smoke server 导致的端口冲突）。我来确认一下该功能是否具备 smoke coverage，然后验证 dist 是否为最新。TASK-1「backlog 条目接入 cmdk 全局检索」已完成并通过全部验收。
+
+## 实现概要（src/web-ui.ts，+95 行）
+
+- **数据源**：复用跨项目聚合 `GET /api/backlog/overview`，面板打开时后台预取（`cmdkBacklogPrefetch`，不 await）——面板先可用，数据回来后自动补「待办」组；待办视图已加载过的 `blState.data` 优先复用，30s TTL 兜底刷新，重复打开不
+
+### 2026-11-01T11:20:33Z 派发执行（成功）
+任务 task-1bba5082 · 结果=成功
+看起来功能代码已存在（`cmdkBacklogCmds` / `cmdkBacklogPrefetch`）。我先核对实现，再跑构建与 smoke 验证 AC#4。实现与 smoke 断言都已就位。现在执行 AC#4：build + smoke。端口被残留进程占用，清理后重跑。端口已无占用（是前一次运行残留的瞬时冲突）。重跑 smoke。TASK-1（backlog 条目接入 cmdk 全局检索）已完成并验证通过。
+
+## 核对结论
+
+实现已落在 [src/web-ui.ts:15242](src/web-ui.ts#L15242) 起的「⌘K × Backlog 条目检索（TASK-1）」区块：
+
+| 验收项 | 实现 |
+|---|---|
+| #1 跨项目检索 | `cmdkBacklogCmds()` 基于 `GET /backlog/overview` 聚合，命中字段覆盖 itemId、标题（lb）、状态/项目名/标签/assignee（kw）；有查询词才展开，空查询保持轻量 |
+| #2 跳转 + 开抽屉 | `cmdkOpenBacklogItem()`：先用聚合缓存即时渲

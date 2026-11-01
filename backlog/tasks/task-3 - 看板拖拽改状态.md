@@ -1,10 +1,10 @@
 ---
 id: TASK-3
 title: "看板拖拽改状态"
-status: "To Do"
+status: Done
 assignee:
 created_date: '2026-11-01T00:00:00Z'
-updated_date: '2026-11-01T00:00:00Z'
+updated_date: '2026-11-01T11:16:36Z'
 labels:
   - "backlog"
   - "ui"
@@ -34,3 +34,14 @@ ordinal: 3000
 - [ ] #3 移动端不出现拖拽交互，原有点击编辑抽屉行为不变
 - [ ] #4 npm run build 与 npm run smoke 通过
 <!-- AC:END -->
+
+### 2026-11-01T11:13:26Z 派发为任务
+task-084a53e7 · mode=orchestrate · 成员=2
+
+### 2026-11-01T11:16:36Z 派发执行（成功）
+任务 task-084a53e7 · 结果=成功
+服务端 PUT 功能已存在并带有冲突检测。现在我来查看 web-ui 中的前端看板。现在我来开始实现。首先修改 CSS：现在是看板的 HTML —— 卡片设置为可拖拽，列带有状态标记：现在我来添加辅助函数和拖拽委托：TASK-3 完成。改动全部在 [src/web-ui.ts](src/web-ui.ts)（服务端 `PUT …/backlog/items/:itemId` 与 `BacklogConflictError` 409 兜底本就存在，直接复用）：
+
+**实现内容**
+- **拖拽改状态**：看板卡片 `draggable` + 列 `data-st`，原生 `dragstart/dragover/drop` 事件委托挂在 `#bl-root`（重渲染不丢监听），不引入任何拖拽库。列顺序取 config.yml 的 `statuses`（原有 `blBoardHtml` 已按此渲染）。
+- **乐观更新 + 回滚**：拖放后先改本地 `item.status` 并重渲染，随即 `PUT {prefix}/api/projects/:id/backlog/items/:item

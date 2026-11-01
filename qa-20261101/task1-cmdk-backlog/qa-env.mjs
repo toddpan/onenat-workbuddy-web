@@ -3,14 +3,14 @@
  * TASK-1「backlog 条目接入 ⌘K 全局检索」浏览器端验收环境编排（独立 QA，非 smoke）
  *
  * 改造自 scripts/qa-backlog-entry.mjs（只复制、不改原文件），新增：
- *   - 第二个可达项目 C（同 stub 节点、另一 workspace、init + 2 条待办）→ 验证跨项目命中
+ *   - 第二个可达项目 C（同 stub 节点、另一 workspace、init + 2 条条目）→ 验证跨项目命中
  *   - 可达但未初始化 backlog 的项目 D（同一 stub 节点）→ 其条目（不存在）不得进 ⌘K
  *   - 「不可达节点」项目 B：先在同一 stub 上 init + 建条目，再把 dshRef 改成黑洞地址 →
  *     条目物理存在但 overview 中 nodeStatus=unreachable → 不得进 ⌘K
  *   - 「归档」项目 E：先 init + 建条目，再归档 → overview 中 nodeStatus=archived → 不得进 ⌘K
  *   - 「慢节点」项目 S：指向 18122（所有 /fs/* 请求延迟 SLOW_MS）且不 init →
  *     使 GET /api/backlog/overview 耗时约 2×SLOW_MS，用于验证「面板打开不被 overview 阻塞 +
- *     返回后「待办」组自动补入（懒加载）」
+ *     返回后 backlog 组自动补入（懒加载）」
  *
  * 组成（端口可用 --port/--stub-port/--slow-port/--mock-port 覆盖）：
  *   - stub DSH 节点      :18121  内存 FS + 即完成会话（两端口共享同一份内存 FS）
@@ -55,8 +55,8 @@ const ONENAT_KEY = 'onk-mock-key-000'
 const ONENAT_BASE = `http://127.0.0.1:${MOCK_PORT}`
 
 // 各项目 workspace（stub 内存 FS，互不影响；都不落真实磁盘）
-const WS_A = '/tmp/task1-ws-a'   // 可达：3 条不同状态待办
-const WS_C = '/tmp/task1-ws-c'   // 可达：第二个项目，2 条待办（跨项目）
+const WS_A = '/tmp/task1-ws-a'   // 可达：3 条不同状态条目
+const WS_C = '/tmp/task1-ws-c'   // 可达：第二个项目，2 条条目（跨项目）
 const WS_D = '/tmp/task1-ws-d'   // 可达但未初始化 backlog（不 mkdir → 不 init）
 const WS_B = '/tmp/task1-ws-b'   // 先可达 init+建条目，随后 dshRef 改成黑洞 → unreachable
 const WS_E = '/tmp/task1-ws-e'   // 先可达 init+建条目，随后归档 → archived
@@ -295,7 +295,7 @@ async function main() {
   COOKIE = (loginRes.headers.get('set-cookie') || '').split(';')[0]
   check('登录成功（workbuddy）', loginRes.ok && COOKIE.length > 0, `status=${loginRes.status}`)
 
-  // 5) 项目 A：可达 stub + 3 条不同状态待办
+  // 5) 项目 A：可达 stub + 3 条不同状态条目
   const projA = await createProject('TASK1 验收项目A', STUB_BASE, WS_A)
   check('项目 A 创建', Boolean(projA?.id), projA?.id ? `id=${projA.id}` : '')
   check('项目 A backlog 初始化', (await initBacklog(projA.id))?.ok === true)
@@ -314,7 +314,7 @@ async function main() {
     check(`A 待办「${it.title}」置状态 ${it.status}`, r.ok, r.error || `itemId=${r.itemId}`)
   }
 
-  // 6) 项目 C：同一可达 stub、另一 workspace + 2 条待办（跨项目命中）
+  // 6) 项目 C：同一可达 stub、另一 workspace + 2 条条目（跨项目命中）
   const projC = await createProject('TASK1 跨项目C', STUB_BASE, WS_C)
   check('项目 C 创建（第二可达项目）', Boolean(projC?.id), projC?.id ? `id=${projC.id}` : '')
   check('项目 C backlog 初始化', (await initBacklog(projC.id))?.ok === true)
@@ -375,7 +375,7 @@ async function main() {
   check('overview：S 慢节点 ok 但未初始化', oS?.nodeStatus === 'ok' && oS?.initialized === false, `status=${oS?.nodeStatus} init=${oS?.initialized}`)
   check(`overview 总耗时被慢节点拖慢（>= ${Math.round(SLOW_MS * 1.6)}ms）`, overviewMs >= SLOW_MS * 1.6, `overviewMs=${overviewMs}`)
   const expectedCmdkItems = (oA?.items?.length || 0) + (oC?.items?.length || 0)
-  check('⌘K 可见待办条目数 = A+C = 5（排除 D/B/E/S）', expectedCmdkItems === 5, `n=${expectedCmdkItems}`)
+  check('⌘K 可见 backlog 条目数 = A+C = 5（排除 D/B/E/S）', expectedCmdkItems === 5, `n=${expectedCmdkItems}`)
 
   const state = {
     baseUrl: `${BASE}${PREFIX}/`,

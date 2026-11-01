@@ -1,5 +1,5 @@
 /**
- * 未完成事项采集（简版）单测：A 任务账本候选 / B 工作区标记扫描 / 去重 / 落盘幂等。
+ * 未竟事项采集（简版）单测：A 任务账本候选 / B 工作区标记扫描 / 去重 / 落盘幂等。
  * 只在内存 Fake DSH 节点上跑（无网络），覆盖设计文档 docs/design-backlog-auto-collect.md 的 M1 验收口径。
  */
 import test from 'node:test'
@@ -139,6 +139,7 @@ test('taskCandidatesFor: failed/partial/卡死 running 命中；成功、归档�
 test('parseWorkspaceMarkers: 代码标记 / 文档未勾选 / 文档状态标记；无标记文本不产生候选', () => {
   const code = [
     'const a = 1',
+    // ↓ 以下两行为测试夹具标记（backlog 复核 task-26/task-27/task-32：解析器用例数据，非真实工程事项，勿据此登记）
     '// TODO 补充刷 token 的并发保护',
     'function f() { /* FIXME 未完成 */ }',
     '// 普通注释：以后再说',
@@ -156,6 +157,65 @@ test('parseWorkspaceMarkers: 代码标记 / 文档未勾选 / 文档状态标记
   assert.match(docCands[1].title, /状态：草稿/)
 
   assert.equal(parseWorkspaceMarkers('hello\nworld', 'src/plain.ts').length, 0)
+})
+
+test('parseWorkspaceMarkers: 字符串/普通代码行里的中文「待办/未完成」不再误报（QA task-35），注释行仍命中', () => {
+  const code = [
+    "if (raw === undefined) throw new Error('待办文件读取失败')",
+    'const title = \'未完成事项采集\'',
+    'await listBacklog(client) // TODO 待办列表分页优化',
+    '// 待补充：错误码对照表',
+  ].join('\n')
+  const cands = parseWorkspaceMarkers(code, 'src/backlog.ts')
+  assert.equal(cands.length, 2)
+  assert.match(cands[0].title, /TODO 待办列表分页优化/)
+  assert.match(cands[1].title, /待补充：错误码对照表/)
+})
+
+test('parseWorkspaceMarkers: 围栏代码块内的标记跳过（backlog task-24：示例模板不误报）', () => {
+  const doc = [
+    '# 生成格式示例',
+    '',
+    '```markdown',
+    '## Acceptance Criteria',
+    '- [ ] #1 确认该任务的失败根因（示例模板，非真实待办）',
+    '状态：草稿',
+    '```',
+    '',
+    '- [ ] 真实未完成项',
+    '~~~',
+    '- [ ] 波浪线围栏内不算',
+    '~~~',
+  ].join('\n')
+  const cands = parseWorkspaceMarkers(doc, 'docs/design.md')
+  assert.equal(cands.length, 1)
+  assert.match(cands[0].title, /未勾选验收：真实未完成项/)
+})
+
+test('parseWorkspaceMarkers: 采集器自身源码不自激（backlog code:b1c5dfa7 复核：正则定义行、标签字符串、说明注释都不是真实事项）', async () => {
+  // 夹具：复刻采集器源码里曾自命中的两类「代码行」形态——标签常量里的裸 'todo'、
+  // 说明字符串里的裸英文标记词（英文标记不限于注释行，字符串同样命中，QA 实证）
+  const before = [
+    "labels: ['auto-collect', 'source-code', 'todo'],",
+    'return [\'确认该处 TODO/FIXME 是否仍需处理（保留 / 删除标记 / 转成正式待办）\']',
+  ].join('\n')
+  assert.equal(parseWorkspaceMarkers(before, 'src/old.ts').length, 2)
+
+  // 修复后形态（backlog-collect.ts 现状）：标签改中性词、文案不裸写标记词 → 零候选
+  const after = [
+    "labels: ['auto-collect', 'source-code', 'code-marker'],",
+    'return [\'确认该处标记是否仍需处理（保留 / 删除标记 / 转成正式待办）\']',
+    'const CODE_MARKER_EN_RE = /\\bTODO\\b|\\bFIXME\\b|\\bXXX\\b|\\bHACK\\b/i',
+    'const CODE_MARKER_CN_RE = /待办|待补充|未完成/',
+    "// 本项目本身就是事项管理系统，中文关键词（见上）大量出现在标识符、UI 文案与错误消息里",
+  ].join('\n')
+  // 说明：中文关键词只在注释行才算、英文标记正则字面量受 \b 边界保护不会匹配自身
+  assert.equal(parseWorkspaceMarkers(after, 'src/backlog-collect.ts').length, 0)
+
+  // 真实自扫描：编译产物与源码注释一致，扫描自身模块文本必须零候选（防止未来编辑重新引入裸标记词）
+  const { readFile } = await import('node:fs/promises')
+  const self = await readFile(new URL('../src/backlog-collect.ts', import.meta.url), 'utf8')
+  assert.equal(parseWorkspaceMarkers(self, 'backlog-collect.ts').length, 0)
 })
 
 test('sourceKey: 只依赖路径+标记文本，行号变化不影响（跨轮稳定）', () => {

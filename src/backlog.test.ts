@@ -26,7 +26,10 @@ import {
   writeItem,
   BacklogConflictError,
   listBacklog,
+  findItem,
   probeBacklog,
+  sortBacklogItems,
+  backlogPriorityWeight,
 } from './backlog.js'
 import type { DshClient, DshTarget } from './remote-client.js'
 
@@ -312,4 +315,76 @@ test('listBacklog: 目录枚举 + 逐文件解析 + 未初始化判定', async (
   assert.equal(none.items.length, 0)
   assert.equal(await probeBacklog(empty.client, target, WS), false)
   assert.equal(await probeBacklog(client, target, WS), true)
+})
+
+test('findItem: 重复 itemId 显式报错，不再静默取第一个（QA 20261101 错派根因）', async () => {
+  const target: DshTarget = { baseUrl: 'http://x' }
+  const dup = fakeClient({
+    [`${WS}/backlog/tasks/task-1 - backlog条目接入-cmdk-全局检索.md`]: SAMPLE,
+    [`${WS}/backlog/tasks/task-1 - todo-project-list-sorting.md`]: SAMPLE.replace('TASK-1', 'TASK-1'),
+    [`${WS}/backlog/config.yml`]: 'statuses: ["To Do", "In Progress", "Done"]\ndefault_status: "To Do"\ntask_prefix: task\n',
+  })
+  await assert.rejects(
+    () => findItem(dup.client, target, WS, 'TASK-1'),
+    /待办 ID 重复/,
+  )
+  // 改号后可正常定位
+  const fixed = fakeClient({
+    [`${WS}/backlog/tasks/task-1 - t.md`]: SAMPLE,
+    [`${WS}/backlog/config.yml`]: 'statuses: ["To Do", "In Progress", "Done"]\ndefault_status: "To Do"\ntask_prefix: task\n',
+  })
+  const found = await findItem(fixed.client, target, WS, 'task-1')
+  assert.equal(found?.item.itemId, 'TASK-1')
+})
+
+// ---------- TASK-SORT-1：待办列表展示排序（状态 → 优先级 → 创建时间） ----------
+
+test('backlogPriorityWeight: 常见写法归一，未识别/空值排最后', () => {
+  assert.equal(backlogPriorityWeight('P0'), 0)
+  assert.equal(backlogPriorityWeight('urgent'), 0)
+  assert.equal(backlogPriorityWeight('High'), 1)
+  assert.equal(backlogPriorityWeight('高'), 1)
+  assert.equal(backlogPriorityWeight('medium'), 2)
+  assert.equal(backlogPriorityWeight('low'), 3)
+  assert.equal(backlogPriorityWeight('lowest'), 4)
+  assert.equal(backlogPriorityWeight(undefined), 5)
+  assert.equal(backlogPriorityWeight('随便写的'), 5)
+})
+
+test('sortBacklogItems: 状态优先 → 优先级 → 创建时间；未知状态/优先级排尾；不改原数组', () => {
+  const statuses = ['To Do', 'In Progress', 'Done']
+  const mk = (itemId: string, over: Partial<{ status: string; priority: string; createdDate: string }> = {}) => ({ itemId, ...over })
+  const input = [
+    mk('TASK-4', { status: 'In Progress', priority: 'low', createdDate: '2026-01-03' }),
+    mk('TASK-2', { status: 'To Do', priority: 'P0', createdDate: '2026-01-02' }),
+    mk('TASK-9', { status: 'Done', priority: 'P0', createdDate: '2026-01-01' }),
+    mk('TASK-1', { status: 'To Do', priority: 'high', createdDate: '2026-01-05' }),
+    mk('TASK-3', { status: 'To Do', priority: 'high', createdDate: '2026-01-01' }),
+    mk('TASK-5', { status: '随便', priority: 'P0', createdDate: '2026-01-01' }),
+    mk('TASK-6', { status: 'In Progress', priority: 'P0', createdDate: '2026-01-04' }),
+  ]
+  const sorted = sortBacklogItems(input, statuses)
+  assert.deepEqual(
+    sorted.map((x) => x.itemId),
+    // To Do(P0 → high，同优先级创建早在前) → In Progress → Done → 未收录状态
+    ['TASK-2', 'TASK-3', 'TASK-1', 'TASK-6', 'TASK-4', 'TASK-9', 'TASK-5'],
+  )
+  assert.equal(input[0].itemId, 'TASK-4') // 原数组不被修改
+})
+
+test('listBacklog: 返回条目已按 状态→优先级→创建时间 排序（TASK-SORT-1 验收 #2）', async () => {
+  const target: DshTarget = { baseUrl: 'http://x' }
+  const mk = (id: string, status: string, priority: string, createdDate: string) =>
+    SAMPLE.replace('TASK-1', id)
+      .replace(/status: .*/, `status: ${status}`)
+      .replace(/created_date: .*/, `priority: ${priority}\ncreated_date: "${createdDate}"`)
+  const { client } = fakeClient({
+    [`${WS}/backlog/config.yml`]: 'statuses: ["To Do", "In Progress", "Done"]\ndefault_status: "To Do"\ntask_prefix: task\n',
+    [`${WS}/backlog/tasks/task-1 - a.md`]: mk('TASK-1', 'Done', 'P0', '2026-01-01'),
+    [`${WS}/backlog/tasks/task-2 - b.md`]: mk('TASK-2', 'To Do', 'low', '2026-01-01'),
+    [`${WS}/backlog/tasks/task-3 - c.md`]: mk('TASK-3', 'To Do', 'P0', '2026-01-09'),
+    [`${WS}/backlog/tasks/task-4 - d.md`]: mk('TASK-4', 'To Do', 'P0', '2026-01-02'),
+  })
+  const list = await listBacklog(client, target, WS)
+  assert.deepEqual(list.items.map((x) => x.itemId), ['TASK-4', 'TASK-3', 'TASK-2', 'TASK-1'])
 })

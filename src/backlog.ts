@@ -304,6 +304,52 @@ export function itemIdFromFileName(fileName: string, prefix = DEFAULT_TASK_PREFI
   return m ? `${prefix}-${m[1]}` : undefined
 }
 
+// ---------- 列表排序（TASK-SORT-1）：状态（按 config 顺序）→ 优先级 → 创建时间 ----------
+
+/**
+ * 优先级归一权重（越小越靠前）：P0/critical/urgent/highest=0，high/P1=1，
+ * medium/normal/中=2，low/P2/minor=3，lowest=4；无法识别/未设置 → 5（排同类最后）。
+ * 匹配不分大小写；`P0`/`P1`/`P2` 这类带连字符或裸写都认。
+ */
+export function backlogPriorityWeight(priority?: string): number {
+  const p = (priority || '').trim().toLowerCase()
+  if (!p) return 5
+  if (/^(p0|critical|urgent|highest|blocker|紧急|最高)$/.test(p)) return 0
+  if (/^(p1|high|高|重要)$/.test(p)) return 1
+  if (/^(p2|medium|mid|normal|中|普通)$/.test(p)) return 2
+  if (/^(p3|low|低|minor)$/.test(p)) return 3
+  if (/^(p4|lowest|lowest priority|最低)$/.test(p)) return 4
+  return 5
+}
+
+/**
+ * 待办列表展示排序：状态优先级（按 config.statuses 顺序，未收录状态排最后）→
+ * 优先级权重 → 创建时间（createdDate 升序，老条目在前；缺 createdDate 时按
+ * itemId 序号兜底）。原数组不被修改，返回新数组。稳定排序（ES2019+ Array.sort）。
+ */
+export function sortBacklogItems<T extends { status?: string; priority?: string; createdDate?: string; itemId: string }>(
+  items: T[],
+  statuses: string[],
+): T[] {
+  const statusIdx = new Map(statuses.map((s, i) => [s.trim().toLowerCase(), i]))
+  const seqOf = (itemId: string): number => {
+    const m = /(\d+)\s*$/.exec(itemId)
+    return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER
+  }
+  return [...items].sort((a, b) => {
+    const sa = statusIdx.get((a.status || '').trim().toLowerCase()) ?? statuses.length
+    const sb = statusIdx.get((b.status || '').trim().toLowerCase()) ?? statuses.length
+    if (sa !== sb) return sa - sb
+    const pa = backlogPriorityWeight(a.priority)
+    const pb = backlogPriorityWeight(b.priority)
+    if (pa !== pb) return pa - pb
+    const ca = a.createdDate || ''
+    const cb = b.createdDate || ''
+    if (ca !== cb) return ca < cb ? -1 : 1
+    return seqOf(a.itemId) - seqOf(b.itemId)
+  })
+}
+
 // ---------- 节点 IO（DshClient 门面） ----------
 
 function joinPath(workspace: string, rel: string): string {
@@ -383,7 +429,8 @@ export async function listBacklog(client: DshClient, target: DshTarget, workspac
     } satisfies BacklogItem
   })
   const list = items.filter((x): x is BacklogItem => Boolean(x))
-  return { initialized: true, truncated: Boolean(listing.data.truncated), config: cfg, items: list }
+  // 展示排序（TASK-SORT-1）：状态 → 优先级 → 创建时间；API/工具/前端共用同一顺序
+  return { initialized: true, truncated: Boolean(listing.data.truncated), config: cfg, items: sortBacklogItems(list, cfg.statuses) }
 }
 
 export async function readItem(client: DshClient, target: DshTarget, workspace: string, fileName: string): Promise<string> {
@@ -548,7 +595,16 @@ export async function createItem(
 export async function findItem(client: DshClient, target: DshTarget, workspace: string, itemId: string): Promise<{ item: BacklogItem; list: BacklogListResult } | undefined> {
   const list = await listBacklog(client, target, workspace)
   const want = normalizeItemId(itemId)
-  const item = list.items.find((it) => normalizeItemId(it.itemId) === want)
+  const hits = list.items.filter((it) => normalizeItemId(it.itemId) === want)
+  // 重复 ID（如两个文件 frontmatter 都写 TASK-1）会导致派发/回写命中错文件（QA 20261101 实锤），
+  // 必须显式报错让调用方改号，而不是静默取列表第一个。
+  if (hits.length > 1) {
+    throw new Error(
+      `待办 ID 重复：${hits.length} 个文件都使用了 itemId=${itemId}（${hits.map((h) => h.fileName).join(' / ')}）。` +
+        `请为一个文件改用唯一 id（frontmatter id 与文件名前缀同步修改）后再派发。`,
+    )
+  }
+  const item = hits[0]
   if (!item) return undefined
   return { item, list }
 }

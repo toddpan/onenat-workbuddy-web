@@ -1,5 +1,5 @@
 /**
- * TASK-1「backlog 条目接入 ⌘K 全局检索」——桌面 1440x900 真实 Chromium 验收（ego-browser）
+ * TASK-1「backlog 条目接入 ⌘K 全局检索」——桌面 1470x733（ego-browser 默认窗口）真实 Chromium 验收
  *
  * 运行（先起 qa-env.mjs）：
  *   cd <repo>
@@ -230,11 +230,14 @@ const cacheCheck = await page.evaluate(() => {
 })
 const stat = {}
 if (Array.isArray(cacheCheck.cache)) for (const g of cacheCheck.cache) stat[g.name] = g
+// B（节点不可达）的 initialized：overviewOne 在 resolve 成功但读盘抛错时返回 initialized:true
+// （语义 = 「已初始化状态未知，不误报成『尚未初始化 backlog』」；排除依据是 nodeStatus，不是 initialized）。
+// 这里按产品既有语义断言 true，而非 false —— 该字段不参与 ⌘K 过滤（C1/C4 已单独验证 nodeStatus 排除）。
 const wantStat = [
   [STATE.projectA.name, 'ok', true, 3],
   [STATE.projectC.name, 'ok', true, 2],
   [STATE.projectD.name, 'ok', false, 0],
-  [STATE.projectB.name, 'unreachable', false, 0],
+  [STATE.projectB.name, 'unreachable', true, 0],
   [STATE.projectE.name, 'archived', false, 0],
   [STATE.projectS.name, 'ok', false, 0],
 ]

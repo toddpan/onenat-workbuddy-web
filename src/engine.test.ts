@@ -804,3 +804,118 @@ test('流式丢尾自愈：单步回合（无工具）不做额外历史复核�
     rmSync(f.dir, { recursive: true, force: true })
   }
 })
+
+// ---------- TASK-2：backlog 回写失败后台补偿器（指数退避自动重试） ----------
+
+/** 造一个带 backlog 来源、已终态、有汇总且带失败标记的任务（补偿器的目标形态） */
+function seedWritebackFailedTask(store: WorkStore, retry?: { count: number; nextAt: number }): WorkTask {
+  const now = Date.now()
+  return store.upsertTask({
+    id: `task-wb-${Math.random().toString(36).slice(2, 8)}`,
+    title: 'backlog 派发任务',
+    mode: 'chat',
+    status: 'completed',
+    memberAgentIds: [],
+    creator: 'console',
+    turns: [],
+    sessions: {},
+    createdAt: now,
+    updatedAt: now,
+    backlogRef: { projectId: 'proj-x', itemId: 'item-1', itemTitle: '待办一', dispatchedAt: now },
+    summary: { status: 'success', overview: '完成', subtaskSummaries: [], finalConclusion: 'ok', completedAt: now },
+    backlogWritebackFailed: { at: now - 120_000, error: '节点不可达' },
+    ...(retry ? { backlogWritebackRetry: retry } : {}),
+  } as any)
+}
+
+test('backlog 回写补偿器：失败→按退避重试→成功清除标记与退避状态', async () => {
+  const f = makeFixture()
+  try {
+    const t0 = seedWritebackFailedTask(f.store, { count: 0, nextAt: Date.now() - 1 })
+    let calls = 0
+    ;(f.engine as any).runBacklogWriteback = async (task: WorkTask) => {
+      calls++
+      if (calls === 1) throw new Error('节点抖动')
+      // 第二次成功：走真实清除路径（清标记 + 清退避状态 + 审计）
+      f.store.mutateTask(task.id, (t) => {
+        delete t.backlogWritebackFailed
+        delete t.backlogWritebackRetry
+      })
+    }
+    const fired = await f.engine.runBacklogWritebackRetrySweep()
+    assert.equal(fired, 1, '到点任务被拾起重试')
+    await delay(20)
+    let t = f.store.getTask(t0.id)!
+    assert.equal(calls, 1, '首次重试已发起')
+    assert.ok(t.backlogWritebackFailed, '重试失败仍带失败标记')
+    assert.equal(t.backlogWritebackRetry?.count, 1, '退避计数已推进')
+    assert.ok((t.backlogWritebackRetry?.nextAt || 0) > Date.now(), '下次重试在未来（退避生效）')
+    // 退避窗口内不重试
+    assert.equal(await f.engine.runBacklogWritebackRetrySweep(), 0, '退避窗口内不重复重试')
+    // 人为把 nextAt 拨到过去，第二次重试成功
+    f.store.mutateTask(t0.id, (x) => { if (x.backlogWritebackRetry) x.backlogWritebackRetry.nextAt = Date.now() - 1 })
+    const fired2 = await f.engine.runBacklogWritebackRetrySweep()
+    assert.equal(fired2, 1, '退避到点后再次重试')
+    await delay(20)
+    t = f.store.getTask(t0.id)!
+    assert.equal(calls, 2)
+    assert.ok(!t.backlogWritebackFailed, '成功后失败标记已清除')
+    assert.ok(!t.backlogWritebackRetry, '成功后退避状态已清除')
+    assert.equal(await f.engine.runBacklogWritebackRetrySweep(), 0, '标记清除后不再被拾起')
+  } finally {
+    f.store.flush()
+    rmSync(f.dir, { recursive: true, force: true })
+  }
+})
+
+test('backlog 回写补偿器：达上限停止重试、保留标记交回人工；重启后计数不清零', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wb-engine-test-'))
+  const storePath = join(dir, 'store.json')
+  let calls = 0
+  const taskId = (() => {
+    // 进程一：计数已到上限（3 次自动重试全部失败）
+    const store = new WorkStore(storePath)
+    const t = seedWritebackFailedTask(store, { count: 3, nextAt: Date.now() - 1 })
+    const engine = new TaskEngine(store, RESOURCE_DIR_STUB, new StubResolver() as unknown as AgentResolver, new StubComposer() as unknown as PromptComposer, new StubPlanner() as unknown as Orchestrator, undefined, undefined, undefined)
+    ;(engine as any).runBacklogWriteback = async () => { calls++ }
+    return { id: t.id, flush: () => store.flush() }
+  })()
+  try {
+    taskId.flush()
+    // 进程二：重新打开持久化 store —— 退避计数必须仍在（不重启清零），补偿器不再发起重试
+    const store2 = new WorkStore(storePath)
+    const engine2 = new TaskEngine(store2, RESOURCE_DIR_STUB, new StubResolver() as unknown as AgentResolver, new StubComposer() as unknown as PromptComposer, new StubPlanner() as unknown as Orchestrator, undefined, undefined, undefined)
+    ;(engine2 as any).runBacklogWriteback = async () => { calls++ }
+    const fired = await engine2.runBacklogWritebackRetrySweep(Date.now())
+    assert.equal(fired, 0, '达上限后不再自动重试')
+    assert.equal(calls, 0, '回写方法未被调用')
+    const t = store2.getTask(taskId.id)!
+    assert.ok(t.backlogWritebackFailed, '失败标记保留（UI 仍显「回写未确认」，可人工重试）')
+    assert.equal(t.backlogWritebackRetry?.count, 3, '持久化的重试计数重启后不清零')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('backlog 回写补偿器：非终态/无汇总/backlogRef 缺失的任务不被拾起', async () => {
+  const f = makeFixture()
+  try {
+    let calls = 0
+    ;(f.engine as any).runBacklogWriteback = async () => { calls++ }
+    // running 任务
+    const running = seedWritebackFailedTask(f.store)
+    f.store.mutateTask(running.id, (t) => { t.status = 'running' })
+    // 无 summary
+    const noSummary = seedWritebackFailedTask(f.store)
+    f.store.mutateTask(noSummary.id, (t) => { delete t.summary })
+    // 无 backlogRef
+    const noRef = seedWritebackFailedTask(f.store)
+    f.store.mutateTask(noRef.id, (t) => { delete t.backlogRef })
+    const fired = await f.engine.runBacklogWritebackRetrySweep()
+    assert.equal(fired, 0, '不满足前置条件的任务一律不拾起（避免空转）')
+    assert.equal(calls, 0)
+  } finally {
+    f.store.flush()
+    rmSync(f.dir, { recursive: true, force: true })
+  }
+})

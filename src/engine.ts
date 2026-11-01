@@ -715,13 +715,89 @@ export class TaskEngine {
     if (opts?.chatFallback && !task.summary && task.turns.filter((t) => t.role === 'user').length > 1) return
     this.runBacklogWriteback(task).catch((err: unknown) => {
       try {
-        this.store.mutateTask(taskId, (t) => {
-          t.backlogWritebackFailed = { at: Date.now(), error: String((err as Error)?.message || err).slice(0, 300) }
-        })
+        this.recordWritebackFailure(taskId, err)
       } catch {
         // 标记失败不影响任务终态事件
       }
     })
+  }
+
+  // ---------- backlog 回写失败自动重试（TASK-2 后台补偿器） ----------
+
+  /** 自动重试退避序列：第 1/2/3 次失败后分别等 1min / 5min / 15min 再试，共 3 次自动重试机会 */
+  static readonly BACKLOG_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000] as const
+  static readonly BACKLOG_RETRY_MAX = 3
+  /** 补偿器扫描间隔（毫秒）：到点任务在下一个 tick 被拾起，不必为每个退避点单独设定时器 */
+  private static readonly RETRY_SWEEP_INTERVAL_MS = 20_000
+
+  private retrySweepTimer: ReturnType<typeof setInterval> | null = null
+  /** 进行中的自动重试（防同任务并发重复回写） */
+  private retryInFlight = new Set<string>()
+
+  /** 注入审计日志（server.ts 构造顺序晚于引擎，经 setter 注入；缺省不写审计） */
+  public attachAuditLog(auditLog: { record: (e: { actorId: string; action: string; targetType: string; targetId: string; detail?: string }) => void }): void {
+    this.auditLog = auditLog
+  }
+  private auditLog?: { record: (e: { actorId: string; action: string; targetType: string; targetId: string; detail?: string }) => void }
+
+  /** 回写失败统一入口（终态钩子/自动重试/人工重试共用）：打失败标记并推进退避计数 */
+  public recordWritebackFailure(taskId: string, err: unknown): void {
+    const now = Date.now()
+    this.store.mutateTask(taskId, (t) => {
+      t.backlogWritebackFailed = { at: now, error: String((err as Error)?.message || err).slice(0, 300) }
+      const prev = t.backlogWritebackRetry
+      const count = (prev?.count || 0) + 1
+      const delays = TaskEngine.BACKLOG_RETRY_DELAYS_MS
+      // 退避取值：第 n 次失败后等 delays[min(n-1, 末位)]（超出序列后钉在最大间隔，计数封顶由 sweep 把关）
+      const delay = delays[Math.min(Math.max(count, 1), delays.length) - 1]
+      t.backlogWritebackRetry = { count, nextAt: now + delay }
+    })
+  }
+
+  /**
+   * 补偿器单次扫描：拾起「失败标记 + 已终态 + 已产出 summary + 退避到点 + 未达上限」的任务，
+   * 复用 runBacklogWriteback 实时解析回写（勿缓存端口）。返回本次实际发起的重试数（测试/监控用）。
+   */
+  public async runBacklogWritebackRetrySweep(now: number = Date.now()): Promise<number> {
+    const terminal = new Set(['completed', 'failed', 'cancelled'])
+    const due = this.store.getTasks().filter((t) =>
+      t.backlogRef
+      && t.backlogWritebackFailed
+      && t.summary
+      && terminal.has(t.status)
+      && !this.retryInFlight.has(t.id)
+      && (t.backlogWritebackRetry?.count || 0) < TaskEngine.BACKLOG_RETRY_MAX
+      && (t.backlogWritebackRetry?.nextAt || t.backlogWritebackFailed.at) <= now,
+    )
+    let fired = 0
+    for (const task of due) {
+      if (this.retryInFlight.has(task.id)) continue
+      this.retryInFlight.add(task.id)
+      fired++
+      void this.runBacklogWriteback(task)
+        .catch((err: unknown) => {
+          try {
+            this.recordWritebackFailure(task.id, err)
+          } catch { /* 标记失败不影响扫描循环 */ }
+        })
+        .finally(() => {
+          this.retryInFlight.delete(task.id)
+        })
+    }
+    return fired
+  }
+
+  /** 启动补偿器定时器（server.ts 生命周期内调用；unref 不阻塞退出） */
+  public startBacklogWritebackRetrySweeper(): void {
+    if (this.retrySweepTimer) return
+    this.retrySweepTimer = setInterval(() => {
+      void this.runBacklogWritebackRetrySweep().catch(() => {}) // 定时器内吞掉一切异常，禁止未捕获退出
+    }, TaskEngine.RETRY_SWEEP_INTERVAL_MS)
+    ;(this.retrySweepTimer as any).unref?.()
+  }
+
+  public stopBacklogWritebackRetrySweeper(): void {
+    if (this.retrySweepTimer) { clearInterval(this.retrySweepTimer); this.retrySweepTimer = null }
   }
 
   /**
@@ -763,9 +839,17 @@ export class TaskEngine {
     const next = appendExecutionRecord(encodeFrontmatter(raw, { status: nextStatus }), { time, title: `派发执行（${outcome}）`, lines })
     await writeItem(this.client, target, proj.workspace, found.item.fileName, () => next, { base: raw })
     if (task.backlogWritebackFailed) {
+      const retried = task.backlogWritebackRetry?.count || 0
       this.store.mutateTask(task.id, (t) => {
         delete t.backlogWritebackFailed
+        delete t.backlogWritebackRetry
       })
+      // 重试闭环审计：自动补偿器或人工重试成功落账，便于追溯「回写未确认」的清零路径
+      if (retried > 0) {
+        try {
+          this.auditLog?.record({ actorId: 'system', action: 'backlog.writeback-retry', targetType: 'task', targetId: task.id, detail: `重试第 ${retried} 次后回写成功（item=${ref.itemId}）` })
+        } catch { /* 审计失败不阻断闭环 */ }
+      }
     }
   }
 

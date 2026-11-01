@@ -149,7 +149,7 @@ export function parseBacklogFilter(raw: unknown): BacklogFilter {
   if (src.labels !== undefined) f.labels = toStrArray(src.labels)
   if (typeof src.search === 'string' && src.search.trim()) f.search = src.search.trim()
   if (src.ready !== undefined) f.ready = isFlag(src.ready) || src.ready === true
-  // 三态：未给 = 默认（overview 侧按「只看未完成」处理）；给了就按布尔字面量
+  // 三态：未给 = 默认（overview 侧默认剔除已完成项）；给了就按布尔字面量
   if (src.includeDone !== undefined) f.includeDone = isFlag(src.includeDone) || src.includeDone === true
   if (src.limit !== undefined && src.limit !== '') {
     const n = Number(src.limit)
@@ -185,7 +185,7 @@ export function applyBacklogFilter(
   doneStatus: string,
 ): { items: BacklogItemWithTasks[]; total: number } {
   const byId = new Map(items.map((it) => [normalizeItemId(it.itemId), it]))
-  // 依赖未知（条目已删/被改名）不算阻塞：与派发侧「仅对找到的未完成依赖阻止」保持一致
+  // 依赖未知（条目已删/被改名）不算阻塞：与派发侧「仅对找到的进行中的依赖阻止」保持一致
   const isReady = (it: BacklogItem): boolean =>
     !it.dependencies?.length ||
     it.dependencies.every((d) => {
@@ -360,13 +360,13 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
           let projects = store.getProjects()
           if (filter.projectIds?.length) projects = projects.filter((p) => filter.projectIds!.includes(p.id))
           const rows = await overviewBacklog({ client, store, resolver }, projects, { withItems: true })
-          // overview 是「我的待办」视图：默认只看未完成（契约 §6），要历史完成项显式 includeDone:"true"
+          // overview 是「我的工作」视图：默认剔除已完成项（契约 §6），要历史完成项显式 includeDone:"true"
           const overviewFilter: BacklogFilter = { ...filter, includeDone: filter.includeDone === true }
           let openTotal = 0
           const projectsOut = rows.map((r) => {
             const doneStatus = resolveDoneStatus(r.statuses.length ? r.statuses : [r.defaultStatus || 'Done'])
             const filtered = r.nodeStatus === 'ok' ? applyBacklogFilter(r.items, overviewFilter, doneStatus) : { items: [], total: 0 }
-            // open 与 includeDone 解耦：显式 includeDone:"true" 时 total 含已完成，但 open 只数未完成
+            // open 与 includeDone 解耦：显式 includeDone:"true" 时 total 含已完成，但 open 只数进行中的
             const open = r.nodeStatus === 'ok'
               ? applyBacklogFilter(r.items, { ...overviewFilter, includeDone: false }, doneStatus).total
               : 0
@@ -413,9 +413,8 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
             return ok({ taskId, projectId: task.backlogRef.projectId, itemId: task.backlogRef.itemId })
           } catch (err) {
             const msg = errorText(err)
-            store.mutateTask(task.id, (t) => {
-              t.backlogWritebackFailed = { at: Date.now(), error: msg.slice(0, 300) }
-            })
+            // 统一走引擎的失败记账：失败标记 + 退避计数推进（TASK-2 补偿器共用同一退避序列）
+            engine.recordWritebackFailure(task.id, err)
             return fail(`回写仍失败：${msg}`, { taskId, projectId: task.backlogRef.projectId, itemId: task.backlogRef.itemId, retryable: true })
           }
         }
@@ -711,7 +710,7 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
                 code: err?.code,
                 error: errorText(err),
                 blocked: Array.isArray(err?.blocked) ? err.blocked : undefined,
-                // 任务已建但待办未写回：把 taskId 交回调用方，避免 AI 以为失败而重复派发
+                // 任务已建但条目未写回：把 taskId 交回调用方，避免 AI 以为失败而重复派发
                 taskId: err?.taskId,
                 taskCreated: err?.taskCreated || undefined,
               }))
