@@ -14,6 +14,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, appendFileSync, unlinkSync } from 'node:fs'
+import { ensurePrivateDir, hardenDirFiles, PRIVATE_FILE_MODE } from './fs-perms.js'
 import { join } from 'node:path'
 
 import type { OnenatDirectory } from './onenat.js'
@@ -267,7 +268,8 @@ export class MonitorService {
   ) {
     this.monitorDir = join(dataDir, 'monitor')
     try {
-      if (!existsSync(this.monitorDir)) mkdirSync(this.monitorDir, { recursive: true })
+      ensurePrivateDir(this.monitorDir)
+      hardenDirFiles(this.monitorDir, 1) // task-54 V2：存量事件文件收紧 0600
     } catch { /* 只读文件系统下降级为纯内存 */ }
   }
 
@@ -395,7 +397,7 @@ export class MonitorService {
   private appendEventFile(e: MonitorEvent): void {
     if (!this.monitorDir) return
     try {
-      appendFileSync(this.dayFile('events', e.at), JSON.stringify(e) + '\n', 'utf-8')
+      appendFileSync(this.dayFile('events', e.at), JSON.stringify(e) + '\n', { encoding: 'utf-8', mode: PRIVATE_FILE_MODE })
     } catch { /* 落盘失败降级为纯内存 */ }
   }
 

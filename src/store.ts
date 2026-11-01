@@ -4,6 +4,7 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync } from 'node:fs'
 import { writeFile as fspWriteFile, rename as fspRename, mkdir as fspMkdir } from 'node:fs/promises'
+import { ensurePrivateDir, hardenDirFiles, hardenFile, PRIVATE_FILE_MODE } from './fs-perms.js'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import type { AgentResourceBinding, DshRef, ExpertTeam, Project, StorageData, SubAgent, WorkBuddySettings, WorkTask, PlanSubtask, TaskTurn, ScheduledTask, TeamTemplateId } from './types.js'
@@ -63,6 +64,9 @@ export class WorkStore {
     const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh')
     this.filePath = customPath || join(dshHome, 'onenat-workbuddy', 'store.json')
     this.data = { agents: [], tasks: [], schedules: [], projects: [], teams: [], settings: { ...defaultSettings(), xiaozhi: {} } }
+    // task-54 V2：存量数据文件（store.json + archive/）启动时收紧为 0600
+    hardenFile(this.filePath)
+    hardenDirFiles(join(dirname(this.filePath), 'archive'), 1)
     this.load()
     // 进程退出前把未落盘变更同步写盘（SIGKILL 除外）：覆盖尾随窗口内与仍在途的异步写。
     // 只挂 'exit'：SIGINT/SIGTERM 走默认终止路径同样会触发 exit，且不会劫持 Ctrl-C 语义。
@@ -175,7 +179,7 @@ export class WorkStore {
           await fspMkdir(dir, { recursive: true })
           const target = this.archivePath(t.id)
           const tmp = target + '.tmp'
-          await fspWriteFile(tmp, JSON.stringify({ id: t.id, archivedAt: Date.now(), turns, taskLogs: logs }), 'utf-8')
+          await fspWriteFile(tmp, JSON.stringify({ id: t.id, archivedAt: Date.now(), turns, taskLogs: logs }), { encoding: 'utf-8', mode: PRIVATE_FILE_MODE })
           await fspRename(tmp, target)
           if (t.updatedAt !== updatedAtBefore) continue
           t.bulkArchived = { at: Date.now(), turns: turns.length, logs: logs.length }
@@ -252,12 +256,12 @@ export class WorkStore {
   private async doWrite(): Promise<void> {
     try {
       const dir = dirname(this.filePath)
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+      ensurePrivateDir(dir)
       const json = JSON.stringify(this.serializeForDisk(), null, 2)
       const atSnapshot = this.dirtyGen
       const epoch = this.writeEpoch
       const tmp = this.filePath + '.tmp'
-      await fspWriteFile(tmp, json, 'utf-8')
+      await fspWriteFile(tmp, json, { encoding: 'utf-8', mode: PRIVATE_FILE_MODE })
       if (epoch !== this.writeEpoch) return // 期间发生过同步 flush（如进程退出），放弃旧快照防止回写覆盖
       await fspRename(tmp, this.filePath)
       if (atSnapshot >= this.dirtyGen) this.dirty = false // 快照后无新变更才清脏；有则留给下一轮补写
@@ -288,9 +292,9 @@ export class WorkStore {
     this.dirty = false
     try {
       const dir = dirname(this.filePath)
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+      ensurePrivateDir(dir)
       const tmp = this.filePath + '.tmp'
-      writeFileSync(tmp, JSON.stringify(this.serializeForDisk(), null, 2), 'utf-8')
+      writeFileSync(tmp, JSON.stringify(this.serializeForDisk(), null, 2), { encoding: 'utf-8', mode: PRIVATE_FILE_MODE })
       renameSync(tmp, this.filePath)
     } catch (err) {
       console.error('[onenat-workbuddy] Failed to save store:', err)

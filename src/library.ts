@@ -8,6 +8,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameSync, rmSync } from 'node:fs'
+import { ensurePrivateDir, hardenDirFiles, PRIVATE_FILE_MODE } from './fs-perms.js'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
@@ -78,6 +79,7 @@ export class SkillPluginLibrary {
     for (const d of [this.libDir, this.skillsDir(), this.pluginsDir()]) {
       try {
         if (!existsSync(d)) mkdirSync(d, { recursive: true })
+        hardenDirFiles(d, 1) // task-54 V2：存量库文件与索引收紧 0600
       } catch { /* 只读文件系统下降级：入库/下载不可用，不影响其余功能 */ }
     }
     this.index = this.loadIndex()
@@ -108,7 +110,7 @@ export class SkillPluginLibrary {
   private save(): void {
     try {
       const tmp = this.indexPath() + '.tmp'
-      writeFileSync(tmp, JSON.stringify(this.index, null, 2), 'utf-8')
+      writeFileSync(tmp, JSON.stringify(this.index, null, 2), { encoding: 'utf-8', mode: PRIVATE_FILE_MODE })
       renameSync(tmp, this.indexPath())
     } catch (err: any) {
       this.log(`技能插件库 index.json 写入失败: ${err?.message || err}`)
@@ -141,7 +143,7 @@ export class SkillPluginLibrary {
     const id = randomUUID().slice(0, 8)
     const filename = sanitizeFilename(file.filename || (kind === 'skill' ? 'skill.zip' : 'plugin.tgz'))
     const dir = kind === 'skill' ? this.skillsDir() : this.pluginsDir()
-    writeFileSync(join(dir, id), file.data)
+    writeFileSync(join(dir, id), file.data, { mode: PRIVATE_FILE_MODE })
     const meta = await parseArchiveMeta(kind, filename, file.data).catch(() => undefined)
     const entry: LibEntry = {
       id,
@@ -270,7 +272,7 @@ async function parseArchiveMeta(kind: LibKind, filename: string, data: Buffer): 
   const marker = kind === 'skill' ? /(^|\/)SKILL\.md$/i : /(^|\/)package\.json$/
   const tmp = join(tmpdir(), `wb-lib-${randomUUID().slice(0, 8)}${isZip ? '.zip' : '.tgz'}`)
   try {
-    writeFileSync(tmp, data)
+    writeFileSync(tmp, data, { mode: PRIVATE_FILE_MODE })
     let entry: string | undefined
     let content: string | undefined
     if (isZip) {
