@@ -17,6 +17,7 @@
 import {
   compareBacklogIds,
   normalizeItemId,
+  resolveDoneStatus,
   sortBacklogItemsBy,
   type BacklogItem,
   type BacklogOrderBy,
@@ -172,6 +173,22 @@ export function isClosedStatus(status: string | undefined, statuses: string[]): 
   return isTerminalStatus(s, statuses) || CLOSED_STATUS_RE.test(s)
 }
 
+/**
+ * 依赖是否「已完成」：终态，或等于 resolveDoneStatus 判出的 Done 档。
+ *
+ * 必须与派发/回写侧（dispatchBacklogItem / runBacklogWriteback）的 done 语义一致：
+ * 回写用 resolveDoneStatus（按名字匹配 Done/*完成*，不要求是 statuses 末位）。若这里只认末位，
+ * 当配置里 Done 之后还挂着 Cancelled 等状态时，已完成的依赖会被误判为「未完成」，
+ * 导致 A 永远显示 ⛔ 阻塞（2026-11-02 用户报告：「B 完成了 A 还显示依赖 B」）。
+ * 取消/关闭类状态不算完成（fail-closed），与派发拦截的 `status !== doneStatus` 一致。
+ */
+export function isDepDoneStatus(status: string | undefined, statuses: string[]): boolean {
+  if (isTerminalStatus(status, statuses)) return true
+  const done = resolveDoneStatus(statuses.length ? statuses : DEFAULT_QUERY_STATUSES)
+  if (!done) return false
+  return String(status || '').trim().toLowerCase() === done.trim().toLowerCase()
+}
+
 /** 汇总语料的 ID 索引：归一化 id → 条目；重复 id 记为歧义（依赖解析 fail-closed） */
 function buildIdIndex(items: BacklogItem[]): Map<string, BacklogItem | null> {
   const index = new Map<string, BacklogItem | null>()
@@ -223,7 +240,7 @@ function readinessOf(
   for (const dep of deps) {
     const hit = index.get(normalizeItemId(dep))
     if (hit === undefined || hit === null) missingDependencies.push(dep)
-    else if (!isTerminalStatus(hit.status, statuses)) blockingDependencies.push(hit.itemId || dep)
+    else if (!isDepDoneStatus(hit.status, statuses)) blockingDependencies.push(hit.itemId || dep)
   }
   const blocked = blockingDependencies.length > 0 || missingDependencies.length > 0
   return { isReady: !blocked, blocked, blockingDependencies, missingDependencies }

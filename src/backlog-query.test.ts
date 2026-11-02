@@ -14,6 +14,7 @@ import {
   computeReadiness,
   countBacklogQuery,
   isClosedStatus,
+  isDepDoneStatus,
   isTerminalStatus,
   matchesBacklogQuery,
   NO_MILESTONE_QUERY_VALUE,
@@ -308,6 +309,36 @@ test('重复 ID 的依赖解析 fail-closed（歧义 = 未知）', () => {
   const map = computeReadiness(dup, STATUSES)
   assert.deepEqual(map.get('TASK-9')?.missingDependencies, ['TASK-1'])
   assert.equal(map.get('TASK-9')?.blocked, true)
+})
+
+test('ready：依赖「Done」语义与回写一致（resolveDoneStatus）——Done 非末位时不再误报阻塞（2026-11-02 用户报告回归）', () => {
+  // 项目配置 Done 之后还挂着 Cancelled：回写会把完成的 B 置为 Done（非末位），
+  // 修复前 isTerminalStatus('Done') = false → A 永远显示 ⛔ 阻塞「未完成依赖: B」。
+  const statuses = ['To Do', 'In Progress', 'Done', 'Cancelled']
+  const depDone = [mk('TASK-1', { status: 'Done', searchText: 'x' }), mk('TASK-2', { dependencies: ['TASK-1'], searchText: 'y' })]
+  const map = computeReadiness(depDone, statuses)
+  assert.equal(map.get('TASK-2')?.isReady, true, '依赖为 Done（非末位）应视为完成 → A 就绪')
+  assert.equal(map.get('TASK-2')?.blocked, false)
+  assert.deepEqual(map.get('TASK-2')?.blockingDependencies, [])
+  // 取消类：若为末位终态则视为已完结（与上游 terminal 语义一致，解除阻塞）
+  const depCancelled = [mk('TASK-1', { status: 'Cancelled', searchText: 'x' }), mk('TASK-2', { dependencies: ['TASK-1'], searchText: 'y' })]
+  const map2 = computeReadiness(depCancelled, statuses)
+  assert.equal(map2.get('TASK-2')?.isReady, true)
+  // 非「Done 档」也非终态的取消写法（如「已取消」夹在中间）不算完成 → 仍阻塞（fail-closed）
+  const mid = ['To Do', 'Cancelled', 'Done']
+  const depMid = [mk('TASK-1', { status: 'Cancelled', searchText: 'x' }), mk('TASK-2', { dependencies: ['TASK-1'], searchText: 'y' })]
+  const map3 = computeReadiness(depMid, mid)
+  assert.equal(map3.get('TASK-2')?.blocked, true)
+  assert.deepEqual(map3.get('TASK-2')?.blockingDependencies, ['TASK-1'])
+  // 中文状态配置同理：回写置「完成」
+  const cn = ['待办', '进行中', '完成', '取消']
+  const depCn = [mk('TASK-1', { status: '完成', searchText: 'x' }), mk('TASK-2', { dependencies: ['TASK-1'], searchText: 'y' })]
+  assert.equal(computeReadiness(depCn, cn).get('TASK-2')?.isReady, true)
+  // isDepDoneStatus 直测：终态 / Done 档 / 大小写与空白容错 / 未完成
+  assert.equal(isDepDoneStatus('Cancelled', statuses), true, '末位终态仍是完成')
+  assert.equal(isDepDoneStatus('done', statuses), true)
+  assert.equal(isDepDoneStatus(' In Progress ', statuses), false)
+  assert.equal(isDepDoneStatus('In Progress', ['To Do', 'In Progress', 'Done']), false)
 })
 
 test('readinessOfItem / matchesBacklogQuery 单条判定可用', () => {
