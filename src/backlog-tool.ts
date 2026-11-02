@@ -29,28 +29,32 @@ import {
   findItem,
   initBacklog,
   normalizeItemId,
-  parseBacklogOrderBy,
-  parseBacklogOrder,
   probeBacklog,
   readConfig,
   readItem,
   replaceDescription,
-  resolveDoneStatus,
   appendAcceptance,
   setAcceptance,
-  sortBacklogItemsBy,
   writeItem,
   type BacklogConfig,
   type BacklogFields,
-  type BacklogItem,
-  type BacklogOrderBy,
 } from './backlog.js'
 import {
   dispatchBacklogItem,
   listBacklogWithTasks,
+  mergeBacklogFacets,
   overviewBacklog,
+  stripBacklogItemSearchText,
+  summarizeBacklogOverview,
   type BacklogItemWithTasks,
 } from './backlog-service.js'
+import {
+  applyBacklogQuery,
+  parseBacklogQuery,
+  readinessOfItem,
+  type BacklogQuery,
+  type BacklogReadiness,
+} from './backlog-query.js'
 import type { WorkBuddyToolDef } from './tool-ops.js'
 
 /**
@@ -127,86 +131,53 @@ function errorText(err: unknown): string {
 
 // ---------------------------------------------------------------- 过滤
 
-export interface BacklogFilter {
-  status?: string
-  assignee?: string
-  unassigned?: boolean
-  labels?: string[]
-  search?: string
-  ready?: boolean
-  includeDone?: boolean
-  limit?: number
-  projectIds?: string[]
-  /** 排序维度（TASK-SORT-2）：缺省 createdAt（与 REST 列表默认一致） */
-  orderBy?: BacklogOrderBy
-  order?: 'asc' | 'desc'
-  /** statuses 配置顺序（orderBy:"status" 时使用） */
-  statuses?: string[]
+/**
+ * 解析 `filter` JSON → 查询条件（**与 REST 同一解析器** `parseBacklogQuery`，禁止分叉）。
+ * 旧字段全部保留：status / assignee / unassigned / labels / search / ready / includeDone /
+ * limit / projectIds / orderBy / order；新增字段见 docs/design-backlog-query-filters.md §5。
+ * 参数错误（assignee+unassigned 互斥、数值非法、labelMatch/order 非法）→ `ok:false`。
+ */
+function parseToolFilter(
+  raw: unknown,
+): { ok: true; query: BacklogQuery } | { ok: false; error: string; errors: string[] } {
+  if (raw === undefined || raw === null) return { ok: true, query: {} }
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ok: false, error: 'filter 必须是对象，如 {"status":["To Do"],"ready":true}', errors: [] }
+  }
+  const parsed = parseBacklogQuery(raw as Record<string, unknown>)
+  if (parsed.errors.length) {
+    return { ok: false, error: `filter 参数非法：${parsed.errors.join('；')}`, errors: parsed.errors }
+  }
+  return { ok: true, query: parsed.query }
 }
 
-export function parseBacklogFilter(raw: unknown): BacklogFilter {
-  const src = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
-  const f: BacklogFilter = {}
-  if (typeof src.status === 'string' && src.status.trim()) f.status = src.status.trim()
-  if (typeof src.assignee === 'string' && src.assignee.trim()) f.assignee = src.assignee.trim()
-  if (src.unassigned !== undefined) f.unassigned = isFlag(src.unassigned) || src.unassigned === true
-  if (src.labels !== undefined) f.labels = toStrArray(src.labels)
-  if (typeof src.search === 'string' && src.search.trim()) f.search = src.search.trim()
-  if (src.ready !== undefined) f.ready = isFlag(src.ready) || src.ready === true
-  // 三态：未给 = 默认（overview 侧默认剔除已完成项）；给了就按布尔字面量
-  if (src.includeDone !== undefined) f.includeDone = isFlag(src.includeDone) || src.includeDone === true
-  if (src.limit !== undefined && src.limit !== '') {
-    const n = Number(src.limit)
-    if (Number.isFinite(n)) f.limit = Math.max(1, Math.min(MAX_LIMIT, Math.floor(n)))
-  }
-  if (src.projectIds !== undefined) f.projectIds = toStrArray(src.projectIds)
-  // 排序（TASK-SORT-2）：非法值走 parse 兜底，与 REST 列表同规则
-  f.orderBy = parseBacklogOrderBy(typeof src.orderBy === 'string' ? src.orderBy : undefined)
-  f.order = parseBacklogOrder(typeof src.order === 'string' ? src.order : undefined)
-  if (Array.isArray(src.statuses)) f.statuses = toStrArray(src.statuses)
-  return f
+/**
+ * 工具通道的条目上限（契约 §6）：缺省 limit=50、上限 1000。
+ * MCP 单帧 64KB，列表不设上限会被整包换成「结果过大」提示；要更多请收窄 filter 或显式传 limit。
+ */
+function clampToolLimits(query: BacklogQuery): BacklogQuery {
+  const q: BacklogQuery = { ...query }
+  if (q.limit !== undefined) q.limit = Math.min(q.limit, MAX_LIMIT)
+  if (q.maxCount !== undefined) q.maxCount = Math.min(q.maxCount, MAX_LIMIT)
+  return q
 }
 
-/** 待办是否满足过滤条件（search 覆盖标题/描述/标签，与上游 task_search 语义对齐） */
-function matchFilter(it: BacklogItem, f: BacklogFilter, doneStatus: string, isReady: (it: BacklogItem) => boolean): boolean {
-  if (f.status && String(it.status || '').toLowerCase() !== f.status.toLowerCase()) return false
-  const assignees = (it.assignees || []).map((a) => a.toLowerCase())
-  if (f.assignee && !assignees.some((a) => a.includes(f.assignee!.toLowerCase()))) return false
-  if (f.unassigned && assignees.length) return false
-  if (f.labels?.length) {
-    const have = (it.labels || []).map((l) => l.toLowerCase())
-    if (!f.labels.every((l) => have.includes(l.toLowerCase()))) return false
+/**
+ * list / search 专用：未显式给 limit/maxCount 时套默认 50（overview 不套默认，避免截断分组）。
+ * 注意窗口语义（对齐上游）：`limit` 先硬截断、`skip`/`maxCount` 再在其上开窗；
+ * 因此「翻页」（只给 skip）时补 `maxCount` 而不是 `limit`，否则会被 limit 截断后再跳过导致空窗。
+ */
+function withToolLimit(query: BacklogQuery): BacklogQuery {
+  const q = clampToolLimits(query)
+  if (q.limit === undefined && q.maxCount === undefined) {
+    if (q.skip !== undefined && q.skip > 0) q.maxCount = DEFAULT_LIMIT
+    else q.limit = DEFAULT_LIMIT
   }
-  if (f.search) {
-    const hay = `${it.title || ''}\n${it.description || ''}\n${(it.labels || []).join(' ')}`.toLowerCase()
-    if (!hay.includes(f.search.toLowerCase())) return false
-  }
-  if (f.ready && !isReady(it)) return false
-  if (f.includeDone === false && String(it.status || '').toLowerCase() === doneStatus.toLowerCase()) return false
-  return true
+  return q
 }
 
-/** 应用过滤 + 排序（ordinal 升序，其次 id 序号）；返回截断前的总数 */
-export function applyBacklogFilter(
-  items: BacklogItemWithTasks[],
-  f: BacklogFilter,
-  doneStatus: string,
-): { items: BacklogItemWithTasks[]; total: number } {
-  const byId = new Map(items.map((it) => [normalizeItemId(it.itemId), it]))
-  // 依赖未知（条目已删/被改名）不算阻塞：与派发侧「仅对找到的进行中的依赖阻止」保持一致
-  const isReady = (it: BacklogItem): boolean =>
-    !it.dependencies?.length ||
-    it.dependencies.every((d) => {
-      const dep = byId.get(normalizeItemId(d))
-      return !dep || dep.status === doneStatus
-    })
-  const matched = items.filter((it) => matchFilter(it, f, doneStatus, isReady))
-  // 排序（TASK-SORT-2）：orderBy + asc/desc，与 REST 列表/前端共用 sortBacklogItemsBy 同一规则；
-  // 缺省 createdAt desc（最新在前），兼容旧默认改由显式 orderBy:"ordinal" 获得
-  const sorted = sortBacklogItemsBy(matched, f.statuses || [], f.orderBy || 'createdAt', f.order || 'desc')
-  const limit = f.limit ?? DEFAULT_LIMIT
-  return { items: sorted.slice(0, limit), total: sorted.length }
-}
+/** 条目 + 可选就绪派生字段（list/overview 的查询结果带，view 手工附加） */
+type BriefSource = BacklogItemWithTasks & Partial<BacklogReadiness>
 
 // ---------------------------------------------------------------- 视图投影
 
@@ -215,16 +186,25 @@ function linkTasks(tasks: BacklogItemWithTasks['tasks']) {
 }
 
 /** 列表用精简投影：字段够 AI 判断「该派发哪条」，正文留给 view */
-function briefItem(it: BacklogItemWithTasks, withDescription: boolean) {
+function briefItem(it: BriefSource, withDescription: boolean) {
   return compact({
     itemId: it.itemId,
     title: it.title,
     status: it.status,
+    type: it.type,
     priority: it.priority,
+    milestone: it.milestone,
+    taskProject: it.taskProject,
+    parentTaskId: it.parentTaskId,
     dueDate: it.dueDate,
     assignees: it.assignees?.length ? it.assignees : undefined,
     labels: it.labels?.length ? it.labels : undefined,
     dependencies: it.dependencies?.length ? it.dependencies : undefined,
+    // 派生就绪信息（doc §3）：isReady/blocked 恒给布尔，依赖明细只在非空时给（token 预算）
+    isReady: it.isReady,
+    blocked: it.blocked,
+    blockingDependencies: it.blockingDependencies?.length ? it.blockingDependencies : undefined,
+    missingDependencies: it.missingDependencies?.length ? it.missingDependencies : undefined,
     acceptance: it.acceptance,
     hasExecutionRecord: it.hasExecutionRecord || undefined,
     fileName: it.fileName,
@@ -268,7 +248,7 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
     name: 'workbuddy_backlog_manage',
     description:
       '管理平台 backlog 待办（Backlog.md 兼容：项目工作区 backlog/tasks/*.md，人在终端、agent 在会话、Web 看板三方改的是同一批文件）。' +
-      'action: projects（列可管项目，先用它拿 projectId）/ config（状态与配置）/ init（初始化）/ list（筛选列表）/ search（标题+描述全文检索）/ ' +
+      'action: projects（列可管项目，先用它拿 projectId）/ config（状态与配置）/ init（初始化）/ list（筛选/排序/分页列表）/ search（正文全文检索）/ ' +
       'view（详情含完整 Markdown）/ create / edit / delete / dispatch（派发为 WorkBuddy 任务）/ overview（跨项目我的待办）/ retry-writeback（回写失败重试）。' +
       '使用约定：① 登记需求前先 list 或 search 查重，别重复建；② dispatch 建出来的就是普通 WorkBuddy 任务（继承项目节点/工作区/成员/技能），' +
       '任务终态会由服务端自动回写待办状态与执行记录——不要手工改 status 冒充完成；③ delete 是物理删除，必须显式 force:"true"（推荐改状态保留历史）；' +
@@ -288,12 +268,18 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
         type: 'json',
         description:
           'create / edit 的待办字段: {title?, description?, status?, priority?, dueDate?, ordinal?, labels?:[], assignees?:[], dependencies?:[], ' +
-          'acceptance?:[], acceptAdd?:[], note?:{title?, lines?:[]}}（未出现的键=不改动；status 必须是 config.statuses 之一；dueDate 传 null 清除）',
+          'type?, milestone?, taskProject?, parentTaskId?, acceptance?:[], acceptAdd?:[], note?:{title?, lines?:[]}}' +
+          '（未出现的键=不改动；status 必须是 config.statuses 之一；dueDate/type/milestone/taskProject/parentTaskId 传 null 清除）',
       },
       filter: {
         type: 'json',
         description:
-          'list / search / overview 过滤: {status?, assignee?, unassigned?:bool, labels?:[], search?:string, ready?:bool, includeDone?:bool, limit?:number, projectIds?:[], orderBy?:"priority"|"status"|"createdAt"|"updatedAt"|"ordinal", order?:"asc"|"desc"}（orderBy 缺省 createdAt 倒序=最新在前）',
+          'list / search / overview 过滤（旧字段全保留，值可为字符串或数组）: ' +
+          '{status?:[], excludeStatus?:[], assignee?:[], unassigned?:bool, priority?:[], type?:[], labels?:[], labelMatch?:"all"|"any"(缺省 all), ' +
+          'milestone?:string("__none__"=无里程碑), taskProject?:[], parent?:string, search?:string(空白切词全部命中), ready?:bool, blocked?:bool, ' +
+          'includeDone?:bool(overview 缺省 false≡只未完成), openOnly?:bool, sort?:"priority"|"id"|"ordinal"|"createdAt"|"updatedAt"|"status", ' +
+          'order?:"asc"|"desc", limit?:number(缺省 50/上限 1000), maxCount?:number, skip?:number, count?:bool, projectIds?:[]}' +
+          '（sort 缺省 createdAt 倒序=最新在前；assignee 与 unassigned 互斥）',
       },
       force: { type: 'string', description: '布尔字符串 "true"：忽略未完成依赖强制派发 / 确认待办物理删除' },
       sample: { type: 'string', description: 'init 用："true" = 一并创建一条示例待办' },
@@ -306,11 +292,16 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
       if (!filterParsed.ok) return fail(filterParsed.error)
       const itemParsed = parseJsonArg(args.item, 'item')
       if (!itemParsed.ok) return fail(itemParsed.error)
-      const filter = parseBacklogFilter(filterParsed.value)
-      const itemArg = (itemParsed.value && typeof itemParsed.value === 'object' ? itemParsed.value : {}) as Record<string, any>
-      if (filter.unassigned && filter.assignee) {
-        return fail('filter.unassigned 与 filter.assignee 不能同时使用（前者=仅未指派，后者=按指派人匹配）')
+      // 与 REST 同一解析器：assignee+unassigned 互斥、数值/labelMatch/order 非法都在这里拦下
+      const filterParsedQuery = parseToolFilter(filterParsed.value)
+      if (!filterParsedQuery.ok) {
+        return fail(filterParsedQuery.error, {
+          code: 'INVALID_QUERY',
+          ...(filterParsedQuery.errors.length ? { errors: filterParsedQuery.errors } : {}),
+        })
       }
+      const filter = filterParsedQuery.query
+      const itemArg = (itemParsed.value && typeof itemParsed.value === 'object' ? itemParsed.value : {}) as Record<string, any>
 
       /** 解析项目 + 节点（读操作也要求节点在线——backlog 的事实源在节点上） */
       const projectCtx = async (): Promise<
@@ -364,20 +355,18 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
         if (action === 'overview') {
           let projects = store.getProjects()
           if (filter.projectIds?.length) projects = projects.filter((p) => filter.projectIds!.includes(p.id))
-          const rows = await overviewBacklog({ client, store, resolver }, projects, { withItems: true })
-          // overview 是「我的工作」视图：默认剔除已完成项（契约 §6），要历史完成项显式 includeDone:"true"
-          const overviewFilter: BacklogFilter = { ...filter, includeDone: filter.includeDone === true }
-          let openTotal = 0
-          const projectsOut = rows.map((r) => {
-            const doneStatus = resolveDoneStatus(r.statuses.length ? r.statuses : [r.defaultStatus || 'Done'])
-            // 每项目各自的 statuses 传入，orderBy:"status" 时按该项目配置顺序排
-            const filtered = r.nodeStatus === 'ok' ? applyBacklogFilter(r.items, { ...overviewFilter, statuses: r.statuses }, doneStatus) : { items: [], total: 0 }
-            // open 与 includeDone 解耦：显式 includeDone:"true" 时 total 含已完成，但 open 只数进行中的
-            const open = r.nodeStatus === 'ok'
-              ? applyBacklogFilter(r.items, { ...overviewFilter, includeDone: false }, doneStatus).total
-              : 0
-            openTotal += open
-            return compact({
+          // overview 是「我的工作」视图：默认剔除已完成项（契约 §6：includeDone 缺省 false ≡ openOnly=true）；
+          // 显式 includeDone:"true" 才包含历史完成项。查询引擎在 service 内逐项目按各自 statuses 应用。
+          const overviewQuery = clampToolLimits({
+            ...filter,
+            openOnly: filter.includeDone === true ? filter.openOnly : true,
+          })
+          const rows = await overviewBacklog({ client, store, resolver }, projects, {
+            withItems: true,
+            query: overviewQuery,
+          })
+          const projectsOut = rows.map((r) =>
+            compact({
               projectId: r.projectId,
               projectName: r.projectName,
               archived: r.archived || undefined,
@@ -385,17 +374,20 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
               initialized: r.initialized,
               truncated: r.truncated || undefined,
               error: r.error || undefined,
-              total: filtered.total,
-              open,
-              items: filtered.items.map((it) => briefItem(it, false)),
-            })
-          })
+              statuses: r.statuses.length ? r.statuses : undefined,
+              defaultStatus: r.defaultStatus || undefined,
+              total: r.total,
+              matched: r.matched,
+              open: r.open,
+              done: r.done,
+              ready: r.ready,
+              blocked: r.blocked,
+              items: r.items.map((it) => briefItem(it, false)),
+            }),
+          )
           return ok({
-            summary: {
-              projects: projectsOut.length,
-              unreachable: projectsOut.filter((p) => p.nodeStatus === 'unreachable').length,
-              open: openTotal,
-            },
+            summary: summarizeBacklogOverview(rows),
+            facets: mergeBacklogFacets(rows.map((r) => r.facets)),
             projects: projectsOut,
           })
         }
@@ -474,7 +466,7 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
         // ---------------- list / search ----------------
         if (action === 'list' || action === 'search') {
           if (action === 'search' && !filter.search) {
-            return fail('search 需要 filter.search（在标题/描述/标签里检索关键词）')
+            return fail('search 需要 filter.search（在标题/描述/标签/正文里检索关键词）', { code: 'INVALID_QUERY' })
           }
           const needBodies = Boolean(filter.search) || action === 'search'
           const list = await listBacklogWithTasks({ client, store }, target, workspace, proj.id, { withBodies: needBodies })
@@ -486,13 +478,15 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
               statuses: list.config.statuses,
               defaultStatus: list.config.defaultStatus,
               total: 0,
+              matched: 0,
               returned: 0,
               items: [],
               tip: '该项目还没有 backlog，先 {action:"init", projectId:"…"}',
             })
           }
-          const doneStatus = resolveDoneStatus(list.config.statuses)
-          const { items, total } = applyBacklogFilter(list.items, { ...filter, statuses: list.config.statuses }, doneStatus)
+          // 与 REST 同一查询引擎（doc §5）：过滤 → 排序 → 切窗；ready/blocked 依赖全量语料
+          const effectiveQuery = withToolLimit(filter)
+          const result = applyBacklogQuery(list.items, effectiveQuery, { statuses: list.config.statuses })
           return ok({
             projectId: proj.id,
             projectName: proj.name,
@@ -500,9 +494,14 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
             truncated: list.truncated || undefined,
             statuses: list.config.statuses,
             defaultStatus: list.config.defaultStatus,
-            total,
-            returned: items.length,
-            items: items.map((it) => briefItem(it, needBodies)),
+            total: result.total,
+            matched: result.matched,
+            returned: result.items.length,
+            window: result.window,
+            counts: result.counts,
+            facets: result.facets,
+            query: effectiveQuery,
+            items: result.items.map((it) => briefItem(it, needBodies)),
           })
         }
 
@@ -513,6 +512,8 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
           const found = await findItem(client, target, workspace, itemId)
           if (!found) return fail(`待办 ${itemId} 不存在`, { code: 'NOT_FOUND' })
           const raw = await readItem(client, target, workspace, found.item.fileName)
+          // 单条就绪判定与列表同一规则（依赖需在全量语料里解析）
+          const readiness = readinessOfItem(found.item, found.list.items, found.list.config.statuses)
           const linked = store
             .getTasks()
             .filter((t) => t.backlogRef?.projectId === proj.id && normalizeItemId(t.backlogRef!.itemId) === normalizeItemId(found.item.itemId))
@@ -531,7 +532,8 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
           return ok({
             projectId: proj.id,
             projectName: proj.name,
-            item: found.item,
+            // searchText 是服务端检索语料，工具回包不得携带
+            item: { ...stripBacklogItemSearchText(found.item), ...readiness },
             statuses: found.list.config.statuses,
             defaultStatus: found.list.config.defaultStatus,
             tasks: linked,
@@ -563,6 +565,11 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
             assignees: toStrArray(itemArg.assignees ?? itemArg.assignee),
             priority: itemArg.priority !== undefined && itemArg.priority !== null ? String(itemArg.priority) : undefined,
             dueDate: itemArg.dueDate !== undefined && itemArg.dueDate !== null ? String(itemArg.dueDate) : undefined,
+            // 查询相关字段（doc §5）：type / milestone / taskProject（frontmatter project）/ parentTaskId（parent_task_id）
+            type: itemArg.type !== undefined && itemArg.type !== null ? oneLine(itemArg.type) : undefined,
+            milestone: itemArg.milestone !== undefined && itemArg.milestone !== null ? oneLine(itemArg.milestone) : undefined,
+            taskProject: itemArg.taskProject !== undefined && itemArg.taskProject !== null ? oneLine(itemArg.taskProject) : undefined,
+            parentTaskId: itemArg.parentTaskId !== undefined && itemArg.parentTaskId !== null ? oneLine(itemArg.parentTaskId) : undefined,
           })
           // createItem 只写默认状态与自动 ordinal：显式给了 status/ordinal 时按同一乐观写路径补一次
           const patch: Partial<BacklogFields> = {}
@@ -628,6 +635,11 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
           if (itemArg.labels !== undefined) fm.labels = toStrArray(itemArg.labels)
           if (itemArg.dependencies !== undefined) fm.dependencies = toStrArray(itemArg.dependencies)
           if (itemArg.assignees !== undefined || itemArg.assignee !== undefined) fm.assignees = toStrArray(itemArg.assignees ?? itemArg.assignee)
+          // 查询相关字段（doc §5）：未给键=不改动；null/空串=清除（与 status/priority 语义一致）
+          if (itemArg.type !== undefined) fm.type = itemArg.type === null ? '' : oneLine(itemArg.type)
+          if (itemArg.milestone !== undefined) fm.milestone = itemArg.milestone === null ? '' : oneLine(itemArg.milestone)
+          if (itemArg.taskProject !== undefined) fm.taskProject = itemArg.taskProject === null ? '' : oneLine(itemArg.taskProject)
+          if (itemArg.parentTaskId !== undefined) fm.parentTaskId = itemArg.parentTaskId === null ? '' : oneLine(itemArg.parentTaskId)
 
           if (Object.keys(fm).length) next = encodeFrontmatter(next, fm)
           if (typeof itemArg.description === 'string') next = replaceDescription(next, itemArg.description)
@@ -649,7 +661,7 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
           }
           if (next === raw) {
             return fail(
-              'item 没有可修改的字段（支持 title / description / status / priority / dueDate / ordinal / labels / assignees / dependencies / acceptance / acceptAdd / note）',
+              'item 没有可修改的字段（支持 title / description / status / priority / dueDate / ordinal / labels / assignees / dependencies / type / milestone / taskProject / parentTaskId / acceptance / acceptAdd / note）',
             )
           }
           try {

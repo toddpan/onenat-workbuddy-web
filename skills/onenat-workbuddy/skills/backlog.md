@@ -19,8 +19,8 @@ backlog = **项目工作区里的待办清单文件**：`<workspace>/backlog/tas
 | `projects` | – | 列可管项目，选 projectId |
 | `config` | projectId | 读配置：statuses / defaultStatus / taskPrefix / projectName / initialized |
 | `init` | projectId，可选 sample / updateInstruction | 初始化 backlog 目录（幂等） |
-| `list` | projectId，filter | 待办列表（元数据 + 验收进度 + 关联任务） |
-| `search` | projectId，filter.search | 全文检索标题 + 标签 + 描述正文 |
+| `list` | projectId，filter | 待办列表（元数据 + 验收进度 + 关联任务；支持全部分类查询/排序/分页） |
+| `search` | projectId，filter.search | 全文检索正文（标题/描述/备注/评论/元数据） |
 | `view` | projectId，itemId | 单条详情：字段 + 完整 Markdown 原文 + 关联任务（含汇总） |
 | `create` | projectId，item.title | 新建待办（itemId 服务端分配 `<task_prefix>-<n>`） |
 | `edit` | projectId，itemId，item | 改字段/状态/标签/依赖/指派人/描述/验收清单/追加记录 |
@@ -63,7 +63,13 @@ backlog = **项目工作区里的待办清单文件**：`<workspace>/backlog/tas
 - `item`（create / edit）：`title` / `description` / `status` / `priority` / `dueDate` / `ordinal` / `labels` / `assignees` / `dependencies` / `acceptance` / `acceptAdd` / `note`。
   - 未出现的键 = 不改动（宽容原则）；`labels` / `assignees` / `dependencies` / `acceptance` 为**整体替换**，追加验收用 `acceptAdd`，追加记录用 `note:{title, lines}`。
   - `status` 必须是 `config.statuses` 之一（大小写不敏感），非法时直接报错，不静默写入。
-- `filter`（list / search / overview）：`status`（精确）/ `assignee` / `unassigned`（不可与 assignee 同用）/ `labels`（全部命中）/ `search`（标题+描述+标签子串）/ `ready`（依赖已完成）/ `limit`（默认 50，上限 1000——MCP 单帧 64KB，别一次拉太多）/ `includeDone`（overview 用，默认只回未完成）。
+- `filter`（list / search / overview）——与 Backlog.md `task list` 的查询能力对齐（契约全文：`docs/design-backlog-query-filters.md`）：
+  - 分类：`status`（多值，大小写不敏感）/ `excludeStatus` / `priority` / `type` / `labels` + `labelMatch:"all"|"any"`（缺省 all）/ `milestone`（id 或标题；`__none__` = 无里程碑）/ `taskProject`（frontmatter `project` 组件）/ `parent`（父任务 ID）/ `assignee`（包含匹配）/ `unassigned`（不可与 assignee 同用）
+  - 检索：`search`（标题+描述+备注+评论+metadata 全文，空白切词 = 全部命中）
+  - 就绪：`ready` / `blocked`（依赖未完成或依赖找不到都算阻塞，fail-closed；条目回包带 `isReady` / `blockingDependencies` / `missingDependencies`）
+  - 排序/窗口：`sort`（`priority|id|ordinal|createdAt|updatedAt|status`，`orderBy` 为旧别名）+ `order`（`asc|desc`）；`limit`=排序后**硬截断**；`maxCount`=分页窗口大小（配合 `skip` 翻页，回包 `window.nextSkip` 给下一页）；`count:true` 只要计数
+  - 其他：`includeDone`（overview 用，默认只回未完成）/ `projectIds`（overview 限项目）/ `limit` 默认 50、上限 1000——MCP 单帧 64KB，别一次拉太多
+  - 回包：列表类带 `total`（全量）/ `matched`（命中）/ `counts{open,done,ready,blocked,unassigned}` / `window` / `facets`（可选项及计数，UI 用）
 
 ## 错误与常见坑
 

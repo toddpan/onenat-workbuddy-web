@@ -33,6 +33,9 @@ import {
   parseBacklogOrderBy,
   parseBacklogOrder,
   backlogPriorityWeight,
+  buildSearchText,
+  backlogIdNumericParts,
+  compareBacklogIds,
 } from './backlog.js'
 import type { DshClient, DshTarget } from './remote-client.js'
 
@@ -435,3 +438,81 @@ test('sortBacklogItemsBy: 五种维度 × asc/desc（TASK-SORT-2 验收 #2）', 
   assert.equal(items[0].itemId, 'TASK-1')
 })
 
+
+// ---------- 查询相关 frontmatter 字段（docs/design-backlog-query-filters.md §2） ----------
+
+test('decodeFrontmatter: type/milestone/project/parent_task_id/subtasks 与行内数组', () => {
+  const raw = `---
+id: TASK-7
+title: 查询字段
+status: To Do
+assignee: [@alice, bob]
+labels: ["backend", p0]
+dependencies: [TASK-1]
+subtasks:
+  - TASK-8
+  - TASK-9
+type: bug
+milestone: M-1
+project: web
+parent_task_id: TASK-3
+reporter: @carol
+---
+
+正文
+`
+  const { fields } = decodeFrontmatter(raw)
+  assert.deepEqual(fields.assignees, ['@alice', 'bob'])
+  assert.deepEqual(fields.labels, ['backend', 'p0'])
+  assert.deepEqual(fields.dependencies, ['TASK-1'])
+  assert.deepEqual(fields.subtasks, ['TASK-8', 'TASK-9'])
+  assert.equal(fields.type, 'bug')
+  assert.equal(fields.milestone, 'M-1')
+  assert.equal(fields.taskProject, 'web', 'frontmatter project → taskProject')
+  assert.equal(fields.parentTaskId, 'TASK-3')
+  assert.equal(fields.reporter, '@carol')
+})
+
+test('encodeFrontmatter: 查询字段原位改写（project / parent_task_id 映射回上游键名）', () => {
+  const raw = `---\nid: TASK-7\ntitle: t\nstatus: To Do\nordinal: 7000\n---\n\n正文`
+  const out = encodeFrontmatter(raw, { type: 'bug', milestone: 'M-2', taskProject: 'api', parentTaskId: 'TASK-1', updatedDate: 'x' })
+  const { fields } = decodeFrontmatter(out)
+  assert.equal(fields.type, 'bug')
+  assert.equal(fields.milestone, 'M-2')
+  assert.equal(fields.taskProject, 'api')
+  assert.equal(fields.parentTaskId, 'TASK-1')
+  assert.match(out, /^project: api$/m)
+  assert.match(out, /^parent_task_id: TASK-1$/m)
+  assert.match(out, /正文$/, '正文不动')
+  // 清除（空串）后字段不再解析为有值（宽容解码：空标量行按块列表分支处理，值为空）
+  const clearedRaw = encodeFrontmatter(out, { type: '' })
+  assert.match(clearedRaw, /^type:\s*$/m)
+  const cleared = decodeFrontmatter(clearedRaw).fields
+  assert.ok(cleared.type === undefined || cleared.type === '')
+})
+
+test('buildSearchText: frontmatter 元数据 + 正文全文，小写', () => {
+  const raw = SAMPLE.replace('title: 搭建登录接口', 'title: 搭建登录接口\nmilestone: M-1\nproject: web\ntype: feature')
+  const { fields } = decodeFrontmatter(raw)
+  const text = buildSearchText(fields, raw)
+  assert.ok(text.includes('搭建登录接口'))
+  assert.ok(text.includes('m-1'))
+  assert.ok(text.includes('web'))
+  assert.ok(text.includes('feature'))
+  assert.ok(text.includes('需求描述原文'), '正文参与检索')
+  assert.ok(text.includes('@alice'), '指派人参与检索')
+  assert.ok(text.includes('backend'), '标签参与检索')
+  assert.equal(text, text.toLowerCase())
+  // frontmatter 本身不进入语料（避免 yaml 键名污染）
+  assert.ok(!text.includes('created_date:'))
+})
+
+test('backlogIdNumericParts / compareBacklogIds: 数字段比较（task-2 < task-10）', () => {
+  assert.deepEqual(backlogIdNumericParts('task-2'), [2])
+  assert.deepEqual(backlogIdNumericParts('task-2.10'), [2, 10])
+  assert.deepEqual(backlogIdNumericParts('JIRA-7'), [7])
+  assert.deepEqual(backlogIdNumericParts('weird'), [0])
+  assert.ok(compareBacklogIds('task-2', 'task-10') < 0)
+  assert.ok(compareBacklogIds('task-2.1', 'task-2.2') < 0)
+  assert.ok(compareBacklogIds('TASK-3', 'task-3') === 0)
+})

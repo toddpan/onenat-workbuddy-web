@@ -35,7 +35,7 @@ node dist/server.js --port 3081 \
   scrypt 哈希落盘；改密走 `POST /api/auth/password`），未登录访问控制台返回登录页、访问 API 返回 401，
   会话为 HttpOnly Cookie（7 天滑动过期），登录失败单 IP 限速；
 - 默认只监听 `127.0.0.1`；工具通道可用 `--token` 单独保护；公网暴露请套反代 + 认证；
-- 本地验证：`npm run smoke`（39 项，自带 mock ONENAT）；`npm run smoke:e2e` 追加真实派发端到端。
+- 本地验证：`npm run smoke`（91 项断言，自带 mock ONENAT）；`npm run smoke:e2e` 追加真实派发端到端。
 
 完整部署说明（参数表 / 接口清单 / systemd / Docker / nginx / 安全边界）见
 [`docs/standalone-deploy.md`](docs/standalone-deploy.md)。
@@ -168,6 +168,124 @@ GET  {prefix}/monitor               独立暗色全屏投屏页（登录门与�
 - **执行方式**：触发时对每个目标子智能体独立创建任务会话（`⏰ 任务名`）并派发同一份任务文本，复用 TaskEngine 派发链路（长持会话/资源注入/流式回显全部继承）
 - **执行记录**：每个定时任务保留最近 50 次触发记录，详情页（页签：基本信息/执行记录）可联查每次派生的任务会话状态并一键跳转回看
 - **冒烟测试**：`npm run smoke:schedules`（拉起 mock ONENAT + 独立服务，覆盖规则计算/入参校验/手动触发/once 与 interval 自动触发/重启持久化，34 项断言）
+
+## 待办任务（Backlog）与查询筛选
+
+项目待办与 [Backlog.md](https://github.com/MrLesk/Backlog.md) 兼容：唯一事实源是**项目 DSH 节点工作区**的
+`<workspace>/backlog/tasks/*.md`（YAML frontmatter + Markdown 正文），WorkBuddy 只做「读 + 查询 + 门面」，
+不复制、不缓存、不改数据格式。`backlog/config.yml` 决定状态列（`statuses`）与任务前缀（`task_prefix`）。
+唯一权威契约见 [`docs/design-backlog-query-filters.md`](docs/design-backlog-query-filters.md)（CLI 参数 × REST × 工具 × UI 对照表）。
+
+**入口**
+
+- 控制台「✅ 待办」聚合页：跨项目分组 + 查询栏（搜索框、筛选面板、排序 + 方向、计数「匹配 N / 共 M」、清除筛选）；
+  筛选值来自服务端 `facets`（无数据维度不显示），无匹配项目保留分组头显示「无匹配待办」。
+- 项目详细看板：同一查询栏作用于本项目；列头计数为过滤后条数、提示「被筛选隐藏 X 条」，`window.cut` 时列底「显示更多」（带 `skip` 追加）。
+- 卡片/行展示就绪态（✅ 就绪 / ⛔ 阻塞，悬停列出未完成/未知依赖）。
+- REST 与 HTTP/MCP 工具通道（`workbuddy_backlog_manage`）暴露同一套参数与语义（服务端统一过滤，保证 CLI/工具/UI 一致）。
+
+**REST**
+
+```bash
+# 项目看板查询：就绪 + 待办 + 高优先级，按优先级排序后取前 20 条
+curl -b wb.cookie \
+  'http://127.0.0.1:3081/onenat-workbuddy/api/projects/<projectId>/backlog?ready=1&status=To%20Do&priority=high&sort=priority&order=asc&limit=20'
+
+# 跨项目待办总览：按关键词检索并只看未完成
+curl -b wb.cookie \
+  'http://127.0.0.1:3081/onenat-workbuddy/api/backlog/overview?search=登录&openOnly=1'
+
+# 只取计数（不返回条目明细）
+curl -b wb.cookie \
+  'http://127.0.0.1:3081/onenat-workbuddy/api/projects/<projectId>/backlog?status=To%20Do&count=1'
+```
+
+`GET /api/projects/:id/backlog` 在既有 `{initialized,truncated,config,statuses,defaultStatus,items,...}` 上**只增不改**：
+新增 `total`（项目全量）、`matched`（过滤后窗口前）、`counts{open,done,ready,blocked,unassigned}`、
+`window{skip,total,nextSkip,cut}`、`facets{statuses,priorities,types,labels,assignees,milestones,taskProjects}`、
+`query`（解析回显）；每个条目新增 `isReady/blocked/blockingDependencies/missingDependencies`。
+`GET /api/backlog/overview` 的 `data` 仍是项目分组数组（向后兼容），分组上新增 `total/matched/open/done/ready/blocked/facets`，
+响应信封新增 `query/summary{projects,total,matched,open,ready,blocked,unreachable}/facets`（所有项目并集）；
+`openOnly` 按各项目自身状态配置分别排除，`matched=0` 的项目仍返回（保留节点失败隔离与错误可见性）。
+
+**查询参数**
+
+| 参数 | 取值 / 多值 | 说明 |
+|---|---|---|
+| `status` / `statuses` | 多值（重复参数或逗号） | 只保留这些状态（大小写、空白不敏感，多值并集） |
+| `excludeStatus` | 多值 | 排除这些状态；与 `status` 同时给时**排除优先** |
+| `assignee` / `assignees` | 多值 | 按指派人匹配（**包含匹配**，忽略大小写与 `@` 前缀；等价「仅分配给我」） |
+| `unassigned` | 布尔 | 只要无指派人的条目；与 `assignee` 互斥（同给 → 400 / 工具 `ok:false`） |
+| `priority` | 多值 | 优先级（归一化小写后并集） |
+| `type` | 多值 | 任务类型（`type` frontmatter） |
+| `labels` + `labelMatch` | 多值 + `all\|any`（缺省 `all`） | 标签；`all` 与 Backlog.md `--labels` 一致（需全部命中），`any` 为扩展 |
+| `milestone` | 单值 | 里程碑 id/标题（`m-8`/`8` 数字别名；`__none__` = 无里程碑；未精确命中退化为标题包含） |
+| `taskProject` | 多值 | frontmatter `project`（monorepo 组件，区别于 WorkBuddy 项目） |
+| `parent` | 单值 | 父任务 ID（frontmatter `parent_task_id`，id 归一化比较） |
+| `search` | 单值 | 全文检索（标题/描述/备注/最终总结/metadata）；空白切词、**全部子串命中** |
+| `ready` | 布尔 | 未完成且依赖全部完成（见下） |
+| `blocked` | 布尔 | 至少一个依赖未完成或无法解析（与 `ready` 互斥） |
+| `openOnly` | 布尔 | 按各项目状态配置排除已关闭状态（`done/完成/cancel/取消/末位状态`） |
+| `includeDone` | 布尔 | 兼容旧参数：`includeDone=false` ≡ `openOnly=true` |
+| `sort` | `priority\|id\|ordinal\|createdAt\|updatedAt\|status`（`orderBy` 为旧别名） | 缺省 `createdAt` |
+| `order` | `asc\|desc` | 缺省 `desc`；优先级沿用既有语义 `asc` = 高→低 |
+| `limit` | 正整数 | 排序后**硬截断**命中集合（对齐 `--limit`；UI 分页不用它） |
+| `maxCount` | 正整数 | **分页窗口大小**：`skip` 之后最多取多少条，驱动 `window.nextSkip/cut`（对齐 `--max-count`） |
+| `skip` | ≥0 | 窗口偏移（过滤 + 排序之后） |
+| `count` | 布尔 | 只返回计数，`items` 为空数组 |
+| `projectIds` | 多值（仅 overview） | 限定项目作用域 |
+
+多值参数同时支持**重复参数**（`?status=A&status=B`）与**逗号分隔**（`?status=A,B`），与 Backlog.md CLI 一致。
+非法数值（`limit/skip/maxCount` 非数字或越界）、`assignee`+`unassigned` 互斥、`order` 非 `asc|desc`、
+`labelMatch` 非 `all|any`、`parent` 空串 → `400 {ok:false,code:"INVALID_QUERY"}`；非法 `sort` 回退缺省（宽松，不报错）。
+`limit` 与 `maxCount` **不是别名**：`limit` 把命中集合截断成上限，`maxCount` 是分页窗口；分页统一用 `skip`+`maxCount`
+（用 `limit` 分页会让 `window.nextSkip` 恒为 null）。
+`searchText` 仅服务端内部检索用，**任何回包都会剥离**。
+
+**就绪（ready）判定**（对齐 Backlog.md `src/utils/readiness.ts`）
+
+1. 状态为项目 `statuses` 末位（终态）→ 不 ready、不 blocked（归档项目条目视为不可开工）；
+2. 无依赖 → ready；
+3. 依赖在项目全量条目里找不到（含重复 id 歧义）→ `missingDependencies`，**阻塞**（fail-closed）；
+   找到但未完成 → `blockingDependencies`，阻塞；找到且已完成 → 满足。
+
+**与 Backlog.md CLI 等效关系**
+
+| Backlog.md CLI | WorkBuddy |
+|---|---|
+| `npx --yes backlog.md task list --ready` | `GET …/backlog?ready=1` / 工具 `filter:{ready:true}` |
+| `--status "To Do" --priority high` | `?status=To%20Do&priority=high` |
+| `--exclude-status Done` | `?excludeStatus=Done` |
+| `--assignee @alice` / `--unassigned` | `?assignee=alice` / `?unassigned=1` |
+| `--labels backend,api` | `?labels=backend,api`（默认 `labelMatch=all`） |
+| `--type bug --milestone M-1` | `?type=bug&milestone=M-1` |
+| `--parent TASK-12` | `?parent=TASK-12` |
+| `--search "登录 超时"` | `?search=登录%20超时` |
+| `--sort priority --limit 20` | `?sort=priority&order=asc&limit=20` |
+| `--skip 20 --max-count 20`（分页） | `?sort=priority&order=asc&skip=20&maxCount=20` |
+| `--count` | `?count=1` |
+| `--max-count 20` | `?maxCount=20` |
+| （跨项目聚合，CLI 无对应） | `GET …/backlog/overview?<query>`（逐项目 `matched/total` + `summary/facets`） |
+
+**已知差异**（如实标注，非缺陷）
+
+- `search`：Backlog.md 用 Fuse 模糊匹配，WorkBuddy 为「空白切词 + 全部子串命中」（确定性、无额外依赖）；
+- `assignee`：Backlog.md 精确匹配，WorkBuddy 为包含匹配（兼容既有「仅分配给我」的宽松行为）；
+- 默认排序：沿用 WorkBuddy 既有 `createdAt` 倒序（最新在前），不改回 Backlog.md 的 `ordinal→priority→id` 默认；
+- `milestone`：Backlog.md 用 Fuse 最近匹配，WorkBuddy 先精确 id/标题（含数字别名）再退化为标题包含匹配。
+
+**工具通道**：`workbuddy_backlog_manage` 的 `list/overview/search` 共用同一查询引擎，
+`filter` 支持上述全部字段；回包新增 `matched/window/counts/facets`，条目与 `view` 带 `isReady/blocked/blockingDependencies/missingDependencies`；
+`search` 动作保持「必填 `filter.search`」。示例：
+
+```jsonc
+{"action":"list","projectId":"proj-xxx",
+ "filter":{"ready":true,"status":["To Do"],"priority":["high"],"labels":["backend"],
+           "sort":"priority","order":"asc","maxCount":20,"skip":0}}
+```
+
+验证：`node scripts/backlog-e2e.mjs`（真实 stub 节点上的查询链路，含非法参数与就绪判定）、
+`npm run smoke`（前端控件与接口静态断言）。
 
 ## HTTP 工具通道（AI 接入）
 
@@ -303,7 +421,7 @@ ExpertTeam/executeTeam/MEMBER_HANDOFF，落点对齐 workbuddy 既有编排骨�
   （成员不足 2 人时团队保留但不可用）；发任务前校验成员可用性。
 
 冒烟测试：`npm run smoke`（专家团 CRUD 校验/团队任务成员展开/落盘/删除级联等 9 项断言，
-共 49 项）。
+共 91 项）。
 
 ## 代码来源
 

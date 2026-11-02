@@ -33,8 +33,6 @@ import {
   initBacklog,
   listBacklog,
   normalizeItemId,
-  parseBacklogOrderBy,
-  parseBacklogOrder,
   readItem,
   replaceAcceptance,
   replaceDescription,
@@ -43,9 +41,14 @@ import {
 import {
   dispatchBacklogItem,
   listBacklogWithTasks,
+  mergeBacklogFacets,
   overviewBacklog,
+  stripBacklogItemSearchText,
+  stripBacklogSearchText,
+  summarizeBacklogOverview,
   type BacklogDispatchResult,
 } from './backlog-service.js'
+import { applyBacklogQuery, parseBacklogQuery } from './backlog-query.js'
 import { applyProjectCollect, previewProjectCollect } from './backlog-collect.js'
 import { SshInputError, execOnSshResource, maskSshResource, normalizeSshResource, testSshResource } from './ssh-resources.js'
 import type { SshResourceStore } from './ssh-store.js'
@@ -1496,12 +1499,32 @@ export class WorkBuddyRouter {
     // ---------- Backlog 集成（B1-B7，docs/design-backlog-integration.md §5.2/§6/§7.3） ----------
     // 全部过既有鉴权（外层 dispatch）+ 项目可见性门（canSeeProject）；写操作过归档只读拦截（P-08 语义同 /api/tasks）。
     if (p === '/api/backlog/overview' && method === 'GET') {
-      // 聚合与失败隔离逻辑收敛在 backlog-service（工具通道 overview 复用同一实现）
+      // 聚合与失败隔离逻辑收敛在 backlog-service（工具通道 overview 复用同一实现）；
+      // 查询契约见 docs/design-backlog-query-filters.md §4.2：data 仍是项目分组数组（向后兼容），
+      // 信封额外带 query / summary / facets。默认不排除已完成（openOnly 才按各项目 statuses 排除）。
+      const q = new URL(req.url || '/', 'http://localhost').searchParams
+      const parsed = parseBacklogQuery(q)
+      if (parsed.errors.length) {
+        this.sendJson(res, 400, { ok: false, error: parsed.errors.join('；'), code: 'INVALID_QUERY', errors: parsed.errors })
+        return true
+      }
+      const visible = this.store.getProjects().filter((pr) => this.canSeeProject(pr))
+      // projectIds 先筛项目（项目作用域）；条目过滤由 service 逐项目按各自 statuses 应用
+      const scoped = parsed.query.projectIds?.length
+        ? visible.filter((pr) => parsed.query.projectIds!.includes(pr.id))
+        : visible
       const data = await overviewBacklog(
         { client: this.client, store: this.store, resolver: this.resolver },
-        this.store.getProjects().filter((pr) => this.canSeeProject(pr)),
+        scoped,
+        { query: parsed.query },
       )
-      this.sendJson(res, 200, { ok: true, data })
+      this.sendJson(res, 200, {
+        ok: true,
+        data,
+        query: parsed.query,
+        summary: summarizeBacklogOverview(data),
+        facets: mergeBacklogFacets(data.map((row) => row.facets)),
+      })
       return true
     }
 
@@ -1522,19 +1545,42 @@ export class WorkBuddyRouter {
         return { ok: true, target, workspace: proj.workspace }
       }
       try {
-        // GET 列表（读：归档项目也允许只读查看）；排序：?orderBy=priority|status|createdAt|updatedAt|ordinal&order=asc|desc
+        // GET 列表（读：归档项目也允许只读查看）；查询契约见 docs/design-backlog-query-filters.md §4.1：
+        // 先取全量条目（ready/blocked 判依赖需要全量语料），再用查询引擎过滤/排序/切窗。
+        // 旧参数 ?orderBy=&order= 由 parseBacklogQuery 归一为 sort/order，继续可用。
         if (rest.length === 0 && method === 'GET') {
           const ctx = await nodeCtx()
           if (!ctx.ok) { this.sendJson(res, ctx.status, { ok: false, error: ctx.error }); return true }
-          const q = new URL(req.url || '/', 'http://localhost').searchParams
+          const parsed = parseBacklogQuery(new URL(req.url || '/', 'http://localhost').searchParams)
+          if (parsed.errors.length) {
+            this.sendJson(res, 400, { ok: false, error: parsed.errors.join('；'), code: 'INVALID_QUERY', errors: parsed.errors })
+            return true
+          }
           const list = await listBacklogWithTasks(
             { client: this.client, store: this.store },
             ctx.target,
             ctx.workspace,
             projectId,
-            { orderBy: parseBacklogOrderBy(q.get('orderBy')), order: parseBacklogOrder(q.get('order')) },
           )
-          this.sendJson(res, 200, { ok: true, data: { ...list, archived: readOnly, statuses: list.config.statuses, defaultStatus: list.config.defaultStatus, instructionSnippet: backlogInstructionSnippet() } })
+          const result = applyBacklogQuery(list.items, parsed.query, { statuses: list.config.statuses })
+          this.sendJson(res, 200, {
+            ok: true,
+            data: {
+              ...list,
+              // 覆盖 list.items：过滤/排序/切窗后的条目（带 isReady 等派生字段，searchText 已剥离）
+              items: stripBacklogSearchText(result.items),
+              total: result.total,
+              matched: result.matched,
+              counts: result.counts,
+              window: result.window,
+              facets: result.facets,
+              query: parsed.query,
+              archived: readOnly,
+              statuses: list.config.statuses,
+              defaultStatus: list.config.defaultStatus,
+              instructionSnippet: backlogInstructionSnippet(),
+            },
+          })
           return true
         }
         // POST 未完成事项采集（简版：A 任务账本 + B 工作区代码/文档确定性扫描）
@@ -1630,7 +1676,8 @@ export class WorkBuddyRouter {
               .sort((a, b) => b.updatedAt - a.updatedAt)
             this.sendJson(res, 200, {
               ok: true,
-              data: { item, raw, statuses: found.list.config.statuses, tasks: linked.map((t) => ({ id: t.id, status: t.status, summaryStatus: t.summary?.status || '', summary: t.summary ? { overview: t.summary.overview, finalConclusion: t.summary.finalConclusion, completedAt: t.summary.completedAt } : null, writebackFailed: t.backlogWritebackFailed || null, updatedAt: t.updatedAt })) },
+              // searchText 是服务端检索语料，任何回包都不得携带
+              data: { item: stripBacklogItemSearchText(item), raw, statuses: found.list.config.statuses, tasks: linked.map((t) => ({ id: t.id, status: t.status, summaryStatus: t.summary?.status || '', summary: t.summary ? { overview: t.summary.overview, finalConclusion: t.summary.finalConclusion, completedAt: t.summary.completedAt } : null, writebackFailed: t.backlogWritebackFailed || null, updatedAt: t.updatedAt })) },
             })
             return true
           }

@@ -48,7 +48,7 @@ parameters:
 | `config` | projectId | backlog 配置：statuses / defaultStatus / taskPrefix / projectName / initialized | `init` 的只读部分 |
 | `init` | projectId | 初始化 backlog 目录（幂等）；可带 `sample`、`updateInstruction` | `init`（CLI） |
 | `list` | projectId | 待办列表（元数据 + 验收进度 + 关联任务），支持 §6 过滤 | `task_list` |
-| `search` | projectId | 全文检索（标题 + 标签 + 描述正文），需 `filter.search` | `task_search` |
+| `search` | projectId | 全文检索（标题/描述/备注/评论/最终总结/metadata；空白切词全部命中），需 `filter.search` | `task_search` |
 | `view` | projectId, itemId | 单条详情：字段 + 完整 Markdown 原文 + 关联任务（含汇总） | `task_view` |
 | `create` | projectId, item.title | 新建待办（itemId 服务端分配，沿用 `<task_prefix>-<n>`） | `task_create` |
 | `edit` | projectId, itemId, item | 改字段 / 状态 / 标签 / 依赖 / 指派人 / 描述 / 验收清单 / 追加记录 | `task_edit` |
@@ -76,6 +76,11 @@ parameters:
   "labels": ["backend", "p0"],     // 整体替换
   "assignees": ["alice"],          // 整体替换（上游字段名 assignee）
   "dependencies": ["TASK-1"],      // 整体替换
+  // ---- 查询相关字段（docs/design-backlog-query-filters.md §2）：null/空串 = 清除 ----
+  "type": "bug",                   // 任务类型（frontmatter type）
+  "milestone": "M-1",              // 里程碑（frontmatter milestone）
+  "taskProject": "web",            // monorepo 组件（frontmatter project）
+  "parentTaskId": "TASK-12",       // 父任务（frontmatter parent_task_id）
   "acceptance": ["回调签名校验通过"], // 整体替换验收清单（保留已勾选状态优先按文本匹配）
   "acceptAdd": ["新增一条验收"],     // 追加验收项（不覆盖既有）
   "note": { "title": "人工备注", "lines": ["…"] }  // 文末追加执行记录（不动既有内容）
@@ -83,31 +88,67 @@ parameters:
 ```
 
 规则：
-- 未出现的键 = 不改动（宽容原则，与 `encodeFrontmatter` 一致）。
+- 未出现的键 = 不改动（宽容原则，与 `encodeFrontmatter` 一致）；`null`/空串 = 清除该字段。
 - `status` 非法时返回 `{ok:false,error:"status 非法，可选：…"}`，不做静默写入。
 - `edit` 写路径走 `writeItem` 乐观并发：内容被他人改动返回 `{ok:false,code:"CONFLICT"}`，提示重新 `view` 后重试。
+- `create` 一次写入 `type/milestone/taskProject/parentTaskId`（`createItem` 的原生字段），无需二次补写。
 
 ## 6. `filter` JSON（list / search / overview）
 
+> 查询引擎与 REST 完全同源：`src/backlog-query.ts` 的 `parseBacklogQuery`（文档
+> `docs/design-backlog-query-filters.md` §2/§5）。旧字段全部保留，值可为字符串或数组
+> （数组/逗号分隔等价，大小写不敏感）。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `status` | string \| string[] | 只保留这些状态（多值并集，大小写不敏感） |
+| `excludeStatus` | string \| string[] | 排除这些状态（与 `status` 同时给时排除优先） |
+| `assignee` | string \| string[] | 指派人**包含**匹配（忽略前缀 `@`） |
+| `unassigned` | bool | 仅未指派（**不可与 `assignee` 同用**） |
+| `priority` | string \| string[] | 优先级多值（归一化 lower 后并集） |
+| `type` | string \| string[] | 任务类型多值 |
+| `labels` | string \| string[] | 标签，默认要求全部命中 |
+| `labelMatch` | `"all"` \| `"any"` | 标签匹配模式（缺省 `all`；非法值 → `ok:false`） |
+| `milestone` | string | 里程碑（`m-8`/`8` 数字别名；`__none__` = 无里程碑） |
+| `taskProject` | string \| string[] | frontmatter `project`（monorepo 组件，非 WorkBuddy 项目） |
+| `parent` | string | 只要该父任务的子任务（`parent_task_id`，id 归一化；不能为空串） |
+| `search` | string | 全文检索：标题/描述/备注/评论/最终总结/metadata（空白切词、全部子串命中） |
+| `ready` | bool | 未完成且依赖全部完成 |
+| `blocked` | bool | 有未完成/未知依赖（与 `ready` 互斥） |
+| `includeDone` | bool | `false` ≡ `openOnly=true`（overview **缺省 false**） |
+| `openOnly` | bool | 按各项目自身 statuses 排除已关闭状态 |
+| `sort` | `priority`\|`id`\|`ordinal`\|`createdAt`\|`updatedAt`\|`status` | 排序维度（缺省 `createdAt`；旧名 `orderBy` 继续可用） |
+| `order` | `"asc"` \| `"desc"` | 排序方向（缺省 `desc`） |
+| `limit` | number | 排序后的**硬截断**（只取前 N 条，缺省 50、上限 1000）；先截断再开窗 |
+| `maxCount` | number | 窗口大小（`skip` 之后取多少条）；**翻页用 `skip`+`maxCount`**，不要用 `limit` |
+| `skip` | number | 窗口偏移（在过滤 + 排序 + `limit` 截断之后，≥0） |
+| `count` | bool | 只要计数，`items:[]` |
+| `projectIds` | string[] | projects / overview：收窄 WorkBuddy 项目范围 |
+
 ```jsonc
-{
-  "status": "To Do",        // 精确匹配（大小写不敏感）
-  "assignee": "alice",      // 指派人包含
-  "unassigned": true,       // 仅未指派（不可与 assignee 同用）
-  "labels": ["backend"],    // 需全部命中
-  "search": "支付",          // 标题/描述/标签子串（大小写不敏感）
-  "ready": true,            // 仅依赖已全部完成的待办
-  "limit": 50,              // 默认 50（上限 1000）：MCP 单帧 64KB，列表过大会被整包替换成「结果过大」
-  "includeDone": false,     // overview：false = 只返回未完成（**默认 false**）
-  "projectIds": ["proj-x"]  // projects / overview：收窄项目范围
-}
+// 例：高优、未完成、依赖已就绪的「登录 超时」相关待办，按优先级倒序取前 20 条
+{ "status": ["To Do", "In Progress"], "excludeStatus": ["Done"], "priority": ["high"],
+  "labels": ["backend"], "labelMatch": "all", "search": "登录 超时",
+  "ready": true, "sort": "priority", "order": "desc", "limit": 20 }
+
+// 例：翻页（第 2 页，每页 20 条）——分页窗口用 maxCount + skip
+{ "sort": "createdAt", "order": "desc", "maxCount": 20, "skip": 20 }
 ```
+
+> 分页语义（与上游 CLI 一致）：`limit` 先对排序结果硬截断，`skip`/`maxCount` 再在截断后的列表上开窗。
+> 因此**「显示更多」只能带 `skip`+`maxCount`**；只带 `limit` 再叠加 `skip` 会让窗口越出截断列表（第 2 页变空）。
+> 工具通道在**只给 `skip`** 时自动补 `maxCount=50`（不是 `limit`），保证翻页可用。
+
+错误：`assignee`+`unassigned` 互斥、数值非法（`limit/skip/maxCount` 非整数或越界）、
+`labelMatch`/`order` 非法 → `{ok:false, code:"INVALID_QUERY", error, errors[]}`（不静默降级）。
 
 ## 7. 返回约定
 
-- 成功：`JSON.stringify({ ok: true, ... }, null, 2)`，列表类带 `statuses` / `truncated` / `total`。
-- 失败：`{ ok:false, error }`；冲突额外带 `code:"CONFLICT"`；依赖阻止带 `code:"DEPS_BLOCKED"` 与 `blocked:[…]`。
+- 成功：`JSON.stringify({ ok: true, ... }, null, 2)`，列表类带 `statuses` / `truncated` / `total` / `matched` / `window` / `counts` / `facets`。
+- 失败：`{ ok:false, error }`；`filter` 参数非法带 `code:"INVALID_QUERY"` 与 `errors[]`；冲突额外带 `code:"CONFLICT"`；
+  依赖阻止带 `code:"DEPS_BLOCKED"` 与 `blocked:[…]`。
 - 归档项目（`archivedAt` 非空）写操作一律拒绝，读操作放行（与 HTTP API 的 P-08 语义一致）。
+- **`searchText` 是服务端检索语料，任何回包（list / overview / view / detail）都不得出现**（服务层统一剥离）。
 
 各 action 的回包键（测试与文档以此为准）：
 
@@ -116,14 +157,14 @@ parameters:
 | `projects` | `projects[]`（`id/name/node?/workspace?/archived:boolean/nodeStatus/initialized/statuses?/defaultStatus?/error?`）、`total` |
 | `config` | `initialized/statuses/defaultStatus/taskPrefix/instructionSnippet/archived` |
 | `init` | `initialized/sampleItemId?/statuses/defaultStatus` |
-| `list` / `search` | `initialized/statuses/defaultStatus/total/returned/items[]`（未初始化时 `initialized:false` + `tip`，`statuses/defaultStatus` 仍给默认值） |
-| `view` | `item`（完整字段）、`raw`（完整 Markdown；超 40K 字符截断并带 `rawTruncated:true` + `rawLength`）、`tasks[]`（关联任务含 summary）、`statuses` |
-| `create` | `item`（含服务端分配的 `itemId`）、`warning?`（待办已建但 note 追加失败时） |
+| `list` / `search` | `initialized/statuses/defaultStatus/total(全量)/matched(命中)/returned(本窗口条数)/window{skip,total,nextSkip,cut,shown}/counts{open,done,ready,blocked,unassigned}/facets/query/items[]`；条目带 `isReady/blocked/blockingDependencies?/missingDependencies?` 与 `type/milestone/taskProject/parentTaskId?`（未初始化时 `initialized:false` + `tip`，`statuses/defaultStatus` 仍给默认值） |
+| `view` | `item`（完整字段 + `isReady/blocked/blockingDependencies/missingDependencies`；**不含 searchText**）、`raw`（完整 Markdown；超 40K 字符截断并带 `rawTruncated:true` + `rawLength`）、`tasks[]`（关联任务含 summary）、`statuses` |
+| `create` | `item`（含服务端分配的 `itemId` 与 type/milestone/taskProject/parentTaskId）、`warning?`（待办已建但 note 追加失败时） |
 | `edit` | `itemId/updated[]/description?/acceptance?/note?` |
 | `delete` | `deleted/fileName`（未带 `force` 时 `code:"CONFIRM_REQUIRED"`） |
 | `dispatch`（单条；`itemIds` 只有 1 条时也走此形状） | **扁平**：`ok/taskId/itemId/taskTitle/mode/itemStatus` |
 | `dispatch`（批量，`itemIds` ≥2 条） | `ok/results[]（ok/itemId/taskId?/code?/error?/blocked?/taskCreated?）/succeeded/failed` |
-| `overview` | `summary{projects,unreachable,open}`、`projects[]`（`projectId/projectName/nodeStatus/error?/total/open/items[]`；`open` 恒为未完成数，与 `includeDone` 解耦） |
+| `overview` | `summary{projects,unreachable,total,matched,open,ready,blocked}`、`facets`（所有项目并集）、`projects[]`（`projectId/projectName/nodeStatus/error?/statuses?/defaultStatus?/total/matched/open/done/ready/blocked/items[]`）；逐项目字段扁平（与 REST §4.2 一致）；**默认剔除已完成**（`includeDone` 缺省 false ≡ `openOnly=true`），要历史完成项显式 `includeDone:"true"` |
 | `retry-writeback` | `taskId/projectId/itemId`（失败仍回 `taskId/projectId/itemId` + `retryable:true`） |
 
 > HTTP 工具通道（`POST /api/tools/workbuddy_backlog_manage`）在外层再包一层 `{ok, tool, result}`，
@@ -146,7 +187,7 @@ parameters:
 | `task_archive` / `task_restore` | ❌ 未实现 | 本仓库设计（`docs/design-backlog-integration.md` §11.2）已定：归档语义映射为状态迁移，物理归档目录后置；避免引入 `backlog/archive/` 目录与列表排除逻辑 |
 | `definition_of_done_defaults_*` | ❌ 未实现 | 需在 `config.yml` 增项目级 DoD 默认值，数据层未建模；验收清单（AC）已覆盖主要用途 |
 | `document_*`（8 个） | ❌ 未实现 | docs-as-code 与「待办即工单」正交，设计文档已列后置 |
-| `milestone_*` | ❌ 未实现 | frontmatter 未建模 milestone 字段，后置 |
+| `milestone_*` | ⚠️ 部分 | 单条待办的 `milestone` 字段已支持（`--milestone` 过滤、`item.milestone` 读写）；里程碑清单管理（创建/重命名/归档）未实现——上游依赖 `milestones/` 归档目录，本仓库不建模 |
 | 依赖 git 的历史/分支视图 | ❌ 未实现 | 工作区按纯文件读写，不做 git 提交（设计 §9 风险 6） |
 | 派发为任务（上游无） | ✅ `dispatch` / `overview` / `retry-writeback` | WorkBuddy 独有执行闭环 |
 
@@ -154,10 +195,11 @@ parameters:
 
 | 文件 | 变更 |
 |---|---|
-| `src/backlog-service.ts` | 新增：`dispatchBacklogItem()`（从 router 抽出）+ `overviewBacklog()`（跨项目 fan-out） |
-| `src/backlog-tool.ts` | 新增：`createBacklogManageTool(deps)` 返回 backlog 工具定义，由 `tool-ops.ts` 组装进 defs 表 |
-| `src/backlog.ts` | `listBacklog` 支持 `withBodies`（search 需要描述正文） |
+| `src/backlog-service.ts` | `dispatchBacklogItem()`（从 router 抽出）+ `overviewBacklog()`（跨项目 fan-out，支持 `query` 逐项目过滤）；`stripBacklogSearchText` / `mergeBacklogFacets` / `summarizeBacklogOverview` |
+| `src/backlog-query.ts` | 查询引擎（`parseBacklogQuery` / `applyBacklogQuery` / readiness / facets），REST 与工具通道共用 |
+| `src/backlog-tool.ts` | 新增：`createBacklogManageTool(deps)` 返回 backlog 工具定义，由 `tool-ops.ts` 组装进 defs 表；filter 解析复用查询引擎 |
+| `src/backlog.ts` | `listBacklog` 支持 `withBodies`（search 的描述预览）；查询字段（type/milestone/project/parent_task_id）与 `searchText` |
 | `src/tool-ops.ts` | 注册第 16 个工具 `workbuddy_backlog_manage` |
-| `src/router.ts` | 复用 `backlog-service`，删除重复实现 |
-| `scripts/backlog-e2e.mjs` | 新增 MCP 工具通道用例（stub DSH 节点） |
+| `src/router.ts` | 复用 `backlog-service`，两接口接入查询引擎与 `INVALID_QUERY` 错误码 |
+| `scripts/backlog-e2e.mjs` | 新增 MCP 工具通道用例（stub DSH 节点）+ 查询链路覆盖 |
 | `skills/workbuddy-mcp/SKILL.md`、`skills/onenat-workbuddy/*` | 工具清单与用法 |

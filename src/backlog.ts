@@ -46,6 +46,19 @@ export interface BacklogFields {
   ordinal?: number
   priority?: string
   dueDate?: string
+  // ---- Backlog.md v1.55.3 frontmatter 的其余可查询字段（docs/design-backlog-query-filters.md §2）----
+  /** `--type` 语义任务类型（bug/feature/…，取自 config types；缺省=未分类） */
+  type?: string
+  /** `--milestone` 里程碑 ID 或标题（上游存的是人读值，匹配时同时尝试 id 与标题） */
+  milestone?: string
+  /** frontmatter `project`（monorepo 组件名）。名字避开 WorkBuddy 的「项目」，故叫 taskProject */
+  taskProject?: string
+  /** frontmatter `parent_task_id`：父任务 ID（`--parent` 过滤用） */
+  parentTaskId?: string
+  /** frontmatter `subtasks`：子任务 ID 列表（上游声明字段，查询侧只透传） */
+  subtasks?: string[]
+  /** frontmatter `reporter`：登记人（metadata 参与 --search） */
+  reporter?: string
 }
 
 export interface BacklogItem extends BacklogFields {
@@ -67,6 +80,11 @@ export interface BacklogItem extends BacklogFields {
    * 默认不填：列表只要元数据；正文段解析是 search 这类全量检索才需要的额外成本。
    */
   description?: string
+  /**
+   * 检索用正文（小写；frontmatter 字段 + 正文全文，`--search` 的语料）。
+   * **仅服务端内部使用**：HTTP/工具回包必须剥离（体积与 token 预算），由 router/tool 层负责。
+   */
+  searchText?: string
 }
 
 export interface BacklogConfig {
@@ -153,6 +171,17 @@ function quoteIfNeeded(v: string): string {
   return /[:#\[\]{}&*!|>'"%@`,]/.test(v) ? `'${v.replace(/'/g, "''")}'` : v
 }
 
+/** 行内数组（Backlog.md 也接受 `labels: [a, b]` 写法；宽容解析，非法即忽略） */
+function parseInlineArray(val: string): string[] | undefined {
+  const v = val.trim()
+  if (!(v.startsWith('[') && v.endsWith(']'))) return undefined
+  return v
+    .slice(1, -1)
+    .split(',')
+    .map((x) => unquote(x))
+    .filter((x) => x !== '')
+}
+
 /** 逐行解析 frontmatter：已知字段收集 + 行位置登记（写回时按位置原位改写） */
 export function decodeFrontmatter(raw: string): { fields: BacklogFields; meta: DecodedFrontmatter } {
   const lines = raw.split(/\r?\n/)
@@ -184,7 +213,18 @@ export function decodeFrontmatter(raw: string): { fields: BacklogFields; meta: D
         if (key === 'labels') fields.labels = items
         else if (key === 'dependencies') fields.dependencies = items
         else if (key === 'assignee') fields.assignees = items
+        else if (key === 'subtasks') fields.subtasks = items
       } else {
+        // 行内数组：`labels: [a, b]` / `assignee: [x]` / `dependencies: [task-1]`（上游也接受该写法）
+        const inlineArr = parseInlineArray(val)
+        if (inlineArr) {
+          if (key === 'labels') fields.labels = inlineArr
+          else if (key === 'dependencies') fields.dependencies = inlineArr
+          else if (key === 'assignee') fields.assignees = inlineArr
+          else if (key === 'subtasks') fields.subtasks = inlineArr
+          i++
+          continue
+        }
         scalarIdx.set(key, i)
         const v = unquote(val)
         if (key === 'id') fields.id = v
@@ -194,6 +234,11 @@ export function decodeFrontmatter(raw: string): { fields: BacklogFields; meta: D
         else if (key === 'updated_date') fields.updatedDate = v
         else if (key === 'priority') fields.priority = v
         else if (key === 'due_date') fields.dueDate = v
+        else if (key === 'type') fields.type = v
+        else if (key === 'milestone') fields.milestone = v
+        else if (key === 'project') fields.taskProject = v
+        else if (key === 'parent_task_id') fields.parentTaskId = v
+        else if (key === 'reporter') fields.reporter = v
         else if (key === 'ordinal') {
           const n = Number(v)
           if (Number.isFinite(n)) fields.ordinal = n
@@ -253,9 +298,16 @@ export function encodeFrontmatter(raw: string, patch: Partial<BacklogFields>): s
   if (patch.dueDate !== undefined) applyScalar('due_date', patch.dueDate)
   if (patch.ordinal !== undefined) applyScalar('ordinal', patch.ordinal)
   if (patch.updatedDate !== undefined) applyScalar('updated_date', patch.updatedDate)
+  // 查询相关字段（docs/design-backlog-query-filters.md §2）：未给值不改动，空串=清除
+  if (patch.type !== undefined) applyScalar('type', patch.type)
+  if (patch.milestone !== undefined) applyScalar('milestone', patch.milestone)
+  if (patch.taskProject !== undefined) applyScalar('project', patch.taskProject)
+  if (patch.parentTaskId !== undefined) applyScalar('parent_task_id', patch.parentTaskId)
+  if (patch.reporter !== undefined) applyScalar('reporter', patch.reporter)
   applyBlock('labels', patch.labels)
   applyBlock('dependencies', patch.dependencies)
   applyBlock('assignee', patch.assignees)
+  applyBlock('subtasks', patch.subtasks)
   // updated_date 未显式给时自动盖章（上游语义）
   if (patch.updatedDate === undefined) applyScalar('updated_date', now)
   return joinLines(lines)
@@ -286,6 +338,45 @@ export function appendExecutionRecord(raw: string, entry: { time: string; title:
   const head = raw.endsWith('\n') ? raw : raw + '\n'
   const body = ['', `### ${entry.time} ${entry.title}`, ...entry.lines, '']
   return head + body.join('\n')
+}
+
+// ---------- 全文检索语料（--search） ----------
+
+/** 去掉 frontmatter，返回正文（保留行结构；无 frontmatter 时原样返回） */
+export function stripFrontmatter(raw: string): string {
+  const lines = raw.split(/\r?\n/)
+  if (lines[0]?.trim() !== '---') return raw
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === '---') return lines.slice(i + 1).join('\n')
+  }
+  return raw
+}
+
+/**
+ * 构建 `--search` 语料（小写）：frontmatter 关键字段 + 正文全文。
+ * 覆盖上游「搜索标题、描述、备注、评论与 metadata」：正文里本来就含 AC / 备注 / 最终总结 / 执行记录，
+ * 因此正文全文 + 声明字段即可完整覆盖，且不需要再解析段标记（单次列表的成本不增加）。
+ */
+export function buildSearchText(fields: BacklogFields, raw: string): string {
+  const meta = [
+    fields.id,
+    fields.title,
+    fields.status,
+    fields.priority,
+    fields.type,
+    fields.milestone,
+    fields.taskProject,
+    fields.parentTaskId,
+    fields.reporter,
+    fields.dueDate,
+    ...(fields.assignees || []),
+    ...(fields.labels || []),
+    ...(fields.dependencies || []),
+    ...(fields.subtasks || []),
+  ]
+    .filter((x): x is string => typeof x === 'string' && x.length > 0)
+    .join('\n')
+  return `${meta}\n${stripFrontmatter(raw)}`.toLowerCase()
 }
 
 // ---------- 文件名 / itemId ----------
@@ -325,9 +416,16 @@ export function backlogPriorityWeight(priority?: string): number {
 // ---------- 列表排序（TASK-SORT-2）：orderBy + asc/desc（API/工具/前端共用） ----------
 
 /** 列表排序维度：createdAt 映射 frontmatter createdDate，updatedAt 映射 updatedDate */
-export type BacklogOrderBy = 'createdAt' | 'updatedAt' | 'priority' | 'status' | 'ordinal'
+export type BacklogOrderBy = 'createdAt' | 'updatedAt' | 'priority' | 'status' | 'ordinal' | 'id'
 
-export const BACKLOG_ORDER_BY_VALUES: BacklogOrderBy[] = ['createdAt', 'updatedAt', 'priority', 'status', 'ordinal']
+export const BACKLOG_ORDER_BY_VALUES: BacklogOrderBy[] = [
+  'createdAt',
+  'updatedAt',
+  'priority',
+  'status',
+  'ordinal',
+  'id',
+]
 
 /** 解析 orderBy 参数：非法/缺省回退默认 createdAt */
 export function parseBacklogOrderBy(raw?: string | null): BacklogOrderBy {
@@ -342,11 +440,42 @@ export function parseBacklogOrder(raw?: string | null): 'asc' | 'desc' {
 }
 
 /**
+ * 任务 ID 的数字段（`task-2` → [2]，`task-2.10` → [2,10]，`JIRA-7` → [7]）。
+ * 与上游 `src/utils/task-sorting.ts: parseTaskId` 同规则：去前缀字母段后按 `.` 拆数字，
+ * 非数字段落退化为尾数字；完全无法解析返回 [0]。
+ */
+export function backlogIdNumericParts(itemId: string): number[] {
+  const numericPart = String(itemId || '').replace(/^[a-zA-Z]+-/i, '')
+  const dotParts = numericPart.split('.')
+  const nums = dotParts.map((part) => {
+    const n = Number.parseInt(part, 10)
+    return Number.isNaN(n) ? null : n
+  })
+  if (nums.every((n) => n !== null)) return nums as number[]
+  const trailing = /(\d+)$/.exec(numericPart)
+  return trailing ? [Number.parseInt(trailing[1], 10)] : [0]
+}
+
+/** 任务 ID 排序（数字段逐段比较，长度不齐按 0 补齐；全等时用原串 localeCompare 兜底） */
+export function compareBacklogIds(a: string, b: string): number {
+  const pa = backlogIdNumericParts(a)
+  const pb = backlogIdNumericParts(b)
+  const len = Math.max(pa.length, pb.length)
+  for (let i = 0; i < len; i++) {
+    const x = pa[i] ?? 0
+    const y = pb[i] ?? 0
+    if (x !== y) return x - y
+  }
+  return String(a).localeCompare(String(b), undefined, { sensitivity: 'base', numeric: true })
+}
+
+/**
  * 按 orderBy + asc/desc 排序（TASK-SORT-2）：服务端 API / 工具通道 / 前端共用同一规则。
  * - createdAt/updatedAt：ISO 日期字典序即时间序；空日期恒排尾（不受方向影响）；
  * - priority：backlogPriorityWeight（P0→P4→未知）；
  * - status：config.statuses 配置顺序（未收录排最后）；
  * - ordinal：数值（缺省排最后）。
+ * - id：backlogIdNumericParts 数字段（task-2 < task-10）。
  * 平级兜底 itemId 序号（方向跟随 asc/desc）；不修改原数组，稳定排序。
  */
 export function sortBacklogItemsBy<
@@ -358,6 +487,7 @@ export function sortBacklogItemsBy<
     const m = /(\d+)\s*$/.exec(itemId)
     return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER
   }
+  if (orderBy === 'id') return [...items].sort((a, b) => compareBacklogIds(a.itemId, b.itemId) * dir)
   return [...items].sort((a, b) => {
     if (orderBy === 'priority') {
       const pa = backlogPriorityWeight(a.priority)
@@ -494,6 +624,8 @@ export async function listBacklog(
       filePath: e.path || `${paths.tasks}/${e.name}`,
       acceptance: countAcceptance(raw),
       hasExecutionRecord: hasExecutionRecord(raw),
+      // 检索语料随列表一起算（raw 已在内存，零额外 IO）；HTTP/工具回包负责剥离
+      searchText: buildSearchText(fields, raw),
       ...(sourceKeys.length ? { sourceKeys } : {}),
       ...(opts?.withBodies ? { description: extractDescription(raw) } : {}),
     } satisfies BacklogItem
@@ -569,6 +701,10 @@ export interface CreateItemSpec {
   assignees?: string[]
   priority?: string
   dueDate?: string
+  type?: string
+  milestone?: string
+  taskProject?: string
+  parentTaskId?: string
 }
 
 /** 生成条目 Markdown（字段顺序对齐上游 v1.55.3 实测样本，§3.2） */
@@ -587,6 +723,10 @@ function buildItemMarkdown(cfg: BacklogConfig, id: string, num: number, spec: Cr
     'dependencies:',
     ...(spec.dependencies || []).map((d) => `  - ${quoteIfNeeded(d)}`),
     ...(spec.priority ? [`priority: ${quoteIfNeeded(spec.priority)}`] : []),
+    ...(spec.type ? [`type: ${quoteIfNeeded(spec.type)}`] : []),
+    ...(spec.milestone ? [`milestone: ${quoteIfNeeded(spec.milestone)}`] : []),
+    ...(spec.taskProject ? [`project: ${quoteIfNeeded(spec.taskProject)}`] : []),
+    ...(spec.parentTaskId ? [`parent_task_id: ${quoteIfNeeded(spec.parentTaskId)}`] : []),
     ...(spec.dueDate ? [`due_date: '${spec.dueDate}'`] : []),
     `ordinal: ${num * 1000}`,
     '---',
@@ -620,6 +760,10 @@ function itemFromSpec(id: string, num: number, fileName: string, tasksDir: strin
     ordinal: num * 1000,
     priority: spec.priority,
     dueDate: spec.dueDate,
+    type: spec.type,
+    milestone: spec.milestone,
+    taskProject: spec.taskProject,
+    parentTaskId: spec.parentTaskId,
     acceptance: spec.acceptance?.length ? { total: spec.acceptance.length, done: 0 } : undefined,
   }
 }

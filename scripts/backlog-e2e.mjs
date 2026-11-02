@@ -16,6 +16,12 @@
  *      create / edit（含 acceptAdd、note、非法 status）/ delete（二次确认 + force）/
  *      dispatch（DEPS_BLOCKED + force + itemIds 批量部分失败）/ overview（P2 不可达失败隔离）/
  *      retry-writeback / 归档项目写操作被拒
+ *   9. 未完成事项采集（简版：任务账本 + 工作区代码/文档扫描）
+ *  10. 任务查询能力（契约 docs/design-backlog-query-filters.md §2/§3/§4/§5）：
+ *      REST 过滤（status/excludeStatus/priority/type/labels/assignee/unassigned/milestone/parent/search）
+ *      + 排序/切窗/计数/facets/window/就绪派生字段 + 非法参数 400 INVALID_QUERY；
+ *      overview 逐项目过滤 + summary/facets + openOnly + matched=0 项目保留；
+ *      工具通道 filter 新字段 + matched/window/counts/facets + view readiness
  */
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'
@@ -579,6 +585,435 @@ async function main() {
   const archCollect = await req('POST', `${PREFIX}/api/projects/${p4.id}/backlog/collect`, { mode: 'preview' })
   check('采集：归档项目被拒（只读拦截）', archCollect.status === 400, `status=${archCollect.status}`)
   await req('POST', `${PREFIX}/api/projects/${p4.id}/restore`)
+
+  // ================= 10. 任务查询能力（docs/design-backlog-query-filters.md §2/§3/§4/§5） =================
+  // 只在 stub 内存 FS 上验证「查询 → 过滤 → 排序 → 切窗 → 分面 → 就绪判定」链路，不改既有段落。
+  // 造数据：初始化拿到 config.yml 后直接写入 Backlog.md 兼容 frontmatter（type/milestone/parent_task_id
+  // 是本次新增字段；直写文件让测试与 create 接口是否已透传这些字段解耦）。
+  console.log('\n  -- 任务查询能力（REST / overview / 工具通道） --')
+  const WS5 = '/tmp/bl-e2e-ws5'
+  const p5 = (await req('POST', `${PREFIX}/api/projects`, {
+    name: '查询能力项目', dshRef: { kind: 'direct', apiBaseUrl: STUB_BASE }, workspace: WS5,
+  })).json?.data
+  check('查询：P5 创建', Boolean(p5?.id), p5?.id || '')
+  check('查询：P5 backlog 初始化', (await req('POST', `${PREFIX}/api/projects/${p5.id}/backlog/init`, {})).json?.ok === true)
+
+  // 语料设计（6 条，覆盖全部查询维度；created_date 递增 → 默认 createdAt 倒序可断言）：
+  //   task-201 To Do    / high   / bug     / [backend,api] / alice          / M-1 / 无依赖            → 就绪
+  //   task-202 In Prog. / medium / feature / [frontend,api]/ bob            / M-1 / 依赖 task-201(未完成) → 阻塞
+  //   task-203 Done     / low    / chore   / [backend]     / 未指派         / M-2 / 无依赖            → 终态（既不就绪也不阻塞）
+  //   task-204 To Do    / high   / bug     / [backend,api] / alice@example  / M-2 / parent=task-201 / 无依赖 → 就绪
+  //   task-205 To Do    / medium / feature / [frontend,api]/ 未指派         / M-1 / parent=task-201 / 依赖 task-203(已完成) → 就绪
+  //   task-206 To Do    / low    / docs    / [docs]        / carol          /  —  / 依赖 task-999(不存在) → 阻塞（fail-closed）
+  const CORPUS = [
+    { n: 201, title: '登录接口优化', status: 'To Do', priority: 'high', type: 'bug', labels: ['backend', 'api'], assignees: ['alice'], milestone: 'M-1', desc: '排查登录超时并加入重试', created: '2026-10-01T00:00:00Z' },
+    { n: 202, title: '看板刷新', status: 'In Progress', priority: 'medium', type: 'feature', labels: ['frontend', 'api'], assignees: ['bob'], milestone: 'M-1', deps: ['task-201'], desc: '看板自动刷新链路', created: '2026-10-02T00:00:00Z' },
+    { n: 203, title: '旧日志清理', status: 'Done', priority: 'low', type: 'chore', labels: ['backend'], assignees: [], milestone: 'M-2', desc: '清理旧日志文件', created: '2026-10-03T00:00:00Z' },
+    { n: 204, title: '支付回调', status: 'To Do', priority: 'high', type: 'bug', labels: ['backend', 'api'], assignees: ['alice@example.com'], milestone: 'M-2', parent: 'task-201', desc: '支付回调幂等处理', created: '2026-10-04T00:00:00Z' },
+    { n: 205, title: '搜索框防抖', status: 'To Do', priority: 'medium', type: 'feature', labels: ['frontend', 'api'], assignees: [], milestone: 'M-1', parent: 'task-201', deps: ['task-203'], desc: '搜索框输入防抖 300ms', created: '2026-10-05T00:00:00Z' },
+    { n: 206, title: '文档补充', status: 'To Do', priority: 'low', type: 'docs', labels: ['docs'], assignees: ['carol'], deps: ['task-999'], desc: '补充文档章节', created: '2026-10-06T00:00:00Z' },
+  ]
+  // Backlog.md 兼容 frontmatter（块列表字段空值写成 `key:` 后无子项，与 createItem 产物一致）
+  const taskMarkdown = (s) => [
+    '---',
+    `id: task-${s.n}`,
+    `title: '${s.title}'`,
+    `status: '${s.status}'`,
+    'assignee:',
+    ...(s.assignees || []).map((a) => `  - ${a}`),
+    `created_date: '${s.created}'`,
+    `updated_date: '${s.created}'`,
+    ...(s.priority ? [`priority: ${s.priority}`] : []),
+    ...(s.type ? [`type: ${s.type}`] : []),
+    ...(s.milestone ? [`milestone: '${s.milestone}'`] : []),
+    ...(s.parent ? [`parent_task_id: ${s.parent}`] : []),
+    'labels:',
+    ...(s.labels || []).map((l) => `  - ${l}`),
+    'dependencies:',
+    ...(s.deps || []).map((d) => `  - ${d}`),
+    `ordinal: ${s.n * 1000}`,
+    '---',
+    '',
+    '## Description',
+    '',
+    '<!-- SECTION:DESCRIPTION:BEGIN -->',
+    s.desc,
+    '<!-- SECTION:DESCRIPTION:END -->',
+    '',
+    '## Acceptance Criteria',
+    '<!-- AC:BEGIN -->',
+    '- [ ] #1 验收项',
+    '<!-- AC:END -->',
+    '',
+  ].join('\n')
+  for (const spec of CORPUS) putWs(`${WS5}/backlog/tasks/task-${spec.n} - ${spec.title}.md`, taskMarkdown(spec))
+
+  // ---- 断言辅助 ----
+  const idsOf = (rows) => asArray(rows).map((x) => String(x?.itemId || ''))
+  const sameSet = (rows, want) => {
+    const got = idsOf(rows).map((x) => x.toLowerCase()).sort().join(',')
+    return got === want.map((x) => String(x).toLowerCase()).sort().join(',')
+  }
+  const sameOrder = (rows, want) => idsOf(rows).join(',') === want.join(',')
+  const facetCount = (facets, dim, value) => {
+    const hit = asArray(facets?.[dim]).find((v) => String(v?.value || '').toLowerCase() === String(value).toLowerCase())
+    return hit ? hit.count : 0
+  }
+  const bl = async (pairs = []) => {
+    const qs = new URLSearchParams(pairs).toString()
+    const r = await req('GET', `${PREFIX}/api/projects/${p5.id}/backlog${qs ? `?${qs}` : ''}`)
+    return { status: r.status, json: r.json, data: r.json?.data }
+  }
+
+  // ---------- 10.1 全量列表：计数 / window / facets / 派生字段 / 新字段 ----------
+  const full = await bl()
+  const fullItems = asArray(full.data?.items)
+  check('查询REST：全量 total=6 / matched=6 / items=6',
+    full.status === 200 && full.data?.total === 6 && full.data?.matched === 6 && fullItems.length === 6,
+    `status=${full.status} total=${full.data?.total} matched=${full.data?.matched} items=${fullItems.length}`)
+  check('查询REST：默认排序沿用 createdAt 倒序（最新 task-206 在最前）',
+    idsOf(fullItems)[0] === 'task-206', `ids=${idsOf(fullItems).join(',')}`)
+  check('查询REST：window 未截断（skip=0 / total=6 / nextSkip=null / cut=false）',
+    full.data?.window?.skip === 0 && full.data?.window?.total === 6 && full.data?.window?.nextSkip === null && full.data?.window?.cut === false,
+    JSON.stringify(full.data?.window || null))
+  check('查询REST：counts 正确（open=5 / done=1 / ready=3 / blocked=2 / unassigned=2）',
+    full.data?.counts?.open === 5 && full.data?.counts?.done === 1 && full.data?.counts?.ready === 3
+      && full.data?.counts?.blocked === 2 && full.data?.counts?.unassigned === 2,
+    JSON.stringify(full.data?.counts || null))
+  check('查询REST：回包剥离 searchText（检索语料不得外泄）',
+    fullItems.every((x) => x.searchText === undefined),
+    fullItems.filter((x) => x.searchText !== undefined).map((x) => x.itemId).join(',') || 'ok')
+  const it204 = fullItems.find((x) => x.itemId === 'task-204')
+  check('查询REST：条目带 type / milestone / parentTaskId 查询字段（task-204）',
+    it204?.type === 'bug' && it204?.milestone === 'M-2' && String(it204?.parentTaskId || '').toLowerCase() === 'task-201',
+    `type=${it204?.type} milestone=${it204?.milestone} parent=${it204?.parentTaskId}`)
+  const fullFacets = full.data?.facets || {}
+  check('查询REST：facets.statuses 计数正确（To Do=4 / In Progress=1 / Done=1）',
+    facetCount(fullFacets, 'statuses', 'To Do') === 4
+      && facetCount(fullFacets, 'statuses', 'In Progress') === 1
+      && facetCount(fullFacets, 'statuses', 'Done') === 1,
+    JSON.stringify(fullFacets.statuses || []))
+  check('查询REST：facets.priorities / types 计数正确（high=2,medium=2,low=2；bug=2,feature=2,chore=1,docs=1）',
+    facetCount(fullFacets, 'priorities', 'high') === 2 && facetCount(fullFacets, 'priorities', 'medium') === 2
+      && facetCount(fullFacets, 'priorities', 'low') === 2 && facetCount(fullFacets, 'types', 'bug') === 2
+      && facetCount(fullFacets, 'types', 'feature') === 2 && facetCount(fullFacets, 'types', 'chore') === 1
+      && facetCount(fullFacets, 'types', 'docs') === 1,
+    `priorities=${JSON.stringify(fullFacets.priorities || [])} types=${JSON.stringify(fullFacets.types || [])}`)
+  check('查询REST：facets.labels / assignees / milestones 计数正确（api=4,backend=3；M-1=3,M-2=2）',
+    facetCount(fullFacets, 'labels', 'api') === 4 && facetCount(fullFacets, 'labels', 'backend') === 3
+      && facetCount(fullFacets, 'labels', 'frontend') === 2 && facetCount(fullFacets, 'labels', 'docs') === 1
+      && asArray(fullFacets.assignees).length === 4
+      && facetCount(fullFacets, 'milestones', 'M-1') === 3 && facetCount(fullFacets, 'milestones', 'M-2') === 2,
+    `labels=${JSON.stringify(fullFacets.labels || [])} milestones=${JSON.stringify(fullFacets.milestones || [])}`)
+
+  // ---------- 10.2 ready / blocked 判定（doc §3 四条规则） ----------
+  const byId = {}
+  for (const it of fullItems) byId[it.itemId] = it
+  check('查询REST：ready 语义——无依赖 → 就绪（task-201）',
+    byId['task-201']?.isReady === true && byId['task-201']?.blocked === false,
+    `isReady=${byId['task-201']?.isReady} blocked=${byId['task-201']?.blocked}`)
+  check('查询REST：ready 语义——依赖未完成 → 阻塞 + blockingDependencies（task-202 ← task-201）',
+    byId['task-202']?.blocked === true && byId['task-202']?.isReady === false
+      && asArray(byId['task-202']?.blockingDependencies).some((d) => String(d).toLowerCase() === 'task-201'),
+    `blocked=${byId['task-202']?.blocked} blocking=${JSON.stringify(byId['task-202']?.blockingDependencies)}`)
+  check('查询REST：ready 语义——依赖已完成 → 就绪（task-205 ← task-203 Done）',
+    byId['task-205']?.isReady === true && byId['task-205']?.blocked === false,
+    `isReady=${byId['task-205']?.isReady}`)
+  check('查询REST：ready 语义——依赖不存在 → 阻塞 + missingDependencies（task-206 ← task-999，fail-closed）',
+    byId['task-206']?.blocked === true && byId['task-206']?.isReady === false
+      && asArray(byId['task-206']?.missingDependencies).some((d) => String(d).toLowerCase() === 'task-999'),
+    `blocked=${byId['task-206']?.blocked} missing=${JSON.stringify(byId['task-206']?.missingDependencies)}`)
+  check('查询REST：ready 语义——终态既不就绪也不阻塞（task-203 Done）',
+    byId['task-203']?.isReady === false && byId['task-203']?.blocked === false,
+    `isReady=${byId['task-203']?.isReady} blocked=${byId['task-203']?.blocked}`)
+  const readyOnly = await bl([['ready', '1']])
+  check('查询REST：ready=1 → 3 条（task-201/204/205）',
+    readyOnly.data?.matched === 3 && sameSet(readyOnly.data?.items, ['task-201', 'task-204', 'task-205']),
+    `matched=${readyOnly.data?.matched} ids=${idsOf(readyOnly.data?.items).join(',')}`)
+  const blockedOnly = await bl([['blocked', '1']])
+  check('查询REST：blocked=1 → 2 条（task-202/206）',
+    blockedOnly.data?.matched === 2 && sameSet(blockedOnly.data?.items, ['task-202', 'task-206']),
+    `matched=${blockedOnly.data?.matched} ids=${idsOf(blockedOnly.data?.items).join(',')}`)
+
+  // ---------- 10.3 过滤维度：status / excludeStatus / priority / type / labels / assignee / unassigned / milestone / parent / search ----------
+  const stMulti = await bl([['status', 'To Do'], ['status', 'Done']])
+  check('查询REST：status 多值（重复参数）→ 5 条',
+    stMulti.data?.matched === 5 && sameSet(stMulti.data?.items, ['task-201', 'task-203', 'task-204', 'task-205', 'task-206']),
+    `matched=${stMulti.data?.matched} ids=${idsOf(stMulti.data?.items).join(',')}`)
+  const stComma = await bl([['status', 'To Do,In Progress']])
+  check('查询REST：status 多值（逗号分隔）→ 5 条（大小写/空白不敏感）',
+    stComma.data?.matched === 5 && sameSet(stComma.data?.items, ['task-201', 'task-202', 'task-204', 'task-205', 'task-206']),
+    `matched=${stComma.data?.matched} ids=${idsOf(stComma.data?.items).join(',')}`)
+  const exStatus = await bl([['excludeStatus', 'Done']])
+  check('查询REST：excludeStatus=Done → 5 条且不含 Done',
+    exStatus.data?.matched === 5 && sameSet(exStatus.data?.items, ['task-201', 'task-202', 'task-204', 'task-205', 'task-206'])
+      && asArray(exStatus.data?.items).every((x) => x.status !== 'Done'),
+    `matched=${exStatus.data?.matched} ids=${idsOf(exStatus.data?.items).join(',')}`)
+  const exWins = await bl([['status', 'To Do,In Progress'], ['excludeStatus', 'In Progress']])
+  check('查询REST：status + excludeStatus 同时给 → 排除优先（4 条，无 In Progress）',
+    exWins.data?.matched === 4 && sameSet(exWins.data?.items, ['task-201', 'task-204', 'task-205', 'task-206']),
+    `matched=${exWins.data?.matched} ids=${idsOf(exWins.data?.items).join(',')}`)
+  const byPri = await bl([['priority', 'high']])
+  check('查询REST：priority=high → 2 条（task-201/204）',
+    byPri.data?.matched === 2 && sameSet(byPri.data?.items, ['task-201', 'task-204']),
+    `matched=${byPri.data?.matched} ids=${idsOf(byPri.data?.items).join(',')}`)
+  const byType = await bl([['type', 'bug']])
+  check('查询REST：type=bug → 2 条（task-201/204）',
+    byType.data?.matched === 2 && sameSet(byType.data?.items, ['task-201', 'task-204']),
+    `matched=${byType.data?.matched} ids=${idsOf(byType.data?.items).join(',')}`)
+  const labAll = await bl([['labels', 'backend,api']])
+  check('查询REST：labels=backend,api（默认 AND）→ 2 条（task-201/204）',
+    labAll.data?.matched === 2 && sameSet(labAll.data?.items, ['task-201', 'task-204']),
+    `matched=${labAll.data?.matched} ids=${idsOf(labAll.data?.items).join(',')}`)
+  const labAny = await bl([['labels', 'backend,docs'], ['labelMatch', 'any']])
+  check('查询REST：labels + labelMatch=any → 4 条（任一标签命中）',
+    labAny.data?.matched === 4 && sameSet(labAny.data?.items, ['task-201', 'task-203', 'task-204', 'task-206']),
+    `matched=${labAny.data?.matched} ids=${idsOf(labAny.data?.items).join(',')}`)
+  const byAssignee = await bl([['assignee', 'alice']])
+  check('查询REST：assignee=alice（包含匹配，忽略大小写/@）→ 2 条（alice 与 alice@example.com）',
+    byAssignee.data?.matched === 2 && sameSet(byAssignee.data?.items, ['task-201', 'task-204']),
+    `matched=${byAssignee.data?.matched} ids=${idsOf(byAssignee.data?.items).join(',')}`)
+  const unassigned = await bl([['unassigned', '1']])
+  check('查询REST：unassigned=1 → 2 条（task-203/205）',
+    unassigned.data?.matched === 2 && sameSet(unassigned.data?.items, ['task-203', 'task-205']),
+    `matched=${unassigned.data?.matched} ids=${idsOf(unassigned.data?.items).join(',')}`)
+  const byMilestone = await bl([['milestone', 'M-2']])
+  check('查询REST：milestone=M-2 → 2 条（task-203/204）',
+    byMilestone.data?.matched === 2 && sameSet(byMilestone.data?.items, ['task-203', 'task-204']),
+    `matched=${byMilestone.data?.matched} ids=${idsOf(byMilestone.data?.items).join(',')}`)
+  const byMilestoneNum = await bl([['milestone', '2']])
+  check('查询REST：milestone 数字别名（2 ≡ M-2）→ 2 条',
+    byMilestoneNum.data?.matched === 2 && sameSet(byMilestoneNum.data?.items, ['task-203', 'task-204']),
+    `matched=${byMilestoneNum.data?.matched} ids=${idsOf(byMilestoneNum.data?.items).join(',')}`)
+  const byParent = await bl([['parent', 'TASK-201']])
+  check('查询REST：parent=TASK-201（id 归一化）→ 2 条（task-204/205）',
+    byParent.data?.matched === 2 && sameSet(byParent.data?.items, ['task-204', 'task-205']),
+    `matched=${byParent.data?.matched} ids=${idsOf(byParent.data?.items).join(',')}`)
+  const bySearch = await bl([['search', '幂等']])
+  const searchHit = asArray(bySearch.data?.items)[0]
+  check('查询REST：search=幂等 → 仅正文命中 1 条（task-204，标题「支付回调」不含该词）',
+    bySearch.data?.matched === 1 && searchHit?.itemId === 'task-204' && !/幂等/.test(String(searchHit?.title || '')),
+    `matched=${bySearch.data?.matched} ids=${idsOf(bySearch.data?.items).join(',')} title=${searchHit?.title}`)
+  const bySearchMulti = await bl([['search', '登录 重试']])
+  check('查询REST：search 空白切词 AND（登录 + 重试）→ 1 条（task-201）',
+    bySearchMulti.data?.matched === 1 && idsOf(bySearchMulti.data?.items)[0] === 'task-201',
+    `matched=${bySearchMulti.data?.matched} ids=${idsOf(bySearchMulti.data?.items).join(',')}`)
+
+  // ---------- 10.4 排序 / 切窗 / 计数 ----------
+  // 窗口语义（doc §2：limit = 排序后**硬截断**；maxCount = skip 之后的**分页窗口大小**；二者不是别名）
+  const limitHard = await bl([['sort', 'id'], ['order', 'asc'], ['limit', '3']])
+  check('查询REST：limit=3（硬截断）→ task-201/202/203，窗口耗尽（nextSkip=null / cut=false）',
+    sameOrder(limitHard.data?.items, ['task-201', 'task-202', 'task-203'])
+      && limitHard.data?.window?.skip === 0 && limitHard.data?.window?.total === 6
+      && limitHard.data?.window?.nextSkip === null && limitHard.data?.window?.cut === false
+      && limitHard.data?.matched === 6,
+    `ids=${idsOf(limitHard.data?.items).join(',')} window=${JSON.stringify(limitHard.data?.window || null)}`)
+  const maxCountPage1 = await bl([['maxCount', '3'], ['sort', 'id'], ['order', 'asc']])
+  check('查询REST：maxCount=3&skip=0（分页窗口）→ 第 1 页 3 条 + nextSkip=3/cut=true',
+    sameOrder(maxCountPage1.data?.items, ['task-201', 'task-202', 'task-203'])
+      && maxCountPage1.data?.window?.nextSkip === 3 && maxCountPage1.data?.window?.cut === true
+      && maxCountPage1.data?.window?.total === 6,
+    `ids=${idsOf(maxCountPage1.data?.items).join(',')} window=${JSON.stringify(maxCountPage1.data?.window || null)}`)
+  const maxCountPage2 = await bl([['maxCount', '3'], ['skip', '3'], ['sort', 'id'], ['order', 'asc']])
+  check('查询REST：maxCount=3&skip=3 → 第 2 页 task-204/205/206 + nextSkip=null/cut=true',
+    sameOrder(maxCountPage2.data?.items, ['task-204', 'task-205', 'task-206'])
+      && maxCountPage2.data?.window?.skip === 3 && maxCountPage2.data?.window?.nextSkip === null
+      && maxCountPage2.data?.window?.cut === true,
+    `ids=${idsOf(maxCountPage2.data?.items).join(',')} window=${JSON.stringify(maxCountPage2.data?.window || null)}`)
+  const skipNoCap = await bl([['sort', 'id'], ['order', 'asc'], ['skip', '4']])
+  check('查询REST：skip=4（无 maxCount）→ task-205/206 + nextSkip=null/cut=true（窗口省略了前 4 条）',
+    sameOrder(skipNoCap.data?.items, ['task-205', 'task-206'])
+      && skipNoCap.data?.window?.skip === 4 && skipNoCap.data?.window?.nextSkip === null && skipNoCap.data?.window?.cut === true,
+    `ids=${idsOf(skipNoCap.data?.items).join(',')} window=${JSON.stringify(skipNoCap.data?.window || null)}`)
+  const limitThenWindow = await bl([['limit', '3'], ['maxCount', '5'], ['skip', '2'], ['sort', 'id'], ['order', 'asc']])
+  check('查询REST：limit=3&maxCount=5&skip=2 → limit 先硬截断再切窗（只剩 task-203，证明 limit≠maxCount 别名）',
+    sameOrder(limitThenWindow.data?.items, ['task-203'])
+      && limitThenWindow.data?.window?.skip === 2 && limitThenWindow.data?.window?.nextSkip === null
+      && limitThenWindow.data?.window?.cut === true,
+    `ids=${idsOf(limitThenWindow.data?.items).join(',')} window=${JSON.stringify(limitThenWindow.data?.window || null)}`)
+  // 注意：priority 的 order 沿用 TASK-SORT-2 既有语义（asc=高→低，与 backlog-query.test.ts 一致）
+  const sortPriAsc = await bl([['sort', 'priority'], ['order', 'asc']])
+  check('查询REST：sort=priority&order=asc → 高→低（high,medium,low 各两条，同权重按 id 升序）',
+    sameOrder(sortPriAsc.data?.items, ['task-201', 'task-204', 'task-202', 'task-205', 'task-203', 'task-206']),
+    `ids=${idsOf(sortPriAsc.data?.items).join(',')}`)
+  const sortPriDesc = await bl([['sort', 'priority'], ['order', 'desc']])
+  check('查询REST：sort=priority&order=desc → 低→高（同权重内按 id 倒序）',
+    sameOrder(sortPriDesc.data?.items, ['task-206', 'task-203', 'task-205', 'task-202', 'task-204', 'task-201']),
+    `ids=${idsOf(sortPriDesc.data?.items).join(',')}`)
+  const countOnly = await bl([['count', '1']])
+  check('查询REST：count=1 → items=[] 且计数照常（matched=6）',
+    asArray(countOnly.data?.items).length === 0 && countOnly.data?.matched === 6 && countOnly.data?.total === 6,
+    `items=${asArray(countOnly.data?.items).length} matched=${countOnly.data?.matched}`)
+  const echo = await bl([['status', 'To Do'], ['limit', '2']])
+  check('查询REST：query 回显解析结果（status 数组 / limit 数值）',
+    asArray(echo.data?.query?.status).some((s) => String(s).toLowerCase() === 'to do') && echo.data?.query?.limit === 2,
+    JSON.stringify(echo.data?.query || null))
+
+  // ---------- 10.5 非法参数 → 400 INVALID_QUERY（doc §4.1） ----------
+  const badLimit = await bl([['limit', '0']])
+  check('查询REST：limit=0 → 400 + ok:false + code=INVALID_QUERY',
+    badLimit.status === 400 && badLimit.json?.ok === false && badLimit.json?.code === 'INVALID_QUERY',
+    `status=${badLimit.status} code=${badLimit.json?.code}`)
+  const badSkip = await bl([['skip', '-1']])
+  check('查询REST：skip=-1 → 400 + code=INVALID_QUERY',
+    badSkip.status === 400 && badSkip.json?.code === 'INVALID_QUERY',
+    `status=${badSkip.status} code=${badSkip.json?.code}`)
+  const badNum = await bl([['limit', 'abc']])
+  check('查询REST：limit=abc（非数字）→ 400 + code=INVALID_QUERY',
+    badNum.status === 400 && badNum.json?.code === 'INVALID_QUERY',
+    `status=${badNum.status} code=${badNum.json?.code}`)
+  const badMutual = await bl([['assignee', 'alice'], ['unassigned', '1']])
+  check('查询REST：assignee + unassigned 互斥 → 400 + code=INVALID_QUERY',
+    badMutual.status === 400 && badMutual.json?.ok === false && badMutual.json?.code === 'INVALID_QUERY',
+    `status=${badMutual.status} code=${badMutual.json?.code}`)
+
+  // ---------- 10.6 overview：逐项目过滤 + summary/facets + openOnly + matched=0 保留 ----------
+  const ov = async (pairs = []) => {
+    const r = await req('GET', `${PREFIX}/api/backlog/overview?${new URLSearchParams(pairs).toString()}`)
+    return { status: r.status, json: r.json, data: r.json?.data }
+  }
+  const ovP5 = await ov([['projectIds', p5.id]])
+  const qOvRows = asArray(ovP5.data)
+  const row5 = qOvRows.find((x) => x?.projectId === p5.id)
+  check('overview：projectIds 生效（仅返回 P5 一个项目分组，nodeStatus=ok）',
+    ovP5.status === 200 && ovP5.json?.ok === true && qOvRows.length === 1 && row5?.nodeStatus === 'ok',
+    `status=${ovP5.status} rows=${qOvRows.length} node=${row5?.nodeStatus}`)
+  check('overview：逐项目 total/matched（6/6，未过滤总数与过滤命中数分离）',
+    row5?.total === 6 && row5?.matched === 6, `total=${row5?.total} matched=${row5?.matched}`)
+  check('overview：逐项目计数 open/done/ready/blocked（5/1/3/2）',
+    row5?.open === 5 && row5?.done === 1 && row5?.ready === 3 && row5?.blocked === 2,
+    `open=${row5?.open} done=${row5?.done} ready=${row5?.ready} blocked=${row5?.blocked}`)
+  check('overview：逐项目 facets 存在且 statuses 计数正确（To Do=4）',
+    facetCount(row5?.facets, 'statuses', 'To Do') === 4,
+    JSON.stringify(row5?.facets?.statuses || []))
+  check('overview：信封 summary 正确（projects=1 / total=6 / matched=6 / open=5 / ready=3 / blocked=2 / unreachable=0）',
+    ovP5.json?.summary?.projects === 1 && ovP5.json?.summary?.total === 6 && ovP5.json?.summary?.matched === 6
+      && ovP5.json?.summary?.open === 5 && ovP5.json?.summary?.ready === 3
+      && ovP5.json?.summary?.blocked === 2 && ovP5.json?.summary?.unreachable === 0,
+    JSON.stringify(ovP5.json?.summary || null))
+  check('overview：信封 facets 为项目并集（statuses 含 To Do=4）',
+    facetCount(ovP5.json?.facets, 'statuses', 'To Do') === 4,
+    JSON.stringify(ovP5.json?.facets?.statuses || []))
+  const ovOpen = await ov([['projectIds', p5.id], ['openOnly', '1']])
+  const row5Open = asArray(ovOpen.data).find((x) => x?.projectId === p5.id)
+  check('overview：openOnly=1 逐项目排除已完成（P5 matched=5 / 无 Done 条目）',
+    row5Open?.matched === 5 && asArray(row5Open?.items).length === 5
+      && asArray(row5Open?.items).every((x) => x.status !== 'Done'),
+    `matched=${row5Open?.matched} items=${asArray(row5Open?.items).length}`)
+  const ovSearch = await ov([['projectIds', p5.id], ['search', '幂等']])
+  const row5Search = asArray(ovSearch.data).find((x) => x?.projectId === p5.id)
+  check('overview：查询参数生效 + query 回显（search=幂等 → P5 matched=1 / task-204）',
+    row5Search?.matched === 1 && sameSet(row5Search?.items, ['task-204']) && ovSearch.json?.query?.search === '幂等',
+    `matched=${row5Search?.matched} ids=${idsOf(row5Search?.items).join(',')} query=${JSON.stringify(ovSearch.json?.query || null)}`)
+  const ovNone = await ov([['search', '绝不存在关键词xyz']])
+  const rowsNone = asArray(ovNone.data)
+  const row5None = rowsNone.find((x) => x?.projectId === p5.id)
+  check('overview：matched=0 的项目仍返回（5 个项目分组都在，P5 matched=0 且 items=[]，保留失败隔离语义）',
+    ovNone.status === 200 && rowsNone.length === 5 && row5None?.matched === 0 && asArray(row5None?.items).length === 0,
+    `rows=${rowsNone.length} p5.matched=${row5None?.matched} items=${asArray(row5None?.items).length}`)
+
+  // ---------- 10.7 工具通道：filter 新字段 + 回包字段 + view readiness ----------
+  const t5list = async (filter) => (await tool('list', { projectId: p5.id, filter })).result
+  const tlStatus = await t5list({ status: ['To Do'], priority: ['high'] })
+  check('tools list：filter.status 多值 + priority 组合 → 2 条（task-201/204）',
+    tlStatus?.ok === true && tlStatus?.matched === 2 && sameSet(tlStatus?.items, ['task-201', 'task-204']),
+    `matched=${tlStatus?.matched} ids=${idsOf(tlStatus?.items).join(',')}`)
+  check('tools list：回包带 total/counts/window/facets（total=6 / ready=3 / window.total=命中数 2 / facets.statuses 3 项）',
+    tlStatus?.total === 6 && tlStatus?.counts?.ready === 3 && tlStatus?.counts?.blocked === 2
+      && tlStatus?.window?.total === 2 && asArray(tlStatus?.facets?.statuses).length === 3,
+    `total=${tlStatus?.total} counts=${JSON.stringify(tlStatus?.counts || null)} window=${JSON.stringify(tlStatus?.window || null)}`)
+  check('tools list：条目带 isReady/blocked 派生字段',
+    asArray(tlStatus?.items).every((x) => typeof x?.isReady === 'boolean' && typeof x?.blocked === 'boolean'),
+    JSON.stringify(asArray(tlStatus?.items).map((x) => ({ itemId: x?.itemId, isReady: x?.isReady, blocked: x?.blocked }))))
+  const tlReady = await t5list({ ready: true })
+  check('tools list：filter.ready=true → 3 条（task-201/204/205）',
+    tlReady?.ok === true && tlReady?.matched === 3 && sameSet(tlReady?.items, ['task-201', 'task-204', 'task-205']),
+    `matched=${tlReady?.matched} ids=${idsOf(tlReady?.items).join(',')}`)
+  const tlBlocked = await t5list({ blocked: true })
+  check('tools list：filter.blocked=true → 2 条（task-202/206）',
+    tlBlocked?.ok === true && tlBlocked?.matched === 2 && sameSet(tlBlocked?.items, ['task-202', 'task-206']),
+    `matched=${tlBlocked?.matched} ids=${idsOf(tlBlocked?.items).join(',')}`)
+  const tlEx = await t5list({ excludeStatus: ['Done'], type: ['bug'] })
+  check('tools list：filter.excludeStatus + type → 2 条（bug 且非 Done）',
+    tlEx?.ok === true && tlEx?.matched === 2 && sameSet(tlEx?.items, ['task-201', 'task-204']),
+    `matched=${tlEx?.matched} ids=${idsOf(tlEx?.items).join(',')}`)
+  const tlAny = await t5list({ labels: ['backend', 'docs'], labelMatch: 'any' })
+  check('tools list：filter.labels + labelMatch=any → 4 条',
+    tlAny?.ok === true && tlAny?.matched === 4 && sameSet(tlAny?.items, ['task-201', 'task-203', 'task-204', 'task-206']),
+    `matched=${tlAny?.matched} ids=${idsOf(tlAny?.items).join(',')}`)
+  const tlMs = await t5list({ milestone: 'M-1' })
+  check('tools list：filter.milestone=M-1 → 3 条（task-201/202/205）',
+    tlMs?.ok === true && tlMs?.matched === 3 && sameSet(tlMs?.items, ['task-201', 'task-202', 'task-205']),
+    `matched=${tlMs?.matched} ids=${idsOf(tlMs?.items).join(',')}`)
+  const tlParent = await t5list({ parent: 'TASK-201' })
+  check('tools list：filter.parent=TASK-201（id 归一化）→ 2 条（task-204/205）',
+    tlParent?.ok === true && tlParent?.matched === 2 && sameSet(tlParent?.items, ['task-204', 'task-205']),
+    `matched=${tlParent?.matched} ids=${idsOf(tlParent?.items).join(',')}`)
+  const tlSearch = await t5list({ search: '幂等' })
+  check('tools list：filter.search 正文命中 → 1 条（task-204）',
+    tlSearch?.ok === true && tlSearch?.matched === 1 && sameSet(tlSearch?.items, ['task-204']),
+    `matched=${tlSearch?.matched} ids=${idsOf(tlSearch?.items).join(',')}`)
+  const tlWindow = await t5list({ sort: 'id', order: 'asc', maxCount: 2, skip: 2 })
+  check('tools list：sort=id + maxCount/skip 分页窗口（task-203/204；window.nextSkip=4/cut=true）',
+    tlWindow?.ok === true && sameOrder(tlWindow?.items, ['task-203', 'task-204'])
+      && tlWindow?.window?.skip === 2 && tlWindow?.window?.nextSkip === 4 && tlWindow?.window?.cut === true,
+    `ids=${idsOf(tlWindow?.items).join(',')} window=${JSON.stringify(tlWindow?.window || null)}`)
+  const tlLimit = await t5list({ limit: 2 })
+  check('tools list：filter.limit=2（硬截断）→ 2 条 + window.total=6 / nextSkip=null / cut=false',
+    tlLimit?.ok === true && asArray(tlLimit?.items).length === 2
+      && tlLimit?.window?.total === 6 && tlLimit?.window?.nextSkip === null && tlLimit?.window?.cut === false,
+    `items=${asArray(tlLimit?.items).length} window=${JSON.stringify(tlLimit?.window || null)}`)
+  const tlCount = await t5list({ count: true })
+  check('tools list：filter.count=true → items=[] 且 matched=6（只计数）',
+    tlCount?.ok === true && asArray(tlCount?.items).length === 0 && tlCount?.matched === 6,
+    `items=${asArray(tlCount?.items).length} matched=${tlCount?.matched}`)
+  const tlBadLimit = await t5list({ limit: 0 })
+  check('tools list：filter.limit=0 → ok:false（数值非法）',
+    tlBadLimit?.ok === false && /limit/.test(String(tlBadLimit?.error || '')),
+    `error=${String(tlBadLimit?.error || '').slice(0, 100)}`)
+  const tlBadMutual = await t5list({ assignee: 'alice', unassigned: true })
+  check('tools list：filter.assignee + unassigned 互斥 → ok:false',
+    tlBadMutual?.ok === false && /assignee|unassigned/.test(String(tlBadMutual?.error || '')),
+    `error=${String(tlBadMutual?.error || '').slice(0, 100)}`)
+  const v5ready = viewItem(await tool('view', { projectId: p5.id, itemId: 'task-204' }))
+  check('tools view：带 readiness（task-204 isReady=true / blocked=false）',
+    v5ready?.isReady === true && v5ready?.blocked === false,
+    `isReady=${v5ready?.isReady} blocked=${v5ready?.blocked}`)
+  const v5blocked = viewItem(await tool('view', { projectId: p5.id, itemId: 'task-202' }))
+  check('tools view：被阻塞条目带 blockingDependencies（task-202 ← task-201）',
+    v5blocked?.blocked === true
+      && asArray(v5blocked?.blockingDependencies).some((d) => String(d).toLowerCase() === 'task-201'),
+    `blocked=${v5blocked?.blocked} blocking=${JSON.stringify(v5blocked?.blockingDependencies || null)}`)
+  // 工具通道 overview：逐项目计数为**扁平字段**（Lead 2026-11-02 契约确认：与 REST §4.2 一致，不套 counts 对象）
+  const tOv = (await tool('overview', { filter: { projectIds: [p5.id] } })).result
+  const tOvRows = pickedArray(tOv, ['projects', 'overview'])
+  const tRow5 = tOvRows.find((x) => x?.projectId === p5.id)
+  check('tools overview：projectIds 生效 + 逐项目 matched（默认剔除已完成 → 5 / open=5 / done=1）',
+    tOv?.ok === true && tOvRows.length === 1 && tRow5?.matched === 5
+      && tRow5?.open === 5 && tRow5?.done === 1,
+    `rows=${tOvRows.length} matched=${tRow5?.matched} open=${tRow5?.open} done=${tRow5?.done}`)
+  check('tools overview：逐项目 readiness 计数（扁平字段 ready=3 / blocked=2）',
+    tRow5?.ready === 3 && tRow5?.blocked === 2,
+    `ready=${tRow5?.ready} blocked=${tRow5?.blocked}`)
+  check('tools overview：信封 summary（projects=1 / total=6 / matched=5 / open=5 / ready=3 / blocked=2）+ facets.statuses',
+    tOv?.summary?.projects === 1 && tOv?.summary?.total === 6 && tOv?.summary?.matched === 5
+      && tOv?.summary?.open === 5 && tOv?.summary?.ready === 3 && tOv?.summary?.blocked === 2
+      && facetCount(tOv?.facets, 'statuses', 'To Do') === 4,
+    `summary=${JSON.stringify(tOv?.summary || null)} facets=${JSON.stringify(tOv?.facets?.statuses || [])}`)
+  const tOvAll = (await tool('overview', { filter: { projectIds: [p5.id], includeDone: true } })).result
+  const tRow5All = pickedArray(tOvAll, ['projects', 'overview']).find((x) => x?.projectId === p5.id)
+  check('tools overview：includeDone=true 含已完成（matched=6）',
+    tOvAll?.ok === true && tRow5All?.matched === 6,
+    `matched=${tRow5All?.matched}`)
+  const tOvSearch = (await tool('overview', { filter: { projectIds: [p5.id], search: '幂等' } })).result
+  const tRow5Search = pickedArray(tOvSearch, ['projects', 'overview']).find((x) => x?.projectId === p5.id)
+  check('tools overview：filter.search 生效（matched=1 / task-204）',
+    tOvSearch?.ok === true && tRow5Search?.matched === 1 && sameSet(tRow5Search?.items, ['task-204']),
+    `matched=${tRow5Search?.matched} ids=${idsOf(tRow5Search?.items).join(',')}`)
+  const tSearchNoFilter = await tool('search', { projectId: p5.id })
+  check('tools search：缺 filter.search 仍 ok:false（查询段共用同一契约）',
+    tSearchNoFilter.result?.ok === false && /filter\.search|search/.test(String(tSearchNoFilter.result?.error || '')),
+    `error=${String(tSearchNoFilter.result?.error || '').slice(0, 100)}`)
 
   console.log(`\n== 结果：${failures === 0 ? '全部通过 ✅' : `${failures} 项失败 ❌`} ==\n`)
   cleanup()

@@ -2246,6 +2246,32 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .bl-empty { color: var(--tx3); font-size: 12px; padding: 10px; }
 .bl-ac { color: var(--tx3); font-size: 11px; }
 .bl-warn { color: var(--err); font-size: 11px; cursor: pointer; }
+/* ---------- Backlog 查询栏 / 筛选面板（docs/design-backlog-query-filters.md §6） ----------
+   过滤走服务端（与 CLI/工具通道同一语义），前端只负责收集选择；面板默认收起，
+   因为「搜索 + 排序」是高频操作、九个分面是低频操作，全部摊开会把待办列表挤到首屏之外。
+   chip 值多时（标签/指派人）用横向滚动容器，避免一次渲染几百个 chip 把移动端撑爆。 */
+.bl-qbar { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.bl-qrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bl-qwrap { position: relative; flex: 1 1 200px; min-width: 140px; display: flex; align-items: center; }
+.bl-qinput { width: 100%; box-sizing: border-box; font-size: 12.5px; padding: 5px 26px 5px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg, #fff); color: var(--tx, inherit); }
+.bl-qclear { position: absolute; right: 4px; width: 20px; height: 20px; line-height: 18px; text-align: center; border: none; border-radius: 50%; background: transparent; color: var(--tx3); cursor: pointer; font-size: 15px; padding: 0; }
+.bl-qcnt { font-size: 11.5px; color: var(--tx3); white-space: nowrap; }
+/* 桌面端两列铺开（8 组分面竖排会把列表挤到首屏之外）；移动端在 ≤768px 改回单列纵向 */
+.bl-fpanel { border: 1px solid var(--line); border-radius: 10px; background: var(--bg2); padding: 6px 10px 8px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 14px; }
+.bl-frow { display: flex; align-items: flex-start; gap: 8px; padding: 3px 0; min-width: 0; }
+.bl-frow.bl-fspan { grid-column: 1 / -1; }
+.bl-flabel { flex: none; font-size: 11.5px; color: var(--tx3); padding-top: 5px; min-width: 44px; }
+.bl-fvals { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.bl-fvals.scroll { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px; -webkit-overflow-scrolling: touch; }
+.bl-fchip { font-size: 11.5px; padding: 3px 9px; flex: none; }
+.bl-fmore { font-size: 11px; color: var(--tx3); padding-top: 5px; flex: none; }
+.bl-fhint { font-size: 10.5px; color: var(--tx3); font-weight: 400; }
+.bl-cli { font-family: var(--mono); font-size: 10.5px; color: var(--tx2); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 7px; word-break: break-all; display: inline-block; max-width: 100%; }
+.bl-hide { font-size: 11.5px; color: var(--warn); margin-bottom: 6px; }
+.bl-more { margin-top: 8px; }
+.bl-st-ready { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); background: color-mix(in srgb, var(--ok) 8%, transparent); }
+.bl-st-blocked { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, transparent); background: color-mix(in srgb, var(--err) 8%, transparent); }
+.bl-link { color: var(--pri); cursor: pointer; }
 /* 分组头右侧操作区「进入工作台 · 看板」：与 .mini-btn 同款，禁止压缩/换行（X5 旧内核 flex 收缩会把文案挤断） */
 .bl-group-h .bl-enter-btn, .bl-group-h .bl-board-btn { flex: none; white-space: nowrap; }
 @media (max-width: 768px) {
@@ -2254,6 +2280,16 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
   .bl-group-h { padding: 8px 10px; }
   .bl-group-h .bl-enter-btn, .bl-group-h .bl-board-btn { min-height: 44px; padding: 10px 14px; font-size: 12.5px; touch-action: manipulation; }
   .bl-group-h .bl-enter-btn { margin-left: auto; }
+  /* 查询栏：搜索框/chip/下拉都要够 44px 热区（拇指点击）；筛选面板纵向铺开，chip 自动换行（§6.3） */
+  .bl-qinput { min-height: 44px; font-size: 13px; padding: 11px 32px 11px 10px; }
+  .bl-qclear { width: 30px; height: 30px; line-height: 28px; right: 6px; font-size: 18px; }
+  .bl-chip, .bl-fchip { min-height: 44px; padding: 10px 12px; font-size: 12.5px; touch-action: manipulation; }
+  .bl-sort-sel { min-height: 44px; font-size: 13px; max-width: 46vw; }
+  .bl-fpanel { display: flex; flex-direction: column; gap: 2px; padding: 6px 8px 8px; }
+  .bl-frow { flex-direction: column; gap: 4px; padding: 4px 0; }
+  .bl-flabel { padding-top: 0; min-width: 0; }
+  .bl-fvals.scroll { flex-wrap: wrap; overflow-x: visible; }
+  .bl-more { min-height: 44px; width: 100%; }
 }
 </style>
 </head>
@@ -14810,7 +14846,8 @@ function cmdkRun(i) {
 // ---------- Backlog 视图（B5+B7，docs/design-backlog-integration.md §7）：我的待办聚合 + 项目看板 ----------
 
 // 排序状态（TASK-SORT-2）：与服务端 sortBacklogItemsBy 同规则；orderBy 缺省 createdAt 倒序（最新在前）
-var BL_SORT_FIELDS = [['createdAt', '创建时间'], ['updatedAt', '更新时间'], ['priority', '优先级'], ['status', '状态'], ['ordinal', 'Ordinal']];
+// id：按条目 ID 的数字段比较（task-2 < task-10），与服务端 sort=id 一致（docs/design-backlog-query-filters.md §2）
+var BL_SORT_FIELDS = [['createdAt', '创建时间'], ['updatedAt', '更新时间'], ['priority', '优先级'], ['status', '状态'], ['id', 'ID'], ['ordinal', 'Ordinal']];
 function blLoadSort() {
   try {
     const s = JSON.parse(localStorage.getItem('bl-sort') || '');
@@ -14818,7 +14855,377 @@ function blLoadSort() {
   } catch (e) {}
   return { orderBy: 'createdAt', order: 'desc' };
 }
-var blState = { data: null, loading: false, filters: { openOnly: true, mine: false }, sort: blLoadSort(), expanded: {}, board: null, mineName: localStorage.getItem('bl-mine') || '' };
+
+/**
+ * 查询/筛选状态（docs/design-backlog-query-filters.md §2/§4/§6）：
+ * 过滤**全部交给服务端**（overview 与项目看板共用同一套 query 参数名），前端只保存选择并拼 query 串。
+ * 为什么不在前端过滤：① AI 工具通道与 CLI 必须与页面同一语义（大小写不敏感、标签 AND、就绪 fail-closed），
+ * 前端再实现一遍必然漂移；② facets 是「未过滤语料」上的统计，前端过滤会越点越少、无法解释计数。
+ */
+function blNewFilters(openOnly) {
+  return {
+    openOnly: Boolean(openOnly), mine: false, search: '',
+    statuses: [], priorities: [], types: [], labels: [], assignees: [], milestones: [], taskProjects: [],
+    unassigned: false, ready: false, blocked: false,
+  };
+}
+// 看板默认不过滤（保持既有「全部状态列都显示」的行为）；聚合页沿用既有「仅未完成」默认
+function blDefaultOpenOnly() { return blState.board ? false : true; }
+var BL_BOARD_PAGE = 50;
+var blState = {
+  data: null, loading: false,
+  filters: blNewFilters(true),
+  filtersOpen: false,
+  sort: blLoadSort(),
+  expanded: {}, board: null, mineName: localStorage.getItem('bl-mine') || '',
+  picked: {}, searchTimer: null, focusSearch: false, composing: false,
+};
+
+function blActiveFilters() {
+  if (!blState.board) return blState.filters;
+  if (!blState.board.filters) blState.board.filters = blNewFilters(false);
+  return blState.board.filters;
+}
+function blFiltersOpenNow() { return blState.board ? Boolean(blState.board.filtersOpen) : blState.filtersOpen; }
+function blToggleFiltersOpen() {
+  if (blState.board) blState.board.filtersOpen = !blState.board.filtersOpen;
+  else blState.filtersOpen = !blState.filtersOpen;
+}
+/** f 是否有非默认筛选；defaultOpenOnly 省略时按当前上下文默认（看板 false / 聚合页 true） */
+function blHasFilters(f, defaultOpenOnly) {
+  if (!f) return false;
+  if (f.search || f.unassigned || f.ready || f.blocked || f.mine) return true;
+  if ((f.statuses || []).length || (f.priorities || []).length || (f.types || []).length) return true;
+  if ((f.labels || []).length || (f.assignees || []).length || (f.milestones || []).length || (f.taskProjects || []).length) return true;
+  const def = (defaultOpenOnly === undefined) ? blDefaultOpenOnly() : Boolean(defaultOpenOnly);
+  return Boolean(f.openOnly) !== def;
+}
+function blFilterCount(f) {
+  if (!f) return 0;
+  var n = 0;
+  if (f.search) n += 1;
+  n += (f.statuses || []).length + (f.priorities || []).length + (f.types || []).length;
+  n += (f.labels || []).length + (f.assignees || []).length + (f.milestones || []).length + (f.taskProjects || []).length;
+  if (f.unassigned) n += 1;
+  if (f.mine) n += 1;
+  if (f.ready) n += 1;
+  if (f.blocked) n += 1;
+  if (Boolean(f.openOnly) !== blDefaultOpenOnly()) n += 1;
+  return n;
+}
+/** 把筛选状态编码成 REST query（多值用重复参数，契约 §4 与服务端逐字对应） */
+function blQueryParams(f) {
+  var p = {};
+  if (!f) return p;
+  if (f.search) p.search = f.search;
+  if (f.openOnly) p.openOnly = '1';
+  if ((f.statuses || []).length) p.status = f.statuses.slice();
+  if ((f.priorities || []).length) p.priority = f.priorities.slice();
+  if ((f.types || []).length) p.type = f.types.slice();
+  if ((f.labels || []).length) { p.labels = f.labels.slice(); p.labelMatch = 'all'; }
+  if ((f.taskProjects || []).length) p.taskProject = f.taskProjects.slice();
+  if ((f.milestones || []).length) p.milestone = f.milestones[0];
+  if (f.unassigned) p.unassigned = '1';
+  else {
+    var asg = [];
+    (f.assignees || []).forEach(function (a) { if (a && asg.indexOf(a) < 0) asg.push(a); });
+    if (f.mine && blState.mineName && asg.indexOf(blState.mineName) < 0) asg.push(blState.mineName);
+    if (asg.length) p.assignee = asg;
+  }
+  if (f.ready) p.ready = '1';
+  if (f.blocked) p.blocked = '1';
+  p.sort = (blState.sort && blState.sort.orderBy) || 'createdAt';
+  p.order = (blState.sort && blState.sort.order) || 'desc';
+  return p;
+}
+function blQs(p) {
+  var out = [];
+  for (var k in p) {
+    if (!Object.prototype.hasOwnProperty.call(p, k)) continue;
+    var v = p[k];
+    if (v === undefined || v === null || v === '' || v === false) continue;
+    if (Object.prototype.toString.call(v) === '[object Array]') {
+      for (var i = 0; i < v.length; i++) {
+        if (v[i] === undefined || v[i] === null || v[i] === '') continue;
+        out.push(encodeURIComponent(k) + '=' + encodeURIComponent(String(v[i])));
+      }
+    } else {
+      out.push(encodeURIComponent(k) + '=' + encodeURIComponent(String(v)));
+    }
+  }
+  return out.join('&');
+}
+function blOverviewUrl() {
+  var qs = blQs(blQueryParams(blState.filters));
+  return '/backlog/overview' + (qs ? '?' + qs : '');
+}
+/** 「仅分配给我」需要 assignee 名：先取当前用户显示名，取不到再让用户输入（沿用既有 localStorage['bl-mine'] 流程） */
+async function blEnsureMineName() {
+  if (blState.mineName) return blState.mineName;
+  try {
+    var me = await api('/users/me/profile');
+    blState.mineName = (me && me.data && (me.data.displayName || me.data.username)) || '';
+  } catch (e) {}
+  if (!blState.mineName) blState.mineName = prompt('「仅分配给我」按 assignee 名匹配，请输入你的名称（@名/显示名）：') || '';
+  if (blState.mineName) { try { localStorage.setItem('bl-mine', blState.mineName); } catch (e) {} }
+  return blState.mineName;
+}
+function blReloadCurrent() {
+  blState.picked = {};
+  if (blState.board) { blState.board.nextSkip = null; blLoadBoard({}); return; }
+  renderBacklogView(true);
+}
+function blClearFilters() {
+  blState.picked = {};
+  if (blState.board) { blState.board.filters = blNewFilters(false); blReloadCurrent(); return; }
+  blState.filters = blNewFilters(true);
+  renderBacklogView(true);
+}
+function blNewBoard(projectId, name, data) {
+  blState.picked = {};
+  return { projectId: projectId, name: name || projectId, data: data || null, filters: blNewFilters(false), filtersOpen: false, loading: false, nextSkip: null };
+}
+
+// ---------- facets（筛选项候选值） ----------
+var BL_FACET_KEYS = ['statuses', 'priorities', 'types', 'labels', 'assignees', 'milestones', 'taskProjects'];
+function blFacetValues(arr) {
+  var out = [];
+  if (!arr) return out;
+  for (var i = 0; i < arr.length; i++) {
+    var x = arr[i];
+    if (x === null || x === undefined || x === '') continue;
+    var v = typeof x === 'string' ? x : (x.value === undefined || x.value === null ? '' : String(x.value));
+    if (!v) continue;
+    out.push({ value: v, count: (typeof x === 'object' && x.count !== undefined) ? (Number(x.count) || 0) : 0 });
+  }
+  return out;
+}
+function blNormFacets(src) {
+  var out = {};
+  for (var i = 0; i < BL_FACET_KEYS.length; i++) {
+    var k = BL_FACET_KEYS[i];
+    out[k] = blFacetValues(src ? src[k] : null);
+  }
+  return out;
+}
+/** 兜底：旧后端响应或 ⌘K 缓存看板没有 facets 时用当前语料现场统计，保证面板不空、不报错 */
+function blDeriveFacets(items, statuses) {
+  var acc = {};
+  var seen = {};
+  for (var i = 0; i < BL_FACET_KEYS.length; i++) { acc[BL_FACET_KEYS[i]] = []; seen[BL_FACET_KEYS[i]] = {}; }
+  var bump = function (key, val) {
+    if (val === undefined || val === null || val === '') return;
+    var s = String(val);
+    var bag = seen[key];
+    if (bag[s] === undefined) { bag[s] = acc[key].length; acc[key].push({ value: s, count: 0 }); }
+    acc[key][bag[s]].count += 1;
+  };
+  (statuses || []).forEach(function (s) { if (s) bump('statuses', s); });
+  (items || []).forEach(function (it) {
+    bump('statuses', it.status);
+    bump('priorities', it.priority);
+    bump('types', it.type);
+    bump('milestones', it.milestone);
+    bump('taskProjects', it.taskProject);
+    (it.labels || []).forEach(function (l) { bump('labels', l); });
+    (it.assignees || []).forEach(function (a) { bump('assignees', a); });
+  });
+  for (var k in acc) {
+    if (Object.prototype.hasOwnProperty.call(acc, k)) acc[k].sort(function (a, b) { return b.count - a.count; });
+  }
+  return acc;
+}
+function blFacetsOf(kind) {
+  if (kind === 'board') {
+    var b = blState.board;
+    var bd = b && b.data;
+    if (bd && bd.facets) return blNormFacets(bd.facets);
+    return blDeriveFacets(bd ? (bd.items || []) : [], bd ? (bd.statuses || []) : []);
+  }
+  var d = blState.data;
+  if (d && d.facets) return blNormFacets(d.facets);
+  var groups = (d && d.data) || [];
+  var all = [];
+  var sts = [];
+  for (var i = 0; i < groups.length; i++) {
+    all = all.concat(groups[i].items || []);
+    (groups[i].statuses || []).forEach(function (s) { if (s && sts.indexOf(s) < 0) sts.push(s); });
+  }
+  return blDeriveFacets(all, sts);
+}
+
+// ---------- 查询栏 / 筛选面板 HTML ----------
+/** 一行分面 chips：标签/指派人最多各渲染 20 个，其余给「+N」提示（避免几百个 chip 把移动端撑爆） */
+function blFacetChipsRow(label, key, vals, selected, scroll) {
+  var sel = selected || [];
+  var html = '';
+  var max = (key === 'label' || key === 'assignee') ? 20 : 60;
+  var shown = 0;
+  for (var i = 0; i < vals.length; i++) {
+    if (shown >= max) break;
+    var v = vals[i].value;
+    var on = sel.indexOf(v) >= 0;
+    html += '<span class="bl-chip bl-fchip' + (on ? ' on' : '') + '" data-blf="' + esc(key) + '" data-blfv="' + esc(v) + '" title="' + esc(v + (vals[i].count ? ' · ' + vals[i].count + ' 条' : '')) + '">' + esc(v) + '</span>';
+    shown += 1;
+  }
+  if (!html) return '';
+  var more = vals.length > shown ? '<span class="bl-fmore" title="仅展示前 ' + shown + ' 个，可用搜索缩小范围">+' + (vals.length - shown) + '</span>' : '';
+  return '<div class="bl-frow"><span class="bl-flabel">' + esc(label) + '</span>' +
+    '<div class="bl-fvals' + (scroll ? ' scroll' : '') + '">' + html + more + '</div></div>';
+}
+function blAssigneeChipValues(f) {
+  var out = (f.assignees || []).slice();
+  if (f.mine && blState.mineName && out.indexOf(blState.mineName) < 0) out.push(blState.mineName);
+  return out;
+}
+function blCliQuote(s) { return '"' + String(s === undefined || s === null ? '' : s).replace(/"/g, '') + '"'; }
+/** 可选加分项：把当前筛选翻成上游等价 CLI 命令，便于人工/AI 复现同一查询（UI 不依赖它） */
+function blCliText(f) {
+  var q = ['npx --yes backlog.md task list'];
+  if (f.ready) q.push('--ready');
+  if ((f.statuses || []).length) q.push('--status ' + blCliQuote(f.statuses.join(',')));
+  if ((f.priorities || []).length) q.push('--priority ' + blCliQuote(f.priorities.join(',')));
+  if ((f.types || []).length) q.push('--type ' + blCliQuote(f.types.join(',')));
+  if ((f.labels || []).length) q.push('--labels ' + blCliQuote(f.labels.join(',')));
+  if ((f.taskProjects || []).length) q.push('--project ' + blCliQuote(f.taskProjects.join(',')));
+  if ((f.milestones || []).length) q.push('--milestone ' + blCliQuote(f.milestones[0]));
+  if (f.unassigned) q.push('--unassigned');
+  else {
+    var asg = blAssigneeChipValues(f);
+    if (asg.length) q.push('--assignee ' + blCliQuote(asg.join(',')));
+  }
+  if (f.search) q.push('--search ' + blCliQuote(f.search));
+  if (blState.sort && (blState.sort.orderBy === 'priority' || blState.sort.orderBy === 'id' || blState.sort.orderBy === 'ordinal')) q.push('--sort ' + blState.sort.orderBy);
+  return q.join(' ');
+}
+function blCopyCli() {
+  var txt = blCliText(blActiveFilters());
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(txt).then(function () { toast('✓ 已复制'); }, function () { prompt('复制命令：', txt); });
+      return;
+    }
+  } catch (e) {}
+  prompt('复制命令：', txt);
+}
+function blFilterPanelHtml(kind, f, facets) {
+  var h = '<div class="bl-fpanel" id="bl-fpanel">';
+  h += blFacetChipsRow('状态', 'status', facets.statuses, f.statuses, false);
+  h += blFacetChipsRow('优先级', 'priority', facets.priorities, f.priorities, false);
+  h += blFacetChipsRow('类型', 'type', facets.types, f.types, false);
+  h += blFacetChipsRow('标签', 'label', facets.labels, f.labels, true);
+  h += blFacetChipsRow('指派', 'assignee', facets.assignees, blAssigneeChipValues(f), true);
+  h += blFacetChipsRow('里程碑', 'milestone', facets.milestones, f.milestones, false);
+  h += blFacetChipsRow('组件', 'taskProject', facets.taskProjects, f.taskProjects, true);
+  var toggles = [
+    ['unassigned', '未分配', f.unassigned, '只看没有指派人的条目（与指派筛选互斥）'],
+    ['mine', '仅分配给我', f.mine, '按 assignee 名包含匹配' + (blState.mineName ? '：' + blState.mineName : '')],
+    ['openOnly', '仅未完成', f.openOnly, '按各项目自身状态配置排除已关闭状态'],
+    ['ready', '✅ 就绪（可开工）', f.ready, '未完成且依赖全部完成；依赖无法解析视为阻塞'],
+    ['blocked', '⛔ 被阻塞', f.blocked, '存在未完成或无法解析的依赖'],
+  ];
+  var t = '';
+  for (var i = 0; i < toggles.length; i++) {
+    t += '<span class="bl-chip bl-fchip' + (toggles[i][2] ? ' on' : '') + '" data-blf="toggle" data-blfv="' + toggles[i][0] + '" title="' + esc(toggles[i][3]) + '">' + toggles[i][1] + '</span>';
+  }
+  h += '<div class="bl-frow"><span class="bl-flabel">筛选</span><div class="bl-fvals">' + t + '</div></div>';
+  // CLI 行横跨两列（命令可能很长），移动端单列时无影响
+  h += '<div class="bl-frow bl-fspan"><span class="bl-flabel">CLI</span><div class="bl-fvals"><code class="bl-cli">' + esc(blCliText(f)) + '</code>' +
+    '<button class="mini-btn" id="bl-cli-copy" title="复制等价 Backlog.md CLI 命令">复制</button></div></div>';
+  return h + '</div>';
+}
+function blQueryBarHtml(kind, f) {
+  var facets = blFacetsOf(kind);
+  var open = blFiltersOpenNow();
+  var cnt = blFilterCount(f);
+  var matched = null;
+  var total = null;
+  var loading = false;
+  if (kind === 'board') {
+    var b = blState.board;
+    var bd = b && b.data;
+    loading = Boolean(b && b.loading);
+    if (bd && typeof bd.matched === 'number') { matched = bd.matched; total = bd.total; }
+  } else {
+    var d = blState.data;
+    loading = blState.loading;
+    if (d && d.summary && typeof d.summary.matched === 'number') { matched = d.summary.matched; total = d.summary.total; }
+  }
+  var cntTxt = '';
+  if (loading) cntTxt = '加载中…';
+  else if (matched !== null) cntTxt = '匹配 ' + matched + ' / 共 ' + (typeof total === 'number' ? total : matched);
+  return '<div class="bl-qbar" id="bl-qbar">' +
+    '<div class="bl-qrow">' +
+    '<div class="bl-qwrap"><input id="bl-q" class="bl-qinput" type="text" autocomplete="off" placeholder="搜索标题 / 描述 / 备注 / 评论…" value="' + esc(f.search || '') + '">' +
+    (f.search ? '<button class="bl-qclear" id="bl-q-clear" title="清除搜索" aria-label="清除搜索">×</button>' : '') + '</div>' +
+    '<span class="bl-chip bl-fchip' + (open ? ' on' : '') + '" id="bl-f-toggle" title="展开 / 收起筛选条件">⚙ 筛选' + (cnt ? ' ' + cnt : '') + '</span>' +
+    '<select id="bl-s-order" class="bl-sort-sel" title="排序字段">' +
+    BL_SORT_FIELDS.map(function (x) { return '<option value="' + x[0] + '"' + (blState.sort.orderBy === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('') +
+    '</select>' +
+    '<span class="bl-chip bl-fchip' + (blState.sort.order === 'desc' ? ' on' : '') + '" id="bl-s-dir" title="切换升序 / 降序">' + (blState.sort.order === 'desc' ? '↓ 降序' : '↑ 升序') + '</span>' +
+    (cntTxt ? '<span class="bl-qcnt" id="bl-qcnt">' + cntTxt + '</span>' : '') +
+    (blHasFilters(f) ? '<button class="mini-btn" id="bl-f-clear" data-blf-clear="1" title="恢复默认筛选">清除筛选</button>' : '') +
+    '</div>' +
+    (open ? blFilterPanelHtml(kind, f, facets) : '') +
+    '</div>';
+}
+
+// ---------- 查询交互 ----------
+function blOnSearchInput(val) {
+  var f = blActiveFilters();
+  f.search = val;
+  if (blState.searchTimer) clearTimeout(blState.searchTimer);
+  blState.searchTimer = setTimeout(blApplySearch, 350);
+}
+function blApplySearch() {
+  blState.searchTimer = null;
+  // 中文输入法组字期间不重渲染（重渲染会打断候选词），等 compositionend 再来
+  if (blState.composing) { blState.searchTimer = setTimeout(blApplySearch, 350); return; }
+  // 只有用户还停在搜索框里才在重渲染后把焦点还回去（已点走则不要抢焦点）
+  blState.focusSearch = Boolean(document.activeElement && document.activeElement.id === 'bl-q');
+  blReloadCurrent();
+}
+function blOnFilterChip(key, val) {
+  var f = blActiveFilters();
+  if (!f) return;
+  if (key === 'milestone') {
+    // 契约 §2：--milestone 是**单值**（服务端只接受一个），所以里程碑单选，再点一次取消
+    if (f.milestones[0] === val) f.milestones = []; else f.milestones = [val];
+  } else if (key === 'toggle') {
+    if (val === 'unassigned') {
+      f.unassigned = !f.unassigned;
+      if (f.unassigned) { f.assignees = []; f.mine = false; }
+    } else if (val === 'mine') {
+      if (!f.mine) {
+        // 首次开启需要先解析当前用户名称（可能弹输入框），异步取到后再切换并请求
+        blEnsureMineName().then(function (n) {
+          if (!n) return;
+          f.mine = true; f.unassigned = false;
+          blReloadCurrent();
+        });
+        return;
+      }
+      f.mine = false;
+    } else if (val === 'openOnly') {
+      f.openOnly = !f.openOnly;
+    } else if (val === 'ready') {
+      f.ready = !f.ready;
+      if (f.ready) f.blocked = false;
+    } else if (val === 'blocked') {
+      f.blocked = !f.blocked;
+      if (f.blocked) f.ready = false;
+    }
+  } else {
+    var map = { status: 'statuses', priority: 'priorities', type: 'types', label: 'labels', assignee: 'assignees', taskProject: 'taskProjects' };
+    var listKey = map[key];
+    if (!listKey) return;
+    var arr = f[listKey];
+    var i = arr.indexOf(val);
+    if (i >= 0) arr.splice(i, 1); else arr.push(val);
+    if (listKey === 'assignees' && arr.length) f.unassigned = false;
+  }
+  blReloadCurrent();
+}
 
 function blIsOpenStatus(s) { return !(/done|完成/i.test(s || '') || /cancel|取消/i.test(s || '')); }
 function blOpenItem(t) { try { jumpToTask(t.id); } catch (e) { toast('无法打开任务: ' + t.id, true); } }
@@ -14852,6 +15259,7 @@ function blSortItems(items, statuses, orderBy, order) {
       const da = sa === undefined ? n : sa; const db = sb === undefined ? n : sb;
       return da !== db ? (da - db) * dir : tie();
     }
+    if (orderBy === 'id') return tie();
     if (orderBy === 'ordinal') {
       const ao = a.ordinal === undefined || a.ordinal === null ? Number.MAX_SAFE_INTEGER : Number(a.ordinal);
       const bo = b.ordinal === undefined || b.ordinal === null ? Number.MAX_SAFE_INTEGER : Number(b.ordinal);
@@ -14868,16 +15276,17 @@ function blSortItems(items, statuses, orderBy, order) {
 
 async function renderBacklogView(force) {
   if (blState.board && !force) { blRender(); return; }
+  // 「仅分配给我」要先把名称解析出来：assignee 参数在请求前就得进 query 串（服务端过滤）
+  if (blState.filters.mine && !blState.mineName) {
+    const n = await blEnsureMineName();
+    if (!n) blState.filters.mine = false;
+  }
   if (!blState.data || force) {
     blState.loading = true; blRender();
-    blState.data = await api('/backlog/overview');
+    var r = await api(blOverviewUrl());
     blState.loading = false;
-  }
-  if (blState.filters.mine && !blState.mineName) {
-    try { const me = await api('/users/me/profile'); blState.mineName = (me.data && (me.data.displayName || me.data.username)) || ''; } catch (e) {}
-    if (!blState.mineName) blState.mineName = prompt('「仅分配给我」按 assignee 名匹配，请输入你的名称（@名/显示名）：') || '';
-    if (blState.mineName) localStorage.setItem('bl-mine', blState.mineName);
-    if (!blState.mineName) { blState.filters.mine = false; }
+    // 聚合失败也保存响应对象（含 error），交给 blOverviewHtml 渲染明确错误态，而不是静默空列表
+    blState.data = r || { ok: false, error: '请求失败' };
   }
   blRender();
 }
@@ -14897,15 +15306,44 @@ function blBadgeOf(tasks) {
   return '<span class="bl-badge" data-task="' + esc(t.id) + '" title="关联任务 ' + esc(t.id) + '（点击打开）">' + ic + ' ' + esc(t.id) + '</span>';
 }
 
+/** 就绪态徽标（契约 §3）：✅ 就绪 / ⛔ 阻塞；title 列出未完成依赖与无法解析依赖 */
+function blReadyBadgeHtml(it) {
+  if (!it) return '';
+  if (it.isReady === undefined && it.blocked === undefined) return ''; // 旧接口/⌘K 缓存：不做假判定
+  var blocking = it.blockingDependencies || [];
+  var missing = it.missingDependencies || [];
+  var parts = [];
+  if (blocking.length) parts.push('未完成依赖: ' + blocking.join('、'));
+  if (missing.length) parts.push('无法解析依赖: ' + missing.join('、'));
+  var title = parts.length ? parts.join('；') : (it.isReady ? '依赖已全部完成，可以开工' : '');
+  if (it.blocked) return '<span class="bl-tag bl-st-blocked" title="' + esc(title) + '">⛔ 阻塞</span>';
+  if (it.isReady) return '<span class="bl-tag bl-st-ready" title="' + esc(title) + '">✅ 就绪</span>';
+  return '';
+}
+/** type / milestone / taskProject / parentTaskId：有值才展示（契约 §2 新增的可查询字段要让用户看得见） */
+function blItemMetaHtml(it) {
+  var h = '';
+  if (it.type) h += '<span class="bl-tag" title="类型">🏷 ' + esc(it.type) + '</span>';
+  if (it.milestone) h += '<span class="bl-tag" title="里程碑">🎯 ' + esc(it.milestone) + '</span>';
+  if (it.taskProject) h += '<span class="bl-tag" title="组件（frontmatter project）">🧩 ' + esc(it.taskProject) + '</span>';
+  if (it.parentTaskId) h += '<span class="bl-tag" title="父任务">⊞ ' + esc(it.parentTaskId) + '</span>';
+  return h;
+}
+function blServerFiltered() { return Boolean(blState.data && blState.data.query); }
+
 function blRowHtml(g, it) {
-  if (blState.filters.openOnly && !blIsOpenStatus(it.status)) return '';
-  if (blState.filters.mine && !(it.assignees || []).some(function (a) { return a.indexOf(blState.mineName) >= 0; })) return '';
+  // 只有「旧后端没有回显 query」时才走前端兜底过滤；新后端 items 已是服务端过滤后的命中项
+  if (!blServerFiltered()) {
+    if (blState.filters.openOnly && !blIsOpenStatus(it.status)) return '';
+    if (blState.filters.mine && !(it.assignees || []).some(function (a) { return a.indexOf(blState.mineName) >= 0; })) return '';
+  }
   const ac = it.acceptance ? '<span class="bl-ac">AC ' + it.acceptance.done + '/' + it.acceptance.total + '</span>' : '';
   const labels = (it.labels || []).map(function (l) { return '<span class="bl-tag">' + esc(l) + '</span>'; }).join('');
   const done = !blIsOpenStatus(it.status);
   return '<div class="bl-row" data-grp="' + esc(g.projectId) + '" data-item="' + esc(it.itemId) + '">' +
     '<span class="bl-tag">' + esc(it.status || '—') + '</span>' +
-    '<span class="bl-title" data-detail="' + esc(it.itemId) + '">' + esc(it.itemId) + ' ' + esc(it.title || '') + '</span>' + labels + ac + blBadgeOf(it.tasks) +
+    '<span class="bl-title" data-detail="' + esc(it.itemId) + '">' + esc(it.itemId) + ' ' + esc(it.title || '') + '</span>' +
+    blItemMetaHtml(it) + labels + blReadyBadgeHtml(it) + ac + blBadgeOf(it.tasks) +
     '<span class="hspacer"></span>' +
     (!done ? '<button class="mini-btn bl-dispatch" data-dispatch="' + esc(it.itemId) + '">▶ 派发</button>' : '') +
     '</div>';
@@ -14913,28 +15351,48 @@ function blRowHtml(g, it) {
 
 function blOverviewHtml() {
   const d = blState.data;
-  if (!d) return '<div class="bl-empty">' + (blState.loading ? '加载中…' : '加载失败，点「刷新」重试') + '</div>';
-  if (blState.loading) return '<div class="bl-empty">加载中…</div>';
-  const groups = d.data || [];
-  let openTotal = 0;
+  const f = blState.filters;
+  const groups = (d && d.data) || [];
+  const qbar = blQueryBarHtml('overview', f);
+  if (!d) return qbar + '<div class="bl-empty">' + (blState.loading ? '加载中…' : '加载失败，点「刷新」重试') + '</div>';
+  if (d.ok === false) {
+    return qbar + '<div class="bl-empty">待办聚合加载失败：' + esc(d.error || '未知错误') + ' <button class="mini-btn" id="bl-retry-all">重试</button></div>';
+  }
+  if (!groups.length) return qbar + '<div class="bl-empty">没有可见项目' + (blHasFilters(f) ? '（当前筛选条件下没有可展示的项目）' : '') + '</div>';
+  // 后端回显 query 说明 items 已经是服务端过滤后的命中项（契约 §4.2）；否则走旧版前端兜底
+  const serverFiltered = Boolean(d.query);
+  let anyMatch = false;
   const html = groups.map(function (g) {
-    const openItems = (g.items || []).filter(function (it) { return blIsOpenStatus(it.status); });
-    openTotal += openItems.length;
-    const doneCount = (g.items || []).length - openItems.length;
+    const gItems = g.items || [];
+    const matched = typeof g.matched === 'number' ? g.matched : gItems.length;
+    const gtotal = typeof g.total === 'number' ? g.total : gItems.length;
+    const openN = typeof g.open === 'number' ? g.open : gItems.filter(function (it) { return blIsOpenStatus(it.status); }).length;
+    const doneN = typeof g.done === 'number' ? g.done : Math.max(0, gtotal - openN);
+    if (matched > 0) anyMatch = true;
     const expanded = blState.expanded[g.projectId] !== false;
     const nodeChip = g.nodeStatus === 'ok'
       ? '<span class="node-ok">● 节点正常</span>'
       : g.nodeStatus === 'archived'
         ? '<span class="cnt">归档只读</span>'
         : '<span class="node-err" data-bl-retry="' + esc(g.projectId) + '" title="' + esc(g.error || '节点不可达') + '（点击重试）">⚠ 节点不可达</span>';
-    const rows = !g.initialized
-      ? '<div class="bl-row"><span class="bl-empty">该项目尚未初始化 backlog。' + (g.nodeStatus === 'ok' ? '可在项目卡片「进入工作台」后让智能体建待办，或' : '') + '</span><button class="mini-btn bl-init" data-init="' + esc(g.projectId) + '" ' + (g.nodeStatus !== 'ok' ? 'disabled' : '') + '>初始化 backlog</button></div>'
-      : blSortItems(g.items, g.statuses || []).map(function (it) { return blRowHtml(g, it); }).join('') || '<div class="bl-row"><span class="bl-empty">暂无待办</span></div>';
+    let rows;
+    if (!g.initialized) {
+      rows = '<div class="bl-row"><span class="bl-empty">该项目尚未初始化 backlog。' + (g.nodeStatus === 'ok' ? '可在项目卡片「进入工作台」后让智能体建待办，或' : '') + '</span><button class="mini-btn bl-init" data-init="' + esc(g.projectId) + '" ' + (g.nodeStatus !== 'ok' ? 'disabled' : '') + '>初始化 backlog</button></div>';
+    } else if (serverFiltered && matched === 0 && blHasFilters(f)) {
+      // 无匹配项目**保留分组头**（节点错误/初始化状态仍可见），只把条目区换成明确文案 + 清除入口
+      rows = '<div class="bl-row"><span class="bl-empty">无匹配待办 <span class="bl-link" data-blf-clear="1">清除筛选</span></span></div>';
+    } else {
+      rows = blSortItems(gItems, g.statuses || []).map(function (it) { return blRowHtml(g, it); }).join('') || '<div class="bl-row"><span class="bl-empty">暂无待办</span></div>';
+    }
     return '<div class="bl-group">' +
       '<div class="bl-group-h" data-grp-h="' + esc(g.projectId) + '">' +
       '<span>' + (expanded ? '▾' : '▸') + '</span>' +
       '<span>📦 ' + esc(g.projectName) + '</span>' +
-      '<span class="cnt">待办 ' + openItems.length + ' / 完成 ' + doneCount + '</span>' + nodeChip +
+      '<span class="cnt" title="当前筛选条件下的命中数 / 该项目全部条目数">匹配 ' + matched + ' / 共 ' + gtotal + '</span>' +
+      '<span class="cnt">待办 ' + openN + ' / 完成 ' + doneN + '</span>' +
+      (typeof g.ready === 'number' && g.ready > 0 ? '<span class="cnt">✅ 就绪 ' + g.ready + '</span>' : '') +
+      (typeof g.blocked === 'number' && g.blocked > 0 ? '<span class="cnt">⛔ 阻塞 ' + g.blocked + '</span>' : '') +
+      nodeChip +
       (g.truncated ? '<span class="cnt" title="目录列表被截断，仅显示部分">仅显示前若干条</span>' : '') +
       '<span class="hspacer"></span>' +
       // 离线条目不禁用（AC#3）：误点进工作台由工作台承接节点错误态，按钮层不预判
@@ -14942,16 +15400,8 @@ function blOverviewHtml() {
       '<button class="mini-btn bl-board-btn" data-board="' + esc(g.projectId) + '" ' + (g.nodeStatus !== 'ok' ? 'disabled' : '') + '>看板</button>' +
       '</div>' + (expanded ? rows : '') + '</div>';
   }).join('');
-  return '<div class="bl-head">' +
-    '<span class="bl-chip' + (blState.filters.openOnly ? ' on' : '') + '" id="bl-f-open">仅未完成 (' + openTotal + ')</span>' +
-    '<span class="bl-chip' + (blState.filters.mine ? ' on' : '') + '" id="bl-f-mine" title="按 assignee 匹配' + (blState.mineName ? '：' + esc(blState.mineName) : '') + '">仅分配给我</span>' +
-    '<span class="bl-empty" style="padding:0">排序</span>' +
-    '<select id="bl-s-order" class="bl-sort-sel" title="排序字段">' +
-    BL_SORT_FIELDS.map(function (f) { return '<option value="' + f[0] + '"' + (blState.sort.orderBy === f[0] ? ' selected' : '') + '>' + f[1] + '</option>'; }).join('') +
-    '</select>' +
-    '<span class="bl-chip' + (blState.sort.order === 'desc' ? ' on' : '') + '" id="bl-s-dir" title="切换升序/降序">' + (blState.sort.order === 'desc' ? '↓ 降序' : '↑ 升序') + '</span>' +
-    '<span class="bl-empty" style="padding:0">共 ' + groups.length + ' 个项目</span>' +
-    '</div>' + (html || '<div class="bl-empty">没有可见项目</div>');
+  const banner = (blHasFilters(f) && !anyMatch) ? '<div class="bl-empty">当前筛选条件下没有匹配的待办 <span class="bl-link" data-blf-clear="1">清除筛选</span></div>' : '';
+  return qbar + banner + html;
 }
 
 function blCardHtml(it, statuses, drag) {
@@ -14962,7 +15412,7 @@ function blCardHtml(it, statuses, drag) {
   return '<div class="bl-card" data-item="' + esc(it.itemId) + '"' + (drag ? ' draggable="true"' : '') + '>' +
     '<input type="checkbox" class="bl-pick" data-pick="' + esc(it.itemId) + '" style="width:auto">' +
     ' <span class="bl-title" data-detail="' + esc(it.itemId) + '">' + esc(it.itemId) + ' ' + esc(it.title || '') + '</span>' +
-    '<div class="meta"><span class="bl-tag">' + esc(it.status || '—') + '</span>' + labels + deps + ac + blBadgeOf(it.tasks) + '</div>' +
+    '<div class="meta"><span class="bl-tag">' + esc(it.status || '—') + '</span>' + blItemMetaHtml(it) + labels + deps + blReadyBadgeHtml(it) + ac + blBadgeOf(it.tasks) + '</div>' +
     '<div class="ops"><button class="mini-btn bl-dispatch" data-dispatch="' + esc(it.itemId) + '">▶ 派发</button>' +
     '<button class="mini-btn bl-edit" data-edit="' + esc(it.itemId) + '">✎ 编辑</button>' +
     '<button class="mini-btn bl-del" data-del="' + esc(it.itemId) + '">🗑</button></div>' +
@@ -14972,25 +15422,45 @@ function blCardHtml(it, statuses, drag) {
 function blBoardHtml() {
   const b = blState.board; if (!b) return '';
   const d = b.data;
-  const cols = (d.statuses && d.statuses.length ? d.statuses : ['To Do', 'In Progress', 'Done']);
-  const drag = blDragEnabled() && !d.archived;
-  const picked = blPickedCount();
-  return '<div class="bl-head">' +
+  const f = b.filters || blNewFilters(false);
+  const qbar = blQueryBarHtml('board', f);
+  const head = '<div class="bl-head">' +
     '<button class="mini-btn" id="bl-back">← 返回我的待办</button>' +
     '<b>📦 ' + esc(b.name) + ' · 看板</b>' +
-    (d.archived ? '<span class="bl-tag">归档只读</span>' : '') +
+    (d && d.archived ? '<span class="bl-tag">归档只读</span>' : '') +
     '<span class="hspacer"></span>' +
-    '<button class="mini-btn" id="bl-collect" ' + (d.archived ? 'disabled' : '') + ' title="扫描本项目执行过的未完成任务 + 工作区代码/文档里的 TODO/未勾选项，生成待办候选">🔍 扫描未完成</button>' +
-    '<button class="mini-btn" id="bl-batch" ' + (picked ? '' : 'disabled') + '>派发选中 (' + picked + ')</button>' +
-    '<button class="mini-btn pri" id="bl-new" ' + (d.archived ? 'disabled' : '') + '>＋ 新建待办</button>' +
-    '</div>' +
-    (d.truncated ? '<div class="bl-empty">目录列表被截断，仅显示部分待办</div>' : '') +
-    '<div class="bl-board">' + cols.map(function (st) {
-      const items = blSortItems(d.items, d.statuses).filter(function (it) { return (it.status || d.defaultStatus) === st; });
-      return '<div class="bl-col" data-st="' + esc(st) + '"><div class="bl-col-h">' + esc(st) + ' <span class="cnt">' + items.length + '</span></div><div class="bl-col-b">' +
-        (items.map(function (it) { return blCardHtml(it, cols, drag); }).join('') || '<div class="bl-empty">空</div>') +
-        '</div></div>';
-    }).join('') + '</div>';
+    '<button class="mini-btn" id="bl-collect" ' + (d && d.archived ? 'disabled' : '') + ' title="扫描本项目执行过的未完成任务 + 工作区代码/文档里的 TODO/未勾选项，生成待办候选">🔍 扫描未完成</button>' +
+    '<button class="mini-btn" id="bl-batch" disabled>派发选中 (0)</button>' +
+    '<button class="mini-btn pri" id="bl-new" ' + (d && d.archived ? 'disabled' : '') + '>＋ 新建待办</button>' +
+    '</div>';
+  if (!d) return head + qbar + '<div class="bl-empty">' + (b.loading ? '加载中…' : '看板加载失败，点「刷新」重试') + '</div>';
+  const hidden = (typeof d.total === 'number' && typeof d.matched === 'number') ? Math.max(0, d.total - d.matched) : 0;
+  const hideHint = hidden > 0 ? '<div class="bl-hide">被筛选隐藏 ' + hidden + ' 条</div>' : '';
+  const cols = (d.statuses && d.statuses.length ? d.statuses : ['To Do', 'In Progress', 'Done']);
+  const drag = blDragEnabled() && !d.archived;
+  const itemsAll = d.items || [];
+  const anyFilter = blHasFilters(f);
+  // 命中 0 条时给明确空态 + 清除入口（不是「列是空的」这种含糊提示）
+  const emptyBanner = (anyFilter && typeof d.matched === 'number' && d.matched === 0)
+    ? '<div class="bl-empty">当前筛选条件下没有匹配的待办 <span class="bl-link" data-blf-clear="1">清除筛选</span></div>' : '';
+  const board = '<div class="bl-board">' + cols.map(function (st) {
+    // 列内计数 = 过滤后条数（服务端已过滤，这里只按状态分列）
+    const items = blSortItems(itemsAll, d.statuses).filter(function (it) { return (it.status || d.defaultStatus) === st; });
+    const emptyTxt = anyFilter ? '无匹配' : '空';
+    return '<div class="bl-col" data-st="' + esc(st) + '"><div class="bl-col-h">' + esc(st) + ' <span class="cnt">' + items.length + '</span></div><div class="bl-col-b">' +
+      (items.map(function (it) { return blCardHtml(it, cols, drag); }).join('') || '<div class="bl-empty">' + emptyTxt + '</div>') +
+      '</div></div>';
+  }).join('') + '</div>';
+  // window.cut：服务端按 maxCount 切窗后还有剩余 → 底部「显示更多」，带 skip 再请求并追加（契约 §6.2）
+  let more = '';
+  if (d.window && d.window.cut && d.window.nextSkip !== null && d.window.nextSkip !== undefined) {
+    const wTotal = typeof d.window.total === 'number' ? d.window.total : 0;
+    const wShown = typeof d.window.shown === 'number' ? d.window.shown : itemsAll.length;
+    const wSkip = typeof d.window.skip === 'number' ? d.window.skip : 0;
+    const remain = Math.max(0, wTotal - wSkip - wShown);
+    more = '<button class="mini-btn bl-more" id="bl-more" data-skip="' + esc(String(d.window.nextSkip)) + '">显示更多' + (remain > 0 ? '（还有 ' + remain + ' 条）' : '') + '</button>';
+  }
+  return head + qbar + hideHint + emptyBanner + (d.truncated ? '<div class="bl-empty">目录列表被截断，仅显示部分待办</div>' : '') + board + more;
 }
 
 function blPickedCount() { return document.querySelectorAll('#bl-root .bl-pick:checked').length; }
@@ -15068,7 +15538,16 @@ function blSyncBatchBtn() {
 
 function blRender() {
   const root = document.getElementById('bl-root'); if (!root) return;
+  const searchFocused = Boolean(blState.focusSearch || (document.activeElement && document.activeElement.id === 'bl-q'));
+  // 「显示更多」/拖拽/操作后重载都会整块重渲染：先把勾选态收进内存，渲染后回填，
+  // 否则用户选了几条再翻页/拖一下，批量派发的勾选就全丢了（选择作用于合并后的 items）
+  root.querySelectorAll('.bl-pick').forEach(function (el) {
+    if (el.checked) blState.picked[el.dataset.pick] = 1; else delete blState.picked[el.dataset.pick];
+  });
   root.innerHTML = blState.board ? blBoardHtml() : blOverviewHtml();
+  root.querySelectorAll('.bl-pick').forEach(function (el) {
+    if (blState.picked[el.dataset.pick]) el.checked = true;
+  });
   blSyncBatchBtn();
   if (blState.board) blBindDrag(root);
   root.querySelectorAll('[data-bl-retry]').forEach(function (el) {
@@ -15086,13 +15565,12 @@ function blRender() {
     el.addEventListener('click', function () { enterProjectWorkspace(el.dataset.enter, 'backlog'); });
   });
   root.querySelectorAll('[data-board]').forEach(function (el) {
-    el.addEventListener('click', async function () {
+    el.addEventListener('click', function () {
       const pid = el.dataset.board;
       const g = ((blState.data || {}).data || []).find(function (x) { return x.projectId === pid; });
-      const r = await api('/projects/' + pid + '/backlog');
-      if (!r.ok) { toast('看板加载失败: ' + (r.error || ''), true); return; }
-      blState.board = { projectId: pid, name: (g && g.projectName) || pid, data: r.data };
-      blRender();
+      // 每个看板独立筛选态：进入时重置（默认不过滤，保持既有「全部状态列都显示」）
+      blState.board = blNewBoard(pid, (g && g.projectName) || pid, null);
+      blLoadBoard({});
     });
   });
   root.querySelectorAll('[data-grp-h]').forEach(function (el) {
@@ -15103,17 +15581,53 @@ function blRender() {
       blRender();
     });
   });
-  const fo = document.getElementById('bl-f-open');
-  if (fo) fo.addEventListener('click', function () { blState.filters.openOnly = !blState.filters.openOnly; blRender(); });
-  const fm = document.getElementById('bl-f-mine');
-  if (fm) fm.addEventListener('click', function () { blState.filters.mine = !blState.filters.mine; blState.data = null; renderBacklogView(true); });
-  // 排序控件（TASK-SORT-2）：切换字段/方向即时重排（纯前端，与服务端同规则），选择持久化
+  // ---- 查询栏（服务端过滤）：搜索防抖 350ms、Enter 立即生效；chip 点击即时请求 ----
+  const qi = document.getElementById('bl-q');
+  if (qi) {
+    qi.addEventListener('input', function () { blOnSearchInput(qi.value); });
+    // 中文输入法组字期间重渲染会打断候选词：composition 标记，组字结束再按最终文本触发
+    qi.addEventListener('compositionstart', function () { blState.composing = true; });
+    qi.addEventListener('compositionend', function () { blState.composing = false; blOnSearchInput(qi.value); });
+    qi.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (blState.searchTimer) { clearTimeout(blState.searchTimer); blState.searchTimer = null; }
+        blApplySearch();
+      }
+    });
+  }
+  const qClear = document.getElementById('bl-q-clear');
+  if (qClear) qClear.addEventListener('click', function () { blActiveFilters().search = ''; blReloadCurrent(); });
+  const fToggle = document.getElementById('bl-f-toggle');
+  if (fToggle) fToggle.addEventListener('click', function () { blToggleFiltersOpen(); blRender(); });
+  const cliCopy = document.getElementById('bl-cli-copy');
+  if (cliCopy) cliCopy.addEventListener('click', function () { blCopyCli(); });
+  root.querySelectorAll('[data-blf]').forEach(function (el) {
+    el.addEventListener('click', function () { blOnFilterChip(el.dataset.blf, el.dataset.blfv); });
+  });
+  root.querySelectorAll('[data-blf-clear]').forEach(function (el) {
+    el.addEventListener('click', function (e) { e.stopPropagation(); blClearFilters(); });
+  });
+  const retryAll = document.getElementById('bl-retry-all');
+  if (retryAll) retryAll.addEventListener('click', function () { blState.data = null; renderBacklogView(true); });
+  const moreBtn = document.getElementById('bl-more');
+  if (moreBtn) moreBtn.addEventListener('click', function () { blLoadBoard({ append: true }); });
+  // 排序控件（TASK-SORT-2）：选择持久化；看板必须带新排序重新请求（服务端在排序后切窗口），
+  // 聚合页无窗口、前端按同规则重排即可，不必再打一次接口
   const sel = document.getElementById('bl-s-order');
-  if (sel) sel.addEventListener('change', function () { blState.sort.orderBy = sel.value || 'createdAt'; try { localStorage.setItem('bl-sort', JSON.stringify(blState.sort)); } catch (e) {} blRender(); });
+  if (sel) sel.addEventListener('change', function () {
+    blState.sort.orderBy = sel.value || 'createdAt';
+    try { localStorage.setItem('bl-sort', JSON.stringify(blState.sort)); } catch (e) {}
+    if (blState.board) blReloadCurrent(); else blRender();
+  });
   const sd = document.getElementById('bl-s-dir');
-  if (sd) sd.addEventListener('click', function () { blState.sort.order = blState.sort.order === 'desc' ? 'asc' : 'desc'; try { localStorage.setItem('bl-sort', JSON.stringify(blState.sort)); } catch (e) {} blRender(); });
+  if (sd) sd.addEventListener('click', function () {
+    blState.sort.order = blState.sort.order === 'desc' ? 'asc' : 'desc';
+    try { localStorage.setItem('bl-sort', JSON.stringify(blState.sort)); } catch (e) {}
+    if (blState.board) blReloadCurrent(); else blRender();
+  });
   const back = document.getElementById('bl-back');
-  if (back) back.addEventListener('click', function () { blState.board = null; blState.data = null; renderBacklogView(true); });
+  if (back) back.addEventListener('click', function () { blState.board = null; blState.data = null; blState.picked = {}; renderBacklogView(true); });
   const nw = document.getElementById('bl-new');
   if (nw) nw.addEventListener('click', function () { blOpenEditor(null); });
   const batch = document.getElementById('bl-batch');
@@ -15159,21 +15673,81 @@ function blRender() {
   });
   root.querySelectorAll('.bl-pick').forEach(function (el) {
     el.addEventListener('change', function () {
+      if (el.checked) blState.picked[el.dataset.pick] = 1; else delete blState.picked[el.dataset.pick];
       const b = document.getElementById('bl-batch');
       if (b) { b.disabled = !blPickedCount(); b.textContent = '派发选中 (' + blPickedCount() + ')'; }
     });
   });
+  // 搜索框防抖请求会重渲染整块（innerHTML 替换会丢焦点/光标）：把焦点还给搜索框并定位到末尾，
+  // 否则用户边打字边等结果时输入会被打断（移动端更明显）。
+  // 加载中与加载完成各渲染一次，所以第一次还原后第二次靠 activeElement 继续还原（标志位只用于第一次）。
+  if (searchFocused) {
+    const q = document.getElementById('bl-q');
+    if (q) {
+      try { q.focus(); const n = q.value.length; q.setSelectionRange(n, n); } catch (e) {}
+    }
+  }
+  blState.focusSearch = false;
 }
 
 function blBoardItem(itemId) {
-  const b = blState.board; if (!b) return null;
+  const b = blState.board; if (!b || !b.data) return null;
   return (b.data.items || []).find(function (it) { return it.itemId === itemId; });
 }
 
+/**
+ * 项目看板装载（契约 §4.1 / §6.2）：同一套筛选 query 作用于 GET /projects/:id/backlog。
+ * - 分页窗口用 **maxCount**（= CLI 的 --max-count，skip 之后取多少条，window.nextSkip/cut 由它驱动）；
+ *   不要用 limit：那是排序后的**硬截断**（先截断再切窗），拿它分页会让第 2 页永远为空。
+ * - 初始/筛选变化：skip=0，maxCount=BL_BOARD_PAGE；
+ * - 「显示更多」：带 skip=window.nextSkip 再请求，把新条目**追加**到现有 items（拖拽/勾选都基于合并后的列表）；
+ * - 操作成功后的重载（blReloadBoard）：保持当前筛选与已加载条数，避免用户翻到第二页后操作一下又缩回第一页。
+ */
+async function blLoadBoard(opts) {
+  const b = blState.board; if (!b) return false;
+  opts = opts || {};
+  const append = Boolean(opts.append);
+  const f = b.filters || (b.filters = blNewFilters(false));
+  const loaded = (b.data && b.data.items) ? b.data.items.length : 0;
+  const skip = append ? (typeof b.nextSkip === 'number' ? b.nextSkip : 0) : 0;
+  let pageSize = BL_BOARD_PAGE;
+  if (!append && opts.pageSize) pageSize = Math.max(BL_BOARD_PAGE, Math.min(Number(opts.pageSize) || BL_BOARD_PAGE, 500));
+  if (!append && opts.keepWindow) pageSize = Math.max(BL_BOARD_PAGE, Math.min(loaded, 500));
+  const params = blQueryParams(f);
+  params.maxCount = String(pageSize);
+  if (skip) params.skip = String(skip);
+  b.loading = true;
+  blRender();
+  const r = await api('/projects/' + encodeURIComponent(b.projectId) + '/backlog?' + blQs(params));
+  b.loading = false;
+  if (!r || !r.ok) {
+    blRender();
+    toast('看板加载失败: ' + ((r && r.error) || '请求失败'), true);
+    return false;
+  }
+  const d = r.data || {};
+  if (append && b.data && b.data.items) {
+    const merged = b.data.items.slice();
+    const seen = {};
+    for (let i = 0; i < merged.length; i++) seen[merged[i].itemId] = 1;
+    const add = d.items || [];
+    for (let j = 0; j < add.length; j++) {
+      if (seen[add[j].itemId]) continue;
+      seen[add[j].itemId] = 1;
+      merged.push(add[j]);
+    }
+    d.items = merged;
+  }
+  b.data = d;
+  b.nextSkip = (d.window && d.window.nextSkip !== undefined) ? d.window.nextSkip : null;
+  blRender();
+  return true;
+}
+
+/** 看板操作（拖拽改状态/派发/编辑/删除/扫描）成功后重载：带当前筛选参数，保持用户视图不跳回默认 */
 async function blReloadBoard() {
   const b = blState.board; if (!b) return;
-  const r = await api('/projects/' + b.projectId + '/backlog');
-  if (r.ok) { b.data = r.data; blRender(); }
+  await blLoadBoard({ keepWindow: true });
 }
 
 async function blDispatch(pid, itemId, force) {
@@ -15308,12 +15882,25 @@ async function blOpenDetail(itemId) {
 // 待办视图已加载过的聚合结果（blState.data）优先复用，避免重复请求；30s TTL 兜底刷新。
 var cmdkBl = { cache: null, at: 0, loading: false };
 var CMDK_BL_TTL = 30000;
+/**
+ * 待办聚合结果能否直接当 ⌘K 的全量语料：
+ * ① 用户没套筛选；② 服务端**也没**按默认 openOnly 过滤（默认「仅未完成」同样是服务端过滤，
+ * 那份 items 里没有已完成条目，拿来当 ⌘K 语料会让 Done 条目凭空搜不到）。
+ */
+function blOverviewCacheUsableForCmdk() {
+  if (!(blState.data && blState.data.data)) return false;
+  if (blHasFilters(blState.filters, true)) return false;
+  if (blState.data.query && blState.data.query.openOnly === true) return false;
+  return true;
+}
 function cmdkBacklogGroups() {
-  if (blState.data && blState.data.data) return blState.data.data;
+  // 只有「未过滤」的聚合结果才能当全局搜索语料：待办页一旦套了筛选（含默认 openOnly），
+  // blState.data 只是命中子集，直接复用会让 ⌘K 里凭空少掉大量条目，所以此时退回独立的未过滤缓存。
+  if (blOverviewCacheUsableForCmdk()) return blState.data.data;
   return cmdkBl.cache || [];
 }
 function cmdkBacklogPrefetch() {
-  if (blState.data && blState.data.data) { cmdkBl.cache = blState.data.data; cmdkBl.at = Date.now(); return; }
+  if (blOverviewCacheUsableForCmdk()) { cmdkBl.cache = blState.data.data; cmdkBl.at = Date.now(); return; }
   if (cmdkBl.loading) return;
   if (cmdkBl.at && Date.now() - cmdkBl.at < CMDK_BL_TTL) return;
   cmdkBl.loading = true;
@@ -15356,19 +15943,18 @@ function cmdkOpenBacklogItem(projectId, itemId) {
   var g = null;
   for (var i = 0; i < groups.length; i++) if (groups[i].projectId === projectId) { g = groups[i]; break; }
   var name = (g && g.projectName) || projectId;
+  // 跳转意图是「看这一条」：重置看板筛选，避免被上一个看板的筛选条件藏起来
+  blState.board = blNewBoard(projectId, name, null);
   if (g && (g.items || []).length) {
-    // 聚合缓存里已有条目与状态列：先渲染看板，避免远端列表请求期间白屏或停留在上一个项目的看板
-    blState.board = {
-      projectId: projectId, name: name,
-      data: { initialized: true, items: g.items, statuses: g.statuses || [], defaultStatus: g.defaultStatus || '', truncated: Boolean(g.truncated) },
-    };
+    // 聚合缓存里已有条目与状态列：先渲染看板，避免远端列表请求期间白屏或停留在上一个项目的看板；
+    // 缓存没有 facets/matched/window 等新字段，blBoardHtml / blQueryBarHtml 已做兜底（派生 facets、不显示计数）
+    blState.board.data = { initialized: true, items: g.items, statuses: g.statuses || [], defaultStatus: g.defaultStatus || '', truncated: Boolean(g.truncated) };
   }
   switchView('backlog');
-  // 权威刷新：列表可能比缓存新；失败时保留已渲染的缓存看板并明确提示，不静默失败
-  return api('/projects/' + encodeURIComponent(projectId) + '/backlog').then(function (r) {
-    if (!r || !r.ok) { toast('打开待办看板失败：' + ((r && r.error) || '未知错误'), true); return; }
-    blState.board = { projectId: projectId, name: name, data: r.data };
-    blRender();
+  blRender();
+  // 权威刷新：列表可能比缓存新；一次多取一些，尽量让被跳转的条目直接出现在看板上；失败保留缓存看板并提示
+  return blLoadBoard({ pageSize: 200 }).then(function (ok) {
+    if (!ok) return;
     return blOpenDetail(itemId);
   });
 }

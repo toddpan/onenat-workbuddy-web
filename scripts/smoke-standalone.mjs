@@ -216,6 +216,81 @@ async function main() {
   const blCollectLegacyOk = Boolean(blCollectBlock) && !/[?]\.[A-Za-z_$]/.test(blCollectBlock) && !blCollectBlock.includes('??')
   check('采集代码段兼容旧内核（无 ?. / ??）', blCollectLegacyOk, blCollectLegacyOk ? '' : '采集段出现可选链/空值合并')
 
+  // Backlog 查询能力（docs/design-backlog-query-filters.md §2/§4/§6）：待办聚合页与项目看板的查询栏、
+  // 筛选面板、就绪徽标、看板「显示更多」分页。断言对象 = 控制台内联的 web-ui 源码字面量：
+  // 锚点缺失即说明控件或请求接线被删/改名（回归保护）；文案/锚点调整时需同步更新本段。
+  const blQstateIdx = consoleRes.text.indexOf('* 查询/筛选状态（docs/design-backlog-query-filters.md §2/§4/§6）：')
+  const blQcmdkIdx = consoleRes.text.indexOf('// ---------- ⌘K × Backlog 条目检索（TASK-1）')
+  const blQblock = blQstateIdx > 0 && blQcmdkIdx > blQstateIdx ? consoleRes.text.slice(blQstateIdx, blQcmdkIdx) : ''
+  const blQbarIdx = consoleRes.text.indexOf('// ---------- 查询栏 / 筛选面板 HTML ----------')
+  const blQinterIdx = consoleRes.text.indexOf('// ---------- 查询交互 ----------')
+  check('待办查询栏存在（搜索框 / ⚙筛选 / 排序下拉+方向 / 计数 / 清除筛选）',
+    Boolean(blQblock)
+      && consoleRes.text.includes('id="bl-qbar"')
+      && consoleRes.text.includes('id="bl-q"')
+      && consoleRes.text.includes('class="bl-qinput"')
+      && consoleRes.text.includes('placeholder="搜索标题')
+      && consoleRes.text.includes('id="bl-f-toggle"')
+      && consoleRes.text.includes('id="bl-s-order"')
+      && consoleRes.text.includes('id="bl-s-dir"')
+      && consoleRes.text.includes('id="bl-qcnt"')
+      && consoleRes.text.includes('data-blf-clear="1"')
+      && consoleRes.text.includes('清除筛选'),
+    blQblock ? `queryBlock=${blQblock.length}` : '缺少查询状态段')
+  check('筛选面板存在（facets 驱动的 chips：状态/优先级/类型/标签/指派/里程碑/组件 + 就绪/被阻塞）',
+    blQbarIdx > 0 && blQinterIdx > blQbarIdx
+      && consoleRes.text.includes('function blFilterPanelHtml')
+      && consoleRes.text.includes("blFacetChipsRow('状态'")
+      && consoleRes.text.includes("blFacetChipsRow('优先级'")
+      && consoleRes.text.includes("blFacetChipsRow('标签'")
+      && consoleRes.text.includes("blFacetChipsRow('里程碑'")
+      && consoleRes.text.includes("'✅ 就绪（可开工）'")
+      && consoleRes.text.includes("'⛔ 被阻塞'")
+      && consoleRes.text.includes("'仅未完成'")
+      && consoleRes.text.includes('blCliText'),
+    blQbarIdx > 0 ? `bar=${blQbarIdx} interaction=${blQinterIdx}` : '缺少查询栏 HTML 段')
+  check('计数与筛选态提示（匹配 N / 共 M · 被筛选隐藏 X 条 · 无匹配待办保留分组头）',
+    consoleRes.text.includes("'匹配 ' + matched + ' / 共 '")
+      && consoleRes.text.includes('被筛选隐藏 ')
+      && consoleRes.text.includes('无匹配待办'))
+  check('就绪态徽标（✅ 就绪 / ⛔ 阻塞，title 列出未完成与无法解析依赖）',
+    consoleRes.text.includes('function blReadyBadgeHtml')
+      && consoleRes.text.includes('>✅ 就绪</span>')
+      && consoleRes.text.includes('>⛔ 阻塞</span>')
+      && consoleRes.text.includes('bl-st-ready'))
+  check('看板「显示更多」分页（window.nextSkip → skip 再请求并追加）',
+    blQblock.includes('id="bl-more"')
+      && blQblock.includes('显示更多')
+      && blQblock.includes('data-skip=')
+      && blQblock.includes('window.nextSkip')
+      && blQblock.includes('params.skip = String(skip)'))
+  check('前端请求带查询参数（overview 与项目看板共用 blQueryParams/blQs）',
+    blQblock.includes('function blQueryParams')
+      && blQblock.includes('function blQs')
+      && blQblock.includes('p.search = f.search')
+      && blQblock.includes("p.openOnly = '1'")
+      && blQblock.includes("p.ready = '1'")
+      && blQblock.includes("p.blocked = '1'")
+      && blQblock.includes("p.labelMatch = 'all'")
+      && blQblock.includes('p.milestone')
+      && blQblock.includes("p.unassigned = '1'")
+      && blQblock.includes('p.status = f.statuses.slice()')
+      && blQblock.includes('p.priority = f.priorities')
+      && blQblock.includes('p.sort =')
+      && blQblock.includes('p.order =')
+      && blQblock.includes("'/backlog/overview' + (qs ? '?' + qs : '')")
+      && blQblock.includes("encodeURIComponent(b.projectId) + '/backlog?' + blQs(params)"),
+    blQblock ? `queryBlock=${blQblock.length}` : '缺少查询状态段')
+  check('facets 消费 + 排序维度新增 id（筛选项来自服务端 facets，排序下拉含 ID）',
+    consoleRes.text.includes('var BL_FACET_KEYS = [')
+      && consoleRes.text.includes("'taskProjects']")
+      && consoleRes.text.includes('function blNormFacets')
+      && consoleRes.text.includes('facets.statuses')
+      && consoleRes.text.includes("['id', 'ID']"))
+  // 微信 X5 旧内核：新增查询段只允许 var/function/字符串拼接，不得出现可选链或空值合并（与既有 ⌘K/采集段检查同规则）
+  const blQueryLegacyOk = Boolean(blQblock) && !/[?]\.[A-Za-z_$]/.test(blQblock) && !blQblock.includes('??')
+  check('查询段兼容旧内核（无 ?. / ??）', blQueryLegacyOk, blQueryLegacyOk ? '' : '新增查询段出现可选链/空值合并')
+
   const notFound = await req('GET', '/nope')
   check('未知路径返回 404 JSON', notFound.status === 404 && notFound.json?.ok === false)
 

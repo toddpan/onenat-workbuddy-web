@@ -114,6 +114,12 @@ workbuddy_backlog_manage {"action":"dispatch","projectId":"proj-x","itemId":"TAS
 workbuddy_task_status {"taskId":"<dispatch 返回的 taskId>"}
 ```
 
+**查询/筛选（与 `backlog task list` 对齐，契约见 `docs/design-backlog-query-filters.md`）**：`filter` 支持
+`status`/`excludeStatus`（多值）、`assignee`/`unassigned`、`priority`/`type`/`labels`+`labelMatch`、`milestone`、
+`taskProject`、`parent`、`search`（正文全文）、`ready`/`blocked`（依赖就绪判定，fail-closed）、
+`sort`(priority|id|ordinal|createdAt|updatedAt|status)+`order`、`limit`（硬截断）、`maxCount`+`skip`（分页窗口）、
+`count`。回包带 `total/matched/counts/window/facets`，条目带 `isReady/blocked/blockingDependencies/missingDependencies`。
+
 ③ 看跨项目我的待办
 
 ```
