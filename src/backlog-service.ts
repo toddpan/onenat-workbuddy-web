@@ -66,7 +66,7 @@ export async function dispatchBacklogItem(
   target: DshTarget,
   workspace: string,
   itemId: string,
-  opts: { force?: boolean; instruction?: string } = {},
+  opts: { force?: boolean; instruction?: string; ownerUserId?: string } = {},
 ): Promise<BacklogDispatchResult> {
   const found = await findItem(deps.client, target, workspace, itemId)
   if (!found) throw Object.assign(new Error(`待办 ${itemId} 不存在`), { status: 404, code: 'NOT_FOUND' })
@@ -102,6 +102,8 @@ export async function dispatchBacklogItem(
     projectId: proj.id,
     message,
     creator: 'console',
+    // §11：派发任务归属派发人（项目成员可见；缺省 = AI 工具通道宽容模式）
+    ...(opts.ownerUserId ? { ownerUserId: opts.ownerUserId } : {}),
     backlogRef: { projectId: proj.id, itemId: item.itemId, itemTitle: item.title || '', dispatchedAt: Date.now() },
   })
   // 置进行中（状态可配置：resolveInProgressStatus 判定；已是该状态则不动）+ 追加派发记录

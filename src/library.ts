@@ -36,6 +36,12 @@ export interface LibEntry {
   sourceNode?: string
   /** 插件家族（引擎形态）：dsh / zcode / 未来扩展的其它 AGENT 家族；技能不设。导入时随来源节点/目标 agent 匹配校验 */
   family?: string
+  /**
+   * 归属用户（上传/导入时服务端权威写入；缺省 = 宽容模式）：
+   * - 条目查看/下载/安装全员（共享资产池语义不变）；删除仅归属人+admin
+   * - 缺省（存量条目）：可见可用全员，删除仅 admin（docs/design-user-project-management.md §11）
+   */
+  ownerUserId?: string
 }
 
 export interface LibInstallTarget {
@@ -137,6 +143,7 @@ export class SkillPluginLibrary {
     source: 'upload' | 'import',
     sourceNode?: string,
     family?: string,
+    ownerUserId?: string,
   ): Promise<LibEntry> {
     if (file.data.length === 0) throw new Error('文件为空')
     if (file.data.length > MAX_ARCHIVE_BYTES) throw new Error(`文件超过 ${Math.round(MAX_ARCHIVE_BYTES / 1024 / 1024)}MB 上限`)
@@ -157,6 +164,7 @@ export class SkillPluginLibrary {
       source,
       ...(sourceNode ? { sourceNode } : {}),
       ...(family ? { family } : {}),
+      ...(ownerUserId ? { ownerUserId } : {}),
     }
     this.index.entries.push(entry)
     this.save()

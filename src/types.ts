@@ -106,6 +106,10 @@ export interface SshResource {
   passphrase?: string
   description?: string
   tags?: string[]
+  /** 归属用户（创建者 userId）；缺省 = 宽容模式（全员可用，存量数据零迁移） */
+  ownerUserId?: string
+  /** 可见性：private=仅归属人/项目绑定成员；shared=额外对全部登录用户只读可见（不可使用/取明文） */
+  visibility?: 'private' | 'shared'
   lastTestedAt?: number
   lastTestOk?: boolean
   lastTestError?: string
@@ -165,6 +169,10 @@ export interface SubAgent {
   id: string
   name: string
   dshRef: DshRef
+  /** 归属用户（创建者 userId）；缺省 = 宽容模式（全员可见可用，存量数据零迁移） */
+  ownerUserId?: string
+  /** 显式共享的项目（成员可在项目任务里 @ 它，但不可查看 apiKey/systemPrompt） */
+  sharedProjectIds?: string[]
   /** direct 引用时的 API Key；mapping/app 引用时优先经 ONENAT 映射凭证接口解析 */
   apiKey?: string
   agentPreset?: string
@@ -267,6 +275,8 @@ export interface Project {
   projectMembers?: ProjectMember[]
   /** 可见性：private=仅成员，team=登录用户可见（预留），public=所有人；缺省按 team 处理 */
   visibility?: 'private' | 'team' | 'public'
+  /** 成员邀请开关：true=普通 member 也可邀请他人入项（缺省 = 仅 owner/admin 可邀请） */
+  allowMemberInvite?: boolean
   /** 项目 DSH 节点 */
   dshRef: DshRef
   /** 节点鉴权（direct 直连时可填） */
@@ -432,6 +442,12 @@ export interface WorkTask {
   memberAgentIds: string[]
   /** 创建者（'tool' = AI 工具通道 / 'console' = 控制台人工）。工具通道显式指定的成员受保护，不被主智能体改写 */
   creator?: 'tool' | 'console'
+  /**
+   * 归属用户（创建时服务端权威写入，客户端传入不采信；缺省 = 宽容模式）：
+   * - 有归属：归属人 / admin /（绑定项目且项目隔离时的项目成员）可见；改名/删除/归档等管理仅归属人+admin
+   * - 缺省（存量任务 / AI 工具通道创建）：全员可见，管理仅 admin（docs/design-user-project-management.md §11）
+   */
+  ownerUserId?: string
   /** 最近一轮的路由模式：明确 @ 单人时为 direct（定向直通），无 @ 主会话为 chat+source=node（节点直发） */
   lastRoute?: { kind: 'direct' | 'orchestrate' | 'chat'; agentId?: string; agentName?: string; source?: 'member' | 'main' | 'project' | 'node' }
   turns: TaskTurn[]
@@ -593,6 +609,13 @@ export interface ScheduledTask {
   /** 固定任务文本（触发时原样派发） */
   message: string
   rule: ScheduleRule
+  /**
+   * 归属用户（创建时服务端权威写入，客户端传入不采信；缺省 = 宽容模式）：
+   * - 有归属：归属人 / admin 可见；编辑/删除/toggle/手动 run 仅归属人+admin
+   * - 缺省（存量定时任务）：全员可见，管理仅 admin（docs/design-user-project-management.md §11）
+   * 定时触发派生的任务继承此归属（无归属则派生任务同为宽容模式）。
+   */
+  ownerUserId?: string
   enabled: boolean
   createdAt: number
   updatedAt: number
@@ -759,6 +782,8 @@ export interface ExpertTeam {
   templateId?: TeamTemplateId
   /** 内置团（随版本种子提供，只读，可复制为自定义） */
   builtin?: boolean
+  /** 归属用户（创建者 userId）；缺省 = 宽容模式（全员可见可用） */
+  ownerUserId?: string
   enabled: boolean
   createdAt: number
   updatedAt: number

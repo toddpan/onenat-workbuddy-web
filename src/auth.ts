@@ -618,7 +618,9 @@ export class AuthService {
     if (recent.length >= LOGIN_FAIL_MAX) return null
 
     const name = String(username || '').trim()
-    const user = this.users.find((u) => u.username === name) || this.users.find((u) => AuthService.normalizeEmail(u.username) === AuthService.normalizeEmail(name))
+    // 排除软删记录：删除后重邀同邮箱会产生 deleted + active 两条，find 必须只落在有效记录上
+    const alive = this.users.filter((u) => u.status !== 'deleted')
+    const user = alive.find((u) => u.username === name) || alive.find((u) => AuthService.normalizeEmail(u.username) === AuthService.normalizeEmail(name))
     const ok = user && user.status === 'active' ? safeEqual(await hashPasswordAsync(password, user.salt), user.hash) : false
     if (!ok) {
       recent.push(Date.now())
@@ -675,7 +677,7 @@ export class AuthService {
 
   /** 修改密码（校验旧密码）；成功后吊销该用户全部会话 */
   public async changePassword(usernameOrId: string, oldPassword: string, newPassword: string): Promise<boolean> {
-    const user = this.users.find((u) => u.username === usernameOrId || u.id === usernameOrId)
+    const user = this.users.find((u) => u.status !== 'deleted' && (u.username === usernameOrId || u.id === usernameOrId))
     if (!user) return false
     if (!safeEqual(await hashPasswordAsync(oldPassword, user.salt), user.hash)) return false
     if (!newPassword || newPassword.length < 6) return false

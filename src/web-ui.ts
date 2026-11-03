@@ -2593,8 +2593,8 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
         </div>
         <div class="lib-list" id="lib-installs-skill" style="max-height:30vh"><div class="lib-empty">加载中…</div></div>
       </div>
-      <div class="panel" style="margin-top:12px">
-        <div class="lib-head"><b>🔗 平台公网地址</b><span class="lib-tip">安装任务里给 DSH 的下载链接基址；留空 = 按浏览器访问域名自动推断</span></div>
+      <div class="panel" style="margin-top:12px" id="lib-base-panel" hidden>
+        <div class="lib-head"><b>🔗 平台公网地址（管理员）</b><span class="lib-tip">安装任务里给 DSH 的下载链接基址；留空 = 按浏览器访问域名自动推断</span></div>
         <div style="padding:10px 14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
           <input id="lib-base" placeholder="例如 https://your-host.example.com/onenat-workbuddy" style="flex:1;min-width:260px;width:auto">
           <button class="mini-btn" id="lib-base-save">保存</button>
@@ -2624,8 +2624,8 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
         </div>
         <div class="lib-list" id="lib-installs-plugin" style="max-height:30vh"><div class="lib-empty">加载中…</div></div>
       </div>
-      <div class="panel" style="margin-top:12px">
-        <div class="lib-head"><b>🔗 平台公网地址</b><span class="lib-tip">安装任务里给 DSH 的下载链接基址；留空 = 按浏览器访问域名自动推断</span></div>
+      <div class="panel" style="margin-top:12px" id="lib-base2-panel" hidden>
+        <div class="lib-head"><b>🔗 平台公网地址（管理员）</b><span class="lib-tip">安装任务里给 DSH 的下载链接基址；留空 = 按浏览器访问域名自动推断</span></div>
         <div style="padding:10px 14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
           <input id="lib-base2" placeholder="例如 https://your-host.example.com/onenat-workbuddy" style="flex:1;min-width:260px;width:auto">
           <button class="mini-btn" id="lib-base2-save">保存</button>
@@ -2720,16 +2720,16 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
     <div class="view" id="view-settings"><div class="panel" style="max-width:1100px;margin:0 auto">
       <div class="panel-head"><h2>设置</h2><span class="sub">平台连接 · 任务归档 · AI 接入</span><span class="hspacer"></span><button class="btn pri" id="btn-save-settings">保存设置</button></div>
       <div class="settings-grid">
-      <div class="card">
-        <h3 style="margin-bottom:12px">ONENAT 平台</h3>
+      <div class="card" id="onenat-card" style="display:none">
+        <h3 style="margin-bottom:12px">ONENAT 平台（管理员）</h3>
         <div class="grid3">
           <div class="field"><label>Base URL</label><input id="set-base"></div>
           <div class="field"><label>API Key (onk-…)</label><input id="set-key"></div>
           <div class="field"><label>自动刷新间隔 (ms)</label><input id="set-refresh" type="number"></div>
         </div>
       </div>
-      <div class="card">
-        <h3 style="margin-bottom:12px">全局默认模型</h3>
+      <div class="card" id="global-model-card" style="display:none">
+        <h3 style="margin-bottom:12px">全局默认模型（管理员）</h3>
         <div class="field"><label>未单独指定模型的任务使用此模型（聊天窗模型按钮只改当前任务）</label><select id="set-default-model" class="cfg-sel"></select></div>
         <div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="btn" id="btn-save-default-model">保存默认模型</button><span id="set-default-model-hint" style="font-size:11.5px;color:var(--tx3)"></span></div>
       </div>
@@ -2801,17 +2801,17 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
     <div class="view" id="view-archive"><div class="panel" style="max-width:980px;margin:0 auto">
       <div class="panel-head"><h2>🗄 归档管理</h2><span class="sub">自动归档设置 · 已归档会话搜索 / 批量恢复 / 批量删除</span><span class="hspacer"></span><button class="btn" id="arch-refresh">↻ 刷新</button></div>
       <div class="card arch-set-card">
-        <div class="arch-set-row">
+        <div class="arch-set-row" id="arch-auto-row" hidden>
           <div class="arch-set-main">
-            <div class="arch-set-title">自动归档旧会话</div>
+            <div class="arch-set-title">自动归档旧会话（管理员）</div>
             <div class="arch-set-desc">定时扫描，将最后更新时间超过保留期的终态会话（已完成 / 失败 / 已取消等）自动归档；运行中的会话不受影响。</div>
           </div>
           <button class="arch-sw" id="arch-auto-sw" role="switch" aria-checked="false" title="开启 / 关闭自动归档"><span class="arch-sw-dot"></span></button>
         </div>
         <div class="arch-set-div"></div>
-        <div class="arch-set-row">
+        <div class="arch-set-row" id="arch-days-row" hidden>
           <div class="arch-set-main">
-            <div class="arch-set-title">归档保留时长</div>
+            <div class="arch-set-title">归档保留时长（管理员）</div>
             <div class="arch-set-desc">会话最后更新时间早于该时长后，才会进入自动归档候选；「取消归档」后重新计时。</div>
           </div>
           <select id="arch-days" class="arch-days-sel">
@@ -3330,7 +3330,9 @@ function libRenderList(kind) {
       '<div class="lib-ops">' +
       '<button class="mini-btn" data-act="install" title="向目标节点发起安装任务">安装</button>' +
       '<button class="mini-btn" data-act="download" title="下载压缩包">下载</button>' +
-      '<button class="mini-btn" data-act="delete" title="从库中删除">删除</button></div></div>';
+      // §11：删除仅归属人/管理员（canManageOwnedUi，与服务端同口径）
+      (canManageOwnedUi(e) ? '<button class="mini-btn" data-act="delete" title="从库中删除">删除</button>' : '') +
+      '</div></div>';
   }
   el.innerHTML = html;
   el.querySelectorAll('.lib-item').forEach(function(item) {
@@ -4993,6 +4995,9 @@ ${AUTH_ENABLED ? `var logoutBtn = document.getElementById('logout-btn');
 if (logoutBtn) logoutBtn.addEventListener('click', doLogout);` : ''}var currentView = 'work';
 function switchView(v) {
   if (!document.getElementById('view-' + v)) return;
+  // §11：全局面视图（监控大屏/语音助手）仅管理员；普通用户切换时拉回工作台
+  //（boot 时 state.me 未就绪放行，loadMe→applyPermUi 再兜底拉回）
+  if ((v === 'monitor' || v === 'voice') && state.me && state.me.role !== 'admin') v = 'work';
   currentView = v;
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
   // 激活的是折叠页签时，「更多」按钮保持高亮，提示当前位置
@@ -5361,6 +5366,8 @@ function createTaskItemElement(t, archived) {
 
   const subText = t.lastPreview ? esc(t.lastPreview) : (memberNames ? '成员: ' + esc(memberNames) : fmtTime(t.updatedAt || t.createdAt));
 
+  // §11：改名/归档/删除按归属渲染（canManageTaskUi，与服务端同口径）；条件渲染 + 安全绑定
+  const tManaged = canManageTaskUi(t);
   div.innerHTML =
     '<div class="row-top">' +
     '<span class="s ' + (t.pendingAsk ? 'ask' : statusColor(t.running ? 'running' : t.status)) + '"' + (t.pendingAsk ? ' title="等待用户回答（ask_user）"' : '') + '></span>' +
@@ -5368,14 +5375,14 @@ function createTaskItemElement(t, archived) {
     '</div>' +
     '<div class="row-sub">' + subText + '</div>' +
     '<span class="acts">' +
-    '<button data-a="rename" title="重命名">✏️</button>' +
-    (archived ? '<button data-a="toggle-archive" title="取消归档">↩️</button>' : '<button data-a="toggle-archive" title="归档">🗄️</button>') +
-    '<button data-a="delete" title="删除" style="color:var(--err)">🗑️</button>' +
+    (tManaged ? '<button data-a="rename" title="重命名">✏️</button>' : '') +
+    (tManaged ? (archived ? '<button data-a="toggle-archive" title="取消归档">↩️</button>' : '<button data-a="toggle-archive" title="归档">🗄️</button>') : '') +
+    (tManaged ? '<button data-a="delete" title="删除" style="color:var(--err)">🗑️</button>' : '') +
     '</span>';
 
   div.addEventListener('click', () => openTask(t.id));
-  div.querySelector('[data-a=rename]').addEventListener('click', (e) => { e.stopPropagation(); promptRenameTask(t); });
-  div.querySelector('[data-a=toggle-archive]').addEventListener('click', async (e) => {
+  div.querySelector('[data-a=rename]')?.addEventListener('click', (e) => { e.stopPropagation(); promptRenameTask(t); });
+  div.querySelector('[data-a=toggle-archive]')?.addEventListener('click', async (e) => {
     e.stopPropagation();
     const want = !archived;
     const r = await api('/tasks/' + t.id + '/archive', { method: 'POST', body: JSON.stringify({ archived: want }) });
@@ -5386,7 +5393,7 @@ function createTaskItemElement(t, archived) {
       loadTasksQuiet();
     } else toast(r.error || '操作失败', true);
   });
-  div.querySelector('[data-a=delete]').addEventListener('click', async (e) => {
+  div.querySelector('[data-a=delete]')?.addEventListener('click', async (e) => {
     e.stopPropagation();
     if (!confirm('确定删除会话「' + t.title + '」？')) return;
     const del = await api('/tasks/' + t.id, { method: 'DELETE' });
@@ -5468,7 +5475,8 @@ async function openTask(taskId) {
     const ce = $('chat-empty'); if (ce) ce.style.display = 'none';
     if ($('chat-title')) $('chat-title').textContent = taskSummary.title || '加载中…';
     if ($('btn-add-member')) $('btn-add-member').style.display = '';
-    if ($('btn-rename-task')) $('btn-rename-task').style.display = '';
+    // §11：重命名 = manage 级（非归属人隐藏按钮；服务端 403 兜底）
+    if ($('btn-rename-task')) $('btn-rename-task').style.display = canManageTaskUi(taskSummary) ? '' : 'none';
     if ($('btn-goal')) $('btn-goal').style.display = '';
     if ($('btn-plan')) $('btn-plan').style.display = '';
     if ($('btn-compact')) $('btn-compact').style.display = '';
@@ -5529,7 +5537,7 @@ function applyTaskToView(task, isInitialRender) {
   if ($('btn-ws-toggle')) $('btn-ws-toggle').style.display = '';
   wsRestoreForTask(task);
   if ($('btn-add-member')) $('btn-add-member').style.display = '';
-  if ($('btn-rename-task')) $('btn-rename-task').style.display = '';
+  if ($('btn-rename-task')) $('btn-rename-task').style.display = canManageTaskUi(task) ? '' : 'none';
   if ($('btn-goal')) $('btn-goal').style.display = '';
   if ($('btn-plan')) $('btn-plan').style.display = '';
   if ($('btn-compact')) $('btn-compact').style.display = '';
@@ -10122,14 +10130,14 @@ $('todo-head').addEventListener('click', () => {
   setTodoCollapsedUI();
 });
 
-// 会话重命名（删除/归档入口在会话抽屉的会话条目上）
+// 会话重命名（删除/归档入口在会话抽屉的会话条目上）；§11 非归属人按钮已隐藏，这里再兜底
 $('btn-rename-task').addEventListener('click', () => {
   const t = state.tasks.find(x => x.id === state.currentTaskId);
-  if (t) promptRenameTask(t);
+  if (t && canManageTaskUi(t)) promptRenameTask(t);
 });
 $('chat-title').addEventListener('dblclick', () => {
   const t = state.tasks.find(x => x.id === state.currentTaskId);
-  if (t) promptRenameTask(t);
+  if (t && canManageTaskUi(t)) promptRenameTask(t);
 });
 
 // ---------- 新建任务 = 草稿（P2-2）：「＋ 新建任务」只进入草稿态，发送首条消息时才 POST /tasks ----------
@@ -11038,7 +11046,10 @@ function renderAgents() {
       g.list.map(agentCardHtml).join('') +
       '</div></div>';
   }).join('');
-  el.querySelectorAll('.agent-card').forEach(card => wireAgentCard(card));
+  el.querySelectorAll('.agent-card').forEach(card => {
+    // 单张卡片绑定失败不影响其余卡片（否则整列表按钮失效）
+    try { wireAgentCard(card); } catch (err) { console.error('[web-ui] 子智能体卡片绑定失败', card.dataset.agent, err); }
+  });
   topoWireGroups(el, renderAgents);
 }
 function agentCardHtml(a) {
@@ -11047,12 +11058,14 @@ function agentCardHtml(a) {
   const dshDesc = describeDshRef(a);
   const resDesc = (a.resources || []).map(r => r.alias || r.ref.mappingId || r.ref.appId).join('、') || '无';
   const skillNames = (a.skills || []).filter(Boolean);
+  const managed = canManageAgentUi(a);
   return '<div class="card agent-card" data-agent="' + esc(a.id) + '">' +
     '<div class="row1"><span class="live-dot ' + st.cls + '" style="' + (st.cls ? '' : 'background:' + st.color) + '"></span>' +
     '<h3>' + esc(a.name) + '</h3>' +
     '<span class="live-state" style="color:' + st.color + '">' + st.text + '</span>' +
     (a.role ? '<span class="tag" title="专家角色">🧑‍🔬 ' + esc(a.role) + '</span>' : '') +
     (a.enabled === false ? '<span class="tag err">停用</span>' : '') +
+    (managed ? '' : '<span class="tag" title="归属他人或共享存量：仅归属人/管理员可编辑删除">🔒 只读</span>') +
     '<span class="tag">' + esc(a.agentPreset || 'cordis') + '</span>' +
     (a.model ? '<span class="tag">' + esc(a.model) + '</span>' : '') +
     (a.workDir ? '<span class="tag" title="远端工作目录">📁 ' + esc(a.workDir) + '</span>' : '') +
@@ -11062,39 +11075,92 @@ function agentCardHtml(a) {
     '<div class="desc">DSH 实体: <span class="mono">' + esc(dshDesc) + '</span><br>绑定资源: ' + esc(resDesc) +
     '<br>绑定技能: <span class="mono">' + (skillNames.length ? skillNames.map(s => '<span class="tag" style="margin:2px 4px 2px 0">🎯 ' + esc(s) + '</span>').join('') : '<span class="sub">无</span>') + '</span>' +
     (a.role || a.systemPrompt ? '<br>角色: ' + esc((a.role ? a.role + ' · ' : '') + (a.systemPrompt || '').slice(0, 80)) : '') + '</div>' +
-    '<div class="ops"><button class="btn pri" data-op="enter">🚀 进入工作台</button><button class="btn" data-op="edit">编辑</button><button class="btn" data-op="copy">📋 复制</button><button class="btn" data-op="ping">Ping 探活</button><button class="btn" data-op="preview">提示词预览</button><button class="btn" data-op="skills">🎯 技能</button><button class="btn danger" data-op="del">删除</button></div>' +
+    '<div class="ops"><button class="btn pri" data-op="enter">🚀 进入工作台</button>' +
+    (managed ? '<button class="btn" data-op="edit">编辑</button>' : '') +
+    '<button class="btn" data-op="copy">📋 复制</button>' +
+    '<button class="btn" data-op="ping">Ping 探活</button>' +
+    '<button class="btn" data-op="preview">提示词预览</button>' +
+    '<button class="btn" data-op="skills">🎯 技能</button>' +
+    (managed ? '<button class="btn danger" data-op="del">删除</button>' : '') +
+    '</div>' +
     '</div>';
+}
+
+/**
+ * 当前用户能否编辑/删除该子智能体（与服务端 perm.ts 同口径）：
+ * 管理员全权；有归属人 → 仅归属人；存量无归属 → 仅管理员（写面不向全员放开）。
+ * me 未就绪时按可管处理（服务端仍会兜底），避免登录前误隐藏按钮。
+ */
+function canManageAgentUi(a) {
+  const me = state.me;
+  if (!me) return true;
+  if (me.role === 'admin') return true;
+  if (!a.ownerUserId) return false;
+  return a.ownerUserId === me.userId;
+}
+// ---------- §11 归属门控镜像（与服务端 perm.ts 同口径；me 未就绪按可管处理，服务端兜底） ----------
+// 统一口径：管理员全权；有归属 → 仅归属人；存量无归属 → 仅管理员（写面不向全员放开）。
+function canManageTaskUi(t) {
+  const me = state.me;
+  if (!me) return true;
+  if (me.role === 'admin') return true;
+  if (!t || !t.ownerUserId) return false;
+  return t.ownerUserId === me.userId;
+}
+function canManageScheduleUi(s) {
+  const me = state.me;
+  if (!me) return true;
+  if (me.role === 'admin') return true;
+  if (!s || !s.ownerUserId) return false;
+  return s.ownerUserId === me.userId;
+}
+function canManageOwnedUi(e) {
+  const me = state.me;
+  if (!me) return true;
+  if (me.role === 'admin') return true;
+  if (!e || !e.ownerUserId) return false;
+  return e.ownerUserId === me.userId;
+}
+/** 当前用户是否平台管理员（me 未就绪按否处理：全局面按钮宁缺勿滥，服务端会兜底放行管理员） */
+function isAdminUi() {
+  return Boolean(state.me && state.me.role === 'admin');
 }
 function wireAgentCard(card) {
   const a = state.agents.find(x => x.id === card.dataset.agent);
   if (!a) return;
-  card.querySelector('[data-op=enter]').addEventListener('click', async () => {
+  // 「编辑/删除」按归属渲染（canManageAgentUi）：非归属人卡片上这两个按钮不存在 ——
+  // 缺省即跳过，不能抛 TypeError（否则整张列表后续卡片的事件都绑不上）。
+  const on = (op, fn) => {
+    const el = card.querySelector('[data-op=' + op + ']');
+    if (el) el.addEventListener('click', fn);
+  };
+  on('enter', async () => {
     // 新模型：进入工作台并把任务节点切到该智能体绑定的节点（主 DSH 跟节点走）
     switchView('work');
     const mid = a.dshRef && a.dshRef.kind === 'mapping' ? a.dshRef.mappingId : '';
     if (mid && dshNodeOptions().some(x => x.mappingId === mid)) selectNode(mid);
     else initNodeState();
   });
-  card.querySelector('[data-op=edit]').addEventListener('click', () => openAgentDrawer(a));
-  card.querySelector('[data-op=copy]').addEventListener('click', () => {
+  on('edit', () => openAgentDrawer(a));
+  on('copy', () => {
     // 复制：完整配置进抽屉、id 剥掉 → 保存走「新建」；只复制配置，不带任务历史与会话
     openAgentDrawer(Object.assign({}, a, { id: undefined, name: a.name + ' - 副本' }), true);
   });
-  card.querySelector('[data-op=skills]').addEventListener('click', () => openSkillCenter(a));
-  card.querySelector('[data-op=ping]').addEventListener('click', async () => {
+  on('skills', () => openSkillCenter(a));
+  on('ping', async () => {
     toast('探测中…');
     const r = await api('/agents/' + a.id + '/ping', { method: 'POST' });
     const p = r.data && r.data.ping;
     if (p && p.ok) toast('✓ ' + a.name + ' 在线 · ' + (p.name || '') + ' v' + (p.version || '?') + (r.data.resolved ? ' · ' + r.data.resolved.baseUrl : ''));
     else toast('✗ ' + a.name + ' 不可达: ' + ((p && p.error) || '未知'), true);
   });
-  card.querySelector('[data-op=preview]').addEventListener('click', async () => {
+  on('preview', async () => {
     toast('合成提示词中…');
     const r = await api('/agents/' + a.id + '/prompt-preview');
     if (!r.ok) { toast(r.error, true); return; }
     openModal('资源提示词预览（脱敏）', '<div class="pre-block">' + esc(r.data.full || '(空)') + '</div>' + (r.data.warnings && r.data.warnings.length ? '<div style="color:var(--warn);font-size:12px;margin-top:8px">⚠ ' + r.data.warnings.map(esc).join('；') + '</div>' : ''));
   });
-  card.querySelector('[data-op=del]').addEventListener('click', async () => {
+  on('del', async () => {
     if (!confirm('删除子智能体「' + a.name + '」？')) return;
     await api('/agents/' + a.id, { method: 'DELETE' }); await loadAgents(); renderAgents(); toast('已删除');
   });
@@ -12002,6 +12068,9 @@ function renderSchedules() {
   for (const s of state.schedules) {
     const card = document.createElement('div'); card.className = 'card';
     const successRate = s.totalRuns ? Math.round((s.successRuns || 0) * 100 / s.totalRuns) : null;
+    // §11：编辑/执行/启停/删除按归属渲染（canManageScheduleUi，与服务端同口径）；
+    // 按钮按条件渲染 + 安全绑定（缺按钮不绑事件，不抛 TypeError——QA round2 教训）
+    const sManaged = canManageScheduleUi(s);
     card.innerHTML = '<div class="row1"><h3>' + esc(s.name) + '</h3>' +
       (s.enabled ? '<span class="tag ok">▶ 启用中</span>' : '<span class="tag err">⏸ 已暂停</span>') +
       '<span class="tag">🕐 ' + esc(s.ruleText || ruleText(s.rule)) + '</span>' +
@@ -12015,26 +12084,31 @@ function renderSchedules() {
       ' · 下次触发: ' + (s.enabled ? (s.nextRunAt ? fmtDateTime(s.nextRunAt) : '—') : '（已暂停）') +
       ' · 已运行 <b>' + (s.totalRuns || 0) + '</b> 次' +
       (successRate !== null ? ' · 派发成功率 ' + successRate + '%' : '') + '</div>' +
-      '<div class="ops"><button class="btn" data-op="detail">详情</button><button class="btn" data-op="edit">编辑</button>' +
+      '<div class="ops"><button class="btn" data-op="detail">详情</button>' +
+      (sManaged ? '<button class="btn" data-op="edit">编辑</button>' : '') +
       '<button class="btn" data-op="copy">📋 复制</button>' +
       '<button class="btn" data-op="ping">Ping 探活</button><button class="btn" data-op="preview">提示词预览</button>' +
-      '<button class="btn" data-op="run">▶ 立即执行</button><button class="btn" data-op="toggle">' + (s.enabled ? '停用' : '启用') + '</button>' +
-      '<button class="btn danger" data-op="del">删除</button></div>';
-    card.querySelector('[data-op=detail]').addEventListener('click', () => openScheduleDetail(s.id));
-    card.querySelector('[data-op=edit]').addEventListener('click', () => openScheduleDrawer(s));
-    card.querySelector('[data-op=copy]').addEventListener('click', () => openScheduleDrawer(s, null, true));
-    card.querySelector('[data-op=ping]').addEventListener('click', async () => {
+      (sManaged
+        ? '<button class="btn" data-op="run">▶ 立即执行</button><button class="btn" data-op="toggle">' + (s.enabled ? '停用' : '启用') + '</button>' +
+          '<button class="btn danger" data-op="del">删除</button>'
+        : '<span class="tag" title="仅归属人与管理员可管理">🔒 只读</span>') +
+      '</div>';
+    const on = (op, fn) => { const b = card.querySelector('[data-op=' + op + ']'); if (b) b.addEventListener('click', fn); };
+    on('detail', () => openScheduleDetail(s.id));
+    on('edit', () => openScheduleDrawer(s));
+    on('copy', () => openScheduleDrawer(s, null, true));
+    on('ping', async () => {
       toast('探测中…');
       await runSchedulePing(s.nodeMappingId || '', s.agentIds || []);
     });
-    card.querySelector('[data-op=preview]').addEventListener('click', async () => {
+    on('preview', async () => {
       toast('合成提示词中…');
       // 列表摘要是截断的指令文本（@ 可能被截掉）→ 先拉全量再预览
       const fr = await api('/schedules/' + s.id);
       const full = fr.ok ? fr.data : s;
       await runSchedulePreview({ name: full.name, message: full.message || '', nodeMappingId: full.nodeMappingId || '', model: full.model || '', workDir: full.workDir || '', skills: full.skills || [] });
     });
-    card.querySelector('[data-op=run]').addEventListener('click', async () => {
+    on('run', async () => {
       const runBtn = card.querySelector('[data-op=run]')
       if (runBtn.disabled) return
       runBtn.disabled = true
@@ -12052,13 +12126,13 @@ function renderSchedules() {
         if (runBtn.isConnected) { runBtn.disabled = false; runBtn.textContent = '▶ 立即执行' }
       }
     });
-    card.querySelector('[data-op=toggle]').addEventListener('click', async () => {
+    on('toggle', async () => {
       const r = await api('/schedules/' + s.id + '/toggle', { method: 'POST' });
       if (!r.ok) { toast(r.error || '操作失败', true); return; }
       toast(r.data && r.data.enabled ? '✓ 已启用' : '已停用');
       await loadSchedules(); renderSchedules();
     });
-    card.querySelector('[data-op=del]').addEventListener('click', async () => {
+    on('del', async () => {
       if (!confirm('删除定时任务「' + s.name + '」？触发历史一并删除。')) return;
       await api('/schedules/' + s.id, { method: 'DELETE' });
       await loadSchedules(); renderSchedules(); toast('已删除');
@@ -13888,10 +13962,27 @@ $('btn-save-settings').addEventListener('click', async () => {
 
 // ---------- 当前用户与用户管理（管理员） ----------
 state.me = null;
+/** §11 权限 UI 收敛（me 就绪后一次）：导航/设置页全局面仅管理员可见；各页按钮由镜像函数按归属渲染 */
+function applyPermUi(role) {
+  var admin = role === 'admin';
+  // 导航：监控大屏（全局 Token 用量/节点健康）与语音助手（全局接入点配置）仅管理员
+  document.querySelectorAll('#nav button[data-v=monitor], #nav button[data-v=voice]').forEach(function (b) { b.style.display = admin ? '' : 'none'; });
+  // 深链接兜底：非管理员落在受限视图时拉回工作台
+  if (!admin) {
+    var cur = document.querySelector('.view.on');
+    if (cur && (cur.id === 'view-monitor' || cur.id === 'view-voice')) { try { switchView('work'); } catch (e) { /* 忽略 */ } }
+  }
+  // 设置页：全局配置卡仅管理员（ONENAT 凭证 / 全局默认模型 / 保存按钮）；用户/审计/SSH 池卡本就 display:none
+  var settingsBits = ['onenat-card', 'global-model-card', 'btn-save-settings'];
+  settingsBits.forEach(function (id) { var el = document.getElementById(id); if (el) el.style.display = admin ? '' : 'none'; });
+  // 技能/插件库：共享基址面板仅管理员；归档页的自动归档配置行仅管理员（归档列表本身全员可用）
+  ['lib-base-panel', 'lib-base2-panel', 'arch-auto-row', 'arch-days-row'].forEach(function (id) { var el = document.getElementById(id); if (el) el.hidden = !admin; });
+}
 (function loadMe() {
   api('/auth/me').then(function (r) {
     if (r.ok && r.data) {
       state.me = r.data;
+      applyPermUi(r.data.role);
       var card = document.getElementById('users-card');
       if (card && r.data.role === 'admin') { card.style.display = ''; loadUsers(); loadMailStatus(); }
       var sshCard = document.getElementById('ssh-pool-card');
@@ -13911,7 +14002,18 @@ state.me = null;
         document.getElementById('account-info').textContent = '登录名：' + (r.data.username || '—') + ' · 角色：' + (r.data.role === 'admin' ? '管理员' : '普通用户');
         document.getElementById('account-name').value = r.data.displayName || '';
       }
-      if (r.data.role === 'admin') loadAuditLog();
+      if (r.data.role === 'admin') {
+        var auditCard = document.getElementById('audit-card');
+        if (auditCard) auditCard.style.display = '';
+        loadAuditLog();
+      }
+      // me 归属就绪后重绘活跃页：编辑/删除按钮按归属显示（普通用户不再看到点不动、必 403 的按钮）
+      try { if (typeof renderAgents === 'function') renderAgents(); } catch (e) { /* 忽略渲染失败 */ }
+      try { if (state.schedules && state.schedules.length && typeof renderSchedules === 'function') renderSchedules(); } catch (e) { /* 忽略 */ }
+      try { if (typeof renderTaskList === 'function') renderTaskList(); } catch (e) { /* 忽略 */ }
+      try { if (typeof renderArchiveList === 'function' && document.getElementById('view-archive') && document.getElementById('view-archive').classList.contains('on')) renderArchiveList(); } catch (e) { /* 忽略 */ }
+      try { if (typeof renderExpertsAdmin === 'function' && document.getElementById('view-experts') && document.getElementById('view-experts').classList.contains('on')) renderExpertsAdmin(); } catch (e) { /* 忽略 */ }
+      try { if (typeof refreshChatHead === 'function' && state.currentTaskId) refreshChatHead(); } catch (e) { /* 忽略 */ }
     }
   }).catch(function () {});
 })();
@@ -14296,6 +14398,8 @@ function renderArchiveList() {
   listEl.innerHTML = '';
   for (const g of groupArr) {
     const expanded = !!archUi.expanded[g.key];
+    // §11：批量/逐条恢复与删除按归属渲染（canManageTaskUi；服务端 bulk 逐条过滤 + 403 兜底）
+    const gManaged = g.items.some(t => canManageTaskUi(t));
     const box = document.createElement('div');
     box.className = 'arch-proj';
     box.innerHTML =
@@ -14303,12 +14407,12 @@ function renderArchiveList() {
       '<span class="arch-proj-chev">' + (expanded ? '▾' : '▸') + '</span>' +
       '<span class="arch-proj-name">' + (g.key === '__none__' ? '🗂' : '📁') + ' ' + esc(g.name) + '</span>' +
       '<span class="arch-proj-cnt">' + g.items.length + ' 个会话</span>' +
-      '<span class="arch-pop-wrap">' +
+      (gManaged ? '<span class="arch-pop-wrap">' +
       '<button class="arch-more-btn" title="批量操作">···</button>' +
       '<div class="arch-pop">' +
       '<button data-a="restore">↩️ 全部取消归档</button>' +
       '<button data-a="delete" class="danger">🗑 全部删除</button>' +
-      '</div></span>' +
+      '</div></span>' : '') +
       '</div>' +
       (expanded ? '<div class="arch-proj-body">' + g.items.map(t => archSessRowHtml(t)).join('') + '</div>' : '');
 
@@ -14319,40 +14423,44 @@ function renderArchiveList() {
       renderArchiveList();
     });
     const pop = box.querySelector('.arch-pop');
-    box.querySelector('.arch-more-btn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      document.querySelectorAll('.arch-pop.open').forEach(x => { if (x !== pop) x.classList.remove('open'); });
-      pop.classList.toggle('open');
-    });
-    pop.querySelector('[data-a=restore]').addEventListener('click', async (e) => {
-      e.stopPropagation();
-      pop.classList.remove('open');
-      const r = await archBulk('restore', g.projectId, { ids: g.items.map(t => t.id) }); // ids 必须随行：组内已按搜索过滤，只按 projectId 会误伤未命中搜索的会话
-      if (r) toast('↩️ 已恢复 ' + (r.restored || 0) + ' 个会话到列表');
-    });
-    pop.querySelector('[data-a=delete]').addEventListener('click', async (e) => {
-      e.stopPropagation();
-      pop.classList.remove('open');
-      if (!confirm('确定删除「' + g.name + '」下全部 ' + g.items.length + ' 个已归档会话？删除后不可恢复。')) return;
-      const r = await archBulk('delete', g.projectId, { ids: g.items.map(t => t.id) }); // 同上：避免搜索过滤下多删
-      if (r) toast('🗑 已删除 ' + (r.deleted || 0) + ' 个会话');
-    });
+    const moreBtn = box.querySelector('.arch-more-btn');
+    if (moreBtn && pop) {
+      moreBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        document.querySelectorAll('.arch-pop.open').forEach(x => { if (x !== pop) x.classList.remove('open'); });
+        pop.classList.toggle('open');
+      });
+      pop.querySelector('[data-a=restore]')?.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        pop.classList.remove('open');
+        const r = await archBulk('restore', g.projectId, { ids: g.items.map(t => t.id) }); // ids 必须随行：组内已按搜索过滤，只按 projectId 会误伤未命中搜索的会话
+        if (r) toast('↩️ 已恢复 ' + (r.restored || 0) + ' 个会话到列表');
+      });
+      pop.querySelector('[data-a=delete]')?.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        pop.classList.remove('open');
+        if (!confirm('确定删除「' + g.name + '」下全部 ' + g.items.length + ' 个已归档会话？删除后不可恢复。')) return;
+        const r = await archBulk('delete', g.projectId, { ids: g.items.map(t => t.id) }); // 同上：避免搜索过滤下多删
+        if (r) toast('🗑 已删除 ' + (r.deleted || 0) + ' 个会话');
+      });
+    }
 
     box.querySelectorAll('.arch-sess').forEach(row => {
       const t = g.items.find(x => x.id === row.dataset.id);
       if (!t) return;
       row.querySelector('.arch-sess-main').addEventListener('click', () => jumpToTask(t.id));
-      row.querySelector('[data-a=restore]').addEventListener('click', () => archToggleOne(t));
-      row.querySelector('[data-a=delete]').addEventListener('click', () => archDeleteOne(t));
+      row.querySelector('[data-a=restore]')?.addEventListener('click', () => archToggleOne(t));
+      row.querySelector('[data-a=delete]')?.addEventListener('click', () => archDeleteOne(t));
     });
     listEl.appendChild(box);
   }
 }
 
-/** 会话行 HTML：状态点 + 标题/最新内容 + 时间 + 逐条恢复/删除 */
+/** 会话行 HTML：状态点 + 标题/最新内容 + 时间 + 逐条恢复/删除（§11 按归属渲染管理按钮） */
 function archSessRowHtml(t) {
   const timeTxt = fmtTime(t.archivedAt || t.updatedAt || t.createdAt);
   const timeTitle = t.archivedAt ? '归档于 ' + new Date(t.archivedAt).toLocaleString() : '';
+  const tManaged = canManageTaskUi(t);
   return '<div class="arch-sess" data-id="' + esc(t.id) + '">' +
     '<span class="s ' + statusColor(t.running ? 'running' : t.status) + '"></span>' +
     '<div class="arch-sess-main" title="' + esc(t.title) + '">' +
@@ -14360,8 +14468,8 @@ function archSessRowHtml(t) {
     '<div class="arch-sess-sub">' + (t.lastPreview ? esc(t.lastPreview) : '—') + '</div>' +
     '</div>' +
     '<span class="arch-sess-time" title="' + esc(timeTitle) + '">' + esc(timeTxt) + '</span>' +
-    '<button class="mini-btn" data-a="restore" title="取消归档，恢复到会话列表">↩️ 取消归档</button>' +
-    '<button class="mini-btn" data-a="delete" title="删除会话" style="color:var(--err)">🗑</button>' +
+    (tManaged ? '<button class="mini-btn" data-a="restore" title="取消归档，恢复到会话列表">↩️ 取消归档</button>' +
+    '<button class="mini-btn" data-a="delete" title="删除会话" style="color:var(--err)">🗑</button>' : '') +
     '</div>';
 }
 
@@ -14519,8 +14627,10 @@ function exmRender() {
   const rows = experts.filter(e => (!div || e.division === div) && (!q || ((e.name + ' ' + (e.nameEn || '') + ' ' + (e.division || '') + ' ' + (e.divisionZh || '') + ' ' + e.description + ' ' + (e.tags || []).join(' ')).toLowerCase().includes(q))));
   $('exm-count').textContent = '共 ' + rows.length + ' 位';
   $('exm-body').innerHTML = rows.map(e => {
-    const editable = e.source === 'user';
-    const src = editable ? '<span style="color:var(--pri);font-weight:600">用户</span>' : (e.source === 'builtin' ? '内置' : '名册');
+    // §11：用户专家按归属管理（canManageOwnedUi 与服务端同口径；存量无归属=仅管理员）；
+    // 查看/召唤/@发任务保持全员（公共名册语义不变）
+    const editable = e.source === 'user' && canManageOwnedUi(e);
+    const src = e.source === 'user' ? '<span style="color:var(--pri);font-weight:600">用户</span>' : (e.source === 'builtin' ? '内置' : '名册');
     return '<tr>' +
       '<td><b>' + esc(e.icon || '🧩') + ' ' + esc(e.name) + '</b><br><span class="hint" style="margin:0">' + esc(e.id) + '</span></td>' +
       '<td>' + esc(e.divisionZh || e.division) + '</td>' +
@@ -14530,9 +14640,11 @@ function exmRender() {
       '<td style="white-space:nowrap">' +
       '<button class="mini-btn" data-exm-run="' + esc(e.id) + '" title="以 @' + esc(e.name) + ' 发起任务">🚀 任务</button> ' +
       '<button class="mini-btn" data-exm-view="' + esc(e.id) + '">查看</button> ' +
-      (editable
-        ? '<button class="mini-btn" data-exm-edit="' + esc(e.id) + '">编辑</button> <button class="mini-btn" data-exm-del="' + esc(e.id) + '">删除</button>'
-        : '<span class="hint" style="margin:0">只读</span>') +
+      (e.source !== 'user'
+        ? '<span class="hint" style="margin:0">只读</span>'
+        : (editable
+          ? '<button class="mini-btn" data-exm-edit="' + esc(e.id) + '">编辑</button> <button class="mini-btn" data-exm-del="' + esc(e.id) + '">删除</button>'
+          : '<span class="hint" style="margin:0">🔒 仅归属人/管理员</span>')) +
       '</td></tr>';
   }).join('') || '<tr><td colspan="6" class="hint" style="text-align:center;padding:24px 0">没有匹配的专家</td></tr>';
   document.querySelectorAll('[data-exm-view]').forEach(b => b.addEventListener('click', () => exmOpenForm(b.dataset.exmView, 'view')));

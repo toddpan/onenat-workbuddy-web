@@ -372,3 +372,184 @@ users 1─* sessions
 - 审计：所有 §1.3 B-03 列出的动作落 audit_log，管理端可查。
 - 移动端：邀请接受页需适配 ≤768px 与微信 X5 旧内核（沿用现有前端约束）。
 - 测试：注册邀请全流程、项目邀请全流程纳入 smoke（mock SMTP），关键状态机加单测。
+
+---
+
+## 10. 权限模型扩展（资源与子智能体归属）
+
+> 基于现有 `src/types.ts` 实际落点（`ProjectMember`、`Project.visibility`，`SshResource` / `SubAgent` 均无归属字段）补充的核心思路：**平台角色管「人」，项目管「业务上下文」，资源与子智能体用独立的所有权/共享模型，不挂在项目角色上**。
+
+### 10.1 权限总模型：四层
+
+| 层 | 载体 | 决定什么 |
+|---|---|---|
+| 平台角色 | `user.role: admin \| user` | 用户/全局设置/审计；admin **不**自动穿透项目内容 |
+| 项目成员 | `ProjectMember.role: owner \| member` + `visibility` | 项目及项目内任务/文件/成员管理 |
+| 资源所有权 | 每类资源加 `ownerUserId` + `sharedProjectIds?` 或 `visibility` | SSH 资源、DSH 节点引用、连接器 |
+| 智能体归属 | `SubAgent.ownerUserId` + `projectIds`（可绑多项目） | 子智能体/专家/专家团谁能看、谁能改、谁能 @ |
+
+原则：**默认最小可见，显式共享**；存量数据走宽容模式（`owner` 缺省 = 所有人可用，与现有 `Project.owner?` 注释一致）。此处的「可用」指**读面**；写面（改/删/取明文）对无归属的存量实体收敛为「仅管理员」，见 §10.7「存量口径」。
+
+### 10.2 用户与项目（§2/§3 微调）
+
+- 平台两级角色即可，不引入 RBAC 大表：`admin`（用户生命周期、全局设置、**可进任意项目但需显式「以管理员身份进入」并落审计**）、`user`。
+- 项目角色就 `owner`/`member` 两级；member 的「可邀请」做成开关而非第三种角色，即 `project.allowMemberInvite: boolean`（对应 §8.4 已确认放开）。
+- `visibility`：`private=仅成员`、`team=登录可见（只读摘要，进入仍需成员）`；`public` 不开放（单机部署，语义多余），保留字段但默认禁用。
+- 权限判定收口到一个 `canAccessProject(userId, projectId, action)`，所有 REST 路由统一前置调用，避免散落判断；现状 `projectMembers` 缺省即全员可见的宽容模式必须集中在这一处处理。
+
+### 10.3 资源（SSH / ONENAT 映射 / 连接器）
+
+资源分两类，模型不同：
+
+**① 本地 SSH 资源池（`SshResource`，含密码/私钥，最敏感）**
+- 加 `ownerUserId`（创建者）+ `visibility: 'private' | 'shared'`。
+- 共享不走全局公开，只走**项目绑定**：`Project.connectorIds` 中 `ssh:<id>` 表示该资源已共享给该项目所有成员可 *使用* —— 但 `get`（取回明文凭据）仅 owner，`exec` 成员可用（现有 skill「ssh exec 危险操作先确认」的权限落点）。
+- 判定矩阵：`list`=看到自己 + 所在项目绑定的；`use(exec/upload)`=owner 或所在项目绑定了它；`get 明文/delete/upsert`=仅 owner（+平台 admin）。
+
+**② ONENAT 隧道资源目录（mapping/app，平台级只读）**
+- 目录本身是全局事实（只读、实时解析），**不设权限**，全员可见。
+- 敏感点在**凭证**：沿用 `credentialMode`（`inline/self-fetch/omit`）；「能否选某节点作为项目 dshRef」做成资源级授权：默认全员可选（单机/小团队），如需收紧再加 `DshRefACL: allowUserIds[]`（缺省=允许）。第一步不做节点 ACL（YAGNI）。
+
+### 10.4 子智能体 / 专家 / 专家团
+
+- `SubAgent` 加 `ownerUserId`；专家库（expert-registry）与专家团（expert-teams）同理。
+- 专家库保留「公共名册」属性：名册条目全员可见可用，仅 owner/admin 可改删；子智能体（含 apiKey、systemPrompt 等私有配置）默认 private。
+- 子智能体共享同样走**项目绑定**（`project.defaultAgentIds` 或任务内 `@`）：绑定到项目的子智能体，项目成员可在任务里 @ 它，但不能查看/编辑其 apiKey、systemPrompt —— **API 返回时对非 owner 脱敏**（沿用现有 `SshResourceMasked` 模式）。
+- `ping/preview/models` 这类只读探测：能 @ 就能用。
+
+### 10.5 任务与文件
+
+- 任务天然归属项目（无项目个人任务归属创建者本人）→ 权限完全跟随项目成员，不单独设计。
+- 工作区文件跟随项目 workspace → 同上；跨项目传文件（P2P 直传 URL）保持现状「URL+节点 apiKey 即可取」，但节点 apiKey 不进普通成员可见字段。
+- 定时任务：跟随其引用的项目/智能体的可见性，owner 可改删，成员可见只读。
+
+### 10.6 落地清单（按依赖顺序）
+
+1. `auth/users` 增加 `role` 字段 + admin 守卫中间件（已有 login/auth 基础，改动小）。
+2. 统一 `perm.ts`：`requireAdmin` / `canAccessProject` / `canUseResource` / `canManageResource` 四个判定函数，路由收口。
+3. 存量迁移宽容模式：`owner`/`visibility` 全部 optional，缺省=旧行为（全员可用），UI 提示「未启用成员隔离」。
+4. `SshResource`/`SubAgent`/Expert/Team 加 `ownerUserId` + 脱敏返回；共享只经项目绑定，不做独立分享链接。
+5. 审计（B-03）覆盖：角色变更、成员增删、资源/智能体改删、admin 穿透进入项目。
+
+### 10.7 已落地实现（Phase 3）
+
+> 落地范围：§10.1~§10.4 的判定层与接线（不含任务/文件/定时任务跟随、审计扩展、DSH 节点 ACL）。
+
+**新增模块 `src/perm.ts`（纯函数，无 IO，可单测）**
+
+| 函数 | 语义 |
+|---|---|
+| `canAccessProject(session, project, action)` | 项目动作判定（`view/edit/manageMembers/invite/archive/delete`）；宽容模式（无 owner 且无成员）仅 admin 可改 |
+| `canViewResource` / `canUseResource` / `canManageResource` / `canAccessResource` | 资源动作判定（`view/use/reveal/manage`）；**存量（无归属）资源：可见可用全员，写面（改/删/取明文）仅 admin** |
+| `canViewAgent` / `canUseAgent` / `canManageAgent` | 智能体可见/可用/可改判定；**存量（无归属）智能体：可见可用全员，改删仅 admin** |
+| `maskAgentForViewer(agent, session)` | 非归属人返回脱敏副本（剔除 `apiKey` / `systemPrompt` / `executionPrompt`），不改原对象 |
+| `projectIsolated` / `isProjectMember` / `isProjectOwner` / `projectBindsResource` | 基础判定与项目绑定关系 |
+
+**类型新增（`src/types.ts`）**
+
+- `SshResource.ownerUserId?` + `SshResource.visibility?: 'private' | 'shared'`
+- `SubAgent.ownerUserId?` + `SubAgent.sharedProjectIds?`
+- `ExpertTeam.ownerUserId?`
+- `Project.allowMemberInvite?`（成员邀请开关；缺省 = 仅 owner/admin 可邀请）
+
+**路由接线（`src/router.ts`）**
+
+| 面 | 规则 |
+|---|---|
+| `GET /api/ssh-resources` | 只返回本人可见（归属人 / admin / 项目绑定成员）的脱敏视图 |
+| `GET /api/ssh-resources/:id` | 归属人/admin 返回明文；其余可见者返回脱敏视图；不可见者 404（防枚举） |
+| `POST/PUT/DELETE /api/ssh-resources[/:id]` | 仅归属人/admin；归属人由服务端权威写入，不接受客户端传入 |
+| `POST /api/ssh-resources/:id/exec|test` | 归属人/admin/项目绑定成员可用 |
+| `GET /api/agents[/:id]` | 非归属人只见脱敏视图（无 apiKey / 提示词）；不可见者 404 |
+| `POST/DELETE /api/agents[/:id]` | 仅归属人/admin；新建时的「同名 + 同节点」复用路径同样过归属判定（不得复用他人资产，且复用不转移归属） |
+| `GET /api/teams[/:id]` | 专家团按「公共花名册」全员可见（仅 `coordinatorPrompt` 对非归属人脱敏）；改删仅归属人/admin |
+| `GET/PATCH /api/projects/:id` | 项目可见性与 owner 判定统一改走 `perm.ts` 的 `canAccessProject` |
+| `POST /api/projects/:id/invitations` | owner/admin；开启 `allowMemberInvite` 后普通 member 亦可邀请（邀请列表与重发/撤销仍限 owner/admin） |
+
+**存量口径（2026-11-02 修正）**
+
+> 线上事故教训：存量实体（`ownerUserId` 缺省，归属不可追溯）若对全员开放写面，等于「谁都能改/删」。
+> 故统一为「**读面全员、写面仅 admin**」；且**归属只在新建时写入** —— 更新既有实体保持原归属，
+> 不得因管理员编辑一次就把共享存量资产静默变成其个人私有资产。
+> 详见 `docs/qa-aliyun-permission-20261102.md`（含被误删智能体的恢复取证与回归结果）。
+
+**已实现的 `visibility: 'shared'` 语义（细化 §10.3）**
+
+- `private`（缺省）：仅归属人 / admin / 项目绑定成员可见可用。
+- `shared`：额外对全部登录用户**只读可见**（列表摘要），但**不可使用、不可取明文、不可改删**。
+- 「使用」永远只经项目绑定 —— 与 §10.3「共享不走全局公开」一致。
+
+**验证**
+
+| 命令 | 覆盖 |
+|---|---|
+| `npm run typecheck` | 类型检查 |
+| `npm run test:unit` | 176 项（含 `src/perm.test.ts` 13 项权限单测） |
+| `npm run smoke` | 91 项平台冒烟（SSH 资源脱敏/明文回读等） |
+| `npm run smoke:users` | 86 项用户与项目成员冒烟 |
+| `npm run smoke:perm` | 43 项归属与项目绑定共享端到端（`scripts/perm-owner-e2e.mjs`，含存量无归属实体的改删回归） |
+
+**遗留（下一阶段）**
+
+- 任务 / 工作区文件 / 定时任务「跟随项目或智能体可见性」的统一收口（§10.5）。
+- 审计扩展：资源/智能体改删、admin 穿透进入项目落 audit_log（§10.6 第 5 项）。
+- `DshRefACL` 节点级授权（§10.3 ②，YAGNI 未做）。
+- 工具通道（HTTP `/api/tools` 与 MCP）按服务端级受信通道处理，不做逐用户资源过滤；如需收紧需引入「令牌绑定用户」。
+
+## 11. 全站权限矩阵（§10 的全模块收口，2026-11-03 定稿并落地）
+
+### 11.1 决策记录（已拍板）
+
+1. **新建任务（未绑定项目）仅创建者可见**；团队协作走"绑定项目"路径（项目成员可见可聊）。
+2. **存量无归属数据**（老任务/老定时任务/老专家条目/老库条目）：沿用 §10.7 事故先例——看可用全员、管理（改名/删除/归档/启停/手动 run）仅管理员。
+3. **监控大屏与全局 Token 用量仅管理员**；任务内单任务 Token 明细（S2-1）随任务可见性，普通用户不受影响。
+4. **技能/插件库**：人人可上传（条目归属上传者），删除与共享基址设置仅归属人+admin。
+
+### 11.2 权限矩阵（可视 / 可操作）
+
+图例：owner=归属人；admin=平台管理员；「缺省」=存量/AI 工具通道创建的无归属数据（宽容模式）。
+
+| 模块 | 可视 | 可操作 |
+|---|---|---|
+| 任务 | owner ∪ admin ∪（绑定项目且项目隔离时的项目成员）；缺省=全员 | 查看/聊天/SSE/消息/附件/goal-plan-compact/subtasks/stats/取消生成（cancel）/fork：view 级（fork 新任务归 fork 人）；改名/删除/归档/bulk-archive/编辑成员/session-model·preset/task model/permission 配置/queue：manage 级（owner ∪ admin，缺省=仅 admin） |
+| 项目 | 不变（§10.2 成员可见 + 404 防枚举） | 不变（owner 管理面 + allowMemberInvite） |
+| 待办 Backlog | 不变（canSeeProject + 归档只读） | 成员可写；dispatch 创建任务归属派发人 |
+| 子智能体 | 不变（§10.4） | 补口：skills 读路径 `canViewAgent`；bindings POST / skills upload·delete 补 `canManageAgent`；**prompt-preview 收紧为 manage 级**（返回提示词原文；不可见 404 防枚举） |
+| 资源目录 | ONENAT 平台目录全局只读不变；SSH 资源池不变 | 不变 |
+| 技能/插件库 | 列表/下载/安装全员 | 上传/导入创建归属上传者；删除 owner∪admin（缺省=admin）；`/api/library/settings` 仅 admin |
+| 语音助手 | 仅 admin（导航隐藏，深链接拉回工作台） | status/endpoints 增删全 admin |
+| 定时任务 | owner ∪ admin；缺省=全员 | 编辑/删除/toggle/**run**（派生任务耗资源归 manage 级）：owner ∪ admin，缺省=仅 admin；不可见统一 404 防枚举；派生任务继承定时任务归属 |
+| 文件管理 | 节点工作区为团队共享盘，保持登录门禁（`/api/agents/fs/*` 不做逐用户 ACL，见遗留） | `/api/tasks/:id/files/download` 随任务 view 级 |
+| 专家管理 | 花名册/召唤/@发任务全员（公共名册不变） | 用户专家条目（source=user）编辑/删除：owner∪admin（缺省=admin，内置=admin）；归属只在创建时写入，编辑不夺归属 |
+| 归档 | 列表=归档任务过 `canViewTask` 者（自动跟随任务可见性） | 恢复/删除逐条 `canManageTask`（bulk 逐条过滤静默跳过）；自动归档天数配置随 settings 收 admin |
+| 设置 | 非 admin 仅「当前账号」+「AI 接入」卡 | admin：GET/POST `/api/settings`（GET 对非 admin 返回裁剪版：无 aiToken、无 xiaozhi 段）、`ai-token/reset`、`/api/planner/config`（**带 taskId 的主智能体切换除外**——任务会话日常操作）、`/api/library/settings`、xiaozhi、用户管理、审计 |
+| 监控 + Token 用量 | 仅 admin（`/api/monitor/*`、`/api/usage/tokens/*`；`records?taskId=` 随任务可见性例外） | 同左 |
+| mentions/candidates | 按可见性过滤（项目 `canSeeProject`、智能体 `canViewAgent`、SSH `canViewResource`；团队/专家公共名册、ONENAT 目录不变） | — |
+| 审计 | admin 不变 | 新增动作：task.delete/archive/bulk_delete、schedule.create/update/delete/toggle/run、settings.update、settings.ai-token.reset、agent.delete、ssh-resource.delete、library.delete、expert.create/delete |
+
+**实现口径**：判定全部收口在 `src/perm.ts` 新增纯函数（`canViewTask/canManageTask/visibleTasks/canViewSchedule/canManageSchedule/canManageOwned`）；归属字段一律服务端权威写入（`engine.createTask` 增加 `ownerUserId` 入参，fork 归 fork 人、派发归派发人、定时派生任务继承定时归属；AI 工具通道无会话 → 缺省宽容，文档化为设计内行为）；前端镜像 `canManageTaskUi/canManageScheduleUi/canManageOwnedUi/isAdminUi`（`web-ui.ts`，me 未就绪按可管处理、服务端兜底），全部按钮按条件渲染 + 安全绑定（QA round2 的 `wireAgentCard` null 绑定教训）。
+
+**与批准矩阵的实现差异（两处，安全属性不变）**：
+1. `GET /api/settings` 对非 admin 返回裁剪 200 而非 403——`loadSettings()` 全页面启动即调用且普通用户需要 base 等非敏感字段；敏感下发面收敛相同（aiToken/xiaozhi 凭证仅 admin）。
+2. `POST /api/planner/config` 按 body.taskId 分流而非一刀切 admin——带 taskId 是任务会话内主智能体切换（全员日常），不带才是设置页全局配置。
+3. `POST /api/tasks/:id/cancel` 定为 view 级——前端「⏹ 停止生成」走该路由，属会话协作动作（停止当前轮 ≠ 删除任务），与发消息同权；批准矩阵的 manage 清单未含 cancel。
+
+**验证**（2026-11-03 本地实测）
+
+| 命令 | 结果 |
+|---|---|
+| `npm run typecheck` | 通过 |
+| `npm run test:unit` | 184 项全绿（perm.test.ts 20 项，§11 新增 7 项） |
+| `npm run smoke` | 91 项全绿（回归） |
+| `npm run smoke:users` | 86 项全绿（回归） |
+| `npm run smoke:perm` | 74 项全绿（§11 新增 31 项：全局面门禁 + 任务/定时任务归属矩阵） |
+| `npm run smoke:schedules` | 59 项全绿（回归） |
+| `npm run smoke:xiaozhi` | 32 项全绿（回归） |
+
+**遗留（下一阶段）**
+
+- 文件管理节点级 ACL（`DshRefACL`，§10.3 ② YAGNI 未做）——`/api/agents/fs/*` 仍为登录级共享盘。
+- AI 工具通道「令牌绑定用户」（token→userId），绑定后工具通道可复用同一套 perm 判定；当前 AI 通道创建的任务/定时任务为无归属宽容模式。
+- CSRF：全 JSON 响应 `Access-Control-Allow-Origin: *` + 无 Origin 校验，靠 SameSite=Lax 兜底；如收紧需加 Origin 白名单（写面）。
+- `ssrf-guard.ts`（已存在未接线）：`/api/dsh-test` 可探测任意 apiBaseUrl，建议接线后再放开表单直连。
+- 存量归属回填：不可追溯，维持宽容模式 + 管理员可手动删除/移交；`/api/mentions/candidates` 的团队条目未脱敏 coordinatorPrompt（GET /api/teams 已脱敏，候选卡不带提示词字段）。

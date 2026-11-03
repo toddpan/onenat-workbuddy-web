@@ -83,6 +83,24 @@ test('管理员邀请 → 链接激活 → 登录全流程', async () => {
   }
 })
 
+test('删除后重邀同邮箱：激活新邀请后可正常登录（登录查找排除软删记录）', async () => {
+  const { auth, dir } = makeAuth()
+  try {
+    const r1 = auth.createUserInvite('user@example.com', '张三')
+    assert.ok('token' in r1)
+    assert.ok(auth.softDeleteUser(r1.user.id).ok) // 管理员软删（记录仍在数组，占位在前）
+    const r2 = auth.createUserInvite('user@example.com', '张三') // 重邀：deleted 不占唯一性名额
+    assert.ok('token' in r2)
+    const ok = await auth.acceptInvite(r2.token, 'Passw0rd123', '')
+    assert.equal(ok.ok, true)
+    // 回归：login 曾命中前一条 deleted 记录 → 恒 401「用户名或密码错误」
+    assert.ok(await auth.login('user@example.com', 'Passw0rd123', '127.0.0.1'))
+    assert.ok(await auth.login('USER@EXAMPLE.COM', 'Passw0rd123', '127.0.0.1')) // 大小写别名同样走 alive 过滤
+  } finally {
+    cleanup(dir)
+  }
+})
+
 test('token 状态机：无效 / 撤销（重发后旧链接失效）', async () => {
   const { auth, dir } = makeAuth()
   try {

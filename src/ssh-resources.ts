@@ -60,6 +60,9 @@ export function normalizeSshResource(
     ...(passphrase ? { passphrase } : {}),
     ...(input.description !== undefined ? { description: String(input.description) } : existing?.description ? { description: existing.description } : {}),
     ...(input.tags !== undefined ? { tags: Array.isArray(input.tags) ? input.tags.map(String) : [] } : existing?.tags ? { tags: existing.tags } : {}),
+    // 归属与可见性（§10.3）：ownerUserId 缺省 = 宽容模式（全员可用）
+    ...(input.ownerUserId !== undefined ? { ownerUserId: String(input.ownerUserId) || undefined } : existing?.ownerUserId ? { ownerUserId: existing.ownerUserId } : {}),
+    ...(input.visibility !== undefined ? { visibility: input.visibility === 'shared' ? 'shared' as const : 'private' as const } : existing?.visibility ? { visibility: existing.visibility } : {}),
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   }

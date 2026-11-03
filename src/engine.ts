@@ -64,6 +64,11 @@ export interface CreateTaskInput {
   teamId?: string
   /** backlog 派发来源（B4）：由项目 backlog 待办派发时随任务持久化，终态钩子据此回写 */
   backlogRef?: WorkTask['backlogRef']
+  /**
+   * 归属用户（§11）：控制台会话创建时由服务端写入（fork 归 fork 人）；
+   * AI 工具通道/存量路径缺省（宽容模式：全员可见，管理仅 admin）。客户端传入不采信。
+   */
+  ownerUserId?: string
 }
 
 /** 取 prompt 尾部片段：降级轮询时供远端 history 定位本次回合的起点 user 消息（注入消息不含用户文本，天然排除） */
@@ -667,6 +672,7 @@ export class TaskEngine {
       updatedAt: Date.now(),
       ...(input.scheduleId ? { scheduleId: input.scheduleId } : {}),
       ...(input.scheduleName ? { scheduleName: input.scheduleName } : {}),
+      ...(input.ownerUserId ? { ownerUserId: input.ownerUserId } : {}),
       ...(input.projectId ? { projectId: input.projectId } : {}),
       // 项目任务节点以项目为准（P0-3）：dshRef 在项目上，带 projectId 时忽略 nodeRef，
       // 避免项目节点改动后任务仍钉在旧节点（taskExec 的解析顺序本就是项目优先）
@@ -857,7 +863,7 @@ export class TaskEngine {
    * 跨节点续接（P4-1）：在新节点/项目上开新任务，携带最近对话原文草稿（不调用 LLM）。
    * 新任务记录 forkedFrom，原任务追加 forks[]（双向链接），并插入一条 system 轮提示。
    */
-  public async forkTask(taskId: string, opts: { nodeRef?: DshRef; projectId?: string } = {}): Promise<{ task: WorkTask; draft: string }> {
+  public async forkTask(taskId: string, opts: { nodeRef?: DshRef; projectId?: string; ownerUserId?: string } = {}): Promise<{ task: WorkTask; draft: string }> {
     const origin = this.store.getTask(taskId)
     if (!origin) throw new Error(`任务不存在: ${taskId}`)
     const projectId = opts.projectId || origin.projectId || undefined
@@ -869,6 +875,8 @@ export class TaskEngine {
       projectId: projectId || undefined,
       nodeRef,
       memberAgentIds: origin.memberAgentIds?.length ? [...origin.memberAgentIds] : undefined,
+      // §11：fork 出的新任务归属 fork 人（view 级动作，非归属继承）
+      ...(opts.ownerUserId ? { ownerUserId: opts.ownerUserId } : {}),
     })
     const now = Date.now()
     this.store.mutateTask(created.id, (t) => {

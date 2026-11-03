@@ -69,14 +69,19 @@ export class UserExpertStore {
     return this.load().get(id)
   }
 
-  /** 创建或整体更新一位用户专家；返回保存后的完整档案。 */
-  upsert(input: UserExpertInput): ExpertProfile {
+  /**
+   * 创建或整体更新一位用户专家；返回保存后的完整档案。
+   * 归属语义（§11）：ownerUserId 只在真正创建时经 `opts.ownerUserId`（服务端会话）写入；
+   * 更新时保留原归属（编辑他人条目的 admin 不夺走归属）；客户端 input 中的同名字段一律不采信。
+   */
+  upsert(input: UserExpertInput, opts: { ownerUserId?: string } = {}): ExpertProfile {
     const id = String(input.id).trim()
     if (!EXPERT_ID.test(id)) throw new Error('专家 id 必须是小写字母/数字的中划线 slug（如 my-reviewer）。')
     const existing = this.load().get(id)
+    const { ownerUserId: _clientOwner, ...trustedInput } = input as UserExpertInput & { ownerUserId?: string }
     const profile: ExpertProfile = {
       ...existing,
-      ...input,
+      ...trustedInput,
       id,
       source: 'user',
       division: String(input.division || existing?.division || USER_DIVISION).trim() || USER_DIVISION,
@@ -86,6 +91,8 @@ export class UserExpertStore {
       description: String(input.description ?? existing?.description ?? '').trim(),
       systemPrompt: String(input.systemPrompt ?? existing?.systemPrompt ?? ''),
     }
+    const owner = existing?.ownerUserId ?? opts.ownerUserId
+    if (owner) profile.ownerUserId = owner
     if (!profile.nameEn && existing?.nameEn) profile.nameEn = existing.nameEn
     if (!profile.descriptionEn && existing?.descriptionEn) profile.descriptionEn = existing.descriptionEn
     if (!profile.systemPrompt.trim()) throw new Error('systemPrompt 不能为空。')

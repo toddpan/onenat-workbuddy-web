@@ -341,6 +341,14 @@ export class WorkStore {
     return this.data.agents.find((a) => a.id === id)
   }
 
+  /**
+   * 查找「同名 + 同 DSH 实体」的既有智能体 —— 新建时的复用目标（upsertAgent 的复用规则）。
+   * 供路由层做归属判定：复用他人归属的智能体等于改他人资产，必须先过权限。
+   */
+  public findAgentByNameAndRef(name: string, dshRef: DshRef): SubAgent | undefined {
+    return this.data.agents.find((a) => a.name === name && sameDshRef(a.dshRef, dshRef))
+  }
+
   public mutateAgent(id: string, fn: (a: SubAgent) => void): void {
     const agent = this.data.agents.find((a) => a.id === id)
     if (!agent) return
@@ -374,6 +382,8 @@ export class WorkStore {
       role: input.role !== undefined ? String(input.role).trim() || undefined : target?.role,
       executionPrompt: input.executionPrompt !== undefined ? String(input.executionPrompt).trim() || undefined : target?.executionPrompt,
       workDir: input.workDir !== undefined ? normalizeWorkDir(input.workDir) : target?.workDir,
+      ...(input.ownerUserId !== undefined ? { ownerUserId: input.ownerUserId } : target?.ownerUserId ? { ownerUserId: target.ownerUserId } : {}),
+      ...(input.sharedProjectIds !== undefined ? { sharedProjectIds: input.sharedProjectIds } : target?.sharedProjectIds ? { sharedProjectIds: target.sharedProjectIds } : {}),
       resources,
       skills: input.skills !== undefined ? input.skills : target?.skills,
       ...(input.tags !== undefined ? { tags: input.tags } : target?.tags ? { tags: target.tags } : {}),
@@ -449,6 +459,7 @@ export class WorkStore {
       members: (input.members as ExpertTeam['members']) || existing?.members || [],
       coordinatorPrompt: input.coordinatorPrompt !== undefined ? (String(input.coordinatorPrompt).trim() || undefined) : existing?.coordinatorPrompt,
       templateId: (input.templateId as TeamTemplateId | undefined) ?? existing?.templateId,
+      ...(input.ownerUserId !== undefined ? { ownerUserId: input.ownerUserId } : existing?.ownerUserId ? { ownerUserId: existing.ownerUserId } : {}),
       enabled: input.enabled ?? existing?.enabled ?? false,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
@@ -497,6 +508,8 @@ export class WorkStore {
       skills: input.skills !== undefined ? [...(input.skills || [])] : existing?.skills,
       message: String(input.message ?? existing?.message ?? ''),
       rule: (input.rule as ScheduledTask['rule']) || existing?.rule || { kind: 'daily', times: ['09:00'] },
+      // §11 归属只在创建时写入（服务端权威）；编辑不夺走原归属（与 upsertAgent 同款约束）
+      ownerUserId: existing ? existing.ownerUserId : (input.ownerUserId || undefined),
       enabled: input.enabled ?? existing?.enabled ?? true,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
@@ -671,6 +684,7 @@ export class WorkStore {
       owner: input.owner !== undefined ? input.owner : existing?.owner,
       projectMembers: input.projectMembers !== undefined ? input.projectMembers : existing?.projectMembers,
       visibility: input.visibility !== undefined ? input.visibility : existing?.visibility,
+      allowMemberInvite: input.allowMemberInvite !== undefined ? Boolean(input.allowMemberInvite) : existing?.allowMemberInvite,
       importedFrom: input.importedFrom ?? existing?.importedFrom,
       // 归档：传 truthy 时间戳=归档；传 null/0=恢复（清空）；不传=保持
       archivedAt: input.archivedAt !== undefined ? (input.archivedAt || undefined) : existing?.archivedAt,

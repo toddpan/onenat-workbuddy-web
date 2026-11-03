@@ -54,6 +54,12 @@ export interface Expert {
   descriptionEn?: string
   /** 标签，用于筛选（可选） */
   tags?: string[]
+  /**
+   * 归属用户（仅 source='user' 的条目；创建时服务端权威写入；缺省 = 宽容模式）：
+   * - 有归属：编辑/删除仅归属人+admin，名册查看/召唤全员（公共名册语义不变）
+   * - 缺省（存量用户专家）：可见可用全员，管理仅 admin（docs/design-user-project-management.md §11）
+   */
+  ownerUserId?: string
 }
 
 /** 专家完整档案：惰性加载 assets/experts/profiles/<id>.json。 */
@@ -141,11 +147,11 @@ export class ExpertRegistry {
     return e?.source === 'user'
   }
 
-  /** 创建用户专家（id 冲突含资产层时拒绝）。 */
-  async createExpert(input: UserExpertInput): Promise<ExpertProfile> {
+  /** 创建用户专家（id 冲突含资产层时拒绝；ownerUserId 为服务端会话归属，创建时写入）。 */
+  async createExpert(input: UserExpertInput, opts: { ownerUserId?: string } = {}): Promise<ExpertProfile> {
     if (!this.userStore) throw new Error('用户专家存储未初始化。')
     if (await this.get(input.id)) throw new Error(`专家 id「${input.id}」已存在。`)
-    const saved = this.userStore.upsert(input)
+    const saved = this.userStore.upsert(input, { ownerUserId: opts.ownerUserId })
     this.invalidate()
     return saved
   }
