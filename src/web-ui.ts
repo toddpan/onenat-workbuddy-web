@@ -374,6 +374,14 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
 .place-back {
   border: none; background: none; color: var(--pri); font-size: 11px; cursor: pointer; padding: 0;
 }
+/* 节点搜索框（执行位置下拉）：节点变多后最后几个新节点会沉在滚动区底部 */
+.place-search { padding: 2px 6px 6px; }
+.place-search input {
+  width: 100%; box-sizing: border-box; font-size: 12px; padding: 6px 9px;
+  border: 1px solid var(--line2); border-radius: 7px; background: var(--bg3);
+  color: var(--tx); outline: none;
+}
+.place-search input:focus { border-color: var(--pri); background: var(--bg2); }
 
 .chat-scroll {
   flex: 1; overflow-y: auto; padding: 18px 24px 28px; scroll-behavior: auto;
@@ -1653,7 +1661,8 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .jump-bottom.on { display: inline-flex; }
 .jump-bottom:hover { color: var(--pri); border-color: var(--pri); }
 .mention-popup {
-  position: absolute; bottom: 100%; left: 16px; width: 340px; max-height: 280px;
+  /* 400px：分类条 + 计数在常见桌面宽度下一行放得下（340px 时 7 个分类需两行） */
+  position: absolute; bottom: 100%; left: 16px; width: min(400px, calc(100vw - 32px)); max-height: 320px;
   background: var(--bg2); border: 1px solid var(--line2); border-radius: 10px;
   box-shadow: 0 8px 30px rgba(31,35,41,.14); z-index: 35; display: none; flex-direction: column;
   overflow: hidden; margin-bottom: 8px;
@@ -1669,11 +1678,11 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 /* 类型筛选条（对齐 Android 客户端：全部 / 最近 / 项目 / 专家团 / 智能体 / 资源 / 专家）：
    392 条候选无法一次铺满滚动区，分类直达让「排在后面的节点」不再被折叠区吃掉 */
 .mention-filters {
-  display: flex; gap: 6px; padding: 7px 10px; overflow-x: auto; flex: none;
+  /* 换行而非横向滚动：弹层宽 340px、7 个分类实际需要 ~565px，
+     横向滚动会把「智能体/资源/专家」藏在可视区外，用户点空处导致弹窗关闭（线上实测）。 */
+  display: flex; flex-wrap: wrap; gap: 6px; padding: 7px 10px; flex: none;
   background: var(--bg2); border-bottom: 1px solid var(--line);
-  scrollbar-width: none;
 }
-.mention-filters::-webkit-scrollbar { display: none; }
 .mention-chip {
   flex: none; font-size: 11px; line-height: 1; padding: 5px 9px; border-radius: 999px;
   border: 1px solid var(--line2); background: var(--bg3); color: var(--tx2);
@@ -8606,12 +8615,17 @@ function initMentionPopup() {
       el.addEventListener('mousedown', (e) => {
         // mousedown 阻止默认：点击筛选条不能夺走 textarea 焦点（否则插入位置丢失）
         e.preventDefault();
-        el.click();
       });
       el.addEventListener('click', (e) => {
         e.preventDefault();
+        // ⚠ 必须阻止冒泡到 document：re-render 会把本按钮节点从 DOM 摘掉，
+        // document 的「点空白关闭」监听器拿到的是已脱离文档的 e.target，
+        // popup.contains(target) 为 false → 一点筛选条弹窗就被关掉（线上实测复现）。
+        e.stopPropagation();
         const f = el.dataset.f;
-        mentionFilter = f === 'all' ? null : f;
+        const next = f === 'all' ? null : f;
+        if (next === mentionFilter) return; // 重复点同一项不重绘
+        mentionFilter = next;
         mentionActiveIdx = 0;
         renderMentionList();
         input.focus();
@@ -8703,9 +8717,8 @@ function initMentionPopup() {
       html += mentionItemHtml(mentionMatched[entry], entry);
     });
     listEl.innerHTML = html;
-    // 重新渲染后同步一次 active 高亮（首项高亮）
-    renderMentionFilters(true);
-
+    // 注意：筛选条只在函数开头渲染一次。曾在此处二次 renderMentionFilters(true)，
+    // innerHTML 重建把上面绑好的 click 监听器整个抹掉 → 筛选条点了没反应。
     listEl.querySelectorAll('.mention-item').forEach(el => {
       el.addEventListener('click', () => {
         const idx = +el.dataset.idx;
@@ -9159,7 +9172,7 @@ function closeMainAgentPop() {
 const nodeState = { cur: '', userPicked: false }; // mappingId；'' = 未选（资源目录为空时）
 // 执行位置选择框（P2-1）：place = { nodeMappingId, projectId|null }；pop/anchor = 当前挂载的弹层与触发按钮；
 // level = 'node' | 'project'，browse = 第二层正在看的节点；onChange(place) 由调用方传入
-const placeState = { place: { nodeMappingId: '', projectId: null }, pop: null, anchor: null, level: 'node', browse: '', onChange: null, nodeOnly: false };
+const placeState = { place: { nodeMappingId: '', projectId: null }, pop: null, anchor: null, level: 'node', browse: '', query: '', onChange: null, nodeOnly: false };
 /** 当前打开的任务对象（完整缓存优先，列表摘要兜底）；无当前任务返回 null */
 function currentTaskObj() {
   if (!state.currentTaskId) return null;
@@ -9476,6 +9489,7 @@ function openPlacePop(anchor, place, onChange, opts) {
   placeState.level = 'node';
   placeState.nodeOnly = Boolean(opts && opts.nodeOnly); // 只有节点层（P5-2：抽屉/定时任务表单选节点用）
   placeState.browse = '';
+  placeState.query = ''; // 每次打开清空节点搜索
   const pop = document.createElement('div');
   pop.className = 'main-agent-pop place-pop on';
   pop.addEventListener('click', function (e) { e.stopPropagation(); });
@@ -9503,6 +9517,57 @@ function selectPlace(place) {
   closePlacePop();
   if (cb) cb(placeState.place);
 }
+/** 节点搜索匹配：名称 / 应用名 / 备注 / mappingId / 隧道名 / 地址 全字段包含匹配 */
+function matchPlaceQuery(n, q) {
+  if (!q) return true;
+  var hay = [n.title, n.appName, n.note, n.mappingId, n.tunnelName, n.baseUrl].filter(Boolean).join(' ').toLowerCase();
+  return hay.indexOf(q) >= 0;
+}
+
+/** 执行位置「节点层」列表 HTML（供整体渲染与搜索增量刷新共用） */
+function placeNodeListHtml(opts, cur) {
+  var q = String(placeState.query || '').trim().toLowerCase();
+  var shown = opts.filter(function (n) { return matchPlaceQuery(n, q); });
+  var html = '';
+  if (opts.length && !shown.length) html += '<div class="model-empty">没有匹配「' + esc(placeState.query) + '」的节点</div>';
+  var groups = dshNodeGroups(shown);
+  for (var gi = 0; gi < groups.length; gi++) {
+    var g = groups[gi];
+    if (groups.length > 1 || g.list.length > 1) html += '<div class="model-group">🖥 ' + esc(g.tunnel) + '</div>';
+    for (var ni = 0; ni < g.list.length; ni++) {
+      var n = g.list[ni];
+      var cnt = placeNodeProjects(n.mappingId).length;
+      html += dshNodeItemHtml(n, cur.nodeMappingId === n.mappingId, placeState.nodeOnly ? '选定 ›' : (cnt ? cnt + ' 个项目 ›' : '单独任务 ›'));
+    }
+  }
+  return html;
+}
+
+/** 搜索增量刷新：只重建节点列表，保留输入框（焦点/光标不丢） */
+function refreshPlaceNodeList() {
+  var pop = placeState.pop;
+  if (!pop) return;
+  var box = pop.querySelector('#place-node-list');
+  if (!box) { renderPlacePop(); return; }
+  var opts = dshNodeOptions();
+  box.innerHTML = placeNodeListHtml(opts, placeState.place);
+  wirePlaceNodeItems(pop);
+}
+
+/** 节点行点击绑定（整体渲染与增量刷新共用） */
+function wirePlaceNodeItems(pop) {
+  pop.querySelectorAll('.main-agent-item[data-mid]').forEach(function (it) {
+    if (it.dataset.bound === '1') return;
+    it.dataset.bound = '1';
+    it.addEventListener('click', function () {
+      if (placeState.nodeOnly) { selectPlace({ nodeMappingId: it.dataset.mid, projectId: null }); return; }
+      placeState.level = 'project';
+      placeState.browse = it.dataset.mid;
+      renderPlacePop();
+    });
+  });
+}
+
 function renderPlacePop() {
   const pop = placeState.pop;
   if (!pop) return;
@@ -9512,14 +9577,11 @@ function renderPlacePop() {
   if (placeState.level === 'node') {
     html += '<div class="main-agent-pop-head"><span>执行位置 · 选择节点</span><span>离线节点也可选</span></div>';
     if (!opts.length) html += '<div class="model-empty">暂无 DSH 节点（资源目录未同步）</div>';
-    const groups = dshNodeGroups(opts);
-    for (const g of groups) {
-      if (groups.length > 1 || g.list.length > 1) html += '<div class="model-group">🖥 ' + esc(g.tunnel) + '</div>';
-      for (const n of g.list) {
-        const cnt = placeNodeProjects(n.mappingId).length;
-        html += dshNodeItemHtml(n, cur.nodeMappingId === n.mappingId, placeState.nodeOnly ? '选定 ›' : (cnt ? cnt + ' 个项目 ›' : '单独任务 ›'));
-      }
-    }
+    // 节点搜索：节点多了以后（线上已 13 个）最后几个新加的节点沉在滚动区底部，
+    // 用户会以为"看不到"。输入名字/地址/mappingId 即可直达。
+    // 搜索框 + 列表容器：搜索时只重建 #place-node-list，输入框节点保活（焦点不丢）
+    html += '<div class="place-search"><input type="text" id="place-search-input" placeholder="搜索节点（名称 / 地址 / ID）"></div>';
+    html += '<div id="place-node-list">' + placeNodeListHtml(opts, cur) + '</div>';
   } else {
     const mid = placeState.browse;
     const n = opts.find(function (x) { return x.mappingId === mid; });
@@ -9539,14 +9601,21 @@ function renderPlacePop() {
   }
   pop.innerHTML = html;
   if (placeState.level === 'node') {
-    pop.querySelectorAll('.main-agent-item[data-mid]').forEach(function (it) {
-      it.addEventListener('click', function () {
-        if (placeState.nodeOnly) { selectPlace({ nodeMappingId: it.dataset.mid, projectId: null }); return; }
-        placeState.level = 'project';
-        placeState.browse = it.dataset.mid;
-        renderPlacePop();
+    // 搜索框：只在首次创建时绑定 input，之后仅同步 value（重建会丢焦点）
+    const si = pop.querySelector('#place-search-input');
+    if (si && si.dataset.bound !== '1') {
+      si.dataset.bound = '1';
+      si.value = placeState.query || '';
+      si.addEventListener('input', function () {
+        placeState.query = si.value;
+        refreshPlaceNodeList();
       });
-    });
+      si.addEventListener('click', function (e) { e.stopPropagation(); });
+      si.addEventListener('keydown', function (e) { e.stopPropagation(); });
+    } else if (si) {
+      si.value = placeState.query || '';
+    }
+    wirePlaceNodeItems(pop);
     probeNodesIfStale(opts);
   } else {
     const back = pop.querySelector('[data-op="back"]');
