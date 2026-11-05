@@ -109,3 +109,46 @@ return isProjectMember(p, uid) || isPlatformAdmin(session) // 隔离模式：维
 
 > 部署记录：2026-11-05 12:27:07 CST，`systemctl restart onenat-workbuddy` 成功，NRestarts=0。
 > 本地 `src/onenat.ts` / `src/router.ts` 的改动为部署**前**既有的未提交工作，非本次修复内容。
+
+---
+
+# 第二轮报障与修复（同日）
+
+用户反馈两条：
+1. `@` 弹层里点「项目」「专家团」等**分类筛选条后窗口直接关闭**，无法继续选择；
+2. **「执行位置」下拉看不到 alita 项目资源和节点**。
+
+## 问题 1：筛选条点击即关窗 —— 三个原因叠加
+
+| # | 根因 | 修复 |
+|---|---|---|
+| a | chip 的 `click` 冒泡到 `document` 的「点空白关闭」监听器；而 `renderMentionList()` 重建 `innerHTML` 已把 `e.target` 从 DOM 摘掉 → `popup.contains(target)===false` → `hidePopup()` | chip `click` 增加 `e.stopPropagation()` |
+| b | `renderMentionList()` 内把 `renderMentionFilters()` 调了**两次**（首尾各一次），第二次 `innerHTML` 重建把第一次绑好的监听器全部抹掉 → 按钮点了没反应 | 只渲染一次 |
+| c | 筛选条原为 `overflow-x:auto` 横向滚动：弹层宽 340px、7 个分类实际需 ~565px，「智能体/资源/专家」藏在**可视区外**；用户点到弹层外空白 → 关窗 | 改 `flex-wrap` 换行 + 弹层加宽到 400px，7 个分类全部可见 |
+
+> 线上复现证据：点「项目」后 `open=false` 但 `itemCount=25` —— 列表其实已经正确筛选，只是窗口被关了。
+> 几何证据：`scrollW=565` vs `clientW=338`，「智能体」chip 在 `x=608`（容器右边界 635 之外）。
+
+## 问题 2：执行位置看不到新节点
+
+节点按资源目录顺序渲染，13 个节点里 `alita-DSH` 排**最后一个**，沉在 `max-height:54vh` 的滚动区底部。
+资源接口本身完全正常（12 个端点，alita 在线，排在末位）。
+
+**修复**：执行位置下拉新增节点搜索框（名称 / 应用名 / 备注 / mappingId / 隧道名 / 地址全字段匹配）。
+搜索时只重建 `#place-node-list`，输入框节点保活 —— 焦点与光标不丢。
+
+## 验证
+
+新增可复跑回归脚本 [`qa-20261105/mention-regression.mjs`](../qa-20261105/mention-regression.mjs)：
+
+| 项 | 本地 | 线上 |
+|---|---|---|
+| typecheck | ✅ | — |
+| 单测 | ✅ 185/185 | — |
+| 冒烟 | ✅ 91/91 | — |
+| 浏览器回归 12 项 | ✅ 12/12 | ✅ 12/12 |
+
+回归覆盖：筛选条换行、7 个分类全部在可视区内、点每个分类弹窗保持打开且有条目、
+智能体按 DSH 节点分组、执行位置有搜索框、搜索 alita 能命中、搜索时焦点不丢。
+
+部署记录：2026-11-05 12:4x CST，本次仅变更 `dist/web-ui.js`。
