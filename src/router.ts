@@ -4040,8 +4040,9 @@ export class WorkBuddyRouter {
     if (sessionModelMatch && method === 'PUT') {
       const taskId = decodeURIComponent(sessionModelMatch[1])
       const body = await this.parseBody(req)
-      // §11：会话模型/预设属任务配置面 = manage 级
-      const task = this.taskForManage(taskId).task
+      // 会话模型/预设 = 任务可见即可选（用户决策 2026-11-04：选模型/沙箱全员放开，仅按任务可见性；
+      // 不再走 taskForManage——存量/无归属任务曾因此对普通用户误报 404 Task not found）
+      const task = this.taskForView(taskId)
       if (!task) {
         this.sendJson(res, 404, { ok: false, error: 'Task not found' })
         return true
@@ -4126,8 +4127,8 @@ export class WorkBuddyRouter {
     if (sessionPresetMatch && method === 'PUT') {
       const taskId = decodeURIComponent(sessionPresetMatch[1])
       const body = await this.parseBody(req)
-      // §11：会话模型/预设属任务配置面 = manage 级
-      const task = this.taskForManage(taskId).task
+      // 会话预设同 session-model：任务可见即可选（全员放开，仅按可见性）
+      const task = this.taskForView(taskId)
       if (!task) {
         this.sendJson(res, 404, { ok: false, error: 'Task not found' })
         return true
