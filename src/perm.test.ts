@@ -163,6 +163,21 @@ test('有归属人的子智能体：他人不可见、不可改，但可被项�
   assert.equal(canManageAgent(bob, agent), false)
 })
 
+test('宽容模式项目（无 owner 无成员）绑定的默认协作成员：全员可见可用（线上 alita 事故回归）', () => {
+  // 场景：admin 在新建的 DSH 节点（alita）下创建智能体，并加入宽容模式项目的 defaultAgentIds。
+  // 旧实现只认 isProjectMember，而宽容模式项目没有成员 → 项目对所有人可见、
+  // 项目里的默认协作成员却谁都看不到，用户表现为「@ 能看到节点但看不到节点下的智能体」。
+  const lenientProject: PermProjectLike = { id: 'proj-lenient', defaultAgentIds: ['agent-alita'] }
+  const agent = { id: 'agent-alita', ownerUserId: 'usr-admin' }
+  const ctx: PermContext = { projects: [lenientProject] }
+  assert.equal(canViewAgent(bob, agent, ctx), true, '普通用户应能看到宽容模式项目绑定的智能体')
+  assert.equal(canUseAgent(bob, agent, ctx), true, '普通用户应能 @ 该智能体')
+  assert.equal(canUseAgent(carol, agent, ctx), true)
+  assert.equal(canManageAgent(bob, agent), false, '可见可用不等于可管')
+  // 未被任何项目绑定、也不属于自己 → 仍严格不可见（不放宽）
+  assert.equal(canViewAgent(bob, { id: 'agent-other', ownerUserId: 'usr-admin' }, ctx), false)
+})
+
 test('sharedProjectIds 显式共享：项目成员可 @ 不可改', () => {
   const agent = { id: 'agent-3', ownerUserId: 'usr-alice', sharedProjectIds: ['proj-1'] }
   const ctx: PermContext = { projects: [isolatedProject] }

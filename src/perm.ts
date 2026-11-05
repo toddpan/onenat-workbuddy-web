@@ -238,7 +238,16 @@ export function canAccessResource(
 
 // ---------- 智能体权限（子智能体 / 专家 / 专家团） ----------
 
-/** 用户所属项目里是否绑定了该智能体（defaultAgentIds 或 sharedProjectIds） */
+/**
+ * 用户所属项目里是否绑定了该智能体（defaultAgentIds 或 sharedProjectIds）。
+ *
+ * 可见性口径与项目本身对齐（2026-11-05 线上「@ 看不到节点下的智能体」事故修复）：
+ * 宽容模式项目（无 owner 且无成员 = 存量，见 projectIsolated）对所有登录用户可见，
+ * 它绑定的默认协作成员也应对所有登录用户可见。旧实现只认 isProjectMember，
+ * 而宽容模式项目里永远没有成员 → 「项目人人可见、项目里的默认协作成员谁都看不到」，
+ * 用户表现为「@ 能找到节点，却找不到这个节点下建的智能体」。
+ * 隔离模式项目维持严格成员判定（不放宽）。
+ */
 function boundToUserProjectAgent(
   session: PermSession | null | undefined,
   agent: PermAgentLike,
@@ -248,9 +257,14 @@ function boundToUserProjectAgent(
   if (!uid) return false
   return Boolean(
     ctx?.projects?.some((p) => {
-      if (!isProjectMember(p, uid) && !isPlatformAdmin(session)) return false
-      if (agent.sharedProjectIds?.length && agent.sharedProjectIds.includes(p.id)) return true
-      return Boolean(p.defaultAgentIds?.includes(agent.id))
+      const binds = Boolean(
+        (agent.sharedProjectIds?.length && agent.sharedProjectIds.includes(p.id)) ||
+          p.defaultAgentIds?.includes(agent.id),
+      )
+      if (!binds) return false
+      // 绑定成立后，可见性跟随项目可见性：宽容模式项目 → 所有登录用户；隔离模式 → 仅成员/admin
+      if (!projectIsolated(p)) return true
+      return isProjectMember(p, uid) || isPlatformAdmin(session)
     }),
   )
 }

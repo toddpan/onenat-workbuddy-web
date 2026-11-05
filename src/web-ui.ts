@@ -1666,6 +1666,30 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
   font-size: 11px; font-weight: 600; color: var(--tx3); display: flex; justify-content: space-between;
 }
 .mention-popup-list { overflow-y: auto; flex: 1; }
+/* 类型筛选条（对齐 Android 客户端：全部 / 最近 / 项目 / 专家团 / 智能体 / 资源 / 专家）：
+   392 条候选无法一次铺满滚动区，分类直达让「排在后面的节点」不再被折叠区吃掉 */
+.mention-filters {
+  display: flex; gap: 6px; padding: 7px 10px; overflow-x: auto; flex: none;
+  background: var(--bg2); border-bottom: 1px solid var(--line);
+  scrollbar-width: none;
+}
+.mention-filters::-webkit-scrollbar { display: none; }
+.mention-chip {
+  flex: none; font-size: 11px; line-height: 1; padding: 5px 9px; border-radius: 999px;
+  border: 1px solid var(--line2); background: var(--bg3); color: var(--tx2);
+  cursor: pointer; white-space: nowrap; transition: all .12s ease;
+}
+.mention-chip:hover { border-color: rgba(77,107,254,.5); color: var(--pri); }
+.mention-chip.on { background: rgba(77,107,254,.14); border-color: rgba(77,107,254,.55); color: var(--pri); font-weight: 600; }
+.mention-chip .n { opacity: .62; margin-left: 3px; font-family: var(--mono); font-size: 10px; }
+.mention-chip.recent.on { background: rgba(212,136,6,.14); border-color: rgba(212,136,6,.5); color: var(--warn); }
+/* 分组头：智能体按 DSH 节点折叠时使用（Android 同款「组头 + 前 N 条 + 更多」） */
+.mention-group .gc { color: var(--tx3); font-weight: 400; margin-left: 4px; }
+.mention-group .fold { cursor: pointer; user-select: none; }
+.mention-group .fold:hover { color: var(--pri); }
+.mention-group.sub { padding-left: 18px; background: rgba(100,116,139,.05); font-weight: 500; }
+.mention-group.more { cursor: pointer; color: var(--pri); }
+.mention-group.more:hover { text-decoration: underline; }
 .mention-item {
   padding: 8px 12px; display: flex; align-items: center; gap: 10px; cursor: pointer;
   border-bottom: 1px solid rgba(100,116,139,.06); font-size: 13px; transition: background .12s ease;
@@ -2433,9 +2457,10 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <!-- @ 提及自动联想浮层 -->
           <div class="mention-popup" id="mention-popup">
             <div class="mention-popup-head">
-              <span>提及项目、专家、专家团、智能体或资源 (@)</span>
+              <span id="mention-head-label">提及项目、专家、专家团、智能体或资源 (@)</span>
               <span>↑↓ 选择 · Enter 插入</span>
             </div>
+            <div class="mention-filters" id="mention-filters"></div>
             <div class="mention-popup-list" id="mention-list"></div>
           </div>
           <div class="mention-popup" id="skill-popup">
@@ -8433,8 +8458,10 @@ function appendAttachmentLine(line, taskId) {
 })();
 
 // ---------- @ 提及自动联想组件 (Mentions Auto-complete) ----------
+let mentionCandidatesAt = 0;
 async function refreshMentionCandidates() {
   const r = await api('/mentions/candidates');
+  mentionCandidatesAt = Date.now();
   if (r.ok && r.data) {
     mentionCandidates = r.data;
   } else {
@@ -8489,30 +8516,178 @@ function initMentionPopup() {
     return item.kind === 'ssh' ? 'ssh' : (item.kind === 'http' ? 'http' : 'dsh');
   }
 
+  // ---------- 类型筛选条（对齐 Android 客户端 MentionPicker） ----------
+  // 全部 / 🕘最近 / 📁项目 / 🧩专家团 / 🤖智能体 / 📦资源 / 🧠专家
+  // 线上 alita 事故教训：旧实现只按固定 cap（dsh 4 条 / agent 6 条）截断，
+  // 第 20 个智能体、第 5 个 DSH 节点永远落在「输入关键字过滤」折叠区里，
+  // 用户不预先知道节点名就永远看不到新加的节点与它下面的智能体。
+  // 分类条让"按类型直达 + 完整滚动"取代"分页截断"：点开即全部可滚到。
+  let mentionFilter = null; // null=全部 | 'recent' | 'project' | 'team' | 'agent' | 'resource' | 'expert'
+  const MENTION_FILTER_ORDER = ['project', 'team', 'agent', 'resource', 'expert'];
+  const MENTION_FILTER_META = {
+    project: { icon: '📁', name: '项目' },
+    team: { icon: '🧩', name: '专家团' },
+    agent: { icon: '🤖', name: '智能体' },
+    resource: { icon: '📦', name: '资源' },
+    expert: { icon: '🧠', name: '专家' },
+  };
+  // 智能体 DSH 节点折叠：同节点超过该条数才折叠（对齐 Android FOLD_LIMIT=3）
+  const AGENT_FOLD_LIMIT = 3;
+
+  /** 候选的筛选归类（资源不分 ssh/http/dsh，统一归「资源」——用户心智里它们都是"资源"） */
+  function mentionFilterOf(item) {
+    return mentionGroupOf(item) === 'agent' ? 'agent' : (mentionGroupOf(item) === 'dsh' || mentionGroupOf(item) === 'ssh' || mentionGroupOf(item) === 'http' ? 'resource' : mentionGroupOf(item));
+  }
+
+  /** 智能体所属 DSH 节点名（从 detail「🖥 节点名 · 模型」解析，与候选接口同口径） */
+  function mentionNodeOf(item) {
+    const m = /^🖥\s*([^·]+?)\s*(?:·|$)/.exec(String(item.detail || ''));
+    return (m && m[1].trim()) || '未绑定节点';
+  }
+
+  // ---------- 最近使用（localStorage 持久化，对齐 Android PREF mention_recent） ----------
+  const MENTION_RECENT_KEY = 'wb_mention_recent_v1';
+  const MENTION_RECENT_MAX = 6;
+  function mentionRecentIds() {
+    try {
+      const raw = localStorage.getItem(MENTION_RECENT_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr.filter(x => typeof x === 'string') : [];
+    } catch (_) { return []; }
+  }
+  function mentionKeyOf(item) { return (item.type || 'x') + ':' + item.id; }
+  function mentionRememberRecent(item) {
+    try {
+      const key = mentionKeyOf(item);
+      const next = [key].concat(mentionRecentIds().filter(k => k !== key)).slice(0, MENTION_RECENT_MAX);
+      localStorage.setItem(MENTION_RECENT_KEY, JSON.stringify(next));
+    } catch (_) { /* 隐私模式/配额满：最近使用降级为不可用，不影响插入 */ }
+  }
+  function mentionRecentItems() {
+    const ids = mentionRecentIds();
+    const byKey = new Map();
+    mentionCandidates.forEach(c => { if (!byKey.has(mentionKeyOf(c))) byKey.set(mentionKeyOf(c), c); });
+    return ids.map(k => byKey.get(k)).filter(Boolean);
+  }
+
+  function renderMentionHead() {
+    const el = $('mention-head-label');
+    if (!el) return;
+    // 头部动态显示候选总数（Android：@ 提及 N 个候选）；有查询时显示匹配数
+    const total = mentionCandidates.length;
+    el.textContent = mentionQuery
+      ? '@ 提及 · 匹配 ' + mentionMatched.length + ' / ' + total + ' 个候选'
+      : '@ 提及 ' + total + ' 个候选 · 🕘最近 📁项目 🧩专家团 🤖智能体 📦资源 🧠专家';
+  }
+
+  function renderMentionFilters(visible) {
+    const filtersEl = $('mention-filters');
+    if (!filtersEl) return;
+    if (!visible) { filtersEl.innerHTML = ''; filtersEl.style.display = 'none'; return; }
+    filtersEl.style.display = 'flex';
+    const total = mentionMatched.length;
+    const counts = {};
+    mentionMatched.forEach(c => { const f = mentionFilterOf(c); counts[f] = (counts[f] || 0) + 1; });
+    const recentN = mentionRecentItems().filter(c => mentionMatched.includes(c)).length;
+    let html = '<button type="button" class="mention-chip' + (mentionFilter === null ? ' on' : '') + '" data-f="all">全部' +
+      '<span class="n">' + total + '</span></button>';
+    if (recentN) {
+      html += '<button type="button" class="mention-chip recent' + (mentionFilter === 'recent' ? ' on' : '') + '" data-f="recent">🕘 最近' +
+        '<span class="n">' + recentN + '</span></button>';
+    }
+    MENTION_FILTER_ORDER.forEach(f => {
+      if (!counts[f]) return;
+      const meta = MENTION_FILTER_META[f];
+      html += '<button type="button" class="mention-chip' + (mentionFilter === f ? ' on' : '') + '" data-f="' + f + '">' +
+        meta.icon + ' ' + meta.name + '<span class="n">' + counts[f] + '</span></button>';
+    });
+    filtersEl.innerHTML = html;
+    filtersEl.querySelectorAll('.mention-chip').forEach(el => {
+      el.addEventListener('mousedown', (e) => {
+        // mousedown 阻止默认：点击筛选条不能夺走 textarea 焦点（否则插入位置丢失）
+        e.preventDefault();
+        el.click();
+      });
+      el.addEventListener('click', (e) => {
+        e.preventDefault();
+        const f = el.dataset.f;
+        mentionFilter = f === 'all' ? null : f;
+        mentionActiveIdx = 0;
+        renderMentionList();
+        input.focus();
+      });
+    });
+  }
+
+  function mentionItemHtml(item, idx, opts) {
+    const active = mentionActiveIdx === idx ? ' active' : '';
+    const isTeam = item.type === 'team' || item.kind === 'team';
+    const isExpert = item.type === 'expert' || item.kind === 'expert';
+    const isProject = item.type === 'project' || item.kind === 'project';
+    const icon = isProject ? '📁' : (isTeam ? '🧩' : (isExpert ? ((item.meta && item.meta.icon) || '🧠') : (item.type === 'agent' ? '🤖' : (item.kind === 'ssh' ? '🖥️' : (item.kind === 'http' ? '🌐' : '📦')))));
+    const tagClass = isProject ? 'project' : (isTeam ? 'team' : (isExpert ? 'expert' : (item.type === 'agent' ? 'agent' : 'resource')));
+    const tagText = isProject ? '项目' : (isTeam ? '专家团' : (isExpert ? '专家' : (item.type === 'agent' ? '智能体' : (item.kind ? item.kind.toUpperCase() : '资源'))));
+    return '<div class="mention-item' + active + '" data-idx="' + idx + '">' +
+      '<span class="icon">' + icon + '</span>' +
+      '<div class="info">' +
+        '<div class="name">' + esc(item.name) + '</div>' +
+        (item.detail ? '<div class="desc">' + esc(item.detail) + '</div>' : '') +
+      '</div>' +
+      '<span class="tag ' + tagClass + '">' + esc(tagText) + '</span>' +
+    '</div>';
+  }
+
   function renderMentionList() {
     if (!mentionMatched.length) {
       listEl.innerHTML = '<div class="mention-empty">无匹配的项目、团队、专家、智能体或资源</div>';
       mentionRenderIdx = [];
+      renderMentionFilters(false);
       return;
     }
-    // 空查询 = 分组浏览：五类各取前几条 + 分组计数头 + 「更多」提示行；
-    // 有查询 = 按现有匹配顺序渲染，最多 60 条。专家 328 条不再永远沉底（线上评审 E2）。
-    const GROUP_CAP = { project: 6, team: 5, agent: 6, dsh: 4, ssh: 2, http: 2, expert: 8 };
-    const GROUP_NAME = { project: '项目', team: '专家团', agent: '智能体', dsh: 'DSH 节点', ssh: 'SSH', http: 'HTTP', expert: '专家' };
-    const GROUP_ORDER = ['project', 'team', 'agent', 'dsh', 'ssh', 'http', 'expert'];
-    let plan = [];
-    if (!mentionQuery) {
-      for (const g of GROUP_ORDER) {
-        const idxs = [];
-        mentionMatched.forEach((c, i) => { if (mentionGroupOf(c) === g) idxs.push(i); });
-        if (!idxs.length) continue;
-        plan.push({ header: GROUP_NAME[g] + ' · ' + idxs.length });
-        idxs.slice(0, GROUP_CAP[g]).forEach(i => plan.push(i));
-        if (idxs.length > GROUP_CAP[g]) plan.push({ more: GROUP_NAME[g] + ' 共 ' + idxs.length + ' 个，输入关键字过滤' });
-      }
+    // 选中筛选后该类型已无命中（用户又改了关键字）→ 自动回到「全部」，避免空列表
+    if (mentionFilter && mentionFilter !== 'recent' && !mentionMatched.some(c => mentionFilterOf(c) === mentionFilter)) mentionFilter = null;
+    if (mentionFilter === 'recent' && !mentionRecentItems().some(c => mentionMatched.includes(c))) mentionFilter = null;
+    renderMentionFilters(true);
+    renderMentionHead();
+
+    // 有查询：扁平命中列表（全部可滚，不再 60 条截断）；空查询：按筛选条/分组渲染
+    const plan = [];
+    if (mentionQuery) {
+      mentionMatched.forEach((c, i) => plan.push(i));
+    } else if (mentionFilter === 'recent') {
+      mentionRecentItems().filter(c => mentionMatched.includes(c)).forEach(c => plan.push(mentionMatched.indexOf(c)));
+    } else if (mentionFilter) {
+      mentionMatched.forEach((c, i) => { if (mentionFilterOf(c) === mentionFilter) plan.push(i); });
     } else {
-      mentionMatched.forEach((c, i) => { if (i < 60) plan.push(i); });
-      if (mentionMatched.length > 60) plan.push({ more: '匹配共 ' + mentionMatched.length + ' 条，继续输入缩小范围' });
+      // 全部视图：最近使用置顶 → 类型分组；每组完整展开可滚动（不再 cap 截断）
+      const recent = mentionRecentItems().filter(c => mentionMatched.includes(c));
+      if (recent.length) {
+        plan.push({ header: '🕘 最近使用 · ' + recent.length });
+        recent.forEach(c => plan.push(mentionMatched.indexOf(c)));
+      }
+      const groupOrder = ['project', 'team', 'agent', 'resource', 'expert'];
+      groupOrder.forEach(f => {
+        const idxs = [];
+        mentionMatched.forEach((c, i) => { if (mentionFilterOf(c) === f) idxs.push(i); });
+        if (!idxs.length) return;
+        plan.push({ header: MENTION_FILTER_META[f].icon + ' ' + MENTION_FILTER_META[f].name + ' · ' + idxs.length });
+        if (f === 'agent') {
+          // 智能体按 DSH 节点细分（组头 + 超 3 条折叠「更多」），与 Android 客户端一致：
+          // 新加的节点（如 alita）永远能在「智能体」分类里被找到，而不是沉在 20 条之后
+          const byNode = new Map();
+          idxs.forEach(i => {
+            const n = mentionNodeOf(mentionMatched[i]);
+            if (!byNode.has(n)) byNode.set(n, []);
+            byNode.get(n).push(i);
+          });
+          [...byNode.entries()].forEach(([node, list]) => {
+            plan.push({ sub: '🖥 ' + node + ' · ' + list.length });
+            list.forEach(i => plan.push(i));
+          });
+        } else {
+          idxs.forEach(i => plan.push(i));
+        }
+      });
     }
     mentionRenderIdx = plan.filter(x => typeof x === 'number');
     if (!mentionRenderIdx.includes(mentionActiveIdx)) mentionActiveIdx = mentionRenderIdx.length ? mentionRenderIdx[0] : -1;
@@ -8521,28 +8696,15 @@ function initMentionPopup() {
     plan.forEach(entry => {
       if (typeof entry !== 'number') {
         if (entry.header) html += '<div class="mention-group">' + esc(entry.header) + '</div>';
+        else if (entry.sub) html += '<div class="mention-group sub">' + esc(entry.sub) + '</div>';
         else html += '<div class="mention-group more">' + esc(entry.more) + '</div>';
         return;
       }
-      const idx = entry;
-      const item = mentionMatched[idx];
-      const active = mentionActiveIdx === idx ? ' active' : '';
-      const isTeam = item.type === 'team' || item.kind === 'team';
-      const isExpert = item.type === 'expert' || item.kind === 'expert';
-      const isProject = item.type === 'project' || item.kind === 'project';
-      const icon = isProject ? '📁' : (isTeam ? '🧩' : (isExpert ? ((item.meta && item.meta.icon) || '🧠') : (item.type === 'agent' ? '🤖' : (item.kind === 'ssh' ? '🖥️' : (item.kind === 'http' ? '🌐' : '📦')))));
-      const tagClass = isProject ? 'project' : (isTeam ? 'team' : (isExpert ? 'expert' : (item.type === 'agent' ? 'agent' : 'resource')));
-      const tagText = isProject ? '项目' : (isTeam ? '专家团' : (isExpert ? '专家' : (item.type === 'agent' ? '智能体' : (item.kind ? item.kind.toUpperCase() : '资源'))));
-      html += '<div class="mention-item' + active + '" data-idx="' + idx + '">' +
-        '<span class="icon">' + icon + '</span>' +
-        '<div class="info">' +
-          '<div class="name">' + esc(item.name) + '</div>' +
-          (item.detail ? '<div class="desc">' + esc(item.detail) + '</div>' : '') +
-        '</div>' +
-        '<span class="tag ' + tagClass + '">' + esc(tagText) + '</span>' +
-      '</div>';
+      html += mentionItemHtml(mentionMatched[entry], entry);
     });
     listEl.innerHTML = html;
+    // 重新渲染后同步一次 active 高亮（首项高亮）
+    renderMentionFilters(true);
 
     listEl.querySelectorAll('.mention-item').forEach(el => {
       el.addEventListener('click', () => {
@@ -8557,6 +8719,8 @@ function initMentionPopup() {
 
   function insertMention(item) {
     if (!item) return;
+    // 记录最近使用：下次 @ 时「🕘 最近」分类直达（Android 同款本机持久化）
+    mentionRememberRecent(item);
     const text = input.value;
     const before = text.slice(0, mentionCursorStart);
     const after = text.slice(input.selectionEnd);
@@ -8586,27 +8750,41 @@ function initMentionPopup() {
 
     mentionCursorStart = match.index;
     mentionQuery = match[1].toLowerCase().trim();
+    // 重新输入 @ = 重新打开：筛选条回到「全部」，避免上次的筛选状态让新节点看起来"消失"
+    if (!mentionQuery) mentionFilter = null;
 
-    if (!mentionCandidates.length) refreshMentionCandidates();
+    const applyMatched = () => {
+      mentionMatched = mentionCandidates.filter(c => {
+        if (!mentionQuery) return true;
+        const n = (c.name || '').toLowerCase();
+        const id = (c.id || '').toLowerCase();
+        const d = (c.detail || '').toLowerCase();
+        // 前缀匹配优先：允许多词名称随输入逐词匹配；其次兜底子串匹配
+        return n.startsWith(mentionQuery) || n.includes(mentionQuery) || id.includes(mentionQuery) || d.includes(mentionQuery);
+      });
+      // 无匹配 → 隐藏弹窗，不显示「无匹配」空提示
+      if (!mentionMatched.length) {
+        hidePopup();
+        return;
+      }
+      mentionActiveIdx = 0;
+      renderMentionList();
+      popup.classList.add('on');
+    };
 
-    mentionMatched = mentionCandidates.filter(c => {
-      if (!mentionQuery) return true;
-      const n = (c.name || '').toLowerCase();
-      const id = (c.id || '').toLowerCase();
-      const d = (c.detail || '').toLowerCase();
-      // 前缀匹配优先：允许多词名称随输入逐词匹配；其次兜底子串匹配
-      return n.startsWith(mentionQuery) || n.includes(mentionQuery) || id.includes(mentionQuery) || d.includes(mentionQuery);
-    });
-
-    // 无匹配 → 隐藏弹窗，不显示「无匹配」空提示
-    if (!mentionMatched.length) {
-      hidePopup();
+    // 首次打开或候选过期时刷新：新增的 DSH 节点/智能体必须立刻可见（不能等页面重载）
+    const stale = !mentionCandidates.length || Date.now() - mentionCandidatesAt > 60_000;
+    if (!stale) {
+      applyMatched();
       return;
     }
-
-    mentionActiveIdx = 0;
-    renderMentionList();
-    popup.classList.add('on');
+    // 先用旧候选即时渲染（有则显示，避免空窗），再拉最新覆盖
+    if (mentionCandidates.length) applyMatched();
+    refreshMentionCandidates().then(() => {
+      // 用户可能已关闭弹窗或改了输入：只在仍处于 @ 触发状态时重渲染
+      if (!/@([^@]*)$/.test(input.value.slice(0, input.selectionStart))) return;
+      applyMatched();
+    }).catch(() => { /* 刷新失败保留旧候选，不打断输入 */ });
   });
 
   input.addEventListener('keydown', e => {
@@ -9545,7 +9723,15 @@ async function loadPlannerOptions() {
   const agentBtn = $('main-agent-btn');
   if (modelBtn) modelBtn.disabled = true;
   if (agentBtn) agentBtn.disabled = true;
-
+  // 无论成功失败/网络异常都要恢复可点：曾因 await 抛错跳过 re-enable，普通用户侧按钮永久禁用「点不动」
+  try {
+    return await _loadPlannerOptionsInner();
+  } finally {
+    if (modelBtn) modelBtn.disabled = false;
+    if (agentBtn) agentBtn.disabled = false;
+  }
+}
+async function _loadPlannerOptionsInner() {
   // 模型目录跟随所选任务节点（?node=）：调度模型作用于任务节点的主会话，
   // 节点切换后目录必须换成该节点引擎的注册表（否则会把 A 引擎的模型配到 B 引擎上）
   // 节点 = 当前任务实际执行节点（项目 dshRef → task.nodeRef → 所选执行位置），见 taskExecNodeId
