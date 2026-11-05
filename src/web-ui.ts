@@ -8651,6 +8651,24 @@ function initMentionPopup() {
     '</div>';
   }
 
+  /**
+   * 把智能体按 DSH 节点细分进 plan：节点组头 + 该节点下的智能体。
+   * 「全部」视图与「智能体」分类共用（2026-11-05 线上回归：分类视图曾漏掉分组，
+   * 点「智能体」后 20 条平铺，alita 又沉到底部）。
+   */
+  function pushAgentByNode(plan, matched, idxs) {
+    const byNode = new Map();
+    idxs.forEach(i => {
+      const n = mentionNodeOf(matched[i]);
+      if (!byNode.has(n)) byNode.set(n, []);
+      byNode.get(n).push(i);
+    });
+    [...byNode.entries()].forEach(([node, list]) => {
+      plan.push({ sub: '🖥 ' + node + ' · ' + list.length });
+      list.forEach(i => plan.push(i));
+    });
+  }
+
   function renderMentionList() {
     if (!mentionMatched.length) {
       listEl.innerHTML = '<div class="mention-empty">无匹配的项目、团队、专家、智能体或资源</div>';
@@ -8671,7 +8689,12 @@ function initMentionPopup() {
     } else if (mentionFilter === 'recent') {
       mentionRecentItems().filter(c => mentionMatched.includes(c)).forEach(c => plan.push(mentionMatched.indexOf(c)));
     } else if (mentionFilter) {
-      mentionMatched.forEach((c, i) => { if (mentionFilterOf(c) === mentionFilter) plan.push(i); });
+      // 选中分类：智能体仍按 DSH 节点细分（否则点「智能体」后 20 条平铺，
+      // alita 这类新节点又沉到底部，等于把刚修好的问题换个入口复现）
+      const idxs = [];
+      mentionMatched.forEach((c, i) => { if (mentionFilterOf(c) === mentionFilter) idxs.push(i); });
+      if (mentionFilter === 'agent') pushAgentByNode(plan, mentionMatched, idxs);
+      else idxs.forEach(i => plan.push(i));
     } else {
       // 全部视图：最近使用置顶 → 类型分组；每组完整展开可滚动（不再 cap 截断）
       const recent = mentionRecentItems().filter(c => mentionMatched.includes(c));
@@ -8686,18 +8709,9 @@ function initMentionPopup() {
         if (!idxs.length) return;
         plan.push({ header: MENTION_FILTER_META[f].icon + ' ' + MENTION_FILTER_META[f].name + ' · ' + idxs.length });
         if (f === 'agent') {
-          // 智能体按 DSH 节点细分（组头 + 超 3 条折叠「更多」），与 Android 客户端一致：
+          // 智能体按 DSH 节点细分，与 Android 客户端一致：
           // 新加的节点（如 alita）永远能在「智能体」分类里被找到，而不是沉在 20 条之后
-          const byNode = new Map();
-          idxs.forEach(i => {
-            const n = mentionNodeOf(mentionMatched[i]);
-            if (!byNode.has(n)) byNode.set(n, []);
-            byNode.get(n).push(i);
-          });
-          [...byNode.entries()].forEach(([node, list]) => {
-            plan.push({ sub: '🖥 ' + node + ' · ' + list.length });
-            list.forEach(i => plan.push(i));
-          });
+          pushAgentByNode(plan, mentionMatched, idxs);
         } else {
           idxs.forEach(i => plan.push(i));
         }

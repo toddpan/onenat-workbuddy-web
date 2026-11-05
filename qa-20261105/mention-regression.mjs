@@ -72,7 +72,16 @@ ok("回到「全部」恢复全量", all && all.open && all.count > 0, JSON.stri
 
 // 智能体必须按 DSH 节点分组，且能滚动到新节点
 const nodeGroups = await page.evaluate(() => [...document.querySelectorAll("#mention-list .mention-group.sub")].map(e => e.textContent.trim()));
-ok("智能体按 DSH 节点分组", nodeGroups.length > 0, nodeGroups.join(" | ").slice(0, 160));
+ok("智能体按 DSH 节点分组（全部视图）", nodeGroups.length > 0, nodeGroups.join(" | ").slice(0, 160));
+
+// 回归：点「智能体」分类后也必须保留节点分组（曾漏掉 → 20 条平铺，alita 又沉底）
+await clickChip("智能体");
+const agCat = await page.evaluate(() => ({
+  subs: [...document.querySelectorAll("#mention-list .mention-group.sub")].map(e => e.textContent.trim()),
+  count: document.querySelectorAll("#mention-list .mention-item").length,
+  open: document.getElementById("mention-popup").classList.contains("on"),
+}));
+ok("智能体分类视图仍按 DSH 节点分组", agCat.open && agCat.subs.length > 0, agCat.subs.length + " 组 / " + agCat.count + " 条");
 
 await page.keyboard.press("Escape");
 await page.waitForTimeout(300);
