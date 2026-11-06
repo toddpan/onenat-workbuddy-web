@@ -75,8 +75,8 @@ task_manage {action:"create", projectId:"proj-x",
 
 ## 跟踪与追问工具
 
-- `task_manage`：list / create / **send**（多轮发言）/ **wait**（进度快照；HTTP 通道同步等结果，MCP 通道不阻塞）/ members / cancel / delete。
-- `task_status`：任务进度与汇总（默认摘要；`detail:"full"` 回全量）——轮询用。
+- `task_manage`：list（可带 `keyword` 按任务 ID/标题大小写不敏感过滤，任务多时先用它缩小范围）/ create / **send**（多轮发言）/ **wait**（进度快照；HTTP 通道同步等结果，MCP 通道不阻塞）/ members / cancel / delete。
+- `task_status`：任务进度与汇总（默认摘要；`detail:"full"` 回全量）——轮询用。超大任务（>32KB）`full` 会自动降级为「摘要 + chatDownloadUrl 聊天内容下载 URL」：token 10 分钟内有效，`curl "<chatDownloadUrl>"` 直接下载完整任务聊天内容（`format=markdown` 换 Markdown），过期重调 task_status 取新 URL 即可。
 - `task_chat`：看子任务远端聊天记录 / 向远端会话追问（`followupMessage`）。
 - `task_ask_answer`：答复任务里挂起的 ask_user_question 提问（agentId 缺省自动探测提问成员）。
 - `task_evaluate`：任务汇总报告。

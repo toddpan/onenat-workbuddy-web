@@ -43,8 +43,8 @@ description: OneNat WorkBuddy 多智能体工作台 AI 管理技能：发任务�
 | 工具 | 用途 |
 |---|---|
 | `workbuddy_monitor_read` | 监控态势：overview / events（`since` 增量）/ history / task（单任务详情） |
-| `workbuddy_task_manage` | 任务：list / create（异步回执，支持 `nodeRef`/`projectId`）/ send / **wait** / members / cancel / delete |
-| `workbuddy_task_status` | 任务进度与汇总（默认摘要；`detail:"full"` 回全量） |
+| `workbuddy_task_manage` | 任务：list（可 `keyword` 按 ID/标题过滤）/ create（异步回执，支持 `nodeRef`/`projectId`）/ send / **wait** / members / cancel / delete |
+| `workbuddy_task_status` | 任务进度与汇总（默认摘要；`detail:"full"` 回全量，超大任务 >32KB 自动降级为「摘要 + chatDownloadUrl 下载 URL」，token 10 分钟有效） |
 | `workbuddy_task_chat` | 看子任务远端聊天记录 / 向远端会话追问 |
 | `workbuddy_task_ask_answer` | 答复任务里挂起的 ask_user_question 提问（agentId 缺省自动探测提问成员） |
 | `workbuddy_task_evaluate` | 任务汇总报告 |

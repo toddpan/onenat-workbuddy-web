@@ -315,7 +315,7 @@ export class WorkBuddyMcpServer {
         ok: false,
         error: `结果过大：${(bytes / 1024).toFixed(0)}KB 超过 MCP 单帧上限 ${(MAX_RESULT_BYTES / 1024).toFixed(0)}KB`,
         truncated: true,
-        hint: '请缩小查询范围：task_status 用默认摘要、task_chat 用 maxMessages/maxTextChars 分页、文件改用控制台下载',
+        hint: '请缩小查询范围：task_status 用默认摘要（detail:"full" 超大任务会自动降级为聊天内容下载 URL）、task_chat 用 maxMessages/maxTextChars 分页、文件改用控制台下载',
       }, null, 2)
       isError = true
       bytes = Buffer.byteLength(text)

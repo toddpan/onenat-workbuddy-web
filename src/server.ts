@@ -289,7 +289,7 @@ engine.startPendingAskSweeper()
 
   const { port } = cfg
   const consoleUrl = `http://${cfg.host === '0.0.0.0' ? '127.0.0.1' : cfg.host}:${port}${cfg.prefix || '/'}`
-  const tools = createWorkBuddyToolDefs({ store, directory, resolver, composer, engine, sshStore, consoleUrl, monitor, scheduler, planner, expertRegistry: router.expertRegistry })
+  const tools = createWorkBuddyToolDefs({ store, directory, resolver, composer, engine, sshStore, consoleUrl, monitor, scheduler, planner, expertRegistry: router.expertRegistry, downloadTokens: library })
   const toolMap = new Map(tools.map((t) => [t.name, t]))
 
   const server = http.createServer(async (req, res) => {
@@ -570,6 +570,50 @@ engine.startPendingAskSweeper()
         return
       }
 
+      // ---------- 任务聊天内容导出（task-54：超大任务详情的下载端点） ----------
+      // 鉴权三通道任一即可：签名 token（task_status full 超阈值时下发，10 分钟有效）/ 控制台会话 / AI 令牌。
+      // 必须位于登录门禁之前（签名 token 调用方如远端 DSH 无平台登录态），与上方 library/file 同约定。
+      const chatExportMatch = prefix ? new RegExp(`^${prefix}/api/tasks/([^/]+)/chat-export$`) : /^\/api\/tasks\/([^/]+)\/chat-export$/
+      if (underPrefix && method === 'GET' && chatExportMatch.exec(url.pathname)) {
+        const taskId = decodeURIComponent(chatExportMatch.exec(url.pathname)![1])
+        const token = url.searchParams.get('token') || ''
+        const tokenOk = token ? library.verifyDownloadToken(`chat-export:${taskId}`, token) : false
+        const aiTokenOkExport = auth.validateAiToken(extractAiToken(req, url))
+        if (!tokenOk && !sessionUser && !aiTokenOkExport) {
+          sendJson(res, 403, { ok: false, error: '下载链接无效或已过期（token 有效期 10 分钟，请重新调 workbuddy_task_status detail:"full" 取新 URL），或携带登录会话/AI 令牌访问' })
+          return
+        }
+        const task = store.getTask(taskId)
+        if (!task) {
+          sendJson(res, 404, { ok: false, error: 'Task not found' })
+          return
+        }
+        const format = (url.searchParams.get('format') || 'json').toLowerCase()
+        if (format === 'markdown') {
+          const lines: string[] = [`# ${task.title}`, '', `- 任务 ID: ${task.id}`, `- 状态: ${task.status}`, `- 模式: ${task.mode}`, `- 更新时间: ${new Date(task.updatedAt).toISOString()}`, '']
+          for (const t of task.turns) {
+            const who = t.role === 'user' ? '👤 用户' : t.agentName ? `🤖 ${t.agentName} (${t.agentId || ''})` : '🤖 智能体'
+            lines.push(`## ${who}`, '', t.text, '')
+          }
+          const md = lines.join('\n')
+          res.statusCode = 200
+          res.setHeader('Content-Type', 'text/markdown; charset=utf-8')
+          res.setHeader('Content-Length', String(Buffer.byteLength(md)))
+          res.setHeader('Content-Disposition', `attachment; filename="chat-export-${task.id}.md"`)
+          res.setHeader('Cache-Control', 'no-store')
+          res.end(md)
+          return
+        }
+        const json = JSON.stringify({ ok: true, exportedAt: Date.now(), task }, null, 2)
+        res.statusCode = 200
+        res.setHeader('Content-Type', 'application/json; charset=utf-8')
+        res.setHeader('Content-Length', String(Buffer.byteLength(json)))
+        res.setHeader('Content-Disposition', `attachment; filename="chat-export-${task.id}.json"`)
+        res.setHeader('Cache-Control', 'no-store')
+        res.end(json)
+        return
+      }
+
       // ---------- 访问控制：控制台与业务 API 均需登录；AI 令牌可访问开放面（工具通道/监控/定时任务/规划器/文件） ----------
       const aiTokenOk = auth.validateAiToken(extractAiToken(req, url))
       // 项目导入建项目：公开但必须携带一次性 token（远端 DSH 节点无平台登录态；令牌在发起导入时下发到任务提示词）
@@ -712,7 +756,7 @@ function isAiTokenAllowedPath(pathname: string, prefix: string, method = 'GET'):
   if (p === '/api/resources' || p.startsWith('/api/resources/')) return true
   if (p === '/api/dsh-models') return true
   // 任务级文件面：下载成员工作区文件 / 附件上传（最大 2GB）/ 任务清单与统计（读）；messages 为多轮追问
-  if (/^\/api\/tasks\/[^/]+\/(files\/download|attachments|todos|stats|messages)$/.test(p)) return true
+  if (/^\/api\/tasks\/[^/]+\/(files\/download|attachments|todos|stats|messages|chat-export)$/.test(p)) return true
   // 附件 P2P 直传控制面：init 下发节点直连配方（地址+密钥，文件字节不经本服务），register 登记落盘结果
   if (/^\/api\/tasks\/[^/]+\/attachments\/direct\/(init|register|relay)$/.test(p)) return true
   // 任务只读面（状态/详情/流）：AI 令牌跟踪自己派发的任务用

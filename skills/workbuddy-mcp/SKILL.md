@@ -35,7 +35,19 @@ bash $WB call workbuddy_task_status '{}'
 bash $WB call workbuddy_monitor_read '{"action":"overview"}'
 ```
 
-工具名与入参见 `bash $WB tools`。长任务用 `workbuddy_task_status`（默认 summary 小回包，`detail:"full"` 才是大回包）轮询。
+工具名与入参见 `bash $WB tools`。长任务用 `workbuddy_task_status`（默认 summary 小回包）轮询；`task_manage list` 可带 `keyword` 按任务 ID/标题过滤，缩小回包。
+
+## 大任务内容下载（task_status detail:"full" 超阈值自动降级）
+
+MCP 单帧上限 64KB；`task_status {detail:"full"}` 序列化超过 32KB 时不再回全文（也绝不会报「结果过大」丢失内容），而是返回：
+
+```json
+{ "ok": true, "oversized": true, "bytes": 123348, "summary": "…", "lastReply": "…",
+  "chatDownloadUrl": "<BASE>/api/tasks/<taskId>/chat-export?token=<签名>&format=json",
+  "chatDownloadUrlMarkdown": "…format=markdown", "downloadTokenTtlMs": 600000 }
+```
+
+直接 `curl -o chat.md "<chatDownloadUrl>"` 下载完整任务聊天内容（无需任何鉴权头，token 10 分钟内有效）；过期重调 `task_status {detail:"full"}` 取新 URL 即可。≤32KB 的小任务仍直接回全文（向后兼容）。
 
 ## 带大文件的任务：标准三步流程（顺序不能反！）
 
@@ -66,8 +78,8 @@ bash $WB call workbuddy_task_manage '{"action":"send","taskId":"task-xxxx","mess
 
 | 工具 | 用途 |
 |---|---|
-| workbuddy_task_manage | 任务会话：list / create（立即回执不等待）/ send（多轮）/ wait / delete / members / cancel |
-| workbuddy_task_status | 查任务进度：状态、编排计划子任务、汇总结论（默认摘要，detail:"full" 全量） |
+| workbuddy_task_manage | 任务会话：list（可 keyword 按 ID/标题过滤）/ create（立即回执不等待）/ send（多轮）/ wait / delete / members / cancel |
+| workbuddy_task_status | 查任务进度：状态、编排计划子任务、汇总结论（默认摘要，detail:"full" 全量；超大任务 >32KB 自动降级为「摘要 + chatDownloadUrl」，见下方「大任务内容下载」） |
 | workbuddy_task_chat | 看子任务/成员在远端 DSH 的聊天记录，可带 followupMessage 追问 |
 | workbuddy_task_ask_answer | 答复任务里挂起的 ask_user_question 提问卡 |
 | workbuddy_task_evaluate | 重新评估编排任务并生成/刷新汇总报告 |

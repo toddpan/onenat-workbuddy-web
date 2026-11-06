@@ -160,6 +160,12 @@ export interface ToolOpsDeps {
   expertRegistry?: ExpertRegistry
   /** 控制台地址（回显给调用方，便于人接手查看 UI） */
   consoleUrl: string
+  /**
+   * 签名下载令牌服务（task-54：超大任务详情回传聊天内容下载 URL 用）。
+   * 仅需 downloadToken(id, ttlMs) 签发 `exp.sig` 形态的 HMAC 短期令牌；
+   * 服务端校验复用同一实现（router 的 chat-export 端点），id 形态固定为 `chat-export:<taskId>`。
+   */
+  downloadTokens?: { downloadToken(id: string, ttlMs?: number): string }
 }
 
 /** 解析工具入参（HTTP 通道过来的是对象，模型通道过来的可能是 JSON 字符串） */
@@ -177,6 +183,14 @@ function asJson(value: unknown): any {
 export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
   const { store, directory, resolver, composer, planner, engine, sshStore, consoleUrl } = deps
   const client = new DshClient()
+
+  /**
+   * 超大任务详情降级阈值（task-54）：detail:"full" 序列化后超过该字节数时不回全文，
+   * 改回「摘要 + chatDownloadUrl」，调用方再 GET /api/tasks/:id/chat-export 取完整聊天内容。
+   * 取 32KB：低于 MCP 单帧上限 64KB（MAX_RESULT_BYTES），给 JSON.stringify 的缩进与信封留余量。
+   */
+  const TASK_FULL_OVERSIZE_BYTES = 32 * 1024
+  const CHAT_EXPORT_TOKEN_TTL_MS = 10 * 60_000
 
   // 1. 资源目录（只读透传 ONENAT）
   const resourceManage: WorkBuddyToolDef = {
@@ -295,7 +309,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
   const taskManage: WorkBuddyToolDef = {
     name: 'workbuddy_task_manage',
     description:
-      '管理 WorkBuddy 任务会话（每任务一个聊天窗口，多轮对话）: list / create（可带首条消息立即发起，**立即回执不等待执行**）/ send（多轮发言）/ wait（查看进度快照；HTTP 通道可同步等结果，MCP 通道不阻塞）/ delete / members / cancel。' +
+      '管理 WorkBuddy 任务会话（每任务一个聊天窗口，多轮对话）: list / create（可带首条消息立即发起，**立即回执不等待执行**）/ send（多轮发言）/ wait（查看进度快照；HTTP 通道可同步等结果，MCP 通道不阻塞）/ delete / members / cancel。list 支持 keyword 关键词过滤（匹配任务 ID/标题，任务多时先用它缩小范围）。' +
       '发起约定：① 先 project_manage list 判断归属，能确定项目就带 projectId 从项目发起（上下文全继承）；' +
       '② 需求有歧义先向用户问清再 create——任务里的子智能体/专家一律无人值守执行，不会反问澄清；' +
       '③ 在 message 里用 @ 派活：@子智能体名（回其绑定节点执行，@ 多个=编排）、@专家名、@专家团名（按团队合同展开成员编排）、@项目名（对项目发起任务：未绑定项目的任务自动绑定该项目，节点/工作区/项目指令全继承）、@资源名（注入连接信息）；用 @ 时 memberAgentIds 可省略。' +
@@ -306,6 +320,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
     parameters: {
       action: { type: 'string', description: '操作: list / create / send / wait / delete / members / cancel' },
       taskId: { type: 'string', description: '任务 ID（send/wait/delete/members/cancel 用）' },
+      keyword: { type: 'string', description: 'list 可选，关键词过滤：对任务 ID 与标题做大小写不敏感的包含匹配，只返回命中任务；不传返回全部' },
       title: { type: 'string', description: '任务标题（create 可选）' },
       memberAgentIds: { type: 'json', description: '成员子智能体 ID 数组（create 可省略：推荐改在 message 里 @子智能体名/@专家团名 指派；members 必填且非空）' },
       mode: { type: 'string', description: '模式: chat（单成员直通）或 orchestrate（多成员编排），缺省按成员数推断；@ 多个成员或 @专家团时自动编排' },
@@ -319,17 +334,21 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       const ctx = ctxOf(rawCtx)
       const action = args.action || 'list'
       if (action === 'list') {
-        const tasks = store.getTasks().map((t) => ({
-          id: t.id,
-          title: t.title,
-          mode: t.mode,
-          status: t.status,
-          running: engine.isRunning(t.id),
-          members: t.memberAgentIds,
-          turns: t.turns.length,
-          updatedAt: t.updatedAt,
-        }))
-        return JSON.stringify({ ok: true, tasks, consoleUrl }, null, 2)
+        // keyword 过滤（task-53）：对 id/title 做大小写不敏感包含匹配；不传则回全量（向后兼容）
+        const keyword = String(args.keyword || '').trim().toLowerCase()
+        const tasks = store.getTasks()
+          .filter((t) => !keyword || t.id.toLowerCase().includes(keyword) || t.title.toLowerCase().includes(keyword))
+          .map((t) => ({
+            id: t.id,
+            title: t.title,
+            mode: t.mode,
+            status: t.status,
+            running: engine.isRunning(t.id),
+            members: t.memberAgentIds,
+            turns: t.turns.length,
+            updatedAt: t.updatedAt,
+          }))
+        return JSON.stringify({ ok: true, ...(keyword ? { keyword: args.keyword, matched: tasks.length } : {}), tasks, consoleUrl }, null, 2)
       }
       if (action === 'create') {
         const memberIds: string[] = asJson(args.memberAgentIds)
@@ -524,12 +543,12 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
   const taskStatus: WorkBuddyToolDef = {
     name: 'workbuddy_task_status',
     description:
-      '查询 WorkBuddy 任务进度: 任务状态、编排计划（子任务列表与状态）、汇总结论。默认返回摘要（小回包，适合 MCP/语音等窄通道）；detail:"full" 才返回完整轮次与日志（回包很大）',
+      '查询 WorkBuddy 任务进度: 任务状态、编排计划（子任务列表与状态）、汇总结论。默认返回摘要（小回包，适合 MCP/语音等窄通道）；detail:"full" 返回完整轮次与日志——超大任务（>32KB）会自动降级为「摘要 + chatDownloadUrl 聊天内容下载 URL」（token 10 分钟有效，GET 该 URL 取完整内容）',
     parameters: {
       taskId: { type: 'string', description: '任务 ID（缺省列出全部任务概览）' },
       detail: { type: 'string', description: 'summary（默认，摘要）/ full（完整任务对象，含全部轮次与日志，回包很大）' },
     },
-    async execute(args) {
+    async execute(args, rawCtx) {
       if (!args.taskId) {
         return JSON.stringify({
           ok: true,
@@ -545,6 +564,45 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       const task = store.getTask(String(args.taskId))
       if (!task) return JSON.stringify({ ok: false, error: '任务不存在' })
       if (String(args.detail || 'summary') === 'full') {
+        // task-54：超大任务不直回全文——先量化字节，>32KB 时降级为「摘要 + 聊天内容下载 URL」
+        const fullJson = JSON.stringify({ ok: true, running: engine.isRunning(task.id), task })
+        const bytes = Buffer.byteLength(fullJson)
+        if (bytes > TASK_FULL_OVERSIZE_BYTES && deps.downloadTokens) {
+          const token = deps.downloadTokens.downloadToken(`chat-export:${task.id}`, CHAT_EXPORT_TOKEN_TTL_MS)
+          const base = (ctxOf(rawCtx).requestBase || consoleUrl).replace(/\/+$/, '')
+          const agentTurns = task.turns.filter((t) => t.role === 'agent')
+          const userTurns = task.turns.filter((t) => t.role === 'user')
+          engine.logTask(task.id, 'info', `task_status full 回包 ${(bytes / 1024).toFixed(0)}KB 超 ${TASK_FULL_OVERSIZE_BYTES / 1024}KB 阈值，已降级为下载 URL（10 分钟内有效）`)
+          return JSON.stringify({
+            ok: true,
+            oversized: true,
+            bytes,
+            thresholdBytes: TASK_FULL_OVERSIZE_BYTES,
+            running: engine.isRunning(task.id),
+            taskId: task.id,
+            title: task.title,
+            mode: task.mode,
+            status: task.status,
+            members: task.memberAgentIds,
+            turns: task.turns.length,
+            createdAt: task.createdAt,
+            updatedAt: task.updatedAt,
+            summary: preview(task.summary, 800),
+            lastUserMessage: preview(userTurns[userTurns.length - 1]?.text, 200),
+            lastReply: preview(agentTurns[agentTurns.length - 1]?.text, 600),
+            plan: task.plan
+              ? {
+                  strategy: task.plan.strategy,
+                  completed: (task.plan.subtasks || []).filter((s) => s.status === 'completed').length,
+                  subtasks: (task.plan.subtasks || []).map((s) => ({ id: s.id, agentId: s.agentId, title: preview(s.title, 40), status: s.status })),
+                }
+              : undefined,
+            chatDownloadUrl: `${base}/api/tasks/${encodeURIComponent(task.id)}/chat-export?token=${encodeURIComponent(token)}&format=json`,
+            chatDownloadUrlMarkdown: `${base}/api/tasks/${encodeURIComponent(task.id)}/chat-export?token=${encodeURIComponent(token)}&format=markdown`,
+            downloadTokenTtlMs: CHAT_EXPORT_TOKEN_TTL_MS,
+            hint: `任务完整内容 ${(bytes / 1024).toFixed(0)}KB 超过单帧安全阈值，已降级：GET chatDownloadUrl（无需额外鉴权头，token 10 分钟内有效，过期重调本接口取新 URL）即可下载完整任务聊天内容（format=json 或 markdown）`,
+          }, null, 2)
+        }
         return JSON.stringify({ ok: true, running: engine.isRunning(task.id), task }, null, 2)
       }
       const agentTurns = task.turns.filter((t) => t.role === 'agent')
