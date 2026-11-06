@@ -107,3 +107,11 @@ AC#2/#3 沿用已登记证据不重复计入：task-57 真实 v3 4/4（双节点
 - 线上验收全项通过：task-55 同节点同路径 409 通用文案+路径归一化+异节点同路径合法共存；task-53 keyword 按标题/ID/ID 片段过滤（未命中回 0）；task-54 1.5MB 任务 detail:full 降级为 chatDownloadUrl（匿名 GET 200/1.68MB、TTL 600s）；task-56 nodeRef 覆盖快照到 task 并正确落执行节点；task-57 工作区根目录核验（不存在/符号链接路径拒绝 WORKSPACE_ROOT_UNVERIFIED）、原子写 sha256 双端一致、回读一致、删除 ok、根目录保护（WORKSPACE_ROOT_PROTECTED）、brain 子会话经 workspace-remote-v3.mjs --node-ref 实时解析跨节点读取 136 文件字节一致（sha256 d26e200c…）；task-59 AI 令牌 ssh exec/get 被拒（ai-token-ssh-guard）；大文件三步流程 draft 态可用。
 - 环境发现（非本系列缺陷）：brain 节点(mapping:5602f2c2)主会话上游 gpt-6.1-sol 连续两轮空流（自动重发仍空→任务失败并有明确系统提示）；同一模型在 136 节点(6cc2987d)主会话正常、brain 成员会话 glm-5.3-flash 正常、生产用户任务同期也间歇失败——建议排查 brain 节点的模型路由/上游。
 - 测试数据已清理：2 个测试项目、3 个测试任务、测试文件均已删除；136 节点残留空目录 /tmp/wb-verify-11070632（/tmp，无害）。
+
+### 2026-11-07T07:06:00+08:00 阿里云线上稳定性测试（第二轮，PASS）
+- S1 只读高频：healthz×60（60/60，avg 79ms/max 851ms）+ 并发混合读 48/48（avg 241ms），0 错误。
+- S2 数据面：项目生命周期 2/2（create→409→delete）、文件回环 4/4（sha256 三步一致）、draft 生命周期 2/2。
+- S3 派发：136 成员 / brain 成员 / brain 主会话三个真实任务均 <40s 完成——早间 brain 节点 gpt-6.1-sol 空流已恢复。
+- S4 窗口 14min：6 事件全为完成类，0 失败；结束 KPI 18/21 在线。
+- 运维须知：MCP 通道存在 10 分钟同参幂等回放窗口（删除核验请走 HTTP 通道或新会话）；报告与证据 artifacts/stability-20261107/。
+- 清理：5 任务 3 项目全删，全量列表 309 条 0 残留。
