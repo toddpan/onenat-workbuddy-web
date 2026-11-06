@@ -370,7 +370,8 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
 .main-agent-item .ag-ck { flex: none; visibility: hidden; font-weight: 700; color: var(--pri); }
 .main-agent-item.on .ag-ck { visibility: visible; }
 /* 执行位置选择框（P2-1）：挂在 body 上，按触发按钮定位 */
-.main-agent-pop.place-pop { position: fixed; top: auto; right: auto; z-index: 90; }
+.main-agent-pop.place-pop { position: fixed; top: auto; right: auto; z-index: 90; max-height: 76vh; }
+/* 节点多（线上 11+ 个）时继承的 54vh 只能看到一半，最后一个新节点永远沉底被当成「不存在」 */
 .place-back {
   border: none; background: none; color: var(--pri); font-size: 11px; cursor: pointer; padding: 0;
 }
@@ -9659,11 +9660,12 @@ function wirePlaceNodeItems(pop) {
 function renderPlacePop() {
   const pop = placeState.pop;
   if (!pop) return;
+  const keepScroll = pop.scrollTop; // 探测回调/目录过期重绘会重建 innerHTML，把滚动位置还给用户（否则浏览到一半被拽回顶部，最后一个节点又「看不见」了）
   const opts = dshNodeOptions();
   const cur = placeState.place;
   let html = '';
   if (placeState.level === 'node') {
-    html += '<div class="main-agent-pop-head"><span>执行位置 · 选择节点</span><span>离线节点也可选</span></div>';
+    html += '<div class="main-agent-pop-head"><span>执行位置 · 选择节点</span><span>共 ' + opts.length + ' 个 · 离线也可选</span></div>';
     if (!opts.length) html += '<div class="model-empty">暂无 DSH 节点（资源目录未同步）</div>';
     // 节点搜索：节点多了以后（线上已 13 个）最后几个新加的节点沉在滚动区底部，
     // 用户会以为"看不到"。输入名字/地址/mappingId 即可直达。
@@ -9703,6 +9705,7 @@ function renderPlacePop() {
     } else if (si) {
       si.value = placeState.query || '';
     }
+    if (keepScroll) pop.scrollTop = keepScroll;
     wirePlaceNodeItems(pop);
     probeNodesIfStale(opts);
   } else {
