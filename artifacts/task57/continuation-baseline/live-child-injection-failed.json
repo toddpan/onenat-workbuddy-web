@@ -1,0 +1,607 @@
+{
+  "at": "2026-11-06T16:57:41.072Z",
+  "tag": "wb-task57-37e2ba6368bb09f1",
+  "ownerId": "6cc2987d",
+  "executorId": "5602f2c2",
+  "ownerRoot": "/tmp/wb-task57-37e2ba6368bb09f1-owner",
+  "executorRoot": "/tmp/wb-task57-37e2ba6368bb09f1-executor",
+  "checks": [
+    {
+      "name": "real owner/executor isolated fixtures and independent filesystems",
+      "result": "PASS",
+      "evidence": {
+        "ownerRoot": "/tmp/wb-task57-37e2ba6368bb09f1-owner",
+        "executorRoot": "/tmp/wb-task57-37e2ba6368bb09f1-executor",
+        "initialHashes": {
+          "main": "3d469739bc53cfd7fdb8cca158e22e62d53f40ab8d0d95b8855e9181a59af922",
+          "child": "61bc9ab9f66bde18f27c112104c508738ddd1be3e9bd8ac3290a57bddda900d6"
+        },
+        "ownerRootAbsentOnExecutor": true
+      }
+    },
+    {
+      "name": "AC1/2/3 main without mentions actually runs list/read/write/CAS/exec on owner",
+      "result": "PASS",
+      "evidence": {
+        "taskId": "task-373a4b5a",
+        "sessionId": "session-d29600c4-64a5-48f9-bf45-e71abb884943",
+        "cwd": "/tmp/wb-task57-37e2ba6368bb09f1-executor",
+        "tools": [
+          {
+            "sessionId": "session-d29600c4-64a5-48f9-bf45-e71abb884943",
+            "name": "bash"
+          },
+          {
+            "sessionId": "session-d29600c4-64a5-48f9-bf45-e71abb884943",
+            "name": "bash"
+          },
+          {
+            "sessionId": "session-d29600c4-64a5-48f9-bf45-e71abb884943",
+            "name": "job_output"
+          }
+        ],
+        "lane": "main",
+        "executorCwd": "/tmp/wb-task57-37e2ba6368bb09f1-executor",
+        "ownerRef": "mapping:6cc2987d",
+        "root": "/tmp/wb-task57-37e2ba6368bb09f1-owner",
+        "checks": [
+          {
+            "operation": "list",
+            "exitCode": 0,
+            "ok": true,
+            "path": "/tmp/wb-task57-37e2ba6368bb09f1-owner",
+            "temporarySessionId": "session-b2797cd0-b2b3-45ef-9219-06a07a594c14",
+            "sessionCleanup": "deleted"
+          },
+          {
+            "operation": "read",
+            "exitCode": 0,
+            "ok": true,
+            "path": "/tmp/wb-task57-37e2ba6368bb09f1-owner/main.txt",
+            "sha256": "3d469739bc53cfd7fdb8cca158e22e62d53f40ab8d0d95b8855e9181a59af922",
+            "temporarySessionId": "session-492b70b1-c934-4b4e-8cd2-63d4432e2538",
+            "sessionCleanup": "deleted"
+          },
+          {
+            "operation": "write",
+            "exitCode": 0,
+            "ok": true,
+            "path": "/tmp/wb-task57-37e2ba6368bb09f1-owner/main.txt",
+            "sha256": "f070dfd1865ddb43b75884ada4db9ccf2c84c97e073fe6eba42472a28c44d758",
+            "temporarySessionId": "session-7c5f9d2c-a68a-46c1-aec9-857346cea41d",
+            "sessionCleanup": "deleted"
+          },
+          {
+            "operation": "write",
+            "exitCode": 1,
+            "ok": false,
+            "code": "CAS_MISMATCH",
+            "error": "SHA256 changed",
+            "temporarySessionId": "session-95fb9804-9de6-4709-9402-55643a07a637",
+            "sessionCleanup": "deleted"
+          },
+          {
+            "operation": "read",
+            "exitCode": 0,
+            "ok": true,
+            "path": "/tmp/wb-task57-37e2ba6368bb09f1-owner/main.txt",
+            "sha256": "f070dfd1865ddb43b75884ada4db9ccf2c84c97e073fe6eba42472a28c44d758",
+            "temporarySessionId": "session-bbc5bc31-51fe-4d43-9850-b9e6ca19d820",
+            "sessionCleanup": "deleted"
+          },
+          {
+            "operation": "exec",
+            "exitCode": 0,
+            "ok": true,
+            "temporarySessionId": "session-8cdfd468-af39-4f32-977d-9d5fd8e96bcd",
+            "sessionCleanup": "deleted"
+          }
+        ],
+        "ok": true,
+        "initialSha256": "3d469739bc53cfd7fdb8cca158e22e62d53f40ab8d0d95b8855e9181a59af922",
+        "finalSha256": "f070dfd1865ddb43b75884ada4db9ccf2c84c97e073fe6eba42472a28c44d758",
+        "exec": {
+          "cwd": "/tmp/wb-task57-37e2ba6368bb09f1-owner",
+          "hostname": "ts-OptiPlex-Tower-Plus-7020",
+          "sha256": "f070dfd1865ddb43b75884ada4db9ccf2c84c97e073fe6eba42472a28c44d758",
+          "builtSha256": "2261eec057c85e78b6c7625dde1b9e74dea55e70081c0683811d03dfde232c2a"
+        },
+        "independentOwnerSha256": "f070dfd1865ddb43b75884ada4db9ccf2c84c97e073fe6eba42472a28c44d758",
+        "independentBuiltSha256": "2261eec057c85e78b6c7625dde1b9e74dea55e70081c0683811d03dfde232c2a"
+      }
+    },
+    {
+      "name": "AC1/2/3 child actually uses the same injected remote file and command channel",
+      "result": "FAIL",
+      "error": "Automatic stable-reference injection required for this session"
+    }
+  ],
+  "requests": [
+    {
+      "url": "http://natpass.yikaihui.com:31847/api/v1/sessions",
+      "title": "[WorkBuddy] 这是 task-57 的隔离运行验收，只执行这个检查，不实现",
+      "provider": "deepseek-official",
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "url": "http://natpass.yikaihui.com:31847/api/v1/sessions/session-d29600c4-64a5-48f9-bf45-e71abb884943/prompt-stream",
+      "promptSha256": "abefa6997ca8ebd2826574e1dc86eeeb0c5d91eccdab566cd4004542ee5defa4",
+      "workspaceSection": true,
+      "stableOwner": true,
+      "helperV2": true
+    },
+    {
+      "url": "http://natpass.yikaihui.com:31847/api/v1/sessions",
+      "title": "[WorkBuddy] 新任务",
+      "provider": "deepseek-official",
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "url": "http://natpass.yikaihui.com:31847/api/v1/sessions/session-01ddb29a-952e-47b3-b390-816bf1b39ca3/prompt-stream",
+      "promptSha256": "51b320593110c634b87b5a87eee8b28384c9e732eb1578c8c4e4996d2bb059d3",
+      "workspaceSection": true,
+      "stableOwner": false,
+      "helperV2": false
+    }
+  ],
+  "toolCalls": [
+    {
+      "sessionId": "session-d29600c4-64a5-48f9-bf45-e71abb884943",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-d29600c4-64a5-48f9-bf45-e71abb884943",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-d29600c4-64a5-48f9-bf45-e71abb884943",
+      "name": "job_output"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "read"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "job_kill"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "job_output"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "name": "bash"
+    }
+  ],
+  "cleanup": [
+    {
+      "node": "6cc2987d",
+      "sessionId": "session-ee94ede2-03e5-4493-8641-b93b20c3b023",
+      "removed": true
+    },
+    {
+      "node": "6cc2987d",
+      "sessionId": "session-24cd492e-e514-48b7-b14c-b10fc61a3db9",
+      "removed": true
+    },
+    {
+      "node": "6cc2987d",
+      "sessionId": "session-5d906ce2-ba30-4a4c-b37b-2d7ae5b6d556",
+      "removed": true
+    },
+    {
+      "node": "6cc2987d",
+      "sessionId": "session-2163360a-7935-425e-83c1-20aee53437ca",
+      "removed": true
+    },
+    {
+      "node": "6cc2987d",
+      "sessionId": "session-d23408de-22c6-41e8-b724-073564cfd28a",
+      "removed": true
+    },
+    {
+      "node": "6cc2987d",
+      "sessionId": "session-a4abdce3-8ada-454a-8617-1d56a81590d7",
+      "removed": true
+    },
+    {
+      "node": "6cc2987d",
+      "sessionId": "session-8cdfd468-af39-4f32-977d-9d5fd8e96bcd",
+      "removed": true
+    },
+    {
+      "node": "6cc2987d",
+      "sessionId": "session-bbc5bc31-51fe-4d43-9850-b9e6ca19d820",
+      "removed": true
+    },
+    {
+      "node": "6cc2987d",
+      "sessionId": "session-95fb9804-9de6-4709-9402-55643a07a637",
+      "removed": true
+    },
+    {
+      "node": "6cc2987d",
+      "sessionId": "session-7c5f9d2c-a68a-46c1-aec9-857346cea41d",
+      "removed": true
+    },
+    {
+      "node": "6cc2987d",
+      "sessionId": "session-492b70b1-c934-4b4e-8cd2-63d4432e2538",
+      "removed": true
+    },
+    {
+      "node": "6cc2987d",
+      "sessionId": "session-b2797cd0-b2b3-45ef-9219-06a07a594c14",
+      "removed": true
+    },
+    {
+      "node": "6cc2987d",
+      "directory": "/tmp/wb-task57-37e2ba6368bb09f1-owner",
+      "removed": true
+    },
+    {
+      "node": "5602f2c2",
+      "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+      "removed": true
+    },
+    {
+      "node": "5602f2c2",
+      "sessionId": "session-d29600c4-64a5-48f9-bf45-e71abb884943",
+      "removed": true
+    },
+    {
+      "node": "5602f2c2",
+      "directory": "/tmp/wb-task57-37e2ba6368bb09f1-executor",
+      "removed": true
+    },
+    {
+      "node": "5602f2c2",
+      "workspaceId": "578b6725-185c-411c-b06e-458d70a920eb",
+      "removed": true
+    }
+  ],
+  "mainStatus": "completed",
+  "mainTaskDiagnosis": {
+    "status": "completed",
+    "systemTurns": [],
+    "lastTurns": [
+      {
+        "role": "user",
+        "text": "这是 task-57 的隔离运行验收，只执行这个检查，不实现代码、不派发或创建 WorkBuddy/OneNat 任务、不递归发送宿主消息、不询问用户。使用自动注入的 [项目工作区跨机访问] 中的凭证环境变量及已安装 helper；用命令工具运行已上传的 Node 测试驱动（无需读取或改写脚本）：\nnode '/tmp/wb-task57-37e2ba6368bb09f1-executor/workspace-roundtrip-live.mjs' '<已注入的新版远程工具绝对路径>' 'mapping:6cc2987d' 'https://natpass.yikaihui.com' '/tmp/wb-task57-37e2ba6368bb09f1-owner' '/tmp/wb-task57-37e2ba6368bb09f1-executor' 'main-result.json' 'main'\n把尖括号占位替换为注入段实际工具路径，并将注入段的 WORKBUDDY_WORKSPACE_API_KEY 和 WORKBUDDY_ONENAT_API_KEY 作为环境变量传给 Node。不要在回答中输出凭证。驱动串行执行 list/read/write/stale-CAS/read/exec，每个内部调用可能需要等待远端模型，命令至少允许 15 分钟运行。完成后仅返回 LIVE_ROUNDTRIP 行；失败如实报告。不要自行清理目录或会话，测试控制端负责 finally 清理。"
+      },
+      {
+        "role": "agent",
+        "text": "OCIsInRlbXBvcmFyeVNlc3Npb25JZCI6InNlc3Npb24tN2M1ZjlkMmMtYTY4YS00NmMxLWFlYzktODU3MzQ2Y2VhNDFkIiwic2Vzc2lvbkNsZWFudXAiOiJkZWxldGVkIn0seyJvcGVyYXRpb24iOiJ3cml0ZSIsImV4aXRDb2RlIjoxLCJvayI6ZmFsc2UsImNvZGUiOiJDQVNfTUlTTUFUQ0giLCJlcnJvciI6IlNIQTI1NiBjaGFuZ2VkIiwidGVtcG9yYXJ5U2Vzc2lvbklkIjoic2Vzc2lvbi05NWZiOTgwNC05ZGU2LTQ3MDktOTQwMi01NTY0M2EwN2E2MzciLCJzZXNzaW9uQ2xlYW51cCI6ImRlbGV0ZWQifSx7Im9wZXJhdGlvbiI6InJlYWQiLCJleGl0Q29kZSI6MCwib2siOnRydWUsInBhdGgiOiIvdG1wL3diLXRhc2s1Ny0zN2UyYmE2MzY4YmIwOWYxLW93bmVyL21haW4udHh0Iiwic2hhMjU2IjoiZjA3MGRmZDE4NjVkZGI0M2I3NTg4NGFkYTRkYjljY2YyYzg0Yzk3ZTA3M2ZlNmViYTQyNDcyYTI4YzQ0ZDc1OCIsInRlbXBvcmFyeVNlc3Npb25JZCI6InNlc3Npb24tYmJjNWJjMzEtNTFmZS00ZDQzLTk4NTAtYjllNmNhMTlkODIwIiwic2Vzc2lvbkNsZWFudXAiOiJkZWxldGVkIn0seyJvcGVyYXRpb24iOiJleGVjIiwiZXhpdENvZGUiOjAsIm9rIjp0cnVlLCJ0ZW1wb3JhcnlTZXNzaW9uSWQiOiJzZXNzaW9uLThjZGZkNDY4LWFmMzktNGYzMi05NzdkLTlkNWZkOGU5NmJjZCIsInNlc3Npb25DbGVhbnVwIjoiZGVsZXRlZCJ9XSwib2siOnRydWUsImluaXRpYWxTaGEyNTYiOiIzZDQ2OTczOWJjNTNjZmQ3ZmRiOGNjYTE1OGUyMmU2MmQ1M2Y0MGFiOGQwZDk1Yjg4NTVlOTE4MWE1OWFmOTIyIiwiZmluYWxTaGEyNTYiOiJmMDcwZGZkMTg2NWRkYjQzYjc1ODg0YWRhNGRiOWNjZjJjODRjOTdlMDczZmU2ZWJhNDI0NzJhMjhjNDRkNzU4IiwiZXhlYyI6eyJjd2QiOiIvdG1wL3diLXRhc2s1Ny0zN2UyYmE2MzY4YmIwOWYxLW93bmVyIiwiaG9zdG5hbWUiOiJ0cy1PcHRpUGxleC1Ub3dlci1QbHVzLTcwMjAiLCJzaGEyNTYiOiJmMDcwZGZkMTg2NWRkYjQzYjc1ODg0YWRhNGRiOWNjZjJjODRjOTdlMDczZmU2ZWJhNDI0NzJhMjhjNDRkNzU4IiwiYnVpbHRTaGEyNTYiOiIyMjYxZWVjMDU3Yzg1ZTc4YjZjNzYyNWRkZTFiOWU3NGRlYTU1ZTcwMDgxYzA2ODM4MTFkMDNkZmRlMjMyYzJhIn19"
+      }
+    ],
+    "logs": [
+      {
+        "ts": 1793984263385,
+        "level": "info",
+        "msg": "会话已对齐工作区（brain 环境 · 主会话）: workspace=578b6725-185c-411c-b06e-458d70a920eb · 目录 /tmp/wb-task57-37e2ba6368bb09f1-executor"
+      },
+      {
+        "ts": 1793984263385,
+        "level": "info",
+        "msg": "远程会话已创建（brain 环境 · 主会话 · 模型 deepseek-v4-flash · 工作目录 /tmp/wb-task57-37e2ba6368bb09f1-executor）: session-d29600c4-64a5-48f9-bf45-e71abb884943 @ http://natpass.yikaihui.com:31847/api/v1"
+      },
+      {
+        "ts": 1793984263477,
+        "level": "info",
+        "msg": "运行权限已原生生效（brain 环境 · 主会话）: danger-full-access · sandbox=danger-full-access · approval=never"
+      },
+      {
+        "ts": 1793984267116,
+        "level": "tool",
+        "msg": "工具调用: bash · {\"command\": \"ls -l '/tmp/wb-task57-37e2ba6368bb09f1-executor/workspace-roundtrip-live.mjs' '/tmp/wb-task57-37e2ba6368bb0"
+      },
+      {
+        "ts": 1793984270895,
+        "level": "tool",
+        "msg": "工具调用: bash · {\"command\": \"WORKBUDDY_WORKSPACE_API_KEY='[redacted]' WORKBUDDY_ONENAT_API_KEY='on"
+      },
+      {
+        "ts": 1793984272028,
+        "level": "tool",
+        "msg": "工具调用: job_output · {\"job_id\": \"bash-105\", \"wait\": true, \"timeout_ms\": 900000}"
+      }
+    ]
+  },
+  "mainObserved": {
+    "lane": "main",
+    "executorCwd": "/tmp/wb-task57-37e2ba6368bb09f1-executor",
+    "ownerRef": "mapping:6cc2987d",
+    "root": "/tmp/wb-task57-37e2ba6368bb09f1-owner",
+    "checks": [
+      {
+        "operation": "list",
+        "exitCode": 0,
+        "ok": true,
+        "path": "/tmp/wb-task57-37e2ba6368bb09f1-owner",
+        "temporarySessionId": "session-b2797cd0-b2b3-45ef-9219-06a07a594c14",
+        "sessionCleanup": "deleted"
+      },
+      {
+        "operation": "read",
+        "exitCode": 0,
+        "ok": true,
+        "path": "/tmp/wb-task57-37e2ba6368bb09f1-owner/main.txt",
+        "sha256": "3d469739bc53cfd7fdb8cca158e22e62d53f40ab8d0d95b8855e9181a59af922",
+        "temporarySessionId": "session-492b70b1-c934-4b4e-8cd2-63d4432e2538",
+        "sessionCleanup": "deleted"
+      },
+      {
+        "operation": "write",
+        "exitCode": 0,
+        "ok": true,
+        "path": "/tmp/wb-task57-37e2ba6368bb09f1-owner/main.txt",
+        "sha256": "f070dfd1865ddb43b75884ada4db9ccf2c84c97e073fe6eba42472a28c44d758",
+        "temporarySessionId": "session-7c5f9d2c-a68a-46c1-aec9-857346cea41d",
+        "sessionCleanup": "deleted"
+      },
+      {
+        "operation": "write",
+        "exitCode": 1,
+        "ok": false,
+        "code": "CAS_MISMATCH",
+        "error": "SHA256 changed",
+        "temporarySessionId": "session-95fb9804-9de6-4709-9402-55643a07a637",
+        "sessionCleanup": "deleted"
+      },
+      {
+        "operation": "read",
+        "exitCode": 0,
+        "ok": true,
+        "path": "/tmp/wb-task57-37e2ba6368bb09f1-owner/main.txt",
+        "sha256": "f070dfd1865ddb43b75884ada4db9ccf2c84c97e073fe6eba42472a28c44d758",
+        "temporarySessionId": "session-bbc5bc31-51fe-4d43-9850-b9e6ca19d820",
+        "sessionCleanup": "deleted"
+      },
+      {
+        "operation": "exec",
+        "exitCode": 0,
+        "ok": true,
+        "temporarySessionId": "session-8cdfd468-af39-4f32-977d-9d5fd8e96bcd",
+        "sessionCleanup": "deleted"
+      }
+    ],
+    "ok": true,
+    "initialSha256": "3d469739bc53cfd7fdb8cca158e22e62d53f40ab8d0d95b8855e9181a59af922",
+    "finalSha256": "f070dfd1865ddb43b75884ada4db9ccf2c84c97e073fe6eba42472a28c44d758",
+    "exec": {
+      "cwd": "/tmp/wb-task57-37e2ba6368bb09f1-owner",
+      "hostname": "ts-OptiPlex-Tower-Plus-7020",
+      "sha256": "f070dfd1865ddb43b75884ada4db9ccf2c84c97e073fe6eba42472a28c44d758",
+      "builtSha256": "2261eec057c85e78b6c7625dde1b9e74dea55e70081c0683811d03dfde232c2a"
+    }
+  },
+  "childTaskDiagnosis": {
+    "status": "success",
+    "systemTurns": [],
+    "lastTurns": [],
+    "logs": [
+      {
+        "ts": 1793984373217,
+        "level": "info",
+        "msg": "会话已对齐工作区（wb-task57-37e2ba6368bb09f1-child）: workspace=578b6725-185c-411c-b06e-458d70a920eb · 目录 /tmp/wb-task57-37e2ba6368bb09f1-executor"
+      },
+      {
+        "ts": 1793984373217,
+        "level": "info",
+        "msg": "远程会话已创建（wb-task57-37e2ba6368bb09f1-child · 模型 deepseek-v4-flash · 工作目录 /tmp/wb-task57-37e2ba6368bb09f1-executor）: session-01ddb29a-952e-47b3-b390-816bf1b39ca3 @ http://natpass.yikaihui.com:31847/api/v1"
+      },
+      {
+        "ts": 1793984373333,
+        "level": "info",
+        "msg": "运行权限已原生生效（wb-task57-37e2ba6368bb09f1-child）: danger-full-access · sandbox=danger-full-access · approval=never"
+      }
+    ]
+  },
+  "childObserved": {
+    "lane": "child",
+    "executorCwd": "/tmp/wb-task57-37e2ba6368bb09f1-executor",
+    "ownerRef": "mapping:6cc2987d",
+    "root": "/tmp/wb-task57-37e2ba6368bb09f1-owner",
+    "checks": [
+      {
+        "operation": "list",
+        "exitCode": 0,
+        "ok": true,
+        "path": "/tmp/wb-task57-37e2ba6368bb09f1-owner",
+        "temporarySessionId": "session-a4abdce3-8ada-454a-8617-1d56a81590d7",
+        "sessionCleanup": "deleted"
+      },
+      {
+        "operation": "read",
+        "exitCode": 0,
+        "ok": true,
+        "path": "/tmp/wb-task57-37e2ba6368bb09f1-owner/child.txt",
+        "sha256": "61bc9ab9f66bde18f27c112104c508738ddd1be3e9bd8ac3290a57bddda900d6",
+        "temporarySessionId": "session-d23408de-22c6-41e8-b724-073564cfd28a",
+        "sessionCleanup": "deleted"
+      },
+      {
+        "operation": "write",
+        "exitCode": 0,
+        "ok": true,
+        "path": "/tmp/wb-task57-37e2ba6368bb09f1-owner/child.txt",
+        "sha256": "ff14e87767116d2de45eda18d3a50dd8d18ed8c79dfabf7ce030fd62696b803a",
+        "temporarySessionId": "session-2163360a-7935-425e-83c1-20aee53437ca",
+        "sessionCleanup": "deleted"
+      },
+      {
+        "operation": "write",
+        "exitCode": 1,
+        "ok": false,
+        "code": "CAS_MISMATCH",
+        "error": "SHA256 changed",
+        "temporarySessionId": "session-5d906ce2-ba30-4a4c-b37b-2d7ae5b6d556",
+        "sessionCleanup": "deleted"
+      },
+      {
+        "operation": "read",
+        "exitCode": 0,
+        "ok": true,
+        "path": "/tmp/wb-task57-37e2ba6368bb09f1-owner/child.txt",
+        "sha256": "ff14e87767116d2de45eda18d3a50dd8d18ed8c79dfabf7ce030fd62696b803a",
+        "temporarySessionId": "session-24cd492e-e514-48b7-b14c-b10fc61a3db9",
+        "sessionCleanup": "deleted"
+      },
+      {
+        "operation": "exec",
+        "exitCode": 0,
+        "ok": true,
+        "temporarySessionId": "session-ee94ede2-03e5-4493-8641-b93b20c3b023",
+        "sessionCleanup": "deleted"
+      }
+    ],
+    "ok": true,
+    "initialSha256": "61bc9ab9f66bde18f27c112104c508738ddd1be3e9bd8ac3290a57bddda900d6",
+    "finalSha256": "ff14e87767116d2de45eda18d3a50dd8d18ed8c79dfabf7ce030fd62696b803a",
+    "exec": {
+      "cwd": "/tmp/wb-task57-37e2ba6368bb09f1-owner",
+      "hostname": "ts-OptiPlex-Tower-Plus-7020",
+      "sha256": "ff14e87767116d2de45eda18d3a50dd8d18ed8c79dfabf7ce030fd62696b803a",
+      "builtSha256": "131324bacd68597ac5f7e53553280acf50c332304d7b4370b3651a37aa4e97af"
+    }
+  },
+  "error": "Automatic stable-reference injection required for this session",
+  "finishedAt": "2026-11-06T17:03:12.343Z"
+}

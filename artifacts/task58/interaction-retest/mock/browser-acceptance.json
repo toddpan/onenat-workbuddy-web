@@ -1,0 +1,865 @@
+{
+  "at": "2026-11-06T17:55:23.091Z",
+  "spaceId": 15,
+  "checks": [
+    {
+      "name": "#1 desktop project picker preserves draft/project and sends explicit nodeRef",
+      "result": "PASS",
+      "evidence": {
+        "task": {
+          "id": "task-acc3d9ef",
+          "projectId": "proj-fu8yf11q",
+          "nodeRef": {
+            "kind": "mapping",
+            "mappingId": "execution"
+          }
+        },
+        "payload": {
+          "message": "Task58 desktop browser execution",
+          "projectId": "proj-fu8yf11q",
+          "nodeRef": {
+            "kind": "mapping",
+            "mappingId": "execution"
+          }
+        },
+        "files": {
+          "text": "📁 /owner/project 来源：文件归属：Files owner-DSH · 执行：Execution node-DSH · 跨节点远程访问（非本地 cwd）隐藏项＋文件夹⬆️ 上传⟳▸📁backlog@⧉🗑📝README.md@👁⬇⧉🗑",
+          "node": {
+            "kind": "mapping",
+            "mappingId": "file-owner"
+          },
+          "projectId": "proj-fu8yf11q",
+          "rootSrc": "文件归属：Files owner-DSH · 执行：Execution node-DSH · 跨节点远程访问（非本地 cwd）"
+        }
+      }
+    },
+    {
+      "name": "#2 editor separates owner/default nodes, updates access text and persists only chosen default",
+      "result": "PASS",
+      "evidence": {
+        "before": {
+          "file": {
+            "kind": "mapping",
+            "mappingId": "file-owner"
+          },
+          "exec": {
+            "kind": "mapping",
+            "mappingId": "execution"
+          },
+          "note": "文件归属：Files owner-DSH；默认执行：Execution node-DSH。跨节点远程访问；项目目录不是执行节点的原生本地 cwd。"
+        },
+        "saved": {
+          "file": {
+            "kind": "mapping",
+            "mappingId": "file-owner"
+          },
+          "workspace": "/owner/project"
+        }
+      }
+    },
+    {
+      "name": "#1/#3 mobile 320px project node selection, files and backlog",
+      "result": "PASS",
+      "evidence": {
+        "task": {
+          "id": "task-3c0bd2e5",
+          "projectId": "proj-fu8yf11q",
+          "nodeRef": {
+            "kind": "mapping",
+            "mappingId": "file-owner"
+          }
+        },
+        "files": {
+          "text": "📁 /owner/project 来源：文件归属：Files owner-DSH · 执行：Files owner-DSH · 同节点直接访问隐藏项＋文件夹⬆️ 上传⟳▸📁backlog@⧉🗑📝README.md@👁⬇⧉🗑",
+          "node": {
+            "kind": "mapping",
+            "mappingId": "file-owner"
+          },
+          "projectId": "proj-fu8yf11q",
+          "rootSrc": "文件归属：Files owner-DSH · 执行：Files owner-DSH · 同节点直接访问"
+        },
+        "form": {
+          "client": 288,
+          "scroll": 288
+        }
+      }
+    },
+    {
+      "name": "#1/#3 mobile 390px project node selection, files and backlog",
+      "result": "PASS",
+      "evidence": {
+        "task": {
+          "id": "task-bff97640",
+          "projectId": "proj-fu8yf11q",
+          "nodeRef": {
+            "kind": "mapping",
+            "mappingId": "file-owner"
+          }
+        },
+        "files": {
+          "text": "📁 /owner/project 来源：文件归属：Files owner-DSH · 执行：Files owner-DSH · 同节点直接访问隐藏项＋文件夹⬆️ 上传⟳▸📁backlog@⧉🗑📝README.md@👁⬇⧉🗑",
+          "node": {
+            "kind": "mapping",
+            "mappingId": "file-owner"
+          },
+          "projectId": "proj-fu8yf11q",
+          "rootSrc": "文件归属：Files owner-DSH · 执行：Files owner-DSH · 同节点直接访问"
+        },
+        "form": {
+          "client": 358,
+          "scroll": 358
+        }
+      }
+    },
+    {
+      "name": "#1/#3 mobile 768px project node selection, files and backlog",
+      "result": "PASS",
+      "evidence": {
+        "task": {
+          "id": "task-f5c12c6e",
+          "projectId": "proj-fu8yf11q",
+          "nodeRef": {
+            "kind": "mapping",
+            "mappingId": "file-owner"
+          }
+        },
+        "files": {
+          "text": "📁 /owner/project 来源：文件归属：Files owner-DSH · 执行：Files owner-DSH · 同节点直接访问隐藏项＋文件夹⬆️ 上传⟳▸📁backlog@⧉🗑📝README.md@👁⬇⧉🗑",
+          "node": {
+            "kind": "mapping",
+            "mappingId": "file-owner"
+          },
+          "projectId": "proj-fu8yf11q",
+          "rootSrc": "文件归属：Files owner-DSH · 执行：Files owner-DSH · 同节点直接访问"
+        },
+        "form": {
+          "client": 736,
+          "scroll": 736
+        }
+      }
+    },
+    {
+      "name": "#1 live catalog refresh retains project identity and exposes new online node",
+      "result": "PASS",
+      "evidence": {
+        "nodeMappingId": "new-execution",
+        "projectId": "proj-fu8yf11q"
+      }
+    },
+    {
+      "name": "#3 offline file owner fails closed and never lists executor files",
+      "result": "PASS",
+      "evidence": {
+        "file": {
+          "status": 502,
+          "body": {
+            "ok": false,
+            "error": "映射「Files owner/file-owner」当前离线或不可达"
+          }
+        },
+        "backlog": {
+          "status": 502,
+          "body": {
+            "ok": false,
+            "error": "映射「Files owner/file-owner」当前离线或不可达"
+          }
+        }
+      }
+    }
+  ],
+  "layouts": [
+    {
+      "name": "picker-320",
+      "width": 320,
+      "height": 844,
+      "scrollWidth": 320,
+      "rect": {
+        "x": 12,
+        "y": 204.7734375,
+        "width": 296,
+        "height": 320,
+        "top": 204.7734375,
+        "right": 308,
+        "bottom": 524.7734375,
+        "left": 12
+      }
+    },
+    {
+      "name": "files-320",
+      "width": 320,
+      "height": 844,
+      "scrollWidth": 320,
+      "rect": {
+        "x": 0,
+        "y": 46,
+        "width": 320,
+        "height": 736,
+        "top": 46,
+        "right": 320,
+        "bottom": 782,
+        "left": 0
+      }
+    },
+    {
+      "name": "close-pointer-320",
+      "closeHit": {
+        "button": {
+          "x": 288.8515625,
+          "y": 51.5,
+          "width": 25.1484375,
+          "height": 24,
+          "top": 51.5,
+          "right": 314,
+          "bottom": 75.5,
+          "left": 288.8515625
+        },
+        "hit": "btn-ws-close",
+        "receivesInput": true,
+        "extensionPresent": false
+      },
+      "events": [
+        {
+          "isTrusted": true,
+          "target": "btn-ws-close"
+        }
+      ],
+      "sidebarClosed": true
+    },
+    {
+      "name": "backlog-320",
+      "width": 320,
+      "height": 844,
+      "scrollWidth": 320,
+      "rect": {
+        "x": 0,
+        "y": 46,
+        "width": 320,
+        "height": 736,
+        "top": 46,
+        "right": 320,
+        "bottom": 782,
+        "left": 0
+      }
+    },
+    {
+      "name": "editor-320",
+      "width": 320,
+      "height": 844,
+      "scrollWidth": 320,
+      "rect": {
+        "x": 12,
+        "y": 12,
+        "width": 296,
+        "height": 820,
+        "top": 12,
+        "right": 308,
+        "bottom": 832,
+        "left": 12
+      }
+    },
+    {
+      "name": "picker-390",
+      "width": 390,
+      "height": 844,
+      "scrollWidth": 390,
+      "rect": {
+        "x": 12,
+        "y": 231.7734375,
+        "width": 366,
+        "height": 293,
+        "top": 231.7734375,
+        "right": 378,
+        "bottom": 524.7734375,
+        "left": 12
+      }
+    },
+    {
+      "name": "files-390",
+      "width": 390,
+      "height": 844,
+      "scrollWidth": 390,
+      "rect": {
+        "x": 0,
+        "y": 46,
+        "width": 390,
+        "height": 736,
+        "top": 46,
+        "right": 390,
+        "bottom": 782,
+        "left": 0
+      }
+    },
+    {
+      "name": "close-pointer-390",
+      "closeHit": {
+        "button": {
+          "x": 358.8515625,
+          "y": 51.5,
+          "width": 25.1484375,
+          "height": 24,
+          "top": 51.5,
+          "right": 384,
+          "bottom": 75.5,
+          "left": 358.8515625
+        },
+        "hit": "btn-ws-close",
+        "receivesInput": true,
+        "extensionPresent": false
+      },
+      "events": [
+        {
+          "isTrusted": true,
+          "target": "btn-ws-close"
+        }
+      ],
+      "sidebarClosed": true
+    },
+    {
+      "name": "backlog-390",
+      "width": 390,
+      "height": 844,
+      "scrollWidth": 390,
+      "rect": {
+        "x": 0,
+        "y": 46,
+        "width": 390,
+        "height": 736,
+        "top": 46,
+        "right": 390,
+        "bottom": 782,
+        "left": 0
+      }
+    },
+    {
+      "name": "editor-390",
+      "width": 390,
+      "height": 844,
+      "scrollWidth": 390,
+      "rect": {
+        "x": 12,
+        "y": 12,
+        "width": 366,
+        "height": 820,
+        "top": 12,
+        "right": 378,
+        "bottom": 832,
+        "left": 12
+      }
+    },
+    {
+      "name": "picker-768",
+      "width": 768,
+      "height": 844,
+      "scrollWidth": 768,
+      "rect": {
+        "x": 109.828125,
+        "y": 526.2734375,
+        "width": 368.4375,
+        "height": 293,
+        "top": 526.2734375,
+        "right": 478.265625,
+        "bottom": 819.2734375,
+        "left": 109.828125
+      }
+    },
+    {
+      "name": "files-768",
+      "width": 768,
+      "height": 844,
+      "scrollWidth": 768,
+      "rect": {
+        "x": 0,
+        "y": 46,
+        "width": 768,
+        "height": 736,
+        "top": 46,
+        "right": 768,
+        "bottom": 782,
+        "left": 0
+      }
+    },
+    {
+      "name": "close-pointer-768",
+      "closeHit": {
+        "button": {
+          "x": 736.8515625,
+          "y": 51.5,
+          "width": 25.1484375,
+          "height": 24,
+          "top": 51.5,
+          "right": 762,
+          "bottom": 75.5,
+          "left": 736.8515625
+        },
+        "hit": "btn-ws-close",
+        "receivesInput": true,
+        "extensionPresent": false
+      },
+      "events": [
+        {
+          "isTrusted": true,
+          "target": "btn-ws-close"
+        }
+      ],
+      "sidebarClosed": true
+    },
+    {
+      "name": "backlog-768",
+      "width": 768,
+      "height": 844,
+      "scrollWidth": 768,
+      "rect": {
+        "x": 0,
+        "y": 46,
+        "width": 768,
+        "height": 736,
+        "top": 46,
+        "right": 768,
+        "bottom": 782,
+        "left": 0
+      }
+    },
+    {
+      "name": "editor-768",
+      "width": 768,
+      "height": 844,
+      "scrollWidth": 768,
+      "rect": {
+        "x": 12,
+        "y": 12,
+        "width": 744,
+        "height": 820,
+        "top": 12,
+        "right": 756,
+        "bottom": 832,
+        "left": 12
+      }
+    }
+  ],
+  "extensionIsolation": {
+    "scope": "isolated page only",
+    "removed": [
+      {
+        "id": "kiss-translator-fab",
+        "hadShadowRoot": true
+      },
+      {
+        "id": "kiss-translator-box",
+        "hadShadowRoot": true
+      }
+    ]
+  },
+  "ownerRequests": [
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Fconfig.yml",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks%2Ftask-1%20-%20Owner%20backlog.md",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Fconfig.yml",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks%2Ftask-1%20-%20Owner%20backlog.md",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Fconfig.yml",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks%2Ftask-1%20-%20Owner%20backlog.md",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Fconfig.yml",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks%2Ftask-1%20-%20Owner%20backlog.md",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Fconfig.yml",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks%2Ftask-1%20-%20Owner%20backlog.md",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Fconfig.yml",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks%2Ftask-1%20-%20Owner%20backlog.md",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Fconfig.yml",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks%2Ftask-1%20-%20Owner%20backlog.md",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Fconfig.yml",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks%2Ftask-1%20-%20Owner%20backlog.md",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Fconfig.yml",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks%2Ftask-1%20-%20Owner%20backlog.md",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Fconfig.yml",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks%2Ftask-1%20-%20Owner%20backlog.md",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Fconfig.yml",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks%2Ftask-1%20-%20Owner%20backlog.md",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Fconfig.yml",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks%2Ftask-1%20-%20Owner%20backlog.md",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Fconfig.yml",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks%2Ftask-1%20-%20Owner%20backlog.md",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Fconfig.yml",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks%2Ftask-1%20-%20Owner%20backlog.md",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Fconfig.yml",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks%2Ftask-1%20-%20Owner%20backlog.md",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Fconfig.yml",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks%2Ftask-1%20-%20Owner%20backlog.md",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Fconfig.yml",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks%2Ftask-1%20-%20Owner%20backlog.md",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Fconfig.yml",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks%2Ftask-1%20-%20Owner%20backlog.md",
+      "authorized": true
+    }
+  ],
+  "browserErrors": [],
+  "extensionRemovals": [
+    {
+      "id": "kiss-translator-fab",
+      "hadShadowRoot": true
+    },
+    {
+      "id": "kiss-translator-box",
+      "hadShadowRoot": true
+    }
+  ],
+  "interactionMode": "Real browser pointer clicks; no evaluate click/dispatchEvent or product button handler calls"
+}

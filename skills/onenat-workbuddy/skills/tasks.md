@@ -56,7 +56,7 @@ task_manage {action:"create", projectId:"proj-x",
   message:"收集流程编排用户提交工单的情况，生成报告让 @飞书消息 发飞书消息给潘祖继"}
 ```
 
-带 `projectId` 后**不用再传** `nodeRef`/`workspace`/`memberAgentIds`——节点、工作目录、项目指令、可@ sub agent 集合全部自动继承；主会话在项目节点执行，@ 的 sub agent 回各自绑定节点。节点与项目冲突时以项目为准。
+带 `projectId` 后自动继承项目指令、工作区、技能和默认协作成员。省略 `nodeRef` 使用项目默认执行节点；传 `nodeRef` 可选择本次主会话节点，并保存为任务快照。@ 的 sub agent 仍回各自绑定节点。文件始终保留在项目 `dshRef` 指向的归属节点；跨节点会话使用自动注入的远程工作区工具，具体方法见 `agents-projects.md`。
 
 ## 典型流程：发任务并等结果（最常用）
 

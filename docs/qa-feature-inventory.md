@@ -443,6 +443,6 @@
 
 - 独立构建 build-standalone.sh（不依赖 DSH checkout）、deploy-standalone.sh 标准部署流水线（构建→冒烟→上传→备份替换→重启→验证）
 - 冒烟系列：smoke-standalone / smoke:e2e / smoke:schedules / smoke:monitor / smoke:ai / smoke:users / smoke:expert-crud / smoke:mail-real / smoke:mcp / smoke:xiaozhi
-- E2E 系列：ask-user / attachment（双通道）/ console / permission / project-mention / queue / workspace-inject
+- E2E 系列：ask-user / attachment（双通道）/ console / permission / project-mention / queue / workspace-inject / orch-upstream-file（编排 DAG 上游产出+结果文件跨节点下载注入，见 docs/design-cross-node-file-passing.md）
 - 启动参数：--port（默认 3081）/--host（默认 127.0.0.1）/ --prefix / --admin-username/--admin-password / WORKBUDDY_ENV_FILE
 - mock-onenat 本地 Mock 服务（/api/v1 形状对齐真实）

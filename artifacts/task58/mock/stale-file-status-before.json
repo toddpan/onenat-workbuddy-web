@@ -1,0 +1,11 @@
+{
+  "at": "2026-11-06T17:12:49.060Z",
+  "taskId": "task-c6b56f02",
+  "taskRef": {
+    "kind": "mapping",
+    "mappingId": "file-owner"
+  },
+  "rootSrc": "文件归属：Files owner-DSH · 执行：Execution node-DSH · 跨节点远程访问（非本地 cwd）",
+  "expectedRootSrc": "同节点直接访问",
+  "files": "📁 /owner/project 来源：文件归属：Files owner-DSH · 执行：Execution node-DSH · 跨节点远程访问（非本地 cwd）隐藏项＋文件夹⬆️ 上传⟳▸📁backlog@⧉🗑📝README.md@👁⬇⧉🗑"
+}

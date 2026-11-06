@@ -1,0 +1,7 @@
+{
+  "beforeCharacters": 1206,
+  "afterCharacters": 1489,
+  "beforeUtf8Bytes": 2036,
+  "afterUtf8Bytes": 2467,
+  "exactModelTokens": "unavailable: no tokenizer for remote node models; character and byte counts are not token counts"
+}

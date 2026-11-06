@@ -1,0 +1,16 @@
+{
+  "base": "http://127.0.0.1:61289/onenat-workbuddy",
+  "directoryBase": "http://127.0.0.1:61287",
+  "projectId": "proj-lyam52nf",
+  "root": "/owner/project",
+  "refs": {
+    "owner": {
+      "kind": "mapping",
+      "mappingId": "file-owner"
+    },
+    "executor": {
+      "kind": "mapping",
+      "mappingId": "execution"
+    }
+  }
+}

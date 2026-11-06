@@ -328,7 +328,9 @@ engine.startPendingAskSweeper()
       const prefix = cfg.prefix
       const underPrefix = prefix ? url.pathname === prefix || url.pathname.startsWith(prefix + '/') : true
       const sessionToken = AuthService.parseCookies(req.headers.cookie)[SESSION_COOKIE]
-      const sessionUser = auth.validate(sessionToken)
+      // Keep the authenticated identity for this request; revalidation after an await must never turn a user into service scope.
+      const requestSession = auth.validateSession(sessionToken)
+      const sessionUser = requestSession?.username
       const isSecure = url.protocol === 'https:' || String(req.headers['x-forwarded-proto'] || '') === 'https'
       const clientIp = String(req.headers['x-real-ip'] || req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim()
 
@@ -665,7 +667,7 @@ engine.startPendingAskSweeper()
         try {
           // HTTP 工具通道：调用方（AI 技能 / wb.mjs / 三方系统）可承受长阻塞，按既有语义放行；
           // requestBase 按本次请求头推导（反代优先 x-forwarded-*），工具回传的绝对端点对调用方可达
-          const raw = await def.execute(args || {}, { ...HTTP_TOOL_CTX, requestBase: requestPublicBase(req, cfg.prefix || ''), ...(sessionUser ? {} : { aiTokenOnly: true }) })
+          const raw = await def.execute(args || {}, { ...HTTP_TOOL_CTX, requestBase: requestPublicBase(req, cfg.prefix || ''), session: requestSession, ...(sessionUser ? {} : { aiTokenOnly: true }) })
           sendJson(res, 200, { ok: true, tool: name, result: tryParse(raw) })
         } catch (err: any) {
           sendJson(res, 500, { ok: false, tool: name, error: err?.message || String(err) })
@@ -676,7 +678,7 @@ engine.startPendingAskSweeper()
       // ---------- 对外 MCP Server（Streamable HTTP；登录会话或 AI 令牌，门禁已在上方统一完成） ----------
       const mcpPath = `${prefix}/mcp`
       if (underPrefix && (url.pathname === mcpPath || url.pathname === `${mcpPath}/`)) {
-        await mcpServer.handleRequest(req, res, method, sessionUser ? undefined : { aiTokenOnly: true })
+        await mcpServer.handleRequest(req, res, method, { session: requestSession, ...(sessionUser ? {} : { aiTokenOnly: true }) })
         return
       }
       // MCP 运行状态（诊断 / 冒烟）
@@ -693,7 +695,7 @@ engine.startPendingAskSweeper()
       }
 
       // ---------- 业务路由（控制台 + REST + SSE） ----------
-      const handled = await router.dispatch(req, res, prefix, { auth: true, session: auth.validateSession(sessionToken) })
+      const handled = await router.dispatch(req, res, prefix, { auth: true, session: requestSession })
       if (!handled && !res.headersSent) {
         sendJson(res, 404, { ok: false, error: `Endpoint not found: ${req.url}`, consoleUrl })
       }

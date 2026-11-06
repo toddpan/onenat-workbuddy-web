@@ -49,6 +49,8 @@ const REPLAY_MAX_ENTRIES = 300
 /** 超过该耗时的调用打一条 warn */
 const SLOW_CALL_WARN_MS = 30_000
 
+type McpRequestContext = Pick<ToolCallContext, 'aiTokenOnly' | 'session'>
+
 export interface WorkBuddyMcpDeps {
   serverName: string
   serverVersion: string
@@ -119,7 +121,7 @@ export class WorkBuddyMcpServer {
    * 处理一条 MCP HTTP 请求（server.ts 挂载于 {prefix}/mcp；鉴权已由 server.ts 完成）。
    * 返回 true 表示请求已应答。
    */
-  public async handleRequest(req: http.IncomingMessage, res: http.ServerResponse, method: string, opts?: { aiTokenOnly?: boolean }): Promise<boolean> {
+  public async handleRequest(req: http.IncomingMessage, res: http.ServerResponse, method: string, opts?: McpRequestContext): Promise<boolean> {
     if (method === 'DELETE') {
       const sid = String(req.headers['mcp-session-id'] || '')
       if (sid && this.sessions.delete(sid)) this.deps.log(`MCP Server：会话 ${sid.slice(0, 8)}… 已由客户端显式结束`)
@@ -195,7 +197,7 @@ export class WorkBuddyMcpServer {
   }
 
   /** 单条 JSON-RPC 分发；通知（无 id）返回 undefined */
-  private async dispatch(msg: JsonRpcMessage, sessionId: string | undefined, requestBase?: string, opts?: { aiTokenOnly?: boolean }): Promise<JsonRpcMessage | undefined> {
+  private async dispatch(msg: JsonRpcMessage, sessionId: string | undefined, requestBase?: string, opts?: McpRequestContext): Promise<JsonRpcMessage | undefined> {
     const id = msg?.id
     const rpcMethod = String(msg?.method || '')
     const isResponse = rpcMethod === '' && (msg?.result !== undefined || msg?.error !== undefined)
@@ -268,7 +270,7 @@ export class WorkBuddyMcpServer {
   }
 
   /** tools/call：幂等回放 → 进程内执行 → 单帧上限兜底 → 记账（与小智客户端同构） */
-  private async handleToolCall(msg: JsonRpcMessage, sessionId: string, requestBase?: string, opts?: { aiTokenOnly?: boolean }): Promise<JsonRpcMessage> {
+  private async handleToolCall(msg: JsonRpcMessage, sessionId: string, requestBase?: string, opts?: McpRequestContext): Promise<JsonRpcMessage> {
     const id = msg?.id
     const name = String(msg?.params?.name || '')
     const args = (msg?.params?.arguments || {}) as Record<string, any>
@@ -276,10 +278,15 @@ export class WorkBuddyMcpServer {
     this.stats.lastCallAt = Date.now()
 
     // ① 幂等回放：同会话 + 同 id + 同参数 = 客户端侧重投/整轮重跑，直接回放原应答，不再执行副作用
-    const key = replayKey(`mcp:${sessionId}`, id, 'tools/call', msg?.params)
+    // Cache keys include the authenticated identity; tools may require fresh authorization before replay.
+    const principal = opts?.session ? `${opts.session.userId}:${opts.session.role}` : opts?.aiTokenOnly ? 'ai-token' : 'service'
+    const key = replayKey(`mcp:${sessionId}`, id, 'tools/call', { principal, params: msg?.params })
+    const def = this.deps.getTools().find((x) => x.name === name)
+    const ctx: ToolCallContext = { channel: 'mcp', callerId: `mcp:${sessionId}`, rpcId: (id ?? null) as any, maxBlockMs: MCP_SERVER_MAX_BLOCK_MS, ...(requestBase ? { requestBase } : {}), ...opts }
     if (key) {
       const hit = this.replays.get(key)
-      if (hit && Date.now() - hit.at <= REPLAY_TTL_MS) {
+      const cachedText = (hit?.result.result as any)?.content?.[0]?.text
+      if (hit && Date.now() - hit.at <= REPLAY_TTL_MS && (!def?.canReplay || (typeof cachedText === 'string' && def.canReplay(args, ctx, cachedText)))) {
         this.stats.replays += 1
         const r = hit.result as JsonRpcMessage
         if (this.stats.lastTool) this.stats.lastTool = { ...this.stats.lastTool, replayed: true }
@@ -288,7 +295,6 @@ export class WorkBuddyMcpServer {
       }
     }
 
-    const def = this.deps.getTools().find((x) => x.name === name)
     let text: string
     let isError = false
     const startedAt = Date.now()
@@ -296,7 +302,6 @@ export class WorkBuddyMcpServer {
       text = JSON.stringify({ ok: false, error: `工具不存在: ${name}`, available: this.deps.getTools().map((t) => t.name) })
       isError = true
     } else {
-      const ctx: ToolCallContext = { channel: 'mcp', callerId: `mcp:${sessionId}`, rpcId: (id ?? null) as any, maxBlockMs: MCP_SERVER_MAX_BLOCK_MS, ...(requestBase ? { requestBase } : {}), ...(opts?.aiTokenOnly ? { aiTokenOnly: true } : {}) }
       try {
         text = await def.execute(args, ctx)
       } catch (err: any) {

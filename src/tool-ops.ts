@@ -21,6 +21,10 @@ import type { ScheduleRunner } from './scheduler.js'
 import { normalizeRule, nextRun, ruleText } from './scheduler.js'
 import { execOnSshResource, maskSshResource, normalizeSshResource, testSshResource } from './ssh-resources.js'
 import { normalizeDshRef } from './router.js'
+import { dshRefKey, sameDshRef, ProjectWorkspaceConflictError, ProjectWorkspacePathError } from './workspace.js'
+import { canAccessProject, canViewTask, type PermSession } from './perm.js'
+import { requireProjectFiles, requireNodeFiles, projectFilePath, workspaceChild, requireWorkspacePath, checkWorkspaceFsPath, writeProjectFile, WorkspaceFileError } from './workspace-files.js'
+import type { Project } from './types.js'
 import type { ExpertRegistry } from './expert-registry.js'
 import { BUILTIN_TEAMS, parseTeamInput } from './expert-teams.js'
 import { projectDefaultAgentIds, projectDefaultAgentIdsFromInput } from './types.js'
@@ -61,6 +65,8 @@ export interface ToolCallContext {
    * 安全基线（task-51 V7）：AI 令牌禁止读取 SSH 明文凭据、禁止经 SSH 通道任意 exec。
    */
   aiTokenOnly?: boolean
+  /** Validated console identity, supplied by the server; never accepted from tool arguments. */
+  session?: PermSession
 }
 
 /** 默认上下文：HTTP 工具通道（AI 技能）按老行为可长阻塞 */
@@ -92,7 +98,7 @@ function preview(text: unknown, max: number): string {
   return s.length > max ? `${s.slice(0, max)}…（共 ${s.length} 字，已截断）` : s
 }
 
-/** create 幂等指纹：同内容（标题+正文+成员+模式）在窗口内重复到达 → 复用既有任务 */
+/** create 幂等指纹：同项目/执行节点下，同内容（标题+正文+成员+模式）在窗口内重复到达 → 复用既有任务 */
 const CREATE_DEDUP_WINDOW_MS = 120_000
 const createDedupe = new Map<string, { at: number; taskId: string }>()
 
@@ -111,8 +117,8 @@ function pruneSendDedupe(): void {
   }
 }
 
-function createFingerprint(title: unknown, message: unknown, memberIds: string[], mode: unknown, projectId?: unknown): string {
-  const material = [String(title ?? '').trim(), String(message ?? '').trim(), [...memberIds].sort().join(','), String(mode ?? ''), String(projectId ?? '')].join('\u0001')
+function createFingerprint(title: unknown, message: unknown, memberIds: string[], mode: unknown, projectId: string | undefined, nodeKey: string | undefined): string {
+  const material = [String(title ?? '').trim(), String(message ?? '').trim(), [...memberIds].sort().join(','), String(mode ?? ''), projectId || '', nodeKey || ''].join('\u0001')
   return createHash('sha1').update(material).digest('hex')
 }
 
@@ -142,6 +148,8 @@ export interface WorkBuddyToolDef {
   description: string
   parameters: Record<string, ToolParamDef>
   execute(args: Record<string, any>, ctx?: ToolCallContext): Promise<string>
+  /** Optional authorization check before replaying a cached MCP result (not a model-facing parameter). */
+  canReplay?(args: Record<string, any>, ctx: ToolCallContext, result: string): boolean
 }
 
 export interface ToolOpsDeps {
@@ -325,8 +333,8 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       memberAgentIds: { type: 'json', description: '成员子智能体 ID 数组（create 可省略：推荐改在 message 里 @子智能体名/@专家团名 指派；members 必填且非空）' },
       mode: { type: 'string', description: '模式: chat（单成员直通）或 orchestrate（多成员编排），缺省按成员数推断；@ 多个成员或 @专家团时自动编排' },
       message: { type: 'string', description: '消息内容（create 可选首条消息；send 必填）。派活写法：@子智能体名 / @专家名 / @专家团名 / @项目名 / @资源名（名称须与列表完全一致）；指令要自包含：目标、路径参数、验收标准——执行者拿不到你们的对话上下文' },
-      nodeRef: { type: 'json', description: 'create 可选，任务节点（主 DSH）: {kind:"mapping", mappingId:"<DSH 映射 ID>"}。无 @ 的主会话在该节点上执行；不传则用上次所选/默认节点' },
-      projectId: { type: 'string', description: 'create 可选，归属项目 ID（workbuddy_project_manage list 取得）。发起前先判项目归属：能定项目必带此参——项目任务自动继承项目节点/工作区/指令/可@ sub agent，nodeRef 与 memberAgentIds 可省略' },
+      nodeRef: { type: 'json', description: 'create 可选，主会话执行节点：{kind:"mapping",mappingId:"…"}、{kind:"app",appId:"…"} 或 {kind:"direct",apiBaseUrl:"…"}。不传则快照项目默认执行节点，再回退文件归属节点；子智能体使用自身绑定节点' },
+      projectId: { type: 'string', description: 'create 可选，归属项目 ID（workbuddy_project_manage list 取得）。发起前先判项目归属：能定项目必带此参——项目任务继承文件归属工作区/指令/默认协作成员及默认执行节点；nodeRef 可覆盖执行节点，创建时快照' },
       creatorAgentId: { type: 'string', description: 'create 可选，调用方自身在 WorkBuddy 的子智能体 ID（workbuddy_agent_manage list 取得）。传入后新任务自动继承你绑定的技能（/技能名 手势注入到派发提示词），否则创建者的技能不会进入新任务的提示词' },
       timeoutMs: { type: 'string', description: 'wait 最长同步等待毫秒（HTTP 通道默认 120000 上限 600000；MCP 通道默认 0=立即回执，最多 20000）' },
     },
@@ -355,12 +363,16 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
         const explicit = Array.isArray(memberIds) ? memberIds.filter(Boolean) : []
         const projectId = args.projectId ? String(args.projectId) : undefined
         // 归属项目校验（提前失败，避免建出无节点上下文的任务）
-        if (projectId && !store.getProject(projectId)) {
+        const project = projectId ? store.getProject(projectId) : undefined
+        if (projectId && !project) {
           return JSON.stringify({ ok: false, error: `项目不存在: ${projectId}（用 workbuddy_project_manage {action:"list"} 查看可用项目）` }, null, 2)
         }
+        const nodeRef = args.nodeRef == null ? undefined : normalizeDshRef(asJson(args.nodeRef))
+        if (nodeRef && 'error' in nodeRef) return JSON.stringify({ ok: false, error: nodeRef.error })
+        const executionRef = nodeRef || project?.defaultExecutionNodeRef || project?.dshRef
 
         // ① 业务级幂等：同内容重复到达（平台重投/整轮重跑、AI 误重发）→ 复用既有任务，不再建第二个
-        const fp = createFingerprint(args.title, args.message, explicit, args.mode, projectId)
+        const fp = createFingerprint(args.title, args.message, explicit, args.mode, projectId, dshRefKey(executionRef))
         const hit = createDedupe.get(fp)
         if (hit) {
           const existing = store.getTask(hit.taskId)
@@ -391,7 +403,11 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
           if (sentKey) {
             const now = Date.now()
             const fuzzy = store.getTasks().find((t) => {
-              if (now - t.createdAt > CREATE_FUZZY_WINDOW_MS) return false
+              if (now - t.createdAt > CREATE_FUZZY_WINDOW_MS || t.projectId !== projectId) return false
+              const existingRef = t.nodeRef || (t.projectId ? store.getProject(t.projectId)?.dshRef : undefined)
+              if (executionRef || existingRef) {
+                if (!sameDshRef(executionRef, existingRef)) return false
+              }
               const fu = (t.turns || []).find((x) => x.role === 'user')
               return fu ? firstSentenceKey(fu.text) === sentKey : false
             })
@@ -414,7 +430,6 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
           }
         }
 
-        const nodeRef = asJson(args.nodeRef)
         // 创建者身份：AI 通过工具通道创建任务时声明自身子智能体 ID → 继承其绑定技能（/手势注入派发提示词）。
         // 没有这层继承，工具创建的任务若无 @ 成员会落到节点主会话（skills: []），创建者技能完全丢失。
         const creatorAgentId = args.creatorAgentId ? String(args.creatorAgentId).trim() : ''
@@ -433,11 +448,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
           creator: 'tool',
           ...(projectId ? { projectId } : {}),
           ...(inheritedSkills.length ? { skillNames: inheritedSkills } : {}),
-          ...(nodeRef && typeof nodeRef === 'object' && nodeRef.mappingId
-            ? { nodeRef: { kind: 'mapping', mappingId: String(nodeRef.mappingId) } }
-            : (nodeRef && typeof nodeRef === 'object' && nodeRef.apiBaseUrl
-              ? { nodeRef: { kind: 'direct', apiBaseUrl: String(nodeRef.apiBaseUrl) } }
-              : {})),
+          ...(nodeRef ? { nodeRef } : {}),
         })
         createDedupe.set(fp, { at: Date.now(), taskId: task.id })
         // ② 立即回执：执行是异步的（流式进度走 SSE / 轮询），这里绝不等待首轮跑完
@@ -660,17 +671,17 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
     async execute(args, rawCtx) {
       const ctx = ctxOf(rawCtx)
       const task = store.getTask(String(args.taskId || ''))
-      if (!task) return JSON.stringify({ ok: false, error: '任务不存在' })
+      if (!task || (ctx.session && !canViewTask(ctx.session, task, { projects: store.getProjects() }))) return JSON.stringify({ ok: false, error: '任务不存在' })
       const subId = String(args.subtaskId || '')
       if (!subId) return JSON.stringify({ ok: false, error: '缺少 subtaskId（子任务 ID 或成员 agentId）：先 workbuddy_task_status 看子任务/成员列表' })
       const sub = task.plan?.subtasks.find((s) => s.id === subId)
       const agentId = sub?.agentId || subId
       const binding = task.sessions[agentId]
       const agent = store.getAgent(agentId)
-      if (!agent) return JSON.stringify({ ok: false, error: `未找到 ID「${subId}」对应的子任务或成员子智能体：请用 workbuddy_task_status {taskId:"${task.id}", detail:"full"} 查看该任务的子任务 ID / 成员 agentId，再用其作为 subtaskId` })
+      if (!agent && agentId !== '__node__') return JSON.stringify({ ok: false, error: `未找到 ID「${subId}」对应的子任务或成员子智能体：请用 workbuddy_task_status {taskId:"${task.id}", detail:"full"} 查看该任务的子任务 ID / 成员 agentId，再用其作为 subtaskId` })
       if (!binding?.remoteSessionId) return JSON.stringify({ ok: false, error: '该成员尚未创建远程会话' })
-      const target = await resolver.resolve(agent)
-      if (!target.online) return JSON.stringify({ ok: false, error: target.error })
+      const target = await engine.resolveExecTarget(task, agentId)
+      if (!target?.online) return JSON.stringify({ ok: false, error: target?.error || '绑定的会话节点不可达或缺少稳定身份' })
       const client = new DshClient()
       const stateKey = `${task.id}:${agentId}`
       if (args.followupMessage) {
@@ -690,7 +701,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
             }, null, 2)
           }
           followupState.set(stateKey, { at: Date.now(), status: 'running' })
-          engine.logTask(task.id, 'info', `追问已投递（异步）→ ${agent.name}：${preview(msg, 80)}`)
+          engine.logTask(task.id, 'info', `追问已投递（异步）→ ${agent?.name || '节点主会话'}：${preview(msg, 80)}`)
           const startedAt = Date.now()
           void client.prompt(target, binding.remoteSessionId, msg, { timeoutMs: 1_800_000 })
             .then((reply) => {
@@ -1038,12 +1049,38 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
     },
   }
 
+  // Replay authorization is bound to the root/node/task that actually executed the request.
+  const fileReplayScopes = new Map<string, { at: number; fingerprint: string }>()
+  const fileReplayKey = (args: Record<string, any>, ctx: ToolCallContext) => JSON.stringify([ctx.callerId, ctx.rpcId, ctx.session?.userId, args])
+  const fileScopeFingerprint = (args: Record<string, any>, project?: Project) => {
+    const task = args.taskId ? store.getTask(String(args.taskId)) : undefined
+    const agent = args.agent ? store.getAgent(String(args.agent)) : undefined
+    return JSON.stringify([project?.id, project?.workspace, project?.dshRef, task?.projectId, task?.nodeRef, task?.workDir, agent?.dshRef, agent?.workDir])
+  }
+
+  function fileScope(args: Record<string, any>, ctx: ToolCallContext): Project | undefined {
+    const write = !['list', 'download'].includes(args.action || 'list')
+    if (args.taskId) {
+      const task = store.getTask(String(args.taskId))
+      if (!task || (ctx.session && !canViewTask(ctx.session, task, { projects: store.getProjects() }))) throw new WorkspaceFileError(404, 'TASK_NOT_FOUND', '任务不存在')
+      if (task.projectId) {
+        const project = store.getProject(task.projectId)
+        requireProjectFiles(ctx.session, project, write)
+        if (args.agent && args.agent !== '__node__') throw new WorkspaceFileError(400, 'PROJECT_FILE_TARGET', '项目文件固定使用文件归属节点，请省略 agent')
+        if (['upload_resumable_init', 'upload_register'].includes(args.action)) requireNodeFiles(ctx.session)
+        return project
+      }
+    }
+    requireNodeFiles(ctx.session)
+    return undefined
+  }
+
   // 11. 远端工作区文件管理
   const fileManage: WorkBuddyToolDef = {
     name: 'workbuddy_file_manage',
     description:
       '管理远端工作区文件: list（列目录）/ mkdir / upload（base64 内容 ≤1MB，或给 http(s) URL 由服务器拉取 ≤10MB）/ download（返回 utf8 文本或 base64，≤8MB）/ delete / upload_resumable_init + upload_register（大文件 P2P 直传，最大 2GB：init 下发 DSH 节点的 API 地址+密钥+会话与分片端点，调用方直连节点上传，不经本服务中转）。' +
-      '目标二选一：① agent=子智能体 ID → 其 DSH 节点上该智能体 workDir；② taskId=任务 ID（agent 可省略或传 __node__）→ 该任务/项目节点的主会话工作区（项目工作台则用项目 workspace）。' +
+      '项目文件请传 taskId，固定访问项目文件归属节点和根目录：成员可读，owner/admin 可写，归档只读；download 返回 sha256，upload 更新须带 expectedSha256，冲突不覆盖。agent/非项目节点文件及直传凭据仅管理员或服务令牌可用。' +
       '大文件场景（日志等）标准顺序：① task_manage create **不带 message**（任务 draft 不执行）→ ② upload_resumable_init 拿节点直连配方 → 直连节点：POST 节点 init → PUT 分片 → POST 节点 complete 得落盘路径 → ③ upload_register 登记附件（返回跨节点下载 URL+密钥）→ ④ task_manage {action:"send"} 引用路径（多成员协作时附 URL+密钥让其它节点自行下载）才开始执行',
     parameters: {
       action: { type: 'string', description: '操作: list / mkdir / upload / download / delete / upload_resumable_init / upload_register' },
@@ -1057,10 +1094,36 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       contentBase64: { type: 'string', description: 'upload 方式一：文件内容 base64（解码后 ≤1MB）' },
       url: { type: 'string', description: 'upload 方式二：http(s) 文件地址，由服务器拉取（≤10MB）' },
       encoding: { type: 'string', description: 'download 返回编码：auto（默认，文本 utf8 / 二进制 base64）或 base64' },
+      expectedSha256: { type: 'string', description: 'upload 更新已有项目文件必填：download 返回的 sha256；省略仅可创建新文件；冲突后重新读取' },
+    },
+    canReplay(args, ctx, result) {
+      try {
+        const project = fileScope(args, ctx)
+        // Reads are fresh: nested workspace ACLs and file contents can change independently of the task.
+        if (['list', 'download'].includes(args.action || 'list')) return false
+        const prior = fileReplayScopes.get(fileReplayKey(args, ctx))
+        if (!prior || Date.now() - prior.at > 10 * 60_000 || prior.fingerprint !== fileScopeFingerprint(args, project)) return false
+        if (project && !['upload_resumable_init', 'upload_register'].includes(args.action)) {
+          let path = projectFilePath(project, args.path ? String(args.path) : undefined)
+          if (['upload', 'mkdir'].includes(args.action)) path = workspaceChild(path, String(args.name || ''))
+          requireWorkspacePath(ctx.session, project, store.getProjects(), directory, path, true, args.action === 'delete')
+        }
+        return JSON.parse(result).ok === true
+      } catch { return false }
     },
     async execute(args, rawCtx) {
       const ctx = ctxOf(rawCtx)
       const action = args.action || 'list'
+      let project: Project | undefined
+      try { project = fileScope(args, ctx) } catch (err) { return JSON.stringify({ ok: false, code: (err as WorkspaceFileError).code, error: (err as Error).message }) }
+      if (ctx.channel === 'mcp' && ctx.rpcId != null && !['list', 'download'].includes(action)) {
+        for (const [key, value] of fileReplayScopes) if (Date.now() - value.at > 10 * 60_000) fileReplayScopes.delete(key)
+        const replayKey = fileReplayKey(args, ctx), fingerprint = fileScopeFingerprint(args, project)
+        const prior = fileReplayScopes.get(replayKey)
+        if (prior && prior.fingerprint !== fingerprint) return JSON.stringify({ ok: false, code: 'WORKSPACE_SCOPE_CHANGED', error: '请求的项目/节点/工作区已变更；请重新检查后使用新的 RPC ID' })
+        fileReplayScopes.set(replayKey, { at: Date.now(), fingerprint })
+        if (fileReplayScopes.size > 1000) fileReplayScopes.delete(fileReplayScopes.keys().next().value!)
+      }
       // 大文件 P2P 直传（≤2GB）：本服务只当下发节点直连配方的控制面，文件字节客户端直连 DSH 节点；
       // JSON-RPC 单帧装不下 2GB，分片 PUT / 节点 complete / register 凭据都由调用方直发 HTTP
       if (action === 'upload_resumable_init' || action === 'upload_register') {
@@ -1141,13 +1204,13 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
           consoleUrl,
         }, null, 2)
       }
-      // 目标解析优先级：① agent 命中子智能体 → 其节点 + workDir；② taskId（或 agent=__node__）→ 任务/项目节点主会话 + 项目 workspace
+      // 目标解析优先级：① agent 命中子智能体 → 其节点 + workDir；② taskId（或 agent=__node__）→ 任务/项目文件归属节点 + 项目 workspace
       const agentId = String(args.agent || '').trim()
       const task = String(args.taskId || '').trim() ? store.getTask(String(args.taskId).trim()) : undefined
       if (args.taskId && String(args.taskId).trim() && !task) return JSON.stringify({ ok: false, error: `任务不存在: ${args.taskId}` })
       const agent = agentId && agentId !== '__node__' ? store.getAgent(agentId) : undefined
       if (agentId && agentId !== '__node__' && !agent) return JSON.stringify({ ok: false, error: '子智能体不存在' })
-      if (!agent && !task) return JSON.stringify({ ok: false, error: '缺少 agent（子智能体 ID）或 taskId（任务 ID，操作任务/项目节点工作区）：二者至少给一个' })
+      if (!agent && !task) return JSON.stringify({ ok: false, error: '缺少 agent（子智能体 ID）或 taskId（任务 ID，操作任务/项目文件归属工作区）：二者至少给一个' })
       let target: Awaited<ReturnType<typeof resolver.resolve>>
       let workDir = '.'
       if (agent) {
@@ -1155,21 +1218,32 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
         workDir = agent.workDir || '.'
       } else {
         if (!task) return JSON.stringify({ ok: false, error: '缺少 agent（子智能体 ID）或 taskId（任务 ID）' })
-        const t = await engine.resolveExecTarget(task, '__node__').catch(() => undefined)
+        const workspace = engine.taskWorkspaceExec(task)
+        const t = workspace.dshRef ? await resolver.resolveRef(workspace.dshRef, workspace.apiKey, 'task-workspace').catch(() => undefined) : await engine.resolveExecTarget(task, '__node__').catch(() => undefined)
         if (!t || !t.online || !t.baseUrl) return JSON.stringify({ ok: false, error: t?.error || '任务节点不可达' })
         target = t as typeof target
-        const project = task.projectId ? store.getProject(task.projectId) : undefined
-        workDir = project?.workspace || '.'
+        workDir = workspace.workspace || '.'
       }
       if (!target.online || !target.baseUrl) return JSON.stringify({ ok: false, error: target.error || '节点不可达' })
+      const checkedPath = async (input?: string, absent = false, recursive = false) => {
+        if (!project) return { path: input || workDir, exists: true, listing: undefined }
+        const path = projectFilePath(project, input)
+        requireWorkspacePath(ctx.session, project, store.getProjects(), directory, path, !['list', 'download'].includes(action), recursive)
+        return { path, ...await checkWorkspaceFsPath(client, target, project, path, absent) }
+      }
+      try {
       const workDirRef = workDir
       if (action === 'list') {
-        const out = await client.fsList(target, String(args.path || '') || workDirRef || undefined)
+        const checked = await checkedPath(args.path)
+        const out = checked.listing ? { ok: true, data: checked.listing } : await client.fsList(target, String(args.path || '') || workDirRef || undefined)
+        if (out.ok && out.data && project) out.data.entries = out.data.entries.filter(entry => { try { requireWorkspacePath(ctx.session, project!, store.getProjects(), directory, entry.path, false); return true } catch { return false } })
         return JSON.stringify(out, null, 2)
       }
       if (action === 'mkdir') {
         if (!args.name) return JSON.stringify({ ok: false, error: '缺少 name（新目录名）' })
-        const out = await client.fsMkdir(target, String(args.path || '') || workDir, String(args.name))
+        const parent = project ? projectFilePath(project, args.path) : String(args.path || '') || workDir
+        if (project) await checkedPath(workspaceChild(parent, String(args.name)), true)
+        const out = await client.fsMkdir(target, parent, String(args.name))
         return JSON.stringify(out, null, 2)
       }
       if (action === 'upload') {
@@ -1188,13 +1262,21 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
         } else {
           return JSON.stringify({ ok: false, error: 'upload 需要 contentBase64 或 url 之一' })
         }
+        if (project) {
+          const path = workspaceChild(projectFilePath(project, args.path), filename)
+          const checked = await checkedPath(path, true)
+          if (checked.exists && !args.expectedSha256) throw new WorkspaceFileError(428, 'VERSION_REQUIRED', '更新已有文件必须携带读取时的 expectedSha256')
+          const out = await writeProjectFile(project, target, directory, path, data, args.expectedSha256)
+          return JSON.stringify({ ...out, ...(out.ok ? { files: [{ name: filename, path, size: data.length, sha256: out.sha256 }] } : {}) })
+        }
         const out = await client.fsUpload(target, String(args.path || '') || workDir, [{ filename, data }])
         return JSON.stringify(out, null, 2)
       }
       if (action === 'download') {
         const p = String(args.path || '')
         if (!p) return JSON.stringify({ ok: false, error: '缺少 path（文件路径）' })
-        const out = await client.fsDownload(target, p)
+        const checked = await checkedPath(p)
+        const out = await client.fsDownload(target, checked.path)
         if (!out.ok || !out.res) return JSON.stringify({ ok: false, error: out.error })
         const buf = Buffer.from(await out.res.arrayBuffer())
         // MCP 宿主单帧过大会被断链：窄通道只回小文件，大文件引导到控制台
@@ -1215,6 +1297,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
           ok: true,
           name: out.name,
           size: buf.length,
+          sha256: createHash('sha256').update(buf).digest('hex'),
           encoding: useBase64 ? 'base64' : 'utf8',
           content: useBase64 ? buf.toString('base64') : buf.toString('utf-8'),
         }, null, 2)
@@ -1222,10 +1305,13 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       if (action === 'delete') {
         const p = String(args.path || '')
         if (!p) return JSON.stringify({ ok: false, error: '缺少 path' })
-        const out = await client.fsRemove(target, p)
+        const checked = await checkedPath(p, false, true)
+        if (project && checked.path === projectFilePath(project)) throw new WorkspaceFileError(403, 'WORKSPACE_ROOT_PROTECTED', '不能删除项目工作区根目录')
+        const out = await client.fsRemove(target, checked.path)
         return JSON.stringify(out, null, 2)
       }
       return JSON.stringify({ ok: false, error: `不支持的 action: ${action}` })
+      } catch (err) { return JSON.stringify({ ok: false, code: (err as WorkspaceFileError).code, error: (err as Error).message }) }
     },
   }
 
@@ -1258,9 +1344,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       const binding = task.sessions?.[agentId]
       if (!binding?.remoteSessionId) return JSON.stringify({ ok: false, error: '该成员在任务中没有远端会话绑定', code: 'NO_SESSION' })
       const agent = store.getAgent(agentId)
-      const target = agent
-        ? await resolver.resolve(agent)
-        : await engine.resolveExecTarget(task, agentId).catch(() => undefined)
+      const target = await engine.resolveExecTarget(task, agentId).catch(() => undefined)
       if (!target || !target.online || !target.baseUrl) {
         return JSON.stringify({ ok: false, error: (target as any)?.error || '成员节点当前不可达' })
       }
@@ -1278,8 +1362,8 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
   const projectManage: WorkBuddyToolDef = {
     name: 'workbuddy_project_manage',
     description:
-      '管理 WorkBuddy 项目：list / get / upsert / delete。项目把「执行节点(DSH) + 工作目录 + 项目指令 + 默认协作成员 + 连接器 + 技能」捆绑成一个可复用上下文；' +
-      'task_manage create 带 projectId 即创建项目工作台任务（自动继承全部上下文，主会话在项目节点执行）。' +
+      '管理 WorkBuddy 项目：list / get / upsert / delete。项目把「文件归属节点(DSH) + 工作目录 + 可选默认执行节点 + 项目指令 + 默认协作成员 + 连接器 + 技能」捆绑成一个可复用上下文；' +
+      'task_manage create 带 projectId 即创建项目工作台任务（自动继承全部上下文，主会话在默认执行节点执行，task.nodeRef 可覆盖）。' +
       'defaultAgentIds 是项目默认协作成员（创建任务时服务端自动继承，可随时 @ 其他成员补充；不限制 @，也不自动全员派工）。',
     parameters: {
       action: { type: 'string', description: '操作: list / get / upsert / delete' },
@@ -1287,15 +1371,30 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       project: {
         type: 'json',
         description:
-          'upsert 用: {name:"<项目名>", dshRef:{kind:"mapping", mappingId:"<DSH 映射 ID>"}, workspace:"<工作目录>", instruction:"<项目指令>", ' +
+          'upsert 用: {name:"<项目名>", dshRef:{kind:"mapping", mappingId:"<DSH 映射 ID>"}, defaultExecutionNodeRef:<可选DSH引用或null清除>, workspace:"<工作目录>", instruction:"<项目指令>", ' +
           'defaultAgentIds:["<sub agent ID>",...], connectorIds:["ssh:<id>"|"map:<mappingId>",...], skillNames:["<技能名>",...]}' +
           '（编辑时带 id；defaultAgentIds = 项目默认协作成员，非 @ 白名单；传 [] 清空）',
       },
     },
-    async execute(args) {
+    canReplay(args, ctx, result) {
+      // Reads/errors must reflect current visibility. Replay successful writes only while still authorized.
+      const action = String(args.action || 'list')
+      const out = asJson(result)
+      if (!out?.ok || (action !== 'upsert' && action !== 'delete')) return false
+      if (!ctx.session) return true
+      const id = action === 'upsert' ? out.project?.id : out.deleted
+      const p = id ? store.getProject(String(id)) : undefined
+      if (!p) return action === 'delete'
+      return canAccessProject(ctx.session, p, 'edit') && (action === 'delete' || !p.archivedAt)
+    },
+    async execute(args, ctx) {
       const action = args.action || 'list'
+      // Console requests carry user permissions. AI-token channels retain their existing service scope.
+      const session = ctx?.session
+      const canView = (p: import('./types.js').Project) => !session || canAccessProject(session, p, 'view')
+      const canEdit = (p: import('./types.js').Project) => !session || canAccessProject(session, p, 'edit')
       if (action === 'list') {
-        const projects = store.getProjects().map((p) => {
+        const projects = store.getProjects().filter(canView).map((p) => {
           const nodeTitle = p.dshRef.kind === 'direct'
             ? p.dshRef.apiBaseUrl
             : (p.dshRef.kind === 'mapping'
@@ -1305,6 +1404,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
             id: p.id,
             name: p.name,
             dshRef: p.dshRef,
+            defaultExecutionNodeRef: p.defaultExecutionNodeRef,
             nodeTitle: nodeTitle || '(未配置节点)',
             workspace: p.workspace || '',
             defaultAgentIds: projectDefaultAgentIds(p),
@@ -1322,43 +1422,60 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       }
       if (action === 'get') {
         const p = store.getProject(String(args.projectId || ''))
-        if (!p) return JSON.stringify({ ok: false, error: `项目不存在: ${args.projectId}` }, null, 2)
-        return JSON.stringify({ ok: true, project: p }, null, 2)
+        if (!p || !canView(p)) return JSON.stringify({ ok: false, error: '项目不存在', status: 404 }, null, 2)
+        const { apiKey, ...project } = p
+        return JSON.stringify({ ok: true, project: session ? project : p }, null, 2)
       }
       if (action === 'upsert') {
         const body = asJson(args.project)
         if (!body || typeof body !== 'object') return JSON.stringify({ ok: false, error: 'upsert 需要 project 参数（JSON）' }, null, 2)
-        const name = String(body.name || '').trim()
-        if (!name) return JSON.stringify({ ok: false, error: '缺少项目名称 name' }, null, 2)
         const existing = body.id ? store.getProject(String(body.id)) : undefined
+        const name = String(body.name ?? existing?.name ?? '').trim()
+        if (!name) return JSON.stringify({ ok: false, error: '缺少项目名称 name' }, null, 2)
+        if (existing && !canView(existing)) return JSON.stringify({ ok: false, error: '项目不存在', status: 404 })
+        if (existing && !canEdit(existing)) return JSON.stringify({ ok: false, error: '仅项目 owner 或平台管理员可编辑项目', status: 403 })
+        if (existing?.archivedAt) return JSON.stringify({ ok: false, error: '项目已归档（只读），请先恢复再编辑', status: 400 })
         const refInput = body.dshRef ?? existing?.dshRef
         const dshRef = normalizeDshRef(refInput)
         if ('error' in dshRef) return JSON.stringify({ ok: false, error: dshRef.error + '（形如 {kind:"mapping", mappingId:"<DSH 映射 ID>"}，映射 ID 用 workbuddy_resource_manage {action:"dsh"} 查询）' }, null, 2)
+        const executionRef = body.defaultExecutionNodeRef == null ? undefined : normalizeDshRef(body.defaultExecutionNodeRef)
+        if (executionRef && 'error' in executionRef) return JSON.stringify({ ok: false, error: executionRef.error })
         // defaultAgentIds 为 canonical；旧字段 expertIds 兼容别名（store 层镜像）
         const defaultAgentIds = projectDefaultAgentIdsFromInput(body)
         for (const eid of defaultAgentIds || []) {
           if (!store.getAgent(eid)) return JSON.stringify({ ok: false, error: `默认协作成员不存在: ${eid}（用 workbuddy_agent_manage {action:"list"} 查询）` }, null, 2)
         }
-        const saved = store.upsertProject({
-          id: body.id ? String(body.id) : undefined,
-          name,
-          dshRef,
-          workspace: body.workspace !== undefined ? String(body.workspace) : undefined,
-          instruction: body.instruction !== undefined ? String(body.instruction) : undefined,
-          ...(defaultAgentIds !== undefined ? { defaultAgentIds } : {}),
-          connectorIds: Array.isArray(body.connectorIds) ? body.connectorIds.map(String) : (existing?.connectorIds || []),
-          skillNames: Array.isArray(body.skillNames) ? body.skillNames.map(String) : (existing?.skillNames || []),
-        })
-        return JSON.stringify({
-          ok: true,
-          project: saved,
-          usage: `发项目任务: workbuddy_task_manage {action:"create", projectId:"${saved.id}", message:"…"}`,
-        }, null, 2)
+        try {
+          const saved = store.upsertProject({
+            id: body.id ? String(body.id) : undefined,
+            ...(!existing && session?.userId ? { owner: session.userId, projectMembers: [{ userId: session.userId, role: 'owner' as const, joinedAt: Date.now() }] } : {}),
+            name,
+            dshRef,
+            apiKey: body.apiKey !== undefined ? String(body.apiKey) : undefined,
+            ...('defaultExecutionNodeRef' in body ? { defaultExecutionNodeRef: executionRef as import('./types.js').DshRef | undefined } : {}),
+            workspace: body.workspace !== undefined ? String(body.workspace) : undefined,
+            instruction: body.instruction !== undefined ? String(body.instruction) : undefined,
+            ...(defaultAgentIds !== undefined ? { defaultAgentIds } : {}),
+            connectorIds: Array.isArray(body.connectorIds) ? body.connectorIds.map(String) : (existing?.connectorIds || []),
+            skillNames: Array.isArray(body.skillNames) ? body.skillNames.map(String) : (existing?.skillNames || []),
+          })
+          const { apiKey, ...project } = saved
+          return JSON.stringify({
+            ok: true,
+            project: session ? project : saved,
+            usage: `发项目任务: workbuddy_task_manage {action:"create", projectId:"${saved.id}", message:"…"}`,
+          }, null, 2)
+        } catch (err) {
+          if (err instanceof ProjectWorkspaceConflictError || err instanceof ProjectWorkspacePathError) return JSON.stringify({ ok: false, error: err.message, code: err.code, status: err.status })
+          throw err
+        }
       }
       if (action === 'delete') {
-        const ok = store.deleteProject(String(args.projectId || ''))
-        if (!ok) return JSON.stringify({ ok: false, error: `项目不存在: ${args.projectId}` }, null, 2)
-        return JSON.stringify({ ok: true, deleted: String(args.projectId) }, null, 2)
+        const p = store.getProject(String(args.projectId || ''))
+        if (!p || !canView(p)) return JSON.stringify({ ok: false, error: '项目不存在', status: 404 })
+        if (!canEdit(p)) return JSON.stringify({ ok: false, error: '仅项目 owner 或平台管理员可删除项目', status: 403 })
+        store.deleteProject(p.id)
+        return JSON.stringify({ ok: true, deleted: p.id }, null, 2)
       }
       return JSON.stringify({ ok: false, error: `不支持的 action: ${action}` })
     },

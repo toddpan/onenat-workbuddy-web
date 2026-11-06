@@ -1,0 +1,84 @@
+{
+  "at": "2026-11-06T16:56:56.235Z",
+  "node": "6cc2987d",
+  "root": "/tmp/wb-task57-4c376abd3c57de2a-owner",
+  "requests": [
+    {
+      "method": "POST",
+      "route": "/api/v1/sessions",
+      "status": 201
+    },
+    {
+      "method": "POST",
+      "route": "/api/v1/sessions/session-31c93f04-7900-4665-b030-eddb367d7110/files",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "route": "/api/v1/sessions/session-31c93f04-7900-4665-b030-eddb367d7110/prompt",
+      "status": 200
+    },
+    {
+      "method": "DELETE",
+      "route": "/api/v1/sessions/session-31c93f04-7900-4665-b030-eddb367d7110",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "route": "/api/v1/sessions/session-31c93f04-7900-4665-b030-eddb367d7110/history",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "route": "/api/v1/sessions/session-31c93f04-7900-4665-b030-eddb367d7110/cancel",
+      "status": 200
+    },
+    {
+      "method": "DELETE",
+      "route": "/api/v1/sessions/session-31c93f04-7900-4665-b030-eddb367d7110",
+      "status": 200
+    }
+  ],
+  "cleanup": [
+    {
+      "sessionId": "session-31c93f04-7900-4665-b030-eddb367d7110",
+      "archived": true
+    },
+    {
+      "root": "/tmp/wb-task57-4c376abd3c57de2a-owner",
+      "removed": true
+    }
+  ],
+  "result": {
+    "nonce": "09f032fc74c2fbf2fcd8ddea453aa5b2a5c5a987d05edbb0",
+    "operation": "list",
+    "requestHash": "d5d62fd47d5faed67a0b044bf51b8d6293b5a7e2b68e53690d05aa327612b06e",
+    "ok": true,
+    "path": "/tmp/wb-task57-4c376abd3c57de2a-owner",
+    "entries": [
+      {
+        "name": ".workspace-remote.lock",
+        "type": "file"
+      },
+      {
+        "name": "workbuddy-workspace-worker-09f032fc74c2fbf2fcd8ddea453aa5b2a5c5a987d05edbb0.mjs",
+        "type": "file"
+      },
+      {
+        "name": "probe.txt",
+        "type": "file"
+      }
+    ],
+    "truncated": false,
+    "entryLimit": 2000,
+    "executionEvidence": "http-read-worker-result",
+    "temporarySessionId": "session-31c93f04-7900-4665-b030-eddb367d7110",
+    "sessionCleanup": "deleted"
+  },
+  "ok": true,
+  "assistantHistory": [
+    "",
+    "The script is a read-only list operation matching the request. Executing it now.\n\n",
+    "WORKSPACE_REMOTE_READY:09f032fc74c2fbf2fcd8ddea453aa5b2a5c5a987d05edbb0"
+  ]
+}

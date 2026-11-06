@@ -1,0 +1,33 @@
+{
+  "at": "2026-11-06T16:12:32.366Z",
+  "nodes": [
+    {
+      "mappingId": "6cc2987d",
+      "name": "KB 136 环境-DSH",
+      "baseUrl": "http://natpass.yikaihui.com:31399/api/v1",
+      "status": {
+        "name": "dsh-web-service",
+        "version": "0.6.1"
+      },
+      "defaultModel": {
+        "provider": "qwen38",
+        "model": "qwen3.8-27b"
+      },
+      "testModelAvailable": true
+    },
+    {
+      "mappingId": "5602f2c2",
+      "name": "brain 环境-DSH:3080",
+      "baseUrl": "http://natpass.yikaihui.com:31847/api/v1",
+      "status": {
+        "name": "dsh-web-service",
+        "version": "0.6.1"
+      },
+      "defaultModel": {
+        "provider": "zhipu",
+        "model": "z-ai/glm-5.3-flash"
+      },
+      "testModelAvailable": true
+    }
+  ]
+}

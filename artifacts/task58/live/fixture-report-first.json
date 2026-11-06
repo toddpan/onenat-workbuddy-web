@@ -1,0 +1,38 @@
+{
+  "at": "2026-11-06T17:22:42.600Z",
+  "tag": "wb-task58-b1e4bb5b060de76b",
+  "refs": {
+    "owner": {
+      "kind": "mapping",
+      "mappingId": "6cc2987d"
+    },
+    "executor": {
+      "kind": "mapping",
+      "mappingId": "5602f2c2"
+    }
+  },
+  "ownerRoot": "/tmp/wb-task58-b1e4bb5b060de76b-owner",
+  "executionRoot": "/tmp/wb-task58-b1e4bb5b060de76b-execution",
+  "markerSha256": "6419ce7d902ed756f63b4d8a0300f3c6c4b7bce54389929cfd6d626c6e2cab8a",
+  "checks": [
+    {
+      "name": "live directory/auth/models on owner and execution",
+      "result": "PASS"
+    }
+  ],
+  "cleanup": [
+    {
+      "node": "6cc2987d",
+      "path": "/tmp/wb-task58-b1e4bb5b060de76b-owner",
+      "removed": true
+    },
+    {
+      "node": "5602f2c2",
+      "path": "/tmp/wb-task58-b1e4bb5b060de76b-execution",
+      "removed": true
+    },
+    {
+      "localDataRemoved": true
+    }
+  ]
+}

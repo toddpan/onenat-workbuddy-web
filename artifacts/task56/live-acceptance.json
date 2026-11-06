@@ -1,0 +1,116 @@
+{
+  "at": "2026-11-06T15:47:23.074Z",
+  "tag": "wb-task56-6858a76996b96c4a",
+  "nodes": {
+    "owner": "6cc2987d",
+    "execution": "5602f2c2"
+  },
+  "checks": [
+    {
+      "name": "real owner fixture and different executor filesystem",
+      "result": "PASS",
+      "evidence": {
+        "ownerRoot": "/tmp/wb-task56-6858a76996b96c4a-owner",
+        "executionRoot": "/tmp/wb-task56-6858a76996b96c4a-executor",
+        "markerSha": "ae95efedf9b50f9a3fb3bf5c683bd8c973d5aa70608f9cfca9e0e0a6a0e4800f",
+        "ownerPathAbsentOnExecutor": true
+      }
+    },
+    {
+      "name": "real main session on selected execution node reads owner file",
+      "result": "PASS",
+      "evidence": {
+        "taskId": "task-153c096c",
+        "sessionId": "session-60b98ae4-d8d9-4c07-ab57-ab3a43d329f6",
+        "cwd": "/tmp/wb-task56-6858a76996b96c4a-executor",
+        "tools": [
+          {
+            "name": "bash",
+            "status": "done"
+          },
+          {
+            "name": "bash",
+            "status": "done"
+          }
+        ],
+        "markerSha": "ae95efedf9b50f9a3fb3bf5c683bd8c973d5aa70608f9cfca9e0e0a6a0e4800f"
+      }
+    },
+    {
+      "name": "default edit keeps old remote session while new task uses new default",
+      "result": "PASS",
+      "evidence": {
+        "oldTaskId": "task-153c096c",
+        "oldSessionId": "session-60b98ae4-d8d9-4c07-ab57-ab3a43d329f6",
+        "oldNode": {
+          "kind": "mapping",
+          "mappingId": "5602f2c2"
+        },
+        "newTaskId": "task-57ce791c",
+        "newNode": {
+          "kind": "mapping",
+          "mappingId": "6cc2987d"
+        }
+      }
+    },
+    {
+      "name": "real child session keeps its own node cwd and reads owner file",
+      "result": "PASS",
+      "evidence": {
+        "taskId": "task-c0bcfc96",
+        "sessionId": "session-c50dbb88-5874-4e59-8742-5915659c1f2c",
+        "cwd": "/tmp/wb-task56-6858a76996b96c4a-executor",
+        "markerSha": "ae95efedf9b50f9a3fb3bf5c683bd8c973d5aa70608f9cfca9e0e0a6a0e4800f"
+      }
+    }
+  ],
+  "requests": [
+    {
+      "url": "http://natpass.yikaihui.com:31399/api/v1/sessions",
+      "cwd": "/tmp/wb-task56-6858a76996b96c4a-owner",
+      "title": "[task56 fixture] wb-task56-6858a76996b96c4a"
+    },
+    {
+      "url": "http://natpass.yikaihui.com:31847/api/v1/sessions",
+      "workspaceId": "c219a066-7cb6-41d8-b97e-d060592d8f68",
+      "title": "[WorkBuddy] 这是 task-56 验收，仅执行只读检查，不修改文件、不派"
+    },
+    {
+      "url": "http://natpass.yikaihui.com:31847/api/v1/sessions",
+      "workspaceId": "c219a066-7cb6-41d8-b97e-d060592d8f68",
+      "title": "[WorkBuddy] 新任务"
+    }
+  ],
+  "cleanup": [
+    {
+      "sessionId": "session-e84bf688-7b80-42e4-b903-62380bec945f",
+      "deleted": true
+    },
+    {
+      "node": "6cc2987d",
+      "testDirectory": "/tmp/wb-task56-6858a76996b96c4a-owner",
+      "removed": true
+    },
+    {
+      "sessionId": "session-60b98ae4-d8d9-4c07-ab57-ab3a43d329f6",
+      "deleted": true
+    },
+    {
+      "sessionId": "session-c50dbb88-5874-4e59-8742-5915659c1f2c",
+      "deleted": true
+    },
+    {
+      "node": "5602f2c2",
+      "testDirectory": "/tmp/wb-task56-6858a76996b96c4a-executor",
+      "removed": true
+    },
+    {
+      "workspaceId": "c219a066-7cb6-41d8-b97e-d060592d8f68",
+      "removed": true
+    }
+  ],
+  "mainTaskStatus": "completed",
+  "mainReply": "{\"cwd\":\"/tmp/wb-task56-6858a76996b96c4a-executor\",\"marker\":\"owner-only-dfe93ad89524eaa41079723d4355c7fac8a7\",\"sha256\":\"ae95efedf9b50f9a3fb3bf5c683bd8c973d5aa70608f9cfca9e0e0a6a0e4800f\"}",
+  "childResult": "我会执行这次只读验收检查。## 结论摘要\n\n- 已真实执行本次只读检查：Node.js 的 `process.cwd()` 返回 `/tmp/wb-task56-6858a76996b96c4a-executor`（与本机 `pwd` 一致）。\n- 通过文件归属节点的 HTTP 接口成功下载 `marker.txt`（HTTP 200，47 字节，无尾随换行）。\n- SHA256 计算结果为 `ae95efedf9b50f9a3fb3bf5c683bd8c973d5aa70608f9cfca9e0e0a6a0e4800f`。\n- 未修改任何项目文件、未派发子任务、未调用 WorkBuddy/OneNat 工具。\n\n```json\n{\"cwd\":\"/tmp/wb-task56-6858a76996b96c4a-executor\",\"marker\":\"owner-only-dfe93ad89524eaa41079723d4355c7fac8a7\",\"sha256\":\"ae95efedf9b50f9a3fb3bf5c683bd8c973d5aa70608f9cfca9e0e0a6a0e4800f\"}\n```\n\n## 执行结果与证据\n\n### 1. 获取 Node.js `process.cwd()`\n\n```\n$ node -e \"console.log(process.cwd())\"\n/tmp/wb-task56-6858a76996b96c4a-executor\n$ pwd\n/tmp/wb-task56-6858a76996b96c4a-executor\n```\n\n说明：本会话所在节点的当前工作目录是 executor 工作区，与文件归属节点工作区 `/tmp/wb-task56-6858a76996b96c4a-owner` 不是同一个路径。我按任务约定通过 HTTP 读取文件归属节点上的文件，没有在本机创建同路径目录。\n\n### 2. 目录列表（确认 marker.txt 存在）\n\n```\n$ curl -H 'Authorization: Bearer ***' \\\n  'http://natpass.yikaihui.com:31399/api/v1/fs/list?path=%2Ftmp%2Fwb-task56-6858a76996b96c4a-owner&all=1'\n[HTTP 200]\n{\"ok\":true,\"data\":{\"path\":\"/tmp/wb-task56-6858a76996b96c4a-owner\",...\n \"entries\":[{\"name\":\"marker.txt\",\"path\":\"/tmp/wb-task56-6858a76996b96c4a-owner/marker.txt\",\n \"type\":\"file\",\"size\":47,...}],\"truncated\":false,...}}\n```\n\n远端目录中仅有一个文件 `marker.txt`，大小为 47 字节，与下载结果一致。\n\n### 3. 下载 marker.txt 并计算 SHA256\n\n```\n$ curl ... 'http://natpass.yikaihui.com:31399/api/v1/fs/download?path=%2Ftmp%2Fwb-task56-6858a76996b96c4a-owner%2Fmarker.txt' -o marker.txt\n[HTTP 200] size=47\n\n$ sha256sum marker.txt\nae95efedf9b50f9a3fb3bf5c683bd8c973d5aa70608f9cfca9e0e0a6a0e4800f  marker.txt\n```\n\n### 4. 内容字节级校验（排除尾随换行/隐藏字符）\n\n```\n$ od -c marker.txt\n0000000   o   w   n   e   r   -   o   n   l   y   -   d   f   e   9   3\n0000020   a   d   8   9   5   2   4   e   a   a   4   1   0   7   9   7\n0000040   2   3   d   4   3   5   5   c   7   f   a   c   8   a   7\n0000057\n\n$ node -e \"...\"\n\"owner-only-dfe93ad89524eaa41079723d4355c7fac8a7\"\nlen 47 trailingNewline false\n```\n\n以下两个事实可以互相验证文件内容的完整性：\n- 内容长度为 47 个字符。前缀 `owner-only-` 占 11 个字符，随机十六进制串占 36 个字符，两者合计正好 47 个字符。文件字节数与 HTTP 报告的 47 字节完全吻合。\n- 文件没有尾随换行，也没有 BOM。因此 SHA256 是对这 47 个字符计算的，不需要你去除任何结尾符。\n\n## 假设与说明\n\n- 本次下载的副本仅作为校验的临时文件放在 executor 工作区，没有写回文件归属节点；验收的权威来源仍是远端 `/tmp/wb-task56-6858a76996b96c4a-owner/marker.txt`。\n- 没有进行任何写操作；没有派发子任务；没有调用 WorkBuddy/OneNat 工具（任务明确禁止）。\n- 全部要求的三个字段（cwd、marker、sha256）均已真实获取，上面的一行 JSON 可直接用于比对验收结果。",
+  "ownerPathAbsentOnExecutorAfter": true
+}

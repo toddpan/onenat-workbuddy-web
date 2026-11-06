@@ -1,0 +1,46 @@
+{
+  "at": "2026-11-06T17:28:28.841Z",
+  "tag": "wb-task58-b25a76690a04eedb",
+  "refs": {
+    "owner": {
+      "kind": "mapping",
+      "mappingId": "6cc2987d"
+    },
+    "executor": {
+      "kind": "mapping",
+      "mappingId": "5602f2c2"
+    }
+  },
+  "ownerRoot": "/tmp/wb-task58-b25a76690a04eedb-owner",
+  "executionRoot": "/tmp/wb-task58-b25a76690a04eedb-execution",
+  "markerSha256": "f1012c04722344a38159a8982b747d6fc5082a7e3ee84c2ddddbb4f0319343a4",
+  "checks": [
+    {
+      "name": "live directory/auth/models on owner and execution",
+      "result": "PASS"
+    }
+  ],
+  "cleanup": [
+    {
+      "sessionId": "session-5c7fa5df-884d-4745-b178-e76110203f1d",
+      "removed": true
+    },
+    {
+      "node": "6cc2987d",
+      "path": "/tmp/wb-task58-b25a76690a04eedb-owner",
+      "removed": true
+    },
+    {
+      "node": "5602f2c2",
+      "path": "/tmp/wb-task58-b25a76690a04eedb-execution",
+      "removed": true
+    },
+    {
+      "workspaceId": "1025b653-7fa8-4ab4-a509-33ffaa2ab95c",
+      "removed": true
+    },
+    {
+      "localDataRemoved": true
+    }
+  ]
+}

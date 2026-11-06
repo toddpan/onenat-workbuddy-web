@@ -1,0 +1,18 @@
+{
+  "width": 390,
+  "height": 844,
+  "popup": {
+    "x": 12,
+    "y": 231.7734375,
+    "width": 366,
+    "height": 293,
+    "top": 231.7734375,
+    "right": 378,
+    "bottom": 524.7734375,
+    "left": 12
+  },
+  "candidates": [
+    "file-owner",
+    "execution"
+  ]
+}

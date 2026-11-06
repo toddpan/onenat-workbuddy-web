@@ -1,0 +1,42 @@
+{
+  "at": "2026-11-06T17:32:52.958Z",
+  "tag": "wb-task57-ad03a6c262ff379a",
+  "ownerId": "6cc2987d",
+  "executorId": "5602f2c2",
+  "ownerRoot": "/tmp/wb-task57-ad03a6c262ff379a-owner",
+  "executorRoot": "/tmp/wb-task57-ad03a6c262ff379a-executor",
+  "expectedHelperSha256": "6c561494101a81de7b50a82b9cb63eb38b351b27cb206edb9ec4e1720a31b4cc",
+  "checks": [
+    {
+      "name": "real owner/executor isolated fixtures and independent filesystems",
+      "result": "FAIL",
+      "error": "Parent listing must be complete\n\ntrue !== false\n"
+    }
+  ],
+  "requests": [],
+  "toolCalls": [],
+  "helperUploads": [],
+  "cleanup": [
+    {
+      "node": "6cc2987d",
+      "directory": "/tmp/wb-task57-ad03a6c262ff379a-owner",
+      "removed": true
+    },
+    {
+      "node": "6cc2987d",
+      "directory": "/tmp/wb-task57-ad03a6c262ff379a-owner",
+      "absentFromCompleteParentListing": true
+    },
+    {
+      "node": "5602f2c2",
+      "directory": "/tmp/wb-task57-ad03a6c262ff379a-executor",
+      "removed": true
+    },
+    {
+      "node": "5602f2c2",
+      "error": "Parent listing must be complete\n\ntrue !== false\n"
+    }
+  ],
+  "error": "Parent listing must be complete\n\ntrue !== false\n",
+  "finishedAt": "2026-11-06T17:32:56.888Z"
+}

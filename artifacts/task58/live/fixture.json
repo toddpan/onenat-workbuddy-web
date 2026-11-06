@@ -1,0 +1,17 @@
+{
+  "base": "http://127.0.0.1:61341/onenat-workbuddy",
+  "controlBase": "http://127.0.0.1:61344",
+  "projectId": "proj-ibm1e0vq",
+  "root": "/tmp/wb-task58-b25a76690a04eedb-owner",
+  "executionRoot": "/tmp/wb-task58-b25a76690a04eedb-execution",
+  "refs": {
+    "owner": {
+      "kind": "mapping",
+      "mappingId": "6cc2987d"
+    },
+    "executor": {
+      "kind": "mapping",
+      "mappingId": "5602f2c2"
+    }
+  }
+}

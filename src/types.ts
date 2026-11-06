@@ -234,6 +234,8 @@ export interface ExtractedFileMention {
   agentName: string
   path: string
   filename: string
+  /** 裸路径提及属于项目文件归属节点，而非默认成员执行节点 */
+  workspaceOwned?: boolean
 }
 
 export interface ExtractedMentions {
@@ -277,8 +279,10 @@ export interface Project {
   visibility?: 'private' | 'team' | 'public'
   /** 成员邀请开关：true=普通 member 也可邀请他人入项（缺省 = 仅 owner/admin 可邀请） */
   allowMemberInvite?: boolean
-  /** 项目 DSH 节点 */
+  /** 文件归属 DSH 节点；切换默认执行节点不改变工作区身份 */
   dshRef: DshRef
+  /** 默认执行节点；缺省使用文件归属节点，创建任务时快照到 task.nodeRef */
+  defaultExecutionNodeRef?: DshRef
   /** 节点鉴权（direct 直连时可填） */
   apiKey?: string
   /** 项目工作目录（会话 cwd 与工作区） */
@@ -323,6 +327,12 @@ export type TaskStatus = 'draft' | 'running' | 'completed' | 'failed' | 'partial
 export interface TaskSessionBinding {
   remoteSessionId: string
   baseUrl: string
+  /** 稳定执行节点身份；隧道公网端口漂移不重建会话 */
+  nodeRefKey?: string
+  /** app 引用实际落到的 mapping；已有会话不能随 app 改绑迁往另一台节点 */
+  resolvedMappingId?: string
+  /** 注入执行会话的远程工作区工具（文件归属仍在项目节点） */
+  workspaceAccessCliPath?: string
   /** 建会话时使用的工作目录（用于检测 agent.workDir 变更后重建会话） */
   cwd?: string
   /** 主智能体最后一次对齐到会话的主调度模型（planner.model，空串=默认）；用于检测切换后重新对齐 */
@@ -487,7 +497,7 @@ export interface WorkTask {
   scheduleName?: string
   /** 所属项目：任务继承项目的节点/工作区/指令/专家/连接器/技能 */
   projectId?: string
-  /** 单独任务直接指定的执行节点（项目任务走项目节点） */
+  /** 创建时快照的执行节点；项目任务可显式覆盖默认节点，文件仍归属 project.dshRef */
   nodeRef?: DshRef
   /** 任务级模型（provider/model）：定时任务实例配置；主会话（__node__）优先于全局调度模型 */
   model?: string

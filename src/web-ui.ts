@@ -400,6 +400,11 @@ body.draft-mode .chat-empty.draft-hero { height: auto; }
   font-size: 12px; color: var(--tx3);
 }
 .draft-place .dp-btn { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-access-note { flex: 0 0 100%; max-width: 100%; color: var(--tx2); font-size: 11px; line-height: 1.5; word-break: break-word; }
+.draft-place { flex-wrap: wrap; min-width: 0; max-width: 100%; }
+.draft-place .project-access-note { text-align: center; }
+.place-pop .ag-sub { white-space: normal; word-break: break-word; }
+@media (max-width: 768px) { .draft-place .dp-btn { max-width: calc(100vw - 100px); } .badge.place { max-width: 100%; white-space: normal; word-break: break-word; } }
 .task-item.draft-item .t { font-style: italic; }
 
 .qe-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 18px; width: min(620px, 92%); }
@@ -1034,6 +1039,8 @@ body.task-running .dsh-sysRow.sys-planning .markdown::after {
 .model-item:hover { background: var(--bg-hover); }
 .model-item.on { color: var(--pri); background: var(--pri-light); }
 .model-item .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-item .model-id { display: block; margin-top: 3px; font-size: 10.5px; color: var(--tx3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-default-note { padding: 6px 10px; font-size: 11px; color: var(--tx2); line-height: 1.5; overflow-wrap: anywhere; }
 .model-item .ck { flex: none; visibility: hidden; font-weight: 700; }
 .model-item.on .ck { visibility: visible; }
 .model-pinbtn {
@@ -1909,7 +1916,8 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
   .modal { width: 100%; max-width: 100%; max-height: calc(100dvh - 24px); }
   .modal-foot { flex-wrap: wrap; }
   .modal-foot .btn { min-height: 38px; }
-  .drawer { width: 100vw; max-width: 100vw; height: 100vh; height: 100dvh; }
+  .drawer { right: -100vw; width: 100vw; max-width: 100vw; height: 100vh; height: 100dvh; }
+  .drawer.on { right: 0; }
   .drawer-head { padding: 0 14px; height: 48px; }
   .drawer-body { padding: 12px 14px; }
   .db-row { padding: 11px 12px; }
@@ -2538,6 +2546,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <div class="draft-place" id="draft-place" style="display:none">
             <span class="dp-lb">执行位置</span>
             <button type="button" class="cfg-sel dp-btn" id="draft-place-btn" aria-haspopup="menu" title="选择节点与项目（发送首条消息后锁定）"></button>
+            <div class="project-access-note" id="draft-access-note"></div>
           </div>
           <div class="task-stats" id="task-stats" style="display:none">
             <div class="stat-pills">
@@ -2585,7 +2594,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
       <div class="panel">
         <div class="panel-head">
           <h2>📦 项目</h2>
-          <span class="sub">项目 = 节点 + 工作区 + 指令 + 子智能体/连接器/技能 的组合。项目内发起的任务自动继承全部上下文。</span>
+          <span class="sub">项目 = 文件归属节点 + 工作区 + 指令 + 子智能体/连接器/技能。任务可独立选择执行节点；同节点直接访问，跨节点远程访问项目文件。</span>
           <span class="hspacer"></span>
           <button class="btn" id="btn-proj-import" title="选择远程 DSH 节点，拉取其工作区列表，勾选后向节点发分析任务：智能体分析项目并推断项目名/指令/专家/连接器/技能，自动调平台接口建项目">⬇ 从远程 DSH 导入</button>
           <button class="btn pri" id="btn-proj-new">＋ 新建项目</button>
@@ -4512,7 +4521,7 @@ function renderProjects() {
   }
   if (!state.projects.length) {
     $('proj-chips').innerHTML = '';
-    groupsEl.innerHTML = '<div class="mon-empty">还没有项目 —— 点右上角「＋ 新建项目」创建。项目把节点、工作区、指令、连接器、技能捆绑成一个可复用的工作上下文。</div>';
+    groupsEl.innerHTML = '<div class="mon-empty">还没有项目 —— 点右上角「＋ 新建项目」创建。项目保存文件归属节点、工作区、指令、连接器和技能；每次任务可独立选择执行节点。</div>';
     return;
   }
   const envs = topoBuildEnvs(p => topoEntityEnvKey(p.dshRef, p.nodeTitle), state.projects);
@@ -4555,6 +4564,7 @@ function projectCardHtml(p) {
   return '<div class="proj-card" data-proj="' + esc(p.id) + '">' +
     '<div class="pj-name">' + esc(p.name) + '</div>' +
     '<div class="pj-meta">' + (p.workspace ? '📁 ' + esc(p.workspace) + ' · ' : '') + '📋 ' + taskCount + ' 个任务</div>' +
+    '<div class="pj-meta">文件归属：' + esc(nodeRefLabel(p.dshRef)) + ' · 默认执行：' + esc(nodeRefLabel(projectExecutionRef(p))) + ' · ' + (sameNodeRef(p.dshRef, projectExecutionRef(p)) ? '同节点直接访问' : '跨节点远程访问') + '</div>' +
     (p.importedFrom ? '<div class="pj-chips" style="margin-top:6px"><span class="tag" title="自 ' + esc(p.importedFrom.sourceNode + p.importedFrom.sourcePath) + ' 导入 · 导入任务 ' + esc(p.importedFrom.taskId) + '">☁ 云端导入 · 来自 ' + esc(p.importedFrom.sourceNode) + '</span></div>' : '') +
     (p.instructionPreview ? '<div class="pj-ins">' + esc(p.instructionPreview) + '</div>' : '') +
     '<div class="pj-chips"><span class="tag">' + chips + '</span></div>' +
@@ -4584,6 +4594,7 @@ function wireProjectCard(card) {
       connectorIds: (src.connectorIds || []).slice(),
       skillNames: (src.skillNames || []).slice(),
       nodeRef: src.dshRef || null,
+      defaultExecutionNodeRef: src.defaultExecutionNodeRef || null,
     });
   });
   card.querySelector('.pj-del').addEventListener('click', async function () {
@@ -4698,14 +4709,16 @@ async function openProjectImportModal() {
     if (!picked.length) { msg.textContent = '请先勾选要导入的工作区'; return; }
     btn.disabled = true; msg.textContent = '发起中…';
     var okCount = 0, failed = [];
-    var taskIds = [];
+    var taskIds = [], reusedProjects = [];
     for (var i = 0; i < picked.length; i++) {
       var w = picked[i];
       var r = await api('/projects/import', { method: 'POST', body: JSON.stringify({ nodeRef: { kind: 'mapping', mappingId: n.mappingId }, workspacePath: w.path, name: w.title }) });
-      if (r.ok) { okCount++; taskIds.push(r.data.taskId); }
+      if (r.ok && r.data && r.data.reused) reusedProjects.push(r.data.projectId || (r.data.project && r.data.project.id));
+      else if (r.ok && r.data && r.data.taskId) { okCount++; taskIds.push(r.data.taskId); }
       else failed.push({ name: w.title, error: r.error || '发起失败' });
     }
-    var html = '<div class="lib-tip">已向节点「' + esc(nodeLabel(n)) + '」发起 ' + okCount + ' 个主会话分析导入任务' +
+    if (reusedProjects.length) { await loadProjects(); renderProjects(); toast('✓ 已复用 ' + reusedProjects.length + ' 个已有项目，未创建重复项目'); }
+    var html = (reusedProjects.length ? '<div class="lib-tip">已复用 ' + reusedProjects.length + ' 个已有项目（相同文件归属与工作目录）。</div>' : '') + '<div class="lib-tip">已向节点「' + esc(nodeLabel(n)) + '」发起 ' + okCount + ' 个主会话分析导入任务' +
       '（智能体正在分析远程项目并推断项目配置，完成后自动调用平台接口建项目）：</div><div class="lib-check">';
     taskIds.forEach(function (tid) { html += '<label>▸ <b>任务 ' + esc(tid) + '</b><span class="sub">打包 / 上传轨迹可在任务会话查看</span></label>'; });
     (failed || []).forEach(function (f) { html += '<label style="color:var(--err)">✕ ' + esc(f.name) + '<span class="sub">' + esc(f.error) + '</span></label>'; });
@@ -4793,6 +4806,7 @@ async function openProjectDrawer(projectId, preset) {
   const p = state.projects.find(function (x) { return x.id === projectId; });
   const isEdit = Boolean(p);
   if (!state.agents.length) await loadAgents();
+  if (catalogStale()) { try { await loadResources(); } catch (e) { /* 使用现有授权目录 */ } }
   const v = {
     name: (preset && preset.name) || (p && p.name) || '',
     workspace: (preset && preset.workspace) || (p && p.workspace) || '',
@@ -4801,6 +4815,7 @@ async function openProjectDrawer(projectId, preset) {
     connectorIds: (preset && preset.connectorIds) || (p && p.connectorIds) || [],
     skillNames: (preset && preset.skillNames) || (p && p.skillNames) || [],
     nodeRef: (preset && preset.nodeRef) || (p && p.dshRef) || null,
+    defaultExecutionNodeRef: preset && Object.prototype.hasOwnProperty.call(preset, 'defaultExecutionNodeRef') ? preset.defaultExecutionNodeRef : (p && p.defaultExecutionNodeRef) || null,
   };
   // 浏览/技能采样用的智能体：项目首位专家（其所在节点即项目节点），否则第一个智能体
   const browseAgentId = v.expertIds[0] || (state.agents[0] && state.agents[0].id) || '';
@@ -4847,7 +4862,7 @@ async function openProjectDrawer(projectId, preset) {
   // TypeError: Assignment to constant variable. —— 「⚙ 编辑」按钮点击后整段静默无反应（新建不追加故未暴露）
   let bodyHtml =
     '<div class="field" style="margin-bottom:10px"><label>项目名称</label><input id="pj-f-name" value="' + esc(v.name) + '" placeholder="例：KB 平台交付"></div>' +
-    '<div class="field" style="margin-bottom:10px"><label>DSH 节点</label><select id="pj-f-node" class="cfg-sel">' +
+    '<div class="field" style="margin-bottom:10px"><label>文件归属 DSH 节点</label><select id="pj-f-node" class="cfg-sel">' +
     (function () {
       // 按隧道（=机器）分组：同机多引擎（DSH/ZCode）一眼可辨
       const seen = {};
@@ -4871,7 +4886,14 @@ async function openProjectDrawer(projectId, preset) {
       return out;
     })() +
     '</select></div>' +
-    '<div class="field" style="margin-bottom:10px"><label>项目工作目录（从远程 DSH 节点浏览选择，会话 cwd 与工作区）</label>' +
+    '<div class="field" style="margin-bottom:10px"><label>默认执行节点（新任务可另选）</label><select id="pj-f-exec" class="cfg-sel"><option value="">跟随文件归属节点</option>' +
+    executionNodeOptions().map(function (n) {
+      const ref = { kind: 'mapping', mappingId: n.mappingId };
+      return '<option value="' + esc(JSON.stringify(ref)) + '"' + (sameRef(v.defaultExecutionNodeRef, ref) ? ' selected' : '') + '>' + esc(n.title || n.appName || n.note || n.mappingId) + '</option>';
+    }).join('') +
+    (v.defaultExecutionNodeRef && !executionNodeOptions().some(function (n) { return sameRef(v.defaultExecutionNodeRef, { kind: 'mapping', mappingId: n.mappingId }); }) ? '<option selected value="' + esc(JSON.stringify(v.defaultExecutionNodeRef)) + '">当前默认：' + esc(nodeRefLabel(v.defaultExecutionNodeRef)) + '（当前不可选，保留配置）</option>' : '') +
+    '</select><div class="hint" id="pj-f-access" style="margin-top:6px"></div></div>' +
+    '<div class="field" style="margin-bottom:10px"><label>项目工作目录（位于文件归属节点；异节点执行时远程访问）</label>' +
     '<div style="display:flex;gap:8px;align-items:center"><input id="pj-f-ws" style="font-family:var(--mono);flex:1" value="' + esc(v.workspace) + '" placeholder="/workspace/project">' +
     '<button class="mini-btn" id="pj-f-browse" style="padding:10px 14px;white-space:nowrap">📁 浏览节点目录</button></div></div>' +
     '<div class="field" style="margin-bottom:10px"><label>项目指令（注入每次任务，角色/阶段/规范）</label><textarea id="pj-f-ins" rows="6" style="font-family:var(--mono);font-size:12px" placeholder="# 角色\\n你是一个…助手…">' + esc(v.instruction) + '</textarea></div>' +
@@ -4901,6 +4923,7 @@ async function openProjectDrawer(projectId, preset) {
         id: isEdit ? projectId : undefined,
         name: document.getElementById('pj-f-name').value.trim(),
         dshRef: JSON.parse(document.getElementById('pj-f-node').value),
+        defaultExecutionNodeRef: JSON.parse(document.getElementById('pj-f-exec').value || 'null'),
         workspace: document.getElementById('pj-f-ws').value.trim(),
         instruction: document.getElementById('pj-f-ins').value,
         expertIds: Array.prototype.map.call(document.querySelectorAll('.pj-exp:checked'), function (x) { return x.value; }),
@@ -4931,6 +4954,14 @@ async function openProjectDrawer(projectId, preset) {
   }
   openModal(isEdit ? '项目配置 · ' + v.name : '新建项目', bodyHtml, actions);
   if (isEdit) loadProjectMembers(projectId);
+  function renderProjectAccess() {
+    const fileRef = JSON.parse(document.getElementById('pj-f-node').value || 'null');
+    const execRef = JSON.parse(document.getElementById('pj-f-exec').value || 'null') || fileRef;
+    document.getElementById('pj-f-access').textContent = '文件归属：' + nodeRefLabel(fileRef) + '；默认执行：' + nodeRefLabel(execRef) + '。' + (sameNodeRef(fileRef, execRef) ? '同节点直接访问项目目录。' : '跨节点远程访问；项目目录不是执行节点的原生本地 cwd。');
+  }
+  document.getElementById('pj-f-node').addEventListener('change', renderProjectAccess);
+  document.getElementById('pj-f-exec').addEventListener('change', renderProjectAccess);
+  renderProjectAccess();
   // 📁 浏览节点目录：打开远程目录浏览器（复用子智能体的实现），选完带回并保留表单其余内容。
   // 目标节点跟随「DSH 节点」下拉的当前选中值（直连该节点，不经过采样智能体——
   // 否则改了下拉后浏览到的仍是首位专家所在节点的目录）。
@@ -4946,8 +4977,9 @@ async function openProjectDrawer(projectId, preset) {
       connectorIds: Array.prototype.map.call(document.querySelectorAll('.pj-conn:checked'), function (x) { return x.value; }),
       skillNames: Array.prototype.map.call(document.querySelectorAll('.pj-skill:checked'), function (x) { return x.value; }),
       nodeRef: selRef,
+      defaultExecutionNodeRef: JSON.parse(document.getElementById('pj-f-exec').value || 'null'),
     };
-    openDirBrowser({ nodeJson: JSON.stringify(selRef) }, function (picked) {
+    openDirBrowser({ nodeJson: JSON.stringify(selRef), projectId: isEdit && sameNodeRef(selRef, p.dshRef) ? projectId : undefined }, function (picked) {
       keep.workspace = picked;
       openProjectDrawer(projectId, keep);
     });
@@ -4997,15 +5029,16 @@ async function openRunConfig(focus) {
   };
   const expertSection = isProject
     ? '<div class="pj-chips">' + chipsOf(proj.expertIds) + '</div>' +
-      '<div class="hint" style="margin-top:8px">上述为项目默认协作成员（创建任务时自动继承）。主会话在项目节点执行（不绑定身份）；仍可 @ 任意 sub agent/专家库角色在其绑定节点执行专项任务（发飞书、发邮件…）——不受这份清单限制。集合在「⚙ 项目配置」维护。</div>'
+      '<div class="hint" style="margin-top:8px">上述为项目默认协作成员（创建任务时自动继承）。主会话在本会话选定的执行节点运行（不绑定身份）；仍可 @ 任意 sub agent/专家库角色在其绑定节点执行专项任务（发飞书、发邮件…）——不受这份清单限制。集合在「⚙ 项目配置」维护。</div>'
     : '<div class="pj-chips">' + state.agents.map(function (a) { return '<span class="tag">🤖 ' + esc(a.name) + '</span>'; }).join(' ') + '</div>' +
       '<div class="hint" style="margin-top:8px">主会话在任务的执行节点上运行（执行位置随任务锁定）；消息里输入 @ 调用 sub agent，在其绑定的节点上远程执行专项任务（发飞书、发邮件…）。</div>';
 
   // 主会话节点不在这里改（P1-1）：执行位置随任务锁定，新任务的节点由执行位置选择框决定
   const nodeSection = isProject
-    ? '<div class="rc-row"><span class="rc-k">节点</span><span class="tag">🔒 ' + esc(proj.nodeTitle || '(默认)') + '</span></div>' +
+    ? '<div class="rc-row"><span class="rc-k">执行位置</span><span class="tag">🔒 ' + esc(taskPlaceInfo(curTask).nodeLabel) + '</span></div>' +
+      '<div class="rc-row" style="margin-top:6px"><span class="rc-k">文件归属</span><span class="tag">' + esc(nodeRefLabel(proj.dshRef)) + '</span></div>' +
       '<div class="rc-row" style="margin-top:6px"><span class="rc-k">工作区</span><span class="tag" style="font-family:var(--mono)">📁 ' + esc(proj.workspace || '(默认)') + '</span></div>' +
-      '<div class="hint" style="margin-top:8px">随项目锁定，修改请点头部「⋯ → ⚙ 项目配置」</div>'
+      '<div class="hint" style="margin-top:8px">' + (taskPlaceInfo(curTask).remote ? '跨节点远程访问；项目路径不是执行节点的原生本地 cwd。' : '同节点直接访问项目目录。') + '执行位置随本会话锁定；新任务或续接时可另选节点。</div>'
     : '';
 
   const connSection = isProject
@@ -8275,7 +8308,7 @@ function uploadAttachments(files) {
     document.body.appendChild(panel);
   }
   panel.style.display = 'block';
-  panel.innerHTML = '<div class="up-head"><b>📎 上传附件到工作区（P2P 直连节点）</b><span class="up-count"></span><span class="hspacer"></span><button class="mini-btn" id="up-close">✕</button></div><div class="up-rows"></div>';
+  panel.innerHTML = '<div class="up-head"><b>📎 上传附件到工作区</b><span class="up-count"></span><span class="hspacer"></span><button class="mini-btn" id="up-close">✕</button></div><div class="up-rows"></div>';
   $('up-close').addEventListener('click', () => { panel.style.display = 'none'; });
   const rowsEl = panel.querySelector('.up-rows');
   const rows = files.map(f => ({ file: f, status: 'waiting', pct: 0 }));
@@ -8352,6 +8385,18 @@ function uploadAttachments(files) {
     r.status = 'uploading'; r.err = null; renderRow(r);
     let received = 0;
     try {
+      // 普通用户通过服务端项目授权上传；节点级直传配方仅向管理员开放。
+      if (!isAdminUi()) {
+        const fd = new FormData(); fd.append('files', f, f.name);
+        const response = await fetch(API + '/tasks/' + taskId + '/attachments', { method: 'POST', body: fd });
+        const json = await response.json().catch(() => ({}));
+        if (!response.ok || !json.ok) throw new Error(json.error || '上传 HTTP ' + response.status);
+        const saved = (json.data?.results || []).flatMap(x => x.files || [])[0];
+        if (!saved?.path) throw new Error('上传未返回文件路径');
+        r.status = 'done'; r.pct = 100; r.dest = saved.path; renderRow(r);
+        appendAttachmentLine('[附件] ' + saved.path, taskId);
+        return;
+      }
       // ① 向本服务取节点直连配方（地址+密钥+会话；此后文件字节直连节点，不经本服务）
       const init = await fetchJson('/tasks/' + taskId + '/attachments/direct/init', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -9268,12 +9313,24 @@ function currentTaskObj() {
 }
 /**
  * 任务实际执行节点（mappingId），模型目录按它拉取（与 engine.taskExec 同口径）：
- * 项目任务 = project.dshRef → 单独任务 = task.nodeRef → 草稿/解析不到 = 所选执行位置 nodeState.cur
+ * task.nodeRef 优先；旧项目任务回退 project.dshRef；草稿使用所选执行节点。
  */
-function taskExecNodeId(task) {
+function sameNodeRef(a, b) {
+  if (!a || !b || a.kind !== b.kind) return false;
+  return a.kind === 'mapping' ? a.mappingId === b.mappingId : a.kind === 'app' ? a.appId === b.appId : a.apiBaseUrl === b.apiBaseUrl;
+}
+function nodeRefLabel(ref) {
+  if (!ref) return '默认节点';
+  const n = dshNodeOptions().find(function (x) { return ref.kind === 'mapping' ? x.mappingId === ref.mappingId : ref.kind === 'app' ? x.appId === ref.appId : x.apiBaseUrl === ref.apiBaseUrl; });
+  return n ? (n.title || n.appName || n.note || n.mappingId) : (ref.mappingId || ref.appId || ref.apiBaseUrl || '默认节点');
+}
+function projectExecutionRef(pj) { return pj && (pj.defaultExecutionNodeRef || pj.dshRef) || null; }
+function taskExecutionRef(task) {
   const p = task && task.projectId ? (state.projects || []).find(function (x) { return x.id === task.projectId; }) : null;
-  if (p && p.dshRef && p.dshRef.kind === 'mapping' && p.dshRef.mappingId) return p.dshRef.mappingId;
-  const ref = task && task.nodeRef;
+  return (task && task.nodeRef) || (p && p.dshRef) || null;
+}
+function taskExecNodeId(task) {
+  const ref = taskExecutionRef(task);
   if (ref && ref.kind === 'mapping' && ref.mappingId) return ref.mappingId;
   // 草稿态（P2-2）：目录跟随草稿所选执行位置
   if (!task && state.draft && state.draft.place && state.draft.place.nodeMappingId) return state.draft.place.nodeMappingId;
@@ -9281,7 +9338,7 @@ function taskExecNodeId(task) {
 }
 /** 执行节点与已加载目录的节点不一致时重拉模型目录（打开任务 / 首屏节点就绪后调用） */
 function reloadCatalogIfExecNodeChanged() {
-  if (modelState.loaded && !modelCatalogCurrent()) loadPlannerOptions();
+  if (!modelCatalogCurrent()) loadPlannerOptions();
 }
 /**
  * 会话头部节点选择器回显「该会话实际执行节点」。
@@ -9290,27 +9347,8 @@ function reloadCatalogIfExecNodeChanged() {
  */
 function syncNodeChipToTask(task) {
   try {
-    // 项目任务节点以项目为准（P0-3）：按 project.dshRef 回显（/api/projects 摘要带 dshRef + nodeTitle），
-    // 与引擎 taskExec / taskExecNodeId 的「项目 dshRef 优先」同口径；任务上的 nodeRef 已不再参与项目任务。
-    const pj = task && task.projectId ? (state.projects || []).find(function (x) { return x.id === task.projectId; }) : null;
-    const pref = pj && pj.dshRef;
-    if (pref && typeof pref === 'object') {
-      if (pref.kind === 'mapping' && pref.mappingId && dshNodeOptions().some(function (x) { return x.mappingId === pref.mappingId; })) {
-        if (nodeState.cur !== pref.mappingId) {
-          nodeState.cur = pref.mappingId;
-          state.taskEnv.nodeRef = { kind: 'mapping', mappingId: pref.mappingId };
-        }
-        return true;
-      }
-      if (pref.kind === 'direct' && pref.apiBaseUrl) {
-        return true;
-      }
-      // app 型项目节点（或映射不在当前资源快照里）：回显目录解析出的节点名
-      if (pj.nodeTitle) {
-        return true;
-      }
-    }
-    const ref = task && task.nodeRef;
+    // 本会话 nodeRef 优先；旧任务无 nodeRef 时固定回退项目文件节点。
+    const ref = taskExecutionRef(task);
     if (!ref || typeof ref !== 'object') return false;
     if (ref.kind === 'mapping' && ref.mappingId && dshNodeOptions().some(function (x) { return x.mappingId === ref.mappingId; })) {
       if (nodeState.cur !== ref.mappingId) {
@@ -9326,23 +9364,24 @@ function syncNodeChipToTask(task) {
   return false;
 }
 /**
- * 任务执行位置（只读展示用）：项目 dshRef 优先，其次 task.nodeRef（与 taskExecNodeId 同口径）。
+ * 任务执行位置（只读展示用）：task.nodeRef 优先；文件归属独立保留 project.dshRef。
  * 返回 { project, nodeLabel, res（DSH 资源，含 engine 探测档案）, workspace }。
  */
 function taskPlaceInfo(task) {
   const pj = task && task.projectId ? (state.projects || []).find(function (x) { return x.id === task.projectId; }) : null;
-  const ref = (pj && pj.dshRef) || (task && task.nodeRef) || null;
+  const ref = taskExecutionRef(task);
   let nodeLabel = '';
   let res = null;
   if (ref && ref.kind === 'mapping' && ref.mappingId) {
     res = dshNodeOptions().find(function (x) { return x.mappingId === ref.mappingId; }) || null;
-    nodeLabel = res ? (res.title || res.appName || res.note || res.mappingId) : ((pj && pj.nodeTitle) || ref.mappingId);
+    nodeLabel = res ? (res.title || res.appName || res.note || res.mappingId) : ref.mappingId;
   } else if (ref && ref.kind === 'direct' && ref.apiBaseUrl) {
     nodeLabel = '直连 ' + String(ref.apiBaseUrl).replace('https://', '').replace('http://', '');
   } else if (pj && pj.nodeTitle) {
     nodeLabel = pj.nodeTitle;
   }
-  return { project: pj, nodeLabel: nodeLabel || '默认节点', res: res, workspace: (task && task.workDir) || (pj && pj.workspace) || '' };
+  const remote = !!(pj && ref && !sameNodeRef(pj.dshRef, ref));
+  return { project: pj, nodeLabel: nodeLabel || nodeRefLabel(ref), res: res, workspace: (pj && pj.workspace) || (task && task.workDir) || '', fileNodeLabel: pj ? nodeRefLabel(pj.dshRef) : '', remote: remote };
 }
 /**
  * 头部只读执行位置标签「📦 项目 · 🖥 节点」+ ⋯ 菜单（P1-1）。项目和节点在首条消息后锁定在任务上，
@@ -9359,12 +9398,13 @@ function renderChatPlace(task) {
       chip.removeAttribute('title');
     } else {
       chip.style.display = '';
-      chip.textContent = (info.project ? '📦 ' + (info.project.name || info.project.id) + ' · ' : '') + '🖥 ' + info.nodeLabel;
+      chip.textContent = (info.project ? '📦 ' + (info.project.name || info.project.id) + ' · 文件：' + info.fileNodeLabel + ' · ' : '') + '执行：' + info.nodeLabel + (info.project ? (info.remote ? ' · 远程访问' : ' · 直接访问') : '');
       const eng = info.res && info.res.engine;
       const status = !info.res ? '' : !eng ? '未探测' : eng.reachable ? '在线' : '离线' + (eng.error ? '（' + eng.error + '）' : '');
       const lines = [
         '工作区：' + (info.workspace || '远端默认目录'),
-        '节点：' + info.nodeLabel + (status ? ' · ' + status : ''),
+        '执行节点：' + info.nodeLabel + (status ? ' · ' + status : ''),
+        info.project ? '文件归属：' + info.fileNodeLabel + ' · ' + (info.remote ? '跨节点远程访问，项目路径不是执行节点的原生本地 cwd' : '同节点直接访问') : '',
       ];
       if (eng && eng.defaultModel) lines.push('默认模型：' + eng.defaultModel);
       lines.push('执行位置随任务锁定');
@@ -9473,6 +9513,10 @@ function applyReachableNodeDefault() {
 function dshNodeOptions() {
   return state.resources.filter(function (r) { return r.kind === 'dsh' && r.mappingId; });
 }
+// 使用平台授权范围内的资源目录；执行候选排除明确离线/探测不可达的节点。
+function executionNodeOptions() {
+  return dshNodeOptions().filter(function (r) { return r.online !== false && !(r.engine && r.engine.reachable === false); });
+}
 /**
  * 目录新鲜度：>60s 视为过期（与 @ 菜单候选 60s 口径一致）。
  * 背景（2026-11-06 pjy-DSH 报障）：state.resources 只在页面 boot 时加载一次，页面开着不动时
@@ -9561,11 +9605,14 @@ function selectNode(mappingId) {
 function placeProjectNode(pj) {
   return pj && pj.dshRef && pj.dshRef.kind === 'mapping' && pj.dshRef.mappingId ? pj.dshRef.mappingId : '';
 }
-/** 规范化执行位置：选了项目时节点取项目节点；项目不存在则退回单独任务 */
+/** 规范化执行位置：显式执行节点优先，其次项目默认执行节点/文件节点。 */
 function normalizePlace(place) {
   const p = place || {};
   const pj = p.projectId ? (state.projects || []).find(function (x) { return x.id === p.projectId; }) : null;
-  if (pj) return { nodeMappingId: placeProjectNode(pj) || p.nodeMappingId || '', projectId: pj.id };
+  if (pj) {
+    const ref = projectExecutionRef(pj);
+    return { nodeMappingId: p.nodeMappingId || (ref && ref.kind === 'mapping' ? ref.mappingId : ''), projectId: pj.id };
+  }
   return { nodeMappingId: p.nodeMappingId || '', projectId: null };
 }
 /** 执行位置的展示文字「📦 项目 · 🖥 节点」/「🖥 节点 · 单独任务」 */
@@ -9574,14 +9621,16 @@ function placeLabel(place) {
   const res = dshNodeOptions().find(function (x) { return x.mappingId === p.nodeMappingId; });
   const node = res ? (res.title || res.appName || res.note || res.mappingId) : (p.nodeMappingId || '默认节点');
   const pj = p.projectId ? (state.projects || []).find(function (x) { return x.id === p.projectId; }) : null;
-  return pj ? '📦 ' + (pj.name || pj.id) + ' · 🖥 ' + node : '🖥 ' + node + ' · 单独任务';
+  const execRef = p.nodeMappingId ? { kind: 'mapping', mappingId: p.nodeMappingId } : projectExecutionRef(pj);
+  return pj ? '📦 ' + (pj.name || pj.id) + ' · 执行：' + (p.nodeMappingId ? node : nodeRefLabel(execRef)) + ' · 文件：' + nodeRefLabel(pj.dshRef) + ' · ' + (sameNodeRef(pj.dshRef, execRef) ? '直接访问' : '远程访问') : '🖥 ' + node + ' · 单独任务';
 }
 function placeNodeProjects(mid) {
-  return (state.projects || []).filter(function (pj) { return placeProjectNode(pj) === mid; });
+  // 项目身份与执行节点无关；在任何授权在线执行节点均可选同一项目。
+  return (state.projects || []).filter(function (pj) { return !pj.archived; });
 }
 /**
- * 打开执行位置选择框（P2-1）：第一层选节点（在线点 + 引擎徽标 + 默认模型，离线灰显仍可选），
- * 第二层选该节点下的项目或「不使用项目（单独任务）」；选定后回调 onChange({ nodeMappingId, projectId|null })。
+ * 打开执行位置选择框：项目内直接选择任意授权在线执行节点；
+ * 未选项目时先选执行节点，再选任意项目/单独任务；项目文件归属不随之变动。
  */
 function openPlacePop(anchor, place, onChange, opts) {
   closePlacePop();
@@ -9598,14 +9647,7 @@ function openPlacePop(anchor, place, onChange, opts) {
   document.body.appendChild(pop);
   placeState.pop = pop;
   renderPlacePop();
-  if (anchor && anchor.getBoundingClientRect) {
-    const r = anchor.getBoundingClientRect();
-    const w = pop.offsetWidth || 350;
-    pop.style.left = Math.max(12, Math.min(r.left, window.innerWidth - w - 12)) + 'px';
-    const below = window.innerHeight - r.bottom;
-    if (below < 260 && r.top > below) pop.style.bottom = (window.innerHeight - r.top + 6) + 'px';
-    else pop.style.top = (r.bottom + 6) + 'px';
-  }
+  positionPlacePop();
   // 目录过期时后台重拉：新加的 DSH 节点最多 60s 后自动出现在下拉里，无需刷新整页
   // （2026-11-06 pjy-DSH 报障：页面开着不动，ONENAT 新加的映射永远不出现）
   refreshCatalogIfStale(function () {
@@ -9614,6 +9656,35 @@ function openPlacePop(anchor, place, onChange, opts) {
     if (si && document.activeElement === si) return; // 正在输入搜索关键字时不打断，下轮打开再刷新
     renderPlacePop();
   });
+}
+/** 按实际菜单高度定位；节点探测/搜索重绘后也保持在视口内。 */
+function positionPlacePop() {
+  const pop = placeState.pop;
+  const anchor = placeState.anchor;
+  if (!pop || !anchor || !anchor.getBoundingClientRect) return;
+  const margin = 12;
+  const gap = 6;
+  const viewport = window.visualViewport;
+  const left = viewport ? viewport.offsetLeft : 0;
+  const top = viewport ? viewport.offsetTop : 0;
+  const width = viewport ? viewport.width : window.innerWidth;
+  const height = viewport ? viewport.height : window.innerHeight;
+  pop.style.maxWidth = Math.max(0, width - margin * 2) + 'px';
+  pop.style.maxHeight = Math.max(0, Math.min(height * 0.76, height - margin * 2)) + 'px';
+  const r = anchor.getBoundingClientRect();
+  const w = pop.offsetWidth || 350;
+  const h = pop.offsetHeight;
+  const below = top + height - r.bottom - gap - margin;
+  const above = r.top - top - gap - margin;
+  const desiredTop = h > below && above > below ? r.top - gap - h : r.bottom + gap;
+  pop.style.left = Math.max(left + margin, Math.min(r.left, left + width - w - margin)) + 'px';
+  pop.style.top = Math.max(top + margin, Math.min(desiredTop, top + height - h - margin)) + 'px';
+  pop.style.bottom = 'auto';
+}
+window.addEventListener('resize', positionPlacePop);
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', positionPlacePop);
+  window.visualViewport.addEventListener('scroll', positionPlacePop);
 }
 function closePlacePop() {
   if (placeState.pop) placeState.pop.remove();
@@ -9647,7 +9718,9 @@ function placeNodeListHtml(opts, cur) {
     for (var ni = 0; ni < g.list.length; ni++) {
       var n = g.list[ni];
       var cnt = placeNodeProjects(n.mappingId).length;
-      html += dshNodeItemHtml(n, cur.nodeMappingId === n.mappingId, placeState.nodeOnly ? '选定 ›' : (cnt ? cnt + ' 个项目 ›' : '单独任务 ›'));
+      const pj = cur.projectId ? (state.projects || []).find(function (p) { return p.id === cur.projectId; }) : null;
+      const access = pj ? (sameNodeRef(pj.dshRef, { kind: 'mapping', mappingId: n.mappingId }) ? '同节点直接访问' : '跨节点远程访问（非本地 cwd）') : '';
+      html += dshNodeItemHtml(n, cur.nodeMappingId === n.mappingId, pj ? access : placeState.nodeOnly ? '选定 ›' : (cnt ? cnt + ' 个项目 ›' : '单独任务 ›'));
     }
   }
   return html;
@@ -9659,9 +9732,10 @@ function refreshPlaceNodeList() {
   if (!pop) return;
   var box = pop.querySelector('#place-node-list');
   if (!box) { renderPlacePop(); return; }
-  var opts = dshNodeOptions();
+  var opts = executionNodeOptions();
   box.innerHTML = placeNodeListHtml(opts, placeState.place);
   wirePlaceNodeItems(pop);
+  positionPlacePop();
 }
 
 /** 节点行点击绑定（整体渲染与增量刷新共用） */
@@ -9670,7 +9744,8 @@ function wirePlaceNodeItems(pop) {
     if (it.dataset.bound === '1') return;
     it.dataset.bound = '1';
     it.addEventListener('click', function () {
-      if (placeState.nodeOnly) { selectPlace({ nodeMappingId: it.dataset.mid, projectId: null }); return; }
+      if (!executionNodeOptions().some(function (n) { return n.mappingId === it.dataset.mid; })) { toast('该节点当前离线，请选择在线节点', true); return; }
+      if (placeState.nodeOnly || placeState.place.projectId) { selectPlace({ nodeMappingId: it.dataset.mid, projectId: placeState.nodeOnly ? null : placeState.place.projectId }); return; }
       placeState.level = 'project';
       placeState.browse = it.dataset.mid;
       renderPlacePop();
@@ -9682,11 +9757,16 @@ function renderPlacePop() {
   const pop = placeState.pop;
   if (!pop) return;
   const keepScroll = pop.scrollTop; // 探测回调/目录过期重绘会重建 innerHTML，把滚动位置还给用户（否则浏览到一半被拽回顶部，最后一个节点又「看不见」了）
-  const opts = dshNodeOptions();
+  const opts = executionNodeOptions();
   const cur = placeState.place;
   let html = '';
   if (placeState.level === 'node') {
-    html += '<div class="main-agent-pop-head"><span>执行位置 · 选择节点</span><span>共 ' + opts.length + ' 个 · 离线也可选</span></div>';
+    html += '<div class="main-agent-pop-head"><span>' + (cur.projectId ? '项目执行节点' : '执行位置 · 选择节点') + '</span><span>共 ' + opts.length + ' 个在线节点</span></div>';
+    if (cur.projectId) {
+      const pj = (state.projects || []).find(function (p) { return p.id === cur.projectId; });
+      html += '<div class="model-group">📦 ' + esc(pj ? pj.name : cur.projectId) + ' · 文件归属：' + esc(nodeRefLabel(pj && pj.dshRef)) + '</div>';
+      html += '<div class="main-agent-item" data-op="change-project"><div class="ag-info"><div class="ag-title">切换项目 / 单独任务…</div></div></div>';
+    }
     if (!opts.length) html += '<div class="model-empty">暂无 DSH 节点（资源目录未同步）</div>';
     // 节点搜索：节点多了以后（线上已 13 个）最后几个新加的节点沉在滚动区底部，
     // 用户会以为"看不到"。输入名字/地址/mappingId 即可直达。
@@ -9707,10 +9787,12 @@ function renderPlacePop() {
     for (const pj of list) {
       html += '<div class="main-agent-item' + (cur.projectId === pj.id ? ' on' : '') + '" data-pid="' + esc(pj.id) + '">' +
         '<div class="ag-info"><div class="ag-title">📦 ' + esc(pj.name || pj.id) + '</div>' +
-        '<div class="ag-sub">' + esc(pj.workspace || '远端默认目录') + '</div></div><span class="ag-ck">✓</span></div>';
+        '<div class="ag-sub">文件：' + esc(nodeRefLabel(pj.dshRef)) + ' · ' + esc(pj.workspace || '默认目录') + ' · ' + (placeProjectNode(pj) === mid ? '同节点直接访问' : '跨节点远程访问（非本地 cwd）') + '</div></div><span class="ag-ck">✓</span></div>';
     }
   }
   pop.innerHTML = html;
+  const changeProject = pop.querySelector('[data-op="change-project"]');
+  if (changeProject) changeProject.addEventListener('click', function () { placeState.place = { nodeMappingId: cur.nodeMappingId, projectId: null }; renderPlacePop(); });
   if (placeState.level === 'node') {
     // 搜索框：只在首次创建时绑定 input，之后仅同步 value（重建会丢焦点）
     const si = pop.querySelector('#place-search-input');
@@ -9728,7 +9810,7 @@ function renderPlacePop() {
     }
     if (keepScroll) pop.scrollTop = keepScroll;
     wirePlaceNodeItems(pop);
-    probeNodesIfStale(opts);
+    probeNodesIfStale(dshNodeOptions()); // 包括已离线节点，探测恢复后重新进入候选
   } else {
     const back = pop.querySelector('[data-op="back"]');
     if (back) back.addEventListener('click', function () { placeState.level = 'node'; renderPlacePop(); });
@@ -9738,6 +9820,7 @@ function renderPlacePop() {
       });
     });
   }
+  positionPlacePop();
 }
 document.addEventListener('click', function (e) {
   if (placeState.pop && !(placeState.anchor && placeState.anchor.contains(e.target))) closePlacePop();
@@ -9819,7 +9902,7 @@ async function selectMainAgent(agentId) {
 // ---------- 主调度模型选择（自定义弹层：原生 select 的移动端全屏弹窗字大折行且样式失控） ----------
 // curEffort/curPreset：当前执行会话的推理强度与模式预设（任务内才有意义；打开会话时回读回显）
 // cur = 当前任务的任务级模型（空 = 跟随默认）；globalDefault = 全局默认模型（settings.planner.model，只在设置页改）
-const modelState = { groups: {}, cur: '', globalDefault: '', loaded: false, loading: false, error: '', query: '', recent: [], pinnedExtra: [], pinnedHidden: [], modelCfg: {}, lastModel: { model: '', effort: '', preset: '' }, presets: [], curEffort: '', curPreset: '', presetsLoaded: false, loadedForNode: '', loadedForTask: '', presetsForNode: '' };
+const modelState = { groups: {}, cur: '', globalDefault: '', loaded: false, loading: false, error: '', query: '', recent: [], pinnedExtra: [], pinnedHidden: [], modelCfg: {}, lastModel: { model: '', effort: '', preset: '' }, presets: [], curEffort: '', curPreset: '', presetsLoaded: false, loadedForNode: '', loadedForTask: '', presetsForNode: '', nodeDefault: '', loadedForContext: '', loadedAt: 0 };
 try { modelState.recent = JSON.parse(localStorage.getItem('wb-recent-models') || '[]').filter(x => typeof x === 'string'); } catch (e) { modelState.recent = []; }
 // 「常用与默认」手动固定/已移除清单（wb-pinned-extra / wb-pinned-hidden）：× 移除后不再自动回置顶
 try { modelState.pinnedExtra = JSON.parse(localStorage.getItem('wb-pinned-extra') || '[]').filter(x => typeof x === 'string'); } catch (e) { modelState.pinnedExtra = []; }
@@ -9828,14 +9911,15 @@ try { modelState.pinnedHidden = JSON.parse(localStorage.getItem('wb-pinned-hidde
 try { const cfg = JSON.parse(localStorage.getItem('wb-model-config') || '{}'); if (cfg && typeof cfg === 'object') modelState.modelCfg = cfg; } catch (e) { modelState.modelCfg = {}; }
 try { const lm = JSON.parse(localStorage.getItem('wb-last-model') || 'null'); if (lm && typeof lm === 'object' && typeof lm.model === 'string') modelState.lastModel = { model: lm.model, effort: typeof lm.effort === 'string' ? lm.effort : '', preset: typeof lm.preset === 'string' ? lm.preset : '' }; } catch (e) { modelState.lastModel = { model: '', effort: '', preset: '' }; }
 function modelBtnTitle() { return '本任务模型（只影响当前任务的主会话；全局默认模型在设置页修改）'; }
-function curModelEntry() {
-  if (!modelState.cur) return null;
+function modelEntry(v) {
+  if (!v) return null;
   for (const pv of Object.keys(modelState.groups)) {
-    const hit = (modelState.groups[pv] || []).find(m => pv + '/' + m.id === modelState.cur);
+    const hit = (modelState.groups[pv] || []).find(m => pv + '/' + m.id === v);
     if (hit) return hit;
   }
   return null;
 }
+function curModelEntry() { return modelEntry(modelState.cur); }
 function effortName(id) {
   const e = (curModelEntry()?.reasoning?.efforts || []).find(x => x.id === id);
   return e ? (e.name || e.id) : (id || '');
@@ -9896,7 +9980,7 @@ function draftSeedModel() {
 }
 /** 「跟随默认」时实际使用的模型名：全局默认模型，未设置则为节点默认 */
 function followDefaultName() {
-  return modelState.globalDefault || '节点默认';
+  return modelState.globalDefault || modelState.nodeDefault || '节点默认';
 }
 /** 当前任务的任务级模型（空 = 跟随默认）；无当前任务时取新任务环境里选好的模型（没选过则取最近一次使用的模型） */
 function currentTaskModelChoice() {
@@ -9909,7 +9993,8 @@ function currentTaskModelChoice() {
   return (t && t.model) || '';
 }
 function modelBtnLabel(v) {
-  let t = '⚙ ' + (v || ('跟随默认 · ' + followDefaultName()));
+  const entry = modelEntry(v);
+  let t = '⚙ ' + (v ? ((entry && entry.name) || v) : ((modelState.globalDefault ? '跟随全局默认 · ' : '跟随默认 · ') + followDefaultName()));
   if (modelState.curEffort) t += ' ' + effortName(modelState.curEffort);
   if (modelState.curPreset) t += ' · ' + modelState.curPreset;
   return t;
@@ -9934,7 +10019,7 @@ function modelListHtml() {
   }
   const pinRank = x => x.model.isDefault ? 0 : x.value === cur ? 1 : modelState.pinnedExtra.indexOf(x.value) >= 0 ? 2 : modelState.recent.indexOf(x.value) >= 0 ? 3 + modelState.recent.indexOf(x.value) : 100;
   const isPinned = x => pinRank(x) < 100 && modelState.pinnedHidden.indexOf(x.value) < 0;
-  const shownModels = allModels.filter(x => !query || (x.provider + ' ' + x.model.id).toLowerCase().includes(query)).sort((a, b) => pinRank(a) - pinRank(b) || a.provider.localeCompare(b.provider) || a.model.id.localeCompare(b.model.id));
+  const shownModels = allModels.filter(x => !query || (x.provider + ' ' + x.model.id + ' ' + (x.model.name || '')).toLowerCase().includes(query)).sort((a, b) => pinRank(a) - pinRank(b) || a.provider.localeCompare(b.provider) || a.model.id.localeCompare(b.model.id));
   const buckets = [];
   const pinned = shownModels.filter(isPinned);
   if (pinned.length) buckets.push({ title: '常用与默认', items: pinned, pinGroup: true });
@@ -9951,7 +10036,7 @@ function modelListHtml() {
       const pin = group.pinGroup
         ? '<button type="button" class="model-pinbtn" data-unpin="' + esc(v) + '" title="从「常用与默认」移除">×</button>'
         : '<button type="button" class="model-pinbtn add" data-pin="' + esc(v) + '" title="固定到「常用与默认」">＋</button>';
-      html += '<div class="model-item' + (v === cur ? ' on' : '') + '" data-v="' + esc(v) + '"><span class="n">' + esc(m.id + (m.isDefault ? ' ★ 默认' : '')) + '</span>' + pin + '<span class="ck">✓</span></div>';
+      html += '<div class="model-item' + (v === cur ? ' on' : '') + '" data-v="' + esc(v) + '" title="' + esc(v) + '"><span class="n">' + esc((m.name || m.id) + (m.isDefault ? ' ★ 节点默认' : '')) + '<small class="model-id">' + esc(v) + '</small></span>' + pin + '<span class="ck">✓</span></div>';
     }
   }
   if (!allModels.length) {
@@ -9982,7 +10067,10 @@ function renderModelPop() {
   const pop = $('model-pop');
   const cur = modelState.cur;
   let html = '<div class="model-pop-head"><span>' + (state.currentTaskId ? '本任务模型' : '新任务模型') + '</span><span>只影响主会话 · @ 子智能体用各自模型</span></div>';
-  html += '<div class="model-item' + (!cur ? ' on' : '') + '" data-v=""><span class="n">跟随默认（' + esc(followDefaultName()) + '）</span><span class="ck">✓</span></div>';
+  html += '<div class="model-item' + (!cur ? ' on' : '') + '" data-v=""><span class="n">' + (modelState.globalDefault ? '跟随全局默认' : '跟随默认') + '（' + esc(followDefaultName()) + '）</span><span class="ck">✓</span></div>';
+  if (modelState.nodeDefault) {
+    html += '<div class="model-default-note">当前节点默认：' + esc(modelState.nodeDefault) + (modelState.globalDefault && modelState.globalDefault !== modelState.nodeDefault ? '；未指定任务模型时优先使用全局默认。' : '') + '</div>';
+  }
   html += '<div class="model-search"><input id="model-search-input" type="search" placeholder="搜索模型或提供商" value="' + esc(modelState.query) + '" aria-label="搜索模型"></div>';
   html += '<div id="model-list">' + modelListHtml() + '</div>';
   // 推理等级 / 模式预设已拆为 composer 上的独立入口（chat-effort-btn / chat-preset-btn），
@@ -10148,42 +10236,64 @@ document.addEventListener('click', (e) => {
     }
   });
 });
-async function loadPlannerOptions(force) {
+let modelCatalogRequest = null;
+function modelCatalogContextKey() {
+  return JSON.stringify([state.currentTaskId || '', taskExecNodeId(currentTaskObj())]);
+}
+function loadPlannerOptions(force) {
+  const contextKey = modelCatalogContextKey();
+  // 同一上下文复用请求；换节点/任务时立即发新请求，旧请求只允许结束自身。
+  if (modelCatalogRequest && modelCatalogRequest.contextKey === contextKey) return modelCatalogRequest.promise;
+  if (!force && modelCatalogCurrent()) return Promise.resolve();
+  const request = { contextKey: contextKey, taskId: state.currentTaskId || '', node: taskExecNodeId(null), promise: null };
+  modelCatalogRequest = request;
   const modelBtn = $('chat-model-btn');
   const agentBtn = $('main-agent-btn');
-  if (modelState.loading) return;
-  if (!force && modelState.loaded && modelCatalogCurrent()) return;
   modelState.loading = true;
+  modelState.loaded = false;
+  modelState.groups = {};
+  modelState.nodeDefault = '';
   modelState.error = '';
   if ($('model-pop') && $('model-pop').classList.contains('on')) renderModelPop();
   if (modelBtn) modelBtn.disabled = true;
   if (agentBtn) agentBtn.disabled = true;
   // 无论成功失败/网络异常都要恢复可点：曾因 await 抛错跳过 re-enable，普通用户侧按钮永久禁用「点不动」
-  try {
-    return await _loadPlannerOptionsInner(modelBtn, agentBtn);
-  } catch (e) {
-    modelState.error = e && e.message ? e.message : '请求失败';
-    modelState.loaded = false;
-  } finally {
-    modelState.loading = false;
-    if (modelBtn) modelBtn.disabled = false;
-    if (agentBtn) agentBtn.disabled = false;
-    if ($('model-pop') && $('model-pop').classList.contains('on')) renderModelPop();
-  }
+  request.promise = (async function () {
+    try {
+      await _loadPlannerOptionsInner(modelBtn, agentBtn, request);
+    } catch (e) {
+      if (modelCatalogRequest === request && request.contextKey === modelCatalogContextKey()) {
+        modelState.error = e && e.message ? e.message : '请求失败';
+        modelState.loaded = false;
+      }
+    } finally {
+      if (modelCatalogRequest === request) {
+        modelCatalogRequest = null;
+        modelState.loading = false;
+        if (modelBtn) modelBtn.disabled = false;
+        if (agentBtn) agentBtn.disabled = false;
+        // 首屏节点/项目异步就绪也可能改变上下文，即使调用方没再请求也要补拉。
+        if (request.contextKey !== modelCatalogContextKey()) return loadPlannerOptions();
+        if ($('model-pop') && $('model-pop').classList.contains('on')) renderModelPop();
+      }
+    }
+  })();
+  return request.promise;
 }
-async function _loadPlannerOptionsInner(modelBtn, agentBtn) {
+async function _loadPlannerOptionsInner(modelBtn, agentBtn, request) {
   // 模型目录跟随所选任务节点（?node=）：调度模型作用于任务节点的主会话，
   // 节点切换后目录必须换成该节点引擎的注册表（否则会把 A 引擎的模型配到 B 引擎上）
-  // 节点 = 当前任务实际执行节点（项目 dshRef → task.nodeRef → 所选执行位置），见 taskExecNodeId
+  // 节点 = 当前任务 nodeRef（旧项目任务回文件节点）或草稿所选执行节点。
   // 模型目录跟随所选任务节点：任务内带 taskId（服务端按任务/项目绑定节点权威解析，
   // 前端猜节点在项目清单未加载时会回退到所选执行位置 → 目录错节点，真实缺陷 2026-11-06）；
   // 欢迎页/草稿态无任务，仍按所选执行位置 node= 拉取
-  const taskIdQ = state.currentTaskId || '';
-  const catalogNode = taskIdQ ? '' : taskExecNodeId(null);
+  const taskIdQ = request.taskId;
+  const catalogNode = taskIdQ ? '' : request.node;
   const nodeQs = taskIdQ
     ? '?taskId=' + encodeURIComponent(taskIdQ)
     : (catalogNode ? '?node=' + encodeURIComponent(catalogNode) : '');
   const r = await api('/planner/options' + nodeQs);
+  if (modelCatalogRequest !== request || request.contextKey !== modelCatalogContextKey()) return;
   if (!r.ok || !r.data) {
     modelState.error = r.error || '请求失败';
     modelState.loaded = false;
@@ -10212,14 +10322,20 @@ async function _loadPlannerOptionsInner(modelBtn, agentBtn) {
 
   // 2. 更新模型状态：planner.model 只是「全局默认模型」；按钮显示的是当前任务（或新任务环境）的任务级选择
   modelState.globalDefault = (d.current || {}).model || '';
-  modelState.cur = currentTaskModelChoice();
+  const remoteDefault = d.defaultModel || (d.models || []).find(function (m) { return m.isDefault; });
+  const defaultId = remoteDefault && (remoteDefault.model || remoteDefault.id);
+  modelState.nodeDefault = defaultId ? (remoteDefault.provider ? remoteDefault.provider + '/' : '') + defaultId : '';
+  const pendingChoice = modelState.pendingSelection;
+  modelState.cur = pendingChoice && pendingChoice.taskId === taskIdQ ? pendingChoice.model : currentTaskModelChoice();
   if (!state.currentTaskId && !state.draft) applyRememberedCfg(modelState.cur); // 欢迎页按钮带出最近一次使用的整套配置
   modelState.groups = {};
   modelState.error = d.modelError || '';
   for (const m of d.models || []) { (modelState.groups[m.provider] = modelState.groups[m.provider] || []).push(m); }
-  modelState.loaded = true;
+  modelState.loaded = !modelState.error;
   modelState.loadedForNode = d.node || catalogNode;
   modelState.loadedForTask = taskIdQ;
+  modelState.loadedForContext = request.contextKey;
+  modelState.loadedAt = Date.now();
   if (modelBtn) {
     modelBtn.disabled = false;
     modelBtn.textContent = modelBtnLabel(modelState.cur);
@@ -10232,12 +10348,9 @@ async function _loadPlannerOptionsInner(modelBtn, agentBtn) {
   refreshMainAgentModelBadges();
   refreshCfgBtns(); // 模型目录/节点到位后重估强度按钮可见性（跟随当前模型 efforts）
 }
-/** 目录缓存键是否与当前上下文一致：任务内按 taskId 对齐，欢迎页/草稿按执行位置节点对齐 */
+/** 目录必须属于当前任务/执行节点，且缓存未过期；打开弹层时另外强制刷新。 */
 function modelCatalogCurrent() {
-  if (!modelState.loaded) return false;
-  if ((state.currentTaskId || '') !== modelState.loadedForTask) return false;
-  if (!state.currentTaskId && modelState.loadedForNode !== taskExecNodeId(null)) return false;
-  return true;
+  return modelState.loaded && modelState.loadedForContext === modelCatalogContextKey() && Date.now() - modelState.loadedAt < 60000;
 }
 function closeModelPop() { $('model-pop').classList.remove('on'); }
 $('chat-model-btn').addEventListener('click', (e) => {
@@ -10249,7 +10362,7 @@ $('chat-model-btn').addEventListener('click', (e) => {
   modelState.query = '';
   renderModelPop();
   pop.classList.add('on');
-  if (!modelCatalogCurrent()) loadPlannerOptions();
+  loadPlannerOptions(true); // 与 Android 一致：每次打开都读取节点最新目录。
 });
 document.addEventListener('click', (e) => {
   const modelPop = $('model-pop');
@@ -10301,7 +10414,11 @@ async function selectModel(v) {
     setModelStatus('✓ 新任务将使用「' + (v || followDefaultName()) + '」');
     return;
   }
+  const selection = { taskId: taskId, model: v };
+  modelState.pendingSelection = selection;
   const rollback = function () {
+    if (modelState.pendingSelection !== selection) return;
+    modelState.pendingSelection = null;
     if (state.currentTaskId !== taskId) return;
     modelState.cur = prevModel;
     btn.textContent = modelBtnLabel(prevModel);
@@ -10330,6 +10447,7 @@ async function selectModel(v) {
   }
   const cached = state.taskCache.get(taskId);
   if (cached) { if (v) cached.model = v; else delete cached.model; }
+  if (modelState.pendingSelection === selection) modelState.pendingSelection = null;
   // 该模型记住的推理等级/模式预设随后补投（远端切模型已清强度）；失败静默不影响主流程
   const remember = rememberedModelCfg(v);
   if (remember && remember.effort) { try { await api('/tasks/' + taskId + '/session-model', { method: 'PUT', body: JSON.stringify({ reasoningEffort: remember.effort }) }); } catch (e2) { /* ignore */ } }
@@ -10970,8 +11088,15 @@ function wsRestoreForTask(task) {
 })();
 
 // ---------- F1-2 文件页签：逐层展开目录树（所有任务可用；接口与 pjFiles 同源 /agents/fs/*?node=） ----------
-const wsFiles = { node: null, root: '', rootSrc: '', loaded: false, levels: {}, showHidden: false, kw: '', selected: new Set(), lastDir: '' };
-/** 任务执行节点的 dshRef：项目 dshRef → task.nodeRef → 所选节点（与 taskExecNodeId 同口径，含 direct 形态） */
+const wsFiles = { node: null, projectId: '', root: '', rootSrc: '', loaded: false, levels: {}, showHidden: false, kw: '', selected: new Set(), lastDir: '' };
+function fsTargetForChat(task) {
+  const t = task || currentTaskObj();
+  return { node: wsTaskDshRef(t), projectId: (t && t.projectId) || '' };
+}
+function fsTargetQuery(target) {
+  return (target.projectId ? 'projectId=' + encodeURIComponent(target.projectId) + '&' : '') + 'node=' + encodeURIComponent(JSON.stringify(target.node));
+}
+/** 文件浏览节点：项目文件始终属于 project.dshRef；单独任务使用 task.nodeRef。 */
 function wsTaskDshRef(task) {
   const t = task || currentTaskObj();
   if (!t) return null;
@@ -10981,24 +11106,22 @@ function wsTaskDshRef(task) {
   if (nodeState.cur) return { kind: 'mapping', mappingId: nodeState.cur };
   return null;
 }
-/** 目录树根：task.workDir → 项目 workspace → 节点默认（列表接口不传 path 时返回节点默认 cwd） */
+/** 目录树根：项目 workspace 优先；单独任务 workDir → 节点默认目录。 */
 async function wsTaskFileCtx() {
   const t = currentTaskObj();
   const node = wsTaskDshRef(t);
   if (!node) return null;
-  let root = (t && t.workDir) || '';
-  let src = root ? '任务工作目录' : '';
-  if (!root) {
-    const p = t && t.projectId ? (state.projects || []).find(function (x) { return x.id === t.projectId; }) : null;
-    if (p && p.workspace) { root = p.workspace; src = '项目工作区'; }
-  }
+  const p = t && t.projectId ? (state.projects || []).find(function (x) { return x.id === t.projectId; }) : null;
+  let root = p ? (p.workspace || '') : (t && t.workDir) || '';
+  const info = p ? taskPlaceInfo(t) : null;
+  let src = p ? '文件归属：' + nodeRefLabel(p.dshRef) + ' · 执行：' + info.nodeLabel + ' · ' + (info.remote ? '跨节点远程访问（非本地 cwd）' : '同节点直接访问') : root ? '任务工作目录' : '';
   if (!root) {
     try {
-      const r = await api('/agents/fs/list?node=' + encodeURIComponent(JSON.stringify(node)) + '&all=1');
+      const r = await api('/agents/fs/list?' + fsTargetQuery(fsTargetForChat(t)) + '&all=1');
       if (r.ok && r.data && r.data.path) { root = r.data.path; src = '节点默认目录'; }
     } catch (e) { /* ignore */ }
   }
-  return { node: node, root: pjTrimSlash(root), rootSrc: src };
+  return { node: node, projectId: (t && t.projectId) || '', root: pjTrimSlash(root), rootSrc: src };
 }
 function wsFilesLevel(dir) {
   return wsFiles.levels[dir] || (wsFiles.levels[dir] = { open: dir === wsFiles.root, entries: [], loading: false, error: '' });
@@ -11008,7 +11131,7 @@ async function wsFilesLoadLevel(dir) {
   const lv = wsFilesLevel(dir);
   lv.open = true; lv.loading = true; lv.error = '';
   wsFilesRenderTree();
-  const r = await api('/agents/fs/list?node=' + encodeURIComponent(JSON.stringify(wsFiles.node)) + (dir ? '&path=' + encodeURIComponent(dir) : '') + '&all=1');
+  const r = await api('/agents/fs/list?' + fsTargetQuery(wsFiles) + (dir ? '&path=' + encodeURIComponent(dir) : '') + '&all=1');
   lv.loading = false;
   if (!r.ok) { lv.error = r.error || '读取目录失败'; wsFilesRenderTree(); return; }
   lv.entries = (r.data.entries || []).slice().sort(function (a, b) {
@@ -11017,8 +11140,8 @@ async function wsFilesLoadLevel(dir) {
   });
   wsFilesRenderTree();
 }
-function wsFilesReset(node, root, rootSrc) {
-  wsFiles.node = node; wsFiles.root = root || ''; wsFiles.rootSrc = rootSrc || '';
+function wsFilesReset(node, root, rootSrc, projectId) {
+  wsFiles.node = node; wsFiles.projectId = projectId || ''; wsFiles.root = root || ''; wsFiles.rootSrc = rootSrc || '';
   wsFiles.levels = {}; wsFiles.selected = new Set(); wsFiles.showHidden = false; wsFiles.kw = '';
   wsFiles.loaded = Boolean(node); wsFiles.lastDir = root || '';
   if (wsFiles.loaded && wsFiles.root) wsFilesLoadLevel(wsFiles.root);
@@ -11028,8 +11151,9 @@ async function wsFilesMount() {
   const el = $('ws-files-root');
   if (!el) return;
   if (!ctx || !ctx.node) { el.innerHTML = '<div class="ws-hint">当前任务没有可用的执行节点，无法浏览工作区。</div>'; return; }
-  const same = wsFiles.loaded && JSON.stringify(wsFiles.node) === JSON.stringify(ctx.node) && wsFiles.root === ctx.root;
-  if (!same) wsFilesReset(ctx.node, ctx.root, ctx.rootSrc);
+  const same = wsFiles.loaded && wsFiles.projectId === ctx.projectId && JSON.stringify(wsFiles.node) === JSON.stringify(ctx.node) && wsFiles.root === ctx.root;
+  if (!same) wsFilesReset(ctx.node, ctx.root, ctx.rootSrc, ctx.projectId);
+  else wsFiles.rootSrc = ctx.rootSrc; // 同项目切换执行节点时保留目录树，刷新本会话访问说明。
   wsFilesRenderAll();
 }
 function wsFilesHeaderHtml() {
@@ -11150,7 +11274,7 @@ function wsSyncBatchBar() {
     let ok = 0;
     for (const it of items) {
       try {
-        const res = await fetch(API + '/agents/fs/download?node=' + encodeURIComponent(JSON.stringify(wsFiles.node)) + '&path=' + encodeURIComponent(it.path));
+        const res = await fetch(API + '/agents/fs/download?' + fsTargetQuery(wsFiles) + '&path=' + encodeURIComponent(it.path));
         if (!res.ok) { toast('「' + it.name + '」下载失败 (HTTP ' + res.status + ')', true); continue; }
         const blob = new Blob([await res.arrayBuffer()], { type: 'application/octet-stream' });
         const a = document.createElement('a');
@@ -11169,7 +11293,7 @@ function wsSyncBatchBar() {
     if (!confirm('确定在执行节点上删除选中的 ' + paths.length + ' 项？此操作不可恢复。')) return;
     let ok = 0;
     for (const p of paths) {
-      const r = await api('/agents/fs/remove?node=' + encodeURIComponent(JSON.stringify(wsFiles.node)) + '&path=' + encodeURIComponent(p), { method: 'DELETE' });
+      const r = await api('/agents/fs/remove?' + fsTargetQuery(wsFiles) + '&path=' + encodeURIComponent(p), { method: 'DELETE' });
       if (r.ok) { ok++; wsFiles.selected.delete(p); const parent = String(p).split('/').slice(0, -1).join('/'); if (wsFiles.levels[p]) delete wsFiles.levels[p]; if (wsFiles.levels[parent]) wsFilesLoadLevel(parent); }
       else toast('「' + p.split('/').pop() + '」删除失败：' + (r.error || ''), true);
     }
@@ -11209,7 +11333,7 @@ function wsFilesRenderTree() {
       if (op === 'prev') { openWsTab('preview', { path: p, title: name }); return; }
       if (op === 'dl') {
         const a = document.createElement('a');
-        a.href = API + '/agents/fs/download?node=' + encodeURIComponent(JSON.stringify(wsFiles.node)) + '&path=' + encodeURIComponent(p);
+        a.href = API + '/agents/fs/download?' + fsTargetQuery(wsFiles) + '&path=' + encodeURIComponent(p);
         a.download = name;
         a.click();
         return;
@@ -11221,7 +11345,7 @@ function wsFilesRenderTree() {
       }
       if (op === 'del') {
         if (!confirm('确定在执行节点上删除「' + name + '」？此操作不可恢复。')) return;
-        const r = await api('/agents/fs/remove?node=' + encodeURIComponent(JSON.stringify(wsFiles.node)) + '&path=' + encodeURIComponent(p), { method: 'DELETE' });
+        const r = await api('/agents/fs/remove?' + fsTargetQuery(wsFiles) + '&path=' + encodeURIComponent(p), { method: 'DELETE' });
         if (!r.ok) { toast(r.error || '删除失败', true); return; }
         toast('✓ 已删除 ' + name);
         const parent = String(p).split('/').slice(0, -1).join('/');
@@ -11253,7 +11377,7 @@ async function wsFilesUpload(files, destDir) {
     try {
       const fd = new FormData();
       fd.append('files', f, f.name);
-      const res = await fetch(API + '/agents/fs/upload?node=' + encodeURIComponent(JSON.stringify(wsFiles.node)) + '&path=' + encodeURIComponent(destDir), { method: 'POST', body: fd });
+      const res = await fetch(API + '/agents/fs/upload?' + fsTargetQuery(wsFiles) + '&path=' + encodeURIComponent(destDir), { method: 'POST', body: fd });
       const json = await res.json().catch(function () { return {}; });
       if (res.ok && json.ok) ok++;
       else toast('「' + f.name + '」上传失败: ' + (json.error || 'HTTP ' + res.status), true);
@@ -11276,7 +11400,7 @@ function wsFilesRenderAll() {
     if (!dir) { toast('未解析到根目录', true); return; }
     const name = prompt('在目录下新建文件夹：\\n' + dir, '');
     if (!name || !name.trim()) return;
-    const r = await api('/agents/fs/mkdir', { method: 'POST', body: JSON.stringify({ node: wsFiles.node, path: dir, name: name.trim() }) });
+    const r = await api('/agents/fs/mkdir', { method: 'POST', body: JSON.stringify({ node: wsFiles.node, projectId: wsFiles.projectId || undefined, path: dir, name: name.trim() }) });
     if (!r.ok) { toast(r.error || '创建文件夹失败', true); return; }
     toast('✓ 已创建文件夹「' + name.trim() + '」');
     wsFilesLoadLevel(dir);
@@ -11335,7 +11459,7 @@ async function wsPreviewRender(tab) {
   } else {
     const node = wsFiles.node || wsTaskDshRef(currentTaskObj());
     if (!node) { root.innerHTML = '<div class="ws-hint">无法解析文件位置</div>'; return; }
-    downloadUrl = API + '/agents/fs/download?node=' + encodeURIComponent(JSON.stringify(node)) + '&path=' + encodeURIComponent(p);
+    downloadUrl = API + '/agents/fs/download?' + fsTargetQuery({ node: node, projectId: wsFiles.projectId || fsTargetForChat().projectId }) + '&path=' + encodeURIComponent(p);
   }
   if (!p) { root.innerHTML = '<div class="ws-hint">无法解析文件位置</div>'; return; }
   const inlineUrl = downloadUrl + '&inline=1';
@@ -11433,14 +11557,14 @@ function wsChangesMount() {
 function startForkFlow(anchor) {
   const t = currentTaskObj();
   if (!t) { toast('请先打开要续接的任务', true); return; }
-  const cur = t.projectId ? { projectId: t.projectId } : { nodeMappingId: taskExecNodeId(t) };
+  const cur = { projectId: t.projectId || null, nodeMappingId: taskExecNodeId(t) };
   openPlacePop(anchor || $('btn-head-more'), cur, function (place) { forkTaskTo(t.id, place); });
 }
 async function forkTaskTo(taskId, place) {
   toast('正在创建续接任务…');
   const body = {};
-  if (place && place.projectId) body.projectId = place.projectId;
-  else if (place && place.nodeMappingId) body.nodeRef = { kind: 'mapping', mappingId: place.nodeMappingId };
+  if (place) body.projectId = place.projectId || null; // 显式 null 退出项目；缺省仍由服务端继承原项目
+  if (place && place.nodeMappingId) body.nodeRef = { kind: 'mapping', mappingId: place.nodeMappingId };
   const r = await api('/tasks/' + encodeURIComponent(taskId) + '/fork', { method: 'POST', body: JSON.stringify(body) });
   if (!r.ok) { toast(r.error || '续接失败', true); return; }
   const nt = r.data && r.data.task;
@@ -11458,7 +11582,14 @@ async function forkTaskTo(taskId, place) {
 
 function renderDraftPlaceBtn() {
   const btn = $('draft-place-btn');
-  if (btn && state.draft) btn.textContent = placeLabel(state.draft.place) + ' ▾';
+  if (btn && state.draft) { btn.textContent = placeLabel(state.draft.place) + ' ▾'; btn.title = btn.textContent; }
+  const note = $('draft-access-note');
+  if (note && state.draft) {
+    const place = normalizePlace(state.draft.place);
+    const pj = (state.projects || []).find(function (p) { return p.id === place.projectId; });
+    const ref = place.nodeMappingId ? { kind: 'mapping', mappingId: place.nodeMappingId } : projectExecutionRef(pj);
+    note.textContent = pj ? '文件归属：' + nodeRefLabel(pj.dshRef) + ' · ' + (pj.workspace || '默认目录') + '；执行：' + nodeRefLabel(ref) + '。' + (sameNodeRef(pj.dshRef, ref) ? '同节点直接访问。' : '跨节点远程访问；项目路径不是执行节点的原生本地 cwd。') : '';
+  }
 }
 function renderDraftView() {
   document.body.classList.add('draft-mode');
@@ -11536,7 +11667,7 @@ $('draft-place-btn').addEventListener('click', function (e) {
   if (placeState.pop) { closePlacePop(); return; }
   openPlacePop(this, state.draft.place, onDraftPlaceChange);
 });
-/** 草稿 → 创建请求体：项目任务带 projectId（节点以项目为准），单独任务带 nodeRef；有 message 时创建即发送 */
+/** 草稿 → 创建请求体：projectId 与执行 nodeRef 独立传递；有 message 时创建即发送。 */
 function draftCreateBody(d, message) {
   // 不指定成员：由服务端按「主智能体」默认归属（engine.defaultMemberAgentIds，与无 @ 消息的路由判定同源）。
   // 历史实现传 state.agents.map(...) 全部子智能体，导致无 @ 的新任务被放大成全员编排，
@@ -11553,8 +11684,8 @@ function draftCreateBody(d, message) {
     if (proj.skillNames.length) body.skillNames = proj.skillNames;
     if (proj.connectorIds.length) body.connectorIds = proj.connectorIds;
   }
-  // 项目任务节点以项目为准（P0-3）：不再下发 nodeRef，执行节点由 project.dshRef 决定
-  if (!proj && place.nodeMappingId) body.nodeRef = { kind: 'mapping', mappingId: place.nodeMappingId };
+  // projectId 负责项目上下文；nodeRef 独立指定本次执行节点。
+  if (place.nodeMappingId) body.nodeRef = { kind: 'mapping', mappingId: place.nodeMappingId };
   // 草稿里选好的模型 → 任务级模型（engine.createTask 透传 input.model）
   if (d.model) body.model = d.model;
   // 草稿里选好的推理等级/模式预设 → 任务级落点（建会话时随 createPayload 透传，优先于实体默认）
@@ -13346,7 +13477,7 @@ async function previewFile(agentId, filePath, fileName, projCtx, backFn) {
   const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico'].includes(ext);
   const isMarkdown = ['md', 'markdown'].includes(ext);
   const fsQuery = projCtx
-    ? 'node=' + encodeURIComponent(JSON.stringify(projCtx.node)) + '&path=' + encodeURIComponent(filePath)
+    ? fsTargetQuery(projCtx) + '&path=' + encodeURIComponent(filePath)
     : 'agent=' + encodeURIComponent(agentId || '') + '&path=' + encodeURIComponent(filePath);
   const downloadUrl = API + '/agents/fs/download?' + fsQuery;
   const inlineUrl = downloadUrl + '&inline=1';
@@ -14076,7 +14207,7 @@ function pjFilesShell() {
     if (!name || !name.trim()) return;
     const r = await api('/agents/fs/mkdir', {
       method: 'POST',
-      body: JSON.stringify({ node: pjFilesState.node, path: pjFilesState.path, name: name.trim() })
+      body: JSON.stringify({ node: pjFilesState.node, projectId: pjFilesState.projectId, path: pjFilesState.path, name: name.trim() })
     });
     if (!r.ok) { toast(r.error || '创建文件夹失败', true); return; }
     toast('✓ 已创建文件夹「' + name.trim() + '」');
@@ -14126,7 +14257,7 @@ async function pjFilesLoad(dirPath) {
   pjFilesState.loading = true;
   pjFilesState.error = '';
   pjRenderTable();
-  const url = '/agents/fs/list?node=' + encodeURIComponent(JSON.stringify(pjFilesState.node)) +
+  const url = '/agents/fs/list?' + fsTargetQuery(pjFilesState) +
     (dirPath ? '&path=' + encodeURIComponent(dirPath) : '') + '&all=1';
   const r = await api(url);
   pjFilesState.loading = false;
@@ -14206,7 +14337,7 @@ function pjRenderTable() {
     const icon = classifyFileIcon(item.name, item.type);
     const sizeText = isDir ? '—' : (item.size != null ? fmtSize(item.size) : '—');
     const mtimeText = item.mtime ? fmtDateTime(item.mtime) : '—';
-    const downloadUrl = API + '/agents/fs/download?node=' + encodeURIComponent(JSON.stringify(pjFilesState.node)) + '&path=' + encodeURIComponent(item.path);
+    const downloadUrl = API + '/agents/fs/download?' + fsTargetQuery(pjFilesState) + '&path=' + encodeURIComponent(item.path);
     const selected = pjFilesState.selected.has(item.path);
     rowsHtml += '<tr class="files-row' + (selected ? ' selected' : '') + '" data-path="' + esc(item.path) + '" data-name="' + esc(item.name) + '" data-type="' + esc(item.type || 'file') + '">' +
       '<td class="files-cell-check"><input type="checkbox" class="files-check" data-path="' + esc(item.path) + '"' + (selected ? ' checked' : '') + ' title="选择" /></td>' +
@@ -14279,7 +14410,7 @@ function pjRenderTable() {
         e.stopPropagation();
         const label = itemType === 'dir' ? '文件夹及其内容' : '文件';
         if (!confirm('确定在项目节点上删除此' + label + '「' + itemName + '」？此操作不可恢复。')) return;
-        const r = await api('/agents/fs/remove?node=' + encodeURIComponent(JSON.stringify(pjFilesState.node)) + '&path=' + encodeURIComponent(itemPath), { method: 'DELETE' });
+        const r = await api('/agents/fs/remove?' + fsTargetQuery(pjFilesState) + '&path=' + encodeURIComponent(itemPath), { method: 'DELETE' });
         if (!r.ok) { toast(r.error || '删除失败', true); return; }
         toast('✓ 已删除 ' + itemName);
         pjFilesLoad(pjFilesState.path);
@@ -14314,7 +14445,7 @@ function pjGetSelected() {
 }
 
 function pjOpenPreview(filePath, fileName) {
-  previewFile('', filePath, fileName, { node: pjFilesState.node, ws: pjFilesState.ws }, pjFilesRestore);
+  previewFile('', filePath, fileName, { node: pjFilesState.node, projectId: pjFilesState.projectId, ws: pjFilesState.ws }, pjFilesRestore);
 }
 
 /** 批量引用：选中文件以「相对工作区路径」填入对话输入框 */
@@ -14340,7 +14471,7 @@ async function pjBatchDownload() {
   let ok = 0;
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
-    const url = API + '/agents/fs/download?node=' + encodeURIComponent(JSON.stringify(pjFilesState.node)) + '&path=' + encodeURIComponent(it.path);
+    const url = API + '/agents/fs/download?' + fsTargetQuery(pjFilesState) + '&path=' + encodeURIComponent(it.path);
     try {
       const res = await fetch(url);
       if (!res.ok) { toast('「' + it.name + '」下载失败 (HTTP ' + res.status + ')', true); continue; }
@@ -14375,7 +14506,7 @@ async function pjBatchDelete() {
   if (!confirm('确定在项目节点上删除选中的 ' + items.length + ' 个项目' + warn + '？\\n\\n' + names + '\\n\\n此操作不可恢复。')) return;
   let ok = 0, fail = 0;
   for (const it of items) {
-    const r = await api('/agents/fs/remove?node=' + encodeURIComponent(JSON.stringify(pjFilesState.node)) + '&path=' + encodeURIComponent(it.path), { method: 'DELETE' });
+    const r = await api('/agents/fs/remove?' + fsTargetQuery(pjFilesState) + '&path=' + encodeURIComponent(it.path), { method: 'DELETE' });
     if (r.ok) ok++;
     else { fail++; toast('删除「' + it.name + '」失败: ' + (r.error || '未知错误'), true); }
   }
@@ -14395,7 +14526,7 @@ async function pjUpload(files) {
     try {
       const fd = new FormData();
       fd.append('files', f, f.name);
-      const res = await fetch(API + '/agents/fs/upload?node=' + encodeURIComponent(JSON.stringify(pjFilesState.node)) + '&path=' + encodeURIComponent(dest), {
+      const res = await fetch(API + '/agents/fs/upload?' + fsTargetQuery(pjFilesState) + '&path=' + encodeURIComponent(dest), {
         method: 'POST',
         body: fd,
       });
@@ -15427,7 +15558,7 @@ function openDirBrowser(target, onPick) {
   const fsListQuery = function (path) {
     return t.agent
       ? '/agents/fs/list?agent=' + encodeURIComponent(t.agent) + (path ? '&path=' + encodeURIComponent(path) : '')
-      : '/agents/fs/list?node=' + encodeURIComponent(t.nodeJson) + (path ? '&path=' + encodeURIComponent(path) : '');
+      : '/agents/fs/list?' + (t.projectId ? 'projectId=' + encodeURIComponent(t.projectId) + '&' : '') + 'node=' + encodeURIComponent(t.nodeJson) + (path ? '&path=' + encodeURIComponent(path) : '');
   };
   const st = { path: '', home: '', parent: undefined, entries: [], truncated: false, showHidden: false };
   $('modal-title').textContent = '选择工作目录';
@@ -15490,7 +15621,7 @@ function openDirBrowser(target, onPick) {
     $('db-nf-ok').addEventListener('click', async () => {
       const name = $('db-nf').value.trim();
       if (!name) return;
-      const mkdirBody = t.agent ? { agent: t.agent, path: st.path, name } : { node: t.nodeJson, path: st.path, name };
+      const mkdirBody = t.agent ? { agent: t.agent, path: st.path, name } : { node: t.nodeJson, projectId: t.projectId, path: st.path, name };
       const r = await api('/agents/fs/mkdir', { method: 'POST', body: JSON.stringify(mkdirBody) });
       if (!r.ok) { toast(r.error || '创建失败', true); return; }
       toast('✓ 已创建 ' + name);

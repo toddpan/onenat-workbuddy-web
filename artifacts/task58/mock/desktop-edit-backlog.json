@@ -1,0 +1,11 @@
+{
+  "saved": {
+    "file": {
+      "kind": "mapping",
+      "mappingId": "file-owner"
+    },
+    "exec": "",
+    "access": "文件归属：Files owner-DSH；默认执行：Files owner-DSH。同节点直接访问项目目录。"
+  },
+  "backlog": "\n      \n        \n          ✅ 待办（Backlog）\n          待办文件存放在各项目的 backlog/ 目录，人与智能体共编辑；一键派发为任务，完成后自动回写状态。\n          \n          ↻ 刷新\n        \n        ⚙ 筛选创建时间更新时间优先级状态IDOrdinal↓ 降序匹配 1 / 共 1▾📦 Task58 Console匹配 1 / 共 1待办 1 / 完成 0✅ 就绪 1● 节点正常进入工作台看板To Dotask-1 Owner-only backlog✅ 就绪AC 0/1▶ 派发\n      \n    "
+}

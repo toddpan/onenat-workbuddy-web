@@ -1,0 +1,101 @@
+{
+  "at": "2026-11-06T17:34:56.976Z",
+  "checks": [
+    {
+      "name": "#2 real project editor identifies file owner, default executor and remote access",
+      "result": "PASS",
+      "evidence": {
+        "file": {
+          "kind": "mapping",
+          "mappingId": "6cc2987d"
+        },
+        "exec": {
+          "kind": "mapping",
+          "mappingId": "5602f2c2"
+        },
+        "access": "文件归属：KB 136 环境-DSH；默认执行：brain 环境-DSH:3080。跨节点远程访问；项目目录不是执行节点的原生本地 cwd。",
+        "workspace": "/tmp/wb-task58-b25a76690a04eedb-owner"
+      }
+    },
+    {
+      "name": "#1 real browser selects authorized executor and creates project draft with nodeRef",
+      "result": "PASS",
+      "evidence": {
+        "id": "task-32d8fa26",
+        "projectId": "proj-ibm1e0vq",
+        "nodeRef": {
+          "kind": "mapping",
+          "mappingId": "5602f2c2"
+        },
+        "model": "deepseek-official/deepseek-v4-flash"
+      }
+    },
+    {
+      "name": "#1 real send runs DSH session on selected node in isolated execution directory",
+      "result": "PASS",
+      "evidence": {
+        "id": "task-32d8fa26",
+        "status": "completed",
+        "projectId": "proj-ibm1e0vq",
+        "nodeRef": {
+          "kind": "mapping",
+          "mappingId": "5602f2c2"
+        },
+        "workDir": "/tmp/wb-task58-b25a76690a04eedb-execution",
+        "remoteSessionId": "session-5c7fa5df-884d-4745-b178-e76110203f1d",
+        "remote": {
+          "ok": true,
+          "cwd": "/tmp/wb-task58-b25a76690a04eedb-execution",
+          "title": "Untitled Session",
+          "status": "idle"
+        },
+        "replies": [
+          "I'll run the single command as requested.命令已按你的要求运行一次，没有修改任何文件，也没有派发任务。\n\n- 实际 cwd：`/tmp/wb-task58-b25a76690a04eedb-execution`\n- 退出码：0（仅输出上述路径）\n\nTASK58_OK"
+        ]
+      }
+    },
+    {
+      "name": "#3 real file tree and backlog read file owner while execution is on another node",
+      "result": "PASS",
+      "evidence": {
+        "files": {
+          "text": "📁 /tmp/wb-task58-b25a76690a04eedb-owner 来源：文件归属：KB 136 环境-DSH · 执行：brain 环境-DSH:3080 · 跨节点远程访问（非本地 cwd）隐藏项＋文件夹⬆️ 上传⟳▸📁backlog@⧉🗑📝README.md@👁⬇⧉🗑",
+          "node": {
+            "kind": "mapping",
+            "mappingId": "6cc2987d"
+          },
+          "projectId": "proj-ibm1e0vq",
+          "root": "/tmp/wb-task58-b25a76690a04eedb-owner"
+        },
+        "sha256": "f1012c04722344a38159a8982b747d6fc5082a7e3ee84c2ddddbb4f0319343a4",
+        "backlog": "\n      \n        \n          ✅ 待办（Backlog）\n          待办文件存放在各项目的 backlog/ 目录，人与智能体共编辑；一键派发为任务，完成后自动回写状态。\n          \n          ↻ 刷新\n        \n        ⚙ 筛选创建时间更新时间优先级状态IDOrdinal↓ 降序匹配 1 / 共 1▾📦 Task58 real console匹配 1 / 共 1待办 1 / 完成 0✅ 就绪 1● 节点正常进入工作台看板To Dotask-1 Task58 live owner-only backlog✅ 就绪AC 0/1▶ 派发\n      \n    "
+      }
+    },
+    {
+      "name": "#3 real owner backlog and editor usable at 390px mobile viewport",
+      "result": "PASS",
+      "evidence": {
+        "geometry": {
+          "width": 390,
+          "scrollWidth": 390
+        },
+        "form": {
+          "width": 390,
+          "scroll": 358,
+          "client": 358,
+          "access": "文件归属：KB 136 环境-DSH；默认执行：brain 环境-DSH:3080。跨节点远程访问；项目目录不是执行节点的原生本地 cwd。"
+        }
+      }
+    }
+  ],
+  "refs": {
+    "owner": {
+      "kind": "mapping",
+      "mappingId": "6cc2987d"
+    },
+    "executor": {
+      "kind": "mapping",
+      "mappingId": "5602f2c2"
+    }
+  }
+}

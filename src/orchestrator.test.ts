@@ -17,6 +17,7 @@ import {
   buildTaskContract,
   buildUpstreamDigests,
   buildUpstreamSection,
+  extractUpstreamFilePaths,
   parsePlanJson,
   recoverAssigneeFromText,
   sanitizeEngineInstruction,
@@ -452,4 +453,25 @@ test('summarize: 团队轮覆盖度按团队名册计，缺员给出动态专家
   const miss = s.coverage!.missing[0]
   assert.equal(miss.id, makeExpertAgentId('alameda'), '缺员按动态专家伪 id 归因')
   assert.equal(miss.duty, 'd2')
+})
+
+// ---------- extractUpstreamFilePaths：上游结果文件路径候选（跨节点文件传参） ----------
+
+test('extractUpstreamFilePaths: 绝对路径提取、中西文行尾标点剥离与去重', () => {
+  const text = '分析完成。报告已写入 /tmp/wb-orch/report-final.md，请查阅。\n产物 [结果](/data/out/result.csv)，日志 /var/log/app/run.log.'
+  assert.deepEqual(
+    extractUpstreamFilePaths(text),
+    ['/tmp/wb-orch/report-final.md', '/data/out/result.csv', '/var/log/app/run.log'],
+  )
+})
+
+test('extractUpstreamFilePaths: 排除目录/裸词/下载端点/URL 段，超限截断', () => {
+  // 目录与裸词不算
+  assert.deepEqual(extractUpstreamFilePaths('产物目录 /tmp/wb-orch/out/ 与裸词 report 无关'), [])
+  // 已带下载链接的端点不重复注入；URL 的 host 段不误提
+  assert.deepEqual(extractUpstreamFilePaths('见 https://host/fs/download?path=/x/a.md 与 /fs/list?path=/d'), [])
+  // 反引号/引号包裹可提取；上限截断
+  const many = Array.from({ length: 10 }, (_, i) => `文件 /tmp/o/f${i}.txt`).join('，')
+  assert.equal(extractUpstreamFilePaths(many).length, 8, '默认上限 8')
+  assert.deepEqual(extractUpstreamFilePaths('配置见 `/opt/app/conf/app.yaml` 已生成'), ['/opt/app/conf/app.yaml'])
 })

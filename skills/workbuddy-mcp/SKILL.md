@@ -84,7 +84,7 @@ bash $WB call workbuddy_task_manage '{"action":"send","taskId":"task-xxxx","mess
 | workbuddy_task_ask_answer | 答复任务里挂起的 ask_user_question 提问卡 |
 | workbuddy_task_evaluate | 重新评估编排任务并生成/刷新汇总报告 |
 | workbuddy_monitor_read | 监控大屏：overview / events / history / task |
-| workbuddy_project_manage | 项目：list / get / upsert / delete（项目捆绑执行节点+工作目录+指令+可@成员） |
+| workbuddy_project_manage | 项目：list / get / upsert / delete（dshRef 为文件节点，defaultExecutionNodeRef 为默认执行节点；create 的 nodeRef 可选本次执行节点） |
 | workbuddy_schedule_manage | 定时任务：list / get / upsert / delete / toggle / run |
 | workbuddy_file_manage | 远端工作区文件：list / mkdir / upload / download / delete / **upload_resumable_init + upload_register（大文件 P2P 分片直传 ≤2GB，断点续传）** |
 | workbuddy_expert_manage | 专家库：list / get / search / create / update / delete |

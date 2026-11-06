@@ -1,0 +1,128 @@
+{
+  "at": "2026-11-06T18:17:56.474Z",
+  "finishedAt": "2026-11-06T18:22:15.842Z",
+  "tag": "wb-task57-8b6123886371f0d6",
+  "entry": {
+    "route": "public",
+    "sessionsBefore": [],
+    "attachmentsBefore": 0,
+    "entry": "POST /tasks/:id/messages → sendUserMessage → runOrchestrateTurn → runSubtask",
+    "sessionsAfter": [
+      "agent-midd7zox"
+    ],
+    "planPresent": true
+  },
+  "checks": [
+    {
+      "name": "real owner/executor isolated fixtures and independent filesystems",
+      "result": "PASS"
+    },
+    {
+      "name": "AC1/2/3 child via public actually uses the injected remote file and command channel",
+      "result": "PASS"
+    },
+    {
+      "name": "AC1/2/3 main without mentions actually runs list/read/write/CAS/exec on owner",
+      "result": "PASS"
+    },
+    {
+      "name": "files remain only on owner, no leaked helper sessions or coordination files",
+      "result": "PASS"
+    }
+  ],
+  "collisionFixture": {
+    "taskBindingCreated": false,
+    "preexistingHelperSha256": "6c561494101a81de7b50a82b9cb63eb38b351b27cb206edb9ec4e1720a31b4cc"
+  },
+  "plannerUsedStaticFallback": true,
+  "lanes": [
+    {
+      "lane": "child",
+      "taskId": "task-6f8f91fe",
+      "sessionId": "session-61071d93-16b2-4977-8b61-1251ff3bf81d",
+      "helperPath": "/tmp/wb-task57-8b6123886371f0d6-executor/.workbuddy-workspace-remote-v3-1.mjs",
+      "helperSha256": "6c561494101a81de7b50a82b9cb63eb38b351b27cb206edb9ec4e1720a31b4cc",
+      "ownerSha256": "a0e972dec0752de1cf10091b3bbac902ac72b2a85c5b0fd4a6c884c8515fd164",
+      "builtSha256": "69096af5632ffd06c4cd1da4a11b00e2414423472d99ce789a6c72ccc6b27aad",
+      "ownerCwd": "/tmp/wb-task57-8b6123886371f0d6-owner",
+      "operationCount": 6,
+      "operationsCleaned": true
+    },
+    {
+      "lane": "main",
+      "taskId": "task-10788f8b",
+      "sessionId": "session-d00a74f6-92d9-4e79-8399-b0daa0f6316b",
+      "helperPath": "/tmp/wb-task57-8b6123886371f0d6-executor/.workbuddy-workspace-remote-v3-2.mjs",
+      "helperSha256": "6c561494101a81de7b50a82b9cb63eb38b351b27cb206edb9ec4e1720a31b4cc",
+      "ownerSha256": "523398b554d20d6be86567c709ff35d12b3a5c68b81ffbfc85804bf85a8425d3",
+      "builtSha256": "00d847be03de49b1c6f3cffd87774ab9e5f621ec0d2e4ea4958d48a91192a058",
+      "ownerCwd": "/tmp/wb-task57-8b6123886371f0d6-owner",
+      "operationCount": 6,
+      "operationsCleaned": true
+    }
+  ],
+  "helperUploads": [
+    {
+      "sessionId": "session-61071d93-16b2-4977-8b61-1251ff3bf81d",
+      "requestedName": ".workbuddy-workspace-remote-v3.mjs",
+      "requestSha256": "6c561494101a81de7b50a82b9cb63eb38b351b27cb206edb9ec4e1720a31b4cc",
+      "status": 200,
+      "ok": true,
+      "files": [
+        {
+          "name": ".workbuddy-workspace-remote-v3-1.mjs",
+          "path": "/tmp/wb-task57-8b6123886371f0d6-executor/.workbuddy-workspace-remote-v3-1.mjs",
+          "size": 31158
+        }
+      ]
+    },
+    {
+      "sessionId": "session-d00a74f6-92d9-4e79-8399-b0daa0f6316b",
+      "requestedName": ".workbuddy-workspace-remote-v3.mjs",
+      "requestSha256": "6c561494101a81de7b50a82b9cb63eb38b351b27cb206edb9ec4e1720a31b4cc",
+      "status": 200,
+      "ok": true,
+      "files": [
+        {
+          "name": ".workbuddy-workspace-remote-v3-2.mjs",
+          "path": "/tmp/wb-task57-8b6123886371f0d6-executor/.workbuddy-workspace-remote-v3-2.mjs",
+          "size": 31158
+        }
+      ]
+    }
+  ],
+  "archivedPrompts": [
+    {
+      "sessionId": "session-61071d93-16b2-4977-8b61-1251ff3bf81d",
+      "seq": 9,
+      "promptSha256": "cebaf779f493f21b41957af9b59928850a1d6d1a6a9dfa80b803013e7a87adef",
+      "workspaceSection": true,
+      "stableOwner": true,
+      "helperCurrent": true,
+      "readOnlyFallback": false
+    },
+    {
+      "sessionId": "session-d00a74f6-92d9-4e79-8399-b0daa0f6316b",
+      "seq": 9,
+      "promptSha256": "ca2a8fdde86282ef9c425fc790f806b87a2a89cc6158fd1ada0bf834b319b988",
+      "workspaceSection": true,
+      "stableOwner": true,
+      "helperCurrent": true,
+      "readOnlyFallback": false
+    }
+  ],
+  "cleanup": {
+    "records": 21,
+    "errors": [],
+    "sessionDeletes": 16,
+    "directoryDeletes": 2,
+    "workspaceDeletes": 1,
+    "explicitAbsenceChecks": 6
+  },
+  "limits": [
+    "Original failed session helper upload response was not captured",
+    "LLM planner returned error, actual public route exercised documented static fallback",
+    "Existing helper file seeded through filesystem API to force a collision, no prior task binding or session helper upload",
+    "This round does not establish unique cause for original failed session"
+  ]
+}

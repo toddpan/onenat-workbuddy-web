@@ -65,6 +65,8 @@ class StubComposer {
 /** 远端 HTTP stub：会话即时成功 + 流式回写固定文本（engine 只会走 createSession/streamPrompt 主干） */
 class StubDshClient {
   created = 0
+  sessionCreates: Array<{ target: DshTarget; options: any }> = []
+  mkdirs: string[] = []
   /** 收到的派发 prompt（按序），供断言上下文段注入 */
   prompts: string[] = []
   /** 流式正文（默认 stub-output）；丢尾回归用它构造「流式短、历史长」 */
@@ -76,6 +78,7 @@ class StubDshClient {
   /** reconcileTurn 调用次数（断言复核只发一次历史请求） */
   reconcileCalls = 0
   async createSession(_target: DshTarget, _title: string, _options?: any) {
+    this.sessionCreates.push({ target: { ..._target }, options: { ..._options } })
     this.created++
     return { ok: true, sessionId: `sess-${this.created}` }
   }
@@ -134,6 +137,10 @@ class StubDshClient {
   async ensureWorkspace() {
     return { ok: false } as any
   }
+  async fsMkdir(_target: DshTarget, parent: string, name: string) {
+    this.mkdirs.push(parent.replace(/\/$/, '') + '/' + name)
+    return { ok: true }
+  }
   async uploadFiles() {
     return { ok: true } as any
   }
@@ -155,11 +162,13 @@ const RESOURCE_DIR_STUB = {
 /** 规划器 stub：可注入本轮计划；summarize 固定按 subtasks 生成（不走 LLM） */
 class StubPlanner {
   private created = 0
+  planOptions: any[] = []
   constructor(private factory?: (objective: string, members: PlannerMember[]) => PlanDraft, private summary?: TaskSummary) {}
   async pickTarget() {
     return { error: 'stub: no planner target' } as const
   }
-  async planTask(objective: string, members: PlannerMember[]): Promise<any> {
+  async planTask(objective: string, members: PlannerMember[], _targets?: unknown, options?: unknown): Promise<any> {
+    this.planOptions.push(options)
     const draft = this.factory
       ? this.factory(objective, members)
       : { strategy: 'parallel' as const, subtasks: members.map((m) => ({ title: `t-${m.agent.id}`, prompt: `为 ${m.agent.name} 澄清环节 stub-${++this.created}`, agentId: m.agent.id, dependsOn: [] })) }
@@ -311,20 +320,107 @@ test('项目默认协作成员：全部停用时不强制继承，任务仍可�
   }
 })
 
-test('项目任务节点以项目为准：createTask 带 projectId 时忽略 nodeRef', async () => {
+test('项目任务执行节点：显式覆盖与默认快照不改变文件归属或泄露凭证', async () => {
   const f = makeFixture()
   try {
-    f.store.upsertProject({ name: '项目节点项目', dshRef: { kind: 'direct', apiBaseUrl: 'http://stub-node' } })
-    const proj = f.store.getProjects()[0]
+    const owner = { kind: 'direct' as const, apiBaseUrl: 'http://owner-node' }
+    const defaultNode = { kind: 'mapping' as const, mappingId: 'execution-a' }
+    const proj = f.store.upsertProject({ name: '项目', dshRef: owner, apiKey: 'owner-secret', workspace: '/project', defaultExecutionNodeRef: defaultNode })
     const t = await f.engine.createTask({ title: '项目任务', projectId: proj.id, nodeRef: { kind: 'direct', apiBaseUrl: 'http://other-node' } })
     assert.equal(t.projectId, proj.id)
-    assert.equal(t.nodeRef, undefined, '项目任务不应携带 nodeRef（执行节点由 project.dshRef 决定）')
+    assert.deepEqual(t.nodeRef, { kind: 'direct', apiBaseUrl: 'http://other-node' })
+    const inherited = await f.engine.createTask({ projectId: proj.id })
+    assert.deepEqual(inherited.nodeRef, defaultNode)
+    defaultNode.mappingId = 'mutated-input'
+    f.store.upsertProject({ id: proj.id, defaultExecutionNodeRef: { kind: 'mapping', mappingId: 'execution-b' } })
+    assert.deepEqual(f.engine.taskExec(inherited).dshRef, { kind: 'mapping', mappingId: 'execution-a' })
+    assert.deepEqual(f.engine.taskWorkspaceExec(inherited), { project: f.store.getProject(proj.id), dshRef: owner, apiKey: 'owner-secret', workspace: '/project' })
+    assert.equal(f.engine.taskExec(inherited).apiKey, undefined, '归属节点密钥不得发送到异机执行节点')
+    const legacy = { ...inherited, nodeRef: undefined }
+    assert.deepEqual(f.engine.taskExec(legacy).dshRef, owner, '旧任务不追随新默认节点')
     const solo = await f.engine.createTask({ title: '单独任务', nodeRef: { kind: 'direct', apiBaseUrl: 'http://other-node' } })
     assert.ok(solo.nodeRef, '单独任务的 nodeRef 不受影响')
   } finally {
     f.store.flush()
     rmSync(f.dir, { recursive: true, force: true })
   }
+})
+
+test('task-56: @项目 首次绑定快照默认执行节点，显式节点保留且后续不随默认修改', async () => {
+  const f = makeFixture()
+  try {
+    const owner: DshRef = { kind: 'mapping', mappingId: 'owner' }
+    const executor: DshRef = { kind: 'mapping', mappingId: 'executor' }
+    const project = f.store.upsertProject({ name: '节点快照项目', dshRef: owner, defaultExecutionNodeRef: executor })
+    const inherited = await f.engine.createTask({ title: 'late project binding' })
+    await f.engine.sendUserMessage(inherited.id, '@节点快照项目 检查会话节点')
+    await settle(f.engine, f.store, inherited.id)
+    assert.deepEqual(f.store.getTask(inherited.id)?.nodeRef, executor)
+    f.store.upsertProject({ id: project.id, defaultExecutionNodeRef: owner })
+    assert.deepEqual(f.engine.taskExec(f.store.getTask(inherited.id)!).dshRef, executor)
+    const explicit = await f.engine.createTask({ nodeRef: executor })
+    await f.engine.sendUserMessage(explicit.id, '@节点快照项目 检查显式节点')
+    await settle(f.engine, f.store, explicit.id)
+    assert.deepEqual(f.store.getTask(explicit.id)?.nodeRef, executor)
+  } finally { f.store.flush(); rmSync(f.dir, { recursive: true, force: true }) }
+})
+
+test('task-56: 项目编排规划与主/子会话不在异机 mkdir 或使用文件归属路径', async () => {
+  const f = makeFixture({ plannerFactory: (_objective, members) => ({
+    strategy: 'parallel', subtasks: members.filter(m => m.agent.id !== '__node__').map(m => ({ title: '检查', prompt: '验证工作区隔离', agentId: m.agent.id, dependsOn: [] })),
+  }) })
+  try {
+    const owner: DshRef = { kind: 'mapping', mappingId: 'owner' }
+    const executor: DshRef = { kind: 'mapping', mappingId: 'executor' }
+    seedAgent(f.store, 'remote-worker', { name: '异机成员', dshRef: executor })
+    const project = f.store.upsertProject({ name: '异机规划', dshRef: owner, workspace: '/owner/project', defaultExecutionNodeRef: executor })
+    const task = await f.engine.createTask({ projectId: project.id })
+    await f.engine.sendUserMessage(task.id, '@异机成员 检查项目')
+    const final = await settle(f.engine, f.store, task.id)
+    assert.equal(final.status, 'success')
+    assert.equal(f.planners.planOptions.length, 1)
+    assert.equal(f.planners.planOptions[0].plannerCwd, undefined, '规划器不能把归属路径作为执行节点 cwd')
+    assert.deepEqual(f.client.mkdirs, [], '规划器不能在异机补建同路径空目录')
+    assert.ok(f.client.sessionCreates.length > 0)
+    for (const created of f.client.sessionCreates) assert.equal(created.options.cwd, undefined)
+    assert.ok(f.client.prompts.some(p => p.includes('[项目工作区跨机访问]')))
+  } finally { f.store.flush(); rmSync(f.dir, { recursive: true, force: true }) }
+})
+
+test('task-56: 子智能体保留自身节点目录，回退异机不沿用旧 workDir', async () => {
+  const f = makeFixture()
+  try {
+    const owner: DshRef = { kind: 'mapping', mappingId: 'owner' }
+    const executor: DshRef = { kind: 'mapping', mappingId: 'executor' }
+    const own: DshRef = { kind: 'mapping', mappingId: 'worker' }
+    const project = f.store.upsertProject({ name: 'cwd', dshRef: owner, workspace: '/owner/project', defaultExecutionNodeRef: executor })
+    const task = await f.engine.createTask({ projectId: project.id })
+    const agent = { id: 'worker', name: 'worker', dshRef: own, workDir: '/worker/scratch' } as SubAgent
+    const target = { online: true, baseUrl: 'http://worker', mappingId: 'worker', executionDshRef: own }
+    assert.ok((await (f.engine as any).ensureSession(task.id, agent, target)).ok)
+    assert.equal(f.client.sessionCreates.at(-1)?.options.cwd, '/worker/scratch')
+    assert.ok((await (f.engine as any).ensureSession(task.id, agent, { ...target, executionDshRef: executor, mappingId: 'executor' })).ok)
+    assert.equal(f.client.sessionCreates.at(-1)?.options.cwd, undefined)
+    assert.ok((await (f.engine as any).ensureSession(task.id, agent, { ...target, executionDshRef: owner, mappingId: 'owner' })).ok)
+    assert.equal(f.client.sessionCreates.at(-1)?.options.cwd, '/owner/project', '仅文件归属节点可用项目路径')
+  } finally { f.store.flush(); rmSync(f.dir, { recursive: true, force: true }) }
+})
+
+test('task-56: legacy 项目任务无 nodeRef 的默认 fork 保留原有效节点，显式改节点或项目仍生效', async () => {
+  const f = makeFixture()
+  try {
+    const owner: DshRef = { kind: 'mapping', mappingId: 'legacy-owner' }
+    const executor: DshRef = { kind: 'mapping', mappingId: 'new-default' }
+    const project = f.store.upsertProject({ name: '旧项目', dshRef: owner, defaultExecutionNodeRef: executor })
+    const origin = await f.engine.createTask({ projectId: project.id })
+    f.store.mutateTask(origin.id, t => { delete t.nodeRef })
+    const fork = await f.engine.forkTask(origin.id)
+    assert.deepEqual(fork.task.nodeRef, owner, '同项目默认续接快照旧任务有效节点，不改用当前项目默认值')
+    assert.equal(f.store.getTask(origin.id)?.nodeRef, undefined, '不迁移旧任务记录')
+    assert.deepEqual((await f.engine.forkTask(origin.id, { nodeRef: executor })).task.nodeRef, executor)
+    const other = f.store.upsertProject({ name: '新项目', dshRef: owner, defaultExecutionNodeRef: executor })
+    assert.deepEqual((await f.engine.forkTask(origin.id, { projectId: other.id })).task.nodeRef, executor, '显式切项目采用目标项目默认节点')
+  } finally { f.store.flush(); rmSync(f.dir, { recursive: true, force: true }) }
 })
 
 test('本轮变更：extractToolPaths 只取写入/编辑类工具的路径参数，不含内容', () => {
@@ -386,7 +482,7 @@ test('跨节点续接 fork：双向链接 + 草稿 8000 字截断（保留尾部
     const origin3 = await f.engine.createTask({ title: '项目原任务', projectId: proj.id })
     const out3 = await f.engine.forkTask(origin3.id, { projectId: proj.id, nodeRef: { kind: 'direct', apiBaseUrl: 'http://other-node' } })
     assert.equal(out3.task.projectId, proj.id)
-    assert.equal(out3.task.nodeRef, undefined, '项目续接忽略 nodeRef')
+    assert.deepEqual(out3.task.nodeRef, { kind: 'direct', apiBaseUrl: 'http://other-node' }, '项目续接允许覆盖执行节点')
   } finally {
     f.store.flush()
     rmSync(f.dir, { recursive: true, force: true })
@@ -878,10 +974,15 @@ test('backlog 回写补偿器：达上限停止重试、保留标记交回人工
     const t = seedWritebackFailedTask(store, { count: 3, nextAt: Date.now() - 1 })
     const engine = new TaskEngine(store, RESOURCE_DIR_STUB, new StubResolver() as unknown as AgentResolver, new StubComposer() as unknown as PromptComposer, new StubPlanner() as unknown as Orchestrator, undefined, undefined, undefined)
     ;(engine as any).runBacklogWriteback = async () => { calls++ }
-    return { id: t.id, flush: () => store.flush() }
+    return { id: t.id, flush: async () => {
+      // 模拟正常进程关闭：先等当前异步保存结束，再同步兜底；两个写者共享 .tmp 时立即 flush 会制造测试竞态。
+      for (let i = 0; (store as any).writing && i < 100; i++) await delay(5)
+      assert.equal((store as any).writing, false, '正常保存应在重启前结束')
+      store.flush()
+    } }
   })()
   try {
-    taskId.flush()
+    await taskId.flush()
     // 进程二：重新打开持久化 store —— 退避计数必须仍在（不重启清零），补偿器不再发起重试
     const store2 = new WorkStore(storePath)
     const engine2 = new TaskEngine(store2, RESOURCE_DIR_STUB, new StubResolver() as unknown as AgentResolver, new StubComposer() as unknown as PromptComposer, new StubPlanner() as unknown as Orchestrator, undefined, undefined, undefined)
@@ -918,4 +1019,379 @@ test('backlog 回写补偿器：非终态/无汇总/backlogRef 缺失的任务�
     f.store.flush()
     rmSync(f.dir, { recursive: true, force: true })
   }
+})
+
+test('上游结果文件跨节点下载清单：DAG 下游提示词注入上游产出上下文与结果文件下载配方', async () => {
+  const f = makeFixture({
+    // 双成员 DAG：上游产出报告并给出绝对路径 → 下游 dependsOn 消费
+    plannerFactory: (_o, members) => {
+      const ids = members.map((m) => m.agent.id).filter((id) => id !== '__node__')
+      return {
+        strategy: 'dag' as const,
+        subtasks: [
+          { title: '取数产出', prompt: '生成数据报告并把绝对路径写进结论', agentId: ids[0], dependsOn: [] },
+          { title: '核验产出', prompt: '基于上游产出做交叉核验', agentId: ids[1], dependsOn: ['取数产出'] },
+        ],
+      }
+    },
+  })
+  try {
+    f.client.streamText = '分析完成。报告已写入 /tmp/wb-orch/report-final.md，请查阅。'
+    seedAgent(f.store, 'ag-upstream', { name: '取数员' })
+    seedAgent(f.store, 'ag-downstream', { name: '核验员' })
+    const t = await f.engine.createTask({ title: 'DAG 文件传参', memberAgentIds: ['ag-upstream', 'ag-downstream'] })
+    const sent = await f.engine.sendUserMessage(t.id, '@取数员 @核验员 先取数再核验')
+    assert.ok(sent.ok)
+    const settled = await settle(f.engine, f.store, t.id)
+    assert.equal(settled.plan?.subtasks.length, 2, '双 @ 轮不裁剪，保留 DAG 两跳')
+    assert.deepEqual(settled.plan?.subtasks[1].dependsOn.length, 1, '下游依赖上游')
+
+    const dispatched = f.client.prompts.filter((p) => p.includes('[当前子任务指令]'))
+    assert.equal(dispatched.length, 2, '按 DAG 顺序派发两个子任务')
+    const upstreamPrompt = dispatched[0]
+    const downstreamPrompt = dispatched[1]
+
+    // 上游无依赖：不注入上游段
+    assert.ok(!upstreamPrompt.includes('[上游产出]'), '上游子任务无依赖不注入上游产出段')
+    assert.ok(!upstreamPrompt.includes('[上游结果文件'), '上游子任务不注入结果文件清单')
+
+    // 下游：上游文本产出上下文 + 结果文件跨节点下载配方（URL + URL 编码绝对路径 + 密钥成对语义）
+    assert.ok(downstreamPrompt.includes('[上游产出]'), '下游提示词注入上游产出段')
+    assert.ok(downstreamPrompt.includes('上游子任务《取数产出》产出摘要'), '上游摘要按子任务标题标注')
+    assert.ok(downstreamPrompt.includes('/tmp/wb-orch/report-final.md'), '上游产出文本（含结果文件路径）进入下游提示词')
+    assert.ok(downstreamPrompt.includes('[上游结果文件（跨节点下载）]'), '下游提示词注入结果文件下载清单')
+    const expectedUrl = `http://stub-node/fs/download?path=${encodeURIComponent('/tmp/wb-orch/report-final.md')}`
+    assert.ok(downstreamPrompt.includes(expectedUrl), '下载 URL 指向上游成员节点基址且路径 URL 编码')
+    assert.ok(downstreamPrompt.includes("-o 'report-final.md'"), '给出安全引用落盘文件名的 curl 指令')
+    assert.ok(downstreamPrompt.includes('不在你的节点上'), '说明段明确跨节点语义')
+  } finally {
+    f.store.flush()
+    rmSync(f.dir, { recursive: true, force: true })
+  }
+})
+
+
+test('上游文件使用产出会话的稳定节点身份，不随成员改绑迁移或按裸路径去重', async () => {
+  const f = makeFixture()
+  try {
+    const t = await f.engine.createTask({ title: '文件归属' })
+    const task = f.store.getTask(t.id)!
+    task.sessions = {
+      a: { remoteSessionId: 'sa', baseUrl: 'http://old-a', nodeRefKey: 'mapping:origin-a', createdAt: 0 },
+      b: { remoteSessionId: 'sb', baseUrl: 'http://old-b', nodeRefKey: 'mapping:origin-b', createdAt: 0 },
+    }
+    task.plan = { subtasks: [
+      { id: 'a', agentId: 'a', title: 'A', result: { content: '/tmp/result.json' } },
+      { id: 'b', agentId: 'b', title: 'B', result: { content: '/tmp/result.json' } },
+    ] } as any
+    ;(f.engine as any).resolver.resolveRef = async (ref: any) => ({ online: true, baseUrl: `http://${ref.mappingId}` })
+    const out = await (f.engine as any).buildUpstreamFilesSection(task, { dependsOn: ['a', 'b'] })
+    assert.ok(out.includes('http://origin-a/fs/download'))
+    assert.ok(out.includes('http://origin-b/fs/download'))
+    delete task.sessions.a.nodeRefKey
+    const unknown = await (f.engine as any).buildUpstreamFilesSection(task, { dependsOn: ['a'] })
+    assert.ok(unknown.includes('文件位置未验证'))
+    assert.ok(!unknown.includes('curl'))
+  } finally { f.store.flush(); rmSync(f.dir, { recursive: true, force: true }) }
+})
+
+test('跨节点主会话无需 @ 注入归属工作区指引，离线明确拒绝本机同路径', async () => {
+  const f = makeFixture()
+  try {
+    const owner = { kind: 'mapping' as const, mappingId: 'file-node' }
+    const executor = { kind: 'mapping' as const, mappingId: 'exec-node' }
+    const project = f.store.upsertProject({ name: '跨节点', dshRef: owner, apiKey: 'owner-key', defaultExecutionNodeRef: executor, workspace: '/owner/repo' })
+    const task = await f.engine.createTask({ projectId: project.id })
+    const agent = { id: '__node__', name: '主会话', dshRef: executor } as SubAgent
+    const engine = f.engine as any
+    engine.resolver.resolveRef = async (ref: DshRef) => ({ online: true, baseUrl: ref.kind === 'mapping' && ref.mappingId === 'file-node' ? 'http://owner:100' : 'http://executor:200', apiKey: ref.kind === 'mapping' && ref.mappingId === 'file-node' ? 'owner-key' : 'exec-key' })
+    const result = await f.engine.transformFileMentionsForAgent('读取项目', undefined, agent, task)
+    assert.ok(result.extraSections.join(' ').includes('http://owner:100/fs/list'))
+    assert.ok(!result.extraSections.join(' ').includes('http://executor:200/fs/list'))
+    assert.ok(result.extraSections.join(' ').includes('不要改在本机创建同路径目录'))
+    engine.resolver.resolveRef = async () => ({ online: false, baseUrl: 'http://stale:100' })
+    const offline = await f.engine.transformFileMentionsForAgent('读取项目', undefined, agent, task)
+    assert.ok(offline.extraSections.join(' ').includes('文件归属节点当前不可达'))
+    assert.ok(!offline.extraSections.join(' ').includes('http://stale'))
+    task.nodeRef = owner
+    const local = await f.engine.transformFileMentionsForAgent('读取项目', undefined, { ...agent, dshRef: owner }, task)
+    assert.ok(local.extraSections.join(' ').includes('[项目工作区]'))
+    assert.ok(!local.extraSections.join(' ').includes('工具未能安装'))
+  } finally { f.store.flush(); rmSync(f.dir, { recursive: true, force: true }) }
+})
+
+test('task-57: 主/子会话注入稳定引用，旧 helper 升级，回退节点按实际归属判断', async () => {
+  const f = makeFixture()
+  try {
+    const owner = { kind: 'mapping' as const, mappingId: 'file-node' }
+    const executor = { kind: 'mapping' as const, mappingId: 'exec-node' }
+    const project = f.store.upsertProject({ name: '稳定远程工具', dshRef: owner, workspace: '/owner/repo', defaultExecutionNodeRef: executor })
+    const task = await f.engine.createTask({ projectId: project.id })
+    const engine = f.engine as any
+    engine.directory = { endpoint: 'https://directory', key: 'catalog-key', resolveApp: () => ({ mappingId: 'file-node' }) }
+    engine.resolver.resolveRef = async (ref: DshRef) => ({ online: true, baseUrl: 'http://' + (ref.kind === 'mapping' ? ref.mappingId : 'node'), apiKey: 'owner-key' })
+    const uploads: string[] = []
+    f.client.uploadFiles = async (_target?: any, _id?: any, files?: any) => {
+      uploads.push(files[0].filename)
+      return { ok: true, files: [{ name: files[0].filename, path: '/session/' + files[0].filename }] }
+    }
+    for (const id of ['__node__', 'child']) {
+      for (const oldName of ['.workbuddy-workspace-remote.mjs', '.workbuddy-workspace-remote-v2.mjs', '.workbuddy-workspace-remote-v2-1.mjs']) {
+        f.store.mutateTask(task.id, t => { t.sessions[id] = { remoteSessionId: 'session-' + id, baseUrl: 'http://executor', nodeRefKey: 'mapping:exec-node', workspaceAccessCliPath: '/session/' + oldName, createdAt: 0 } })
+        const agent = { id, name: id, dshRef: executor } as SubAgent
+        const result = await f.engine.transformFileMentionsForAgent('读取项目', undefined, agent, f.store.getTask(task.id)!)
+        const prefix = result.extraSections.join('\n').split('\n').find(s => s.includes('使用前缀:'))!
+        assert.ok(prefix.includes("--node-ref 'mapping:file-node'"))
+        assert.ok(prefix.includes("--onenat-base 'https://directory'"))
+        assert.ok(prefix.includes("WORKBUDDY_ONENAT_API_KEY='catalog-key'"))
+        assert.ok(prefix.includes('.workbuddy-workspace-remote-v3.mjs'))
+        assert.ok(!prefix.includes('--base '))
+        await f.engine.transformFileMentionsForAgent('再次读取', undefined, agent, f.store.getTask(task.id)!)
+      }
+    }
+    assert.deepEqual(uploads, Array(6).fill('.workbuddy-workspace-remote-v3.mjs'), '主/子旧版本各升级一次，新版本再次访问不上传')
+    f.store.mutateTask(task.id, t => { t.sessions.child.nodeRefKey = 'mapping:file-node' })
+    const local = await f.engine.transformFileMentionsForAgent('读取', undefined, { id: 'child', name: 'child', dshRef: executor } as SubAgent, f.store.getTask(task.id)!)
+    assert.ok(local.extraSections[0].includes('[项目工作区]'), '子智能体回退文件节点时直接访问')
+    const appProject = f.store.upsertProject({ name: '应用引用', dshRef: { kind: 'app', appId: 'owner-template' }, workspace: '/owner/app', defaultExecutionNodeRef: executor })
+    const appTask = await f.engine.createTask({ projectId: appProject.id })
+    f.store.mutateTask(appTask.id, t => { t.sessions.__node__ = { remoteSessionId: 'app-session', baseUrl: 'http://executor', nodeRefKey: 'mapping:exec-node', createdAt: 0 } })
+    const appResult = await f.engine.transformFileMentionsForAgent('读取', undefined, { id: '__node__', name: 'main', dshRef: executor } as SubAgent, f.store.getTask(appTask.id)!)
+    assert.ok(appResult.extraSections.join('\n').includes("--node-ref 'mapping:file-node'"), '共享 app 按本轮已解析 mapping 固定文件节点')
+  } finally { f.store.flush(); rmSync(f.dir, { recursive: true, force: true }) }
+})
+
+test('task-57: 实际子任务派发接受同目录重名 helper 并复用稳定引用注入', async () => {
+  const f = makeFixture()
+  try {
+    const owner = { kind: 'mapping' as const, mappingId: 'file-node' }
+    const executor = { kind: 'mapping' as const, mappingId: 'exec-node' }
+    const project = f.store.upsertProject({ name: '共享执行目录', dshRef: owner, workspace: '/owner/repo', defaultExecutionNodeRef: executor })
+    seedAgent(f.store, 'child', { dshRef: executor })
+    const task = await f.engine.createTask({ projectId: project.id, memberAgentIds: ['child'], workDir: '/executor/scratch' })
+    f.store.mutateTask(task.id, t => {
+      t.plan = { objective: '验证子任务自动注入', strategy: 'parallel', createdAt: Date.now(), subtasks: [{ id: 'sub', agentId: 'child', title: '验证', prompt: '读取归属项目', dependsOn: [], status: 'pending', logs: [] }] }
+    })
+    const engine = f.engine as any
+    engine.directory = { ...RESOURCE_DIR_STUB, endpoint: 'https://directory', key: 'catalog-key' }
+    engine.resolver.resolveRef = async (ref: DshRef) => ({ online: true, baseUrl: ref.kind === 'mapping' && ref.mappingId === 'file-node' ? 'http://owner:100' : 'http://executor:200', apiKey: 'owner-key' })
+    const uploads: string[] = []
+    f.client.uploadFiles = async (_target?: any, id?: any, files?: any) => {
+      uploads.push(id)
+      assert.equal(files[0].filename, '.workbuddy-workspace-remote-v3.mjs')
+      return { ok: true, files: [{ name: '.workbuddy-workspace-remote-v3-1.mjs', path: '/executor/scratch/.workbuddy-workspace-remote-v3-1.mjs' }] }
+    }
+    for (let i = 0; i < 2; i++) {
+      assert.equal((await f.engine.retrySubtask(task.id, 'sub')).ok, true)
+      const prompt = f.client.prompts.at(-1)!
+      assert.ok(prompt.includes("--node-ref 'mapping:file-node'"), '真正发往子会话的 prompt 必须有稳定 owner')
+      assert.ok(prompt.includes('.workbuddy-workspace-remote-v3-1.mjs'))
+      assert.ok(prompt.includes("WORKBUDDY_ONENAT_API_KEY='catalog-key'"))
+      assert.ok(!prompt.includes('远程操作工具未能安装'))
+      assert.equal(f.store.getTask(task.id)!.sessions.child.workspaceAccessCliPath, '/executor/scratch/.workbuddy-workspace-remote-v3-1.mjs')
+    }
+    assert.deepEqual(uploads, ['sess-1'], '有效编号文件名续用，不每轮重新上传')
+  } finally { f.store.flush(); rmSync(f.dir, { recursive: true, force: true }) }
+})
+
+test('task-57: 首次新子会话经完整 runChatTurn 无附件即安装并注入 helper', async () => {
+  const f = makeFixture()
+  try {
+    const owner = { kind: 'mapping' as const, mappingId: 'file-node' }
+    const executor = { kind: 'mapping' as const, mappingId: 'exec-node' }
+    const project = f.store.upsertProject({ name: '首次聊天注入', dshRef: owner, workspace: '/owner/repo', defaultExecutionNodeRef: executor })
+    seedAgent(f.store, 'child', { dshRef: executor })
+    const task = await f.engine.createTask({ projectId: project.id, memberAgentIds: [] })
+    assert.deepEqual(task.sessions, {}, '不预建 binding，也不先上传附件')
+    const engine = f.engine as any
+    engine.directory = { ...RESOURCE_DIR_STUB, endpoint: 'https://directory', key: 'catalog-key' }
+    f.resolver.resolveRef = async (ref: DshRef) => ({ online: true, baseUrl: ref.kind === 'mapping' && ref.mappingId === 'file-node' ? 'http://owner:100' : 'http://executor:200', apiKey: 'owner-key' })
+    const uploads: Array<{ sessionId: string; path: string }> = []
+    f.client.uploadFiles = async (_target?: any, sessionId?: any, files?: any) => {
+      const path = '/executor/scratch/' + files[0].filename
+      assert.equal(files[0].filename, '.workbuddy-workspace-remote-v3.mjs')
+      assert.equal(f.store.getTask(task.id)!.sessions.child.remoteSessionId, sessionId, '先创建子 binding，再向同一会话安装')
+      uploads.push({ sessionId, path })
+      return { ok: true, files: [{ name: files[0].filename, path }] }
+    }
+    const text = '@child 读取项目并核对版本'
+    const mentions = await f.engine.extractMentions(text)
+    assert.equal(mentions.mentionedFiles, undefined)
+    const target = await f.resolver.resolve(f.store.getAgent('child')!)
+    for (let i = 0; i < 2; i++) {
+      // Single-@ sendUserMessage now routes to a planner. Invoke the full chat
+      // implementation explicitly so this regression cannot accidentally test a DAG.
+      await engine.runChatTurn(task.id, text, mentions, new Map([['child', target]]), new AbortController().signal)
+      const final = f.store.getTask(task.id)!
+      assert.equal(final.status, 'completed')
+      assert.equal(final.plan, undefined, '完整 runChatTurn 派发，不经 DAG 或手工 transformer')
+      assert.equal(final.sessions.__node__, undefined, '无主会话或附件预建 binding 掩盖首轮行为')
+      assert.strictEqual(final, task, '当前 WorkStore.mutateTask 保留对象身份')
+      assert.equal(f.client.prompts.length, i + 1)
+      const prompt = f.client.prompts[i]
+      assert.ok(prompt.includes('[项目工作区跨机访问]'))
+      assert.ok(prompt.includes("--node-ref 'mapping:file-node'"))
+      assert.ok(prompt.includes("--onenat-base 'https://directory'"))
+      assert.ok(prompt.includes("WORKBUDDY_ONENAT_API_KEY='catalog-key'"))
+      assert.ok(prompt.includes('/executor/scratch/.workbuddy-workspace-remote-v3.mjs'))
+      assert.ok(!prompt.includes('远程操作工具未能安装'))
+      assert.equal(final.sessions.child.workspaceAccessCliPath, uploads[0].path)
+    }
+    assert.equal(f.client.created, 1, '第二轮续用首次子会话')
+    assert.deepEqual(uploads.map(u => u.sessionId), ['sess-1'], '首次会话只上传一次 helper')
+    assert.ok(!f.client.mkdirs.includes('/owner/repo'), '不在执行节点创建 owner 镜像目录')
+  } finally { f.store.flush(); await delay(50); rmSync(f.dir, { recursive: true, force: true }) }
+})
+
+test('task-57: 公开单 @ 首次子派发经规划器安装编号 helper，无需刷新 task', async () => {
+  const f = makeFixture({ plannerFactory: () => ({ strategy: 'parallel', subtasks: [{ agentId: 'child', title: '首次子派发', prompt: '读取归属项目并核对版本', dependsOn: [] }] }) })
+  try {
+    const owner = { kind: 'mapping' as const, mappingId: 'file-node' }
+    const executor = { kind: 'mapping' as const, mappingId: 'exec-node' }
+    const project = f.store.upsertProject({ name: '公开子派发入口', dshRef: owner, workspace: '/owner/repo', defaultExecutionNodeRef: executor })
+    seedAgent(f.store, 'child', { dshRef: executor })
+    const task = await f.engine.createTask({ projectId: project.id, memberAgentIds: [] })
+    assert.deepEqual(task.sessions, {})
+    assert.equal(task.attachments?.length || 0, 0)
+    const engine = f.engine as any
+    engine.directory = { ...RESOURCE_DIR_STUB, endpoint: 'https://directory', key: 'catalog-key' }
+    f.resolver.resolveRef = async (ref: DshRef) => ({ online: true, baseUrl: ref.kind === 'mapping' && ref.mappingId === 'file-node' ? 'http://owner:100' : 'http://executor:200', apiKey: 'owner-key' })
+    const uploads: string[] = []
+    f.client.uploadFiles = async (_target?: any, sessionId?: any, files?: any) => {
+      assert.equal(f.store.getTask(task.id)!.sessions.child.remoteSessionId, sessionId, '公开入口创建的 binding 在上传前已经可见')
+      assert.equal(files[0].filename, '.workbuddy-workspace-remote-v3.mjs')
+      uploads.push(sessionId)
+      return { ok: true, files: [{ name: '.workbuddy-workspace-remote-v3-1.mjs', path: '/executor/scratch/.workbuddy-workspace-remote-v3-1.mjs' }] }
+    }
+    await f.engine.sendUserMessage(task.id, '@child 读取项目并核对版本')
+    const final = await settle(f.engine, f.store, task.id)
+    assert.equal(final.status, 'success')
+    assert.equal(final.lastRoute?.kind, 'orchestrate', '公开单 @ 由实际路由决定，不直接调用 chat/transformer/retrySubtask')
+    assert.ok(f.planners.planOptions.length > 0, '由 planner 生成计划，不预置 DAG')
+    assert.equal(final.plan!.subtasks.length, 1)
+    assert.equal(final.plan!.subtasks[0].agentId, 'child')
+    assert.equal(final.plan!.subtasks[0].status, 'completed')
+    assert.equal(final.sessions.__node__, undefined)
+    assert.strictEqual(final, task, '真实 store 原地保留对象，不人为 upsert 替换')
+    assert.deepEqual(uploads, ['sess-1'])
+    assert.equal(final.sessions.child.workspaceAccessCliPath, '/executor/scratch/.workbuddy-workspace-remote-v3-1.mjs')
+    assert.equal(f.client.prompts.length, 1)
+    const prompt = f.client.prompts[0]
+    assert.ok(prompt.includes('[项目工作区跨机访问]'))
+    assert.ok(prompt.includes("--node-ref 'mapping:file-node'"))
+    assert.ok(prompt.includes('/executor/scratch/.workbuddy-workspace-remote-v3-1.mjs'))
+    assert.ok(!prompt.includes('远程操作工具未能安装'))
+  } finally { f.store.flush(); await delay(50); rmSync(f.dir, { recursive: true, force: true }) }
+})
+
+test('主会话跨节点不使用归属路径，稳定映射端口漂移复用会话', async () => {
+  const f = makeFixture()
+  try {
+    const owner = { kind: 'mapping' as const, mappingId: 'file-node' }
+    const executor = { kind: 'mapping' as const, mappingId: 'exec-node' }
+    const project = f.store.upsertProject({ name: '跨节点', dshRef: owner, defaultExecutionNodeRef: executor, workspace: '/owner/repo' })
+    const task = await f.engine.createTask({ projectId: project.id })
+    const agent = { id: '__node__', name: '主会话', dshRef: executor, workDir: '/owner/repo' } as SubAgent
+    const target = { online: true, agentId: '__node__', baseUrl: 'http://tunnel:100', mappingId: 'exec-node' }
+    const engine = f.engine as any
+    const first = await engine.ensureSession(task.id, agent, target)
+    assert.ok(first.ok)
+    assert.equal(f.store.getTask(task.id)?.sessions.__node__.cwd, undefined)
+    assert.equal(f.store.getTask(task.id)?.sessions.__node__.nodeRefKey, 'mapping:exec-node')
+    const second = await engine.ensureSession(task.id, agent, { ...target, baseUrl: 'http://tunnel:999' })
+    assert.equal(second.reused, true)
+    assert.equal(f.client.created, 1)
+    assert.equal(f.store.getTask(task.id)?.sessions.__node__.baseUrl, 'http://tunnel:999')
+  } finally { f.store.flush(); rmSync(f.dir, { recursive: true, force: true }) }
+})
+
+
+test('app解析到mapping仍保留工作区身份；fork null明确退出项目', async () => {
+  const f = makeFixture()
+  try {
+    const appRef = { kind: 'app' as const, appId: 'app-owner' }
+    const project = f.store.upsertProject({ name: 'app', dshRef: appRef, workspace: '/app/repo' })
+    const task = await f.engine.createTask({ projectId: project.id })
+    const agent = { id: '__node__', name: 'main', dshRef: appRef } as SubAgent
+    const out = await (f.engine as any).ensureSession(task.id, agent, { online: true, agentId: '__node__', baseUrl: 'http://tunnel:100', mappingId: 'resolved-app-mapping' })
+    assert.ok(out.ok)
+    assert.equal(f.store.getTask(task.id)?.sessions.__node__.cwd, '/app/repo')
+    assert.equal(f.store.getTask(task.id)?.sessions.__node__.nodeRefKey, 'app:app-owner')
+    const fork = await f.engine.forkTask(task.id, { projectId: null, nodeRef: { kind: 'direct', apiBaseUrl: 'http://solo' } })
+    assert.equal(fork.task.projectId, undefined)
+    assert.deepEqual(fork.task.nodeRef, { kind: 'direct', apiBaseUrl: 'http://solo' })
+  } finally { f.store.flush(); rmSync(f.dir, { recursive: true, force: true }) }
+})
+
+test('task-59: 旧 URL/app-only 绑定不控制未知节点，也不将旧 sessionId 交给新节点探测', async () => {
+  const f = makeFixture()
+  try {
+    const ref: DshRef = { kind: 'mapping', mappingId: 'current-node' }
+    const task = await f.engine.createTask({ nodeRef: ref, memberAgentIds: [] })
+    const calls: string[] = []
+    f.client.getSession = async (_target, sid) => { calls.push(sid); return { ok: true, status: 'idle' } }
+    for (const nodeRefKey of [undefined, 'app:old-template']) {
+      f.store.mutateTask(task.id, t => { t.sessions.__node__ = { remoteSessionId: 'unverified-id', baseUrl: 'http://reused-port', nodeRefKey, createdAt: 0 } })
+      const stored = f.store.getTask(task.id)!
+      assert.equal(await f.engine.resolveExecTarget(stored, '__node__'), undefined)
+      assert.equal((await f.engine.steerTaskMessage(task.id, 'no leak')).ok, false)
+      const result: { ok: boolean; remoteSessionId?: string } = await (f.engine as any).ensureSession(task.id, { id: '__node__', name: 'main', dshRef: ref }, { online: true, baseUrl: 'http://current', mappingId: 'current-node' })
+      assert.equal(result.ok, true); assert.notEqual(result.remoteSessionId, 'unverified-id')
+    }
+    assert.deepEqual(calls, [])
+    assert.equal(f.client.created, 2)
+  } finally { f.store.flush(); rmSync(f.dir, { recursive: true, force: true }) }
+})
+
+test('task-59: app 端口漂移复用，app 改绑拒绝迁移；会话控制按记录 mapping 重新解析', async () => {
+  const f = makeFixture()
+  try {
+    const appRef: DshRef = { kind: 'app', appId: 'shared-template' }
+    const project = f.store.upsertProject({ name: 'session identity', dshRef: appRef, workspace: '/repo' })
+    const task = await f.engine.createTask({ projectId: project.id })
+    const agent = { id: '__node__', name: 'main', dshRef: appRef } as SubAgent
+    const engine = f.engine as any
+    const first = await engine.ensureSession(task.id, agent, { online: true, baseUrl: 'http://node:100', mappingId: 'physical-a' })
+    assert.equal(first.ok, true)
+    assert.equal(f.store.getTask(task.id)?.sessions.__node__.resolvedMappingId, 'physical-a')
+    const drift = await engine.ensureSession(task.id, agent, { online: true, baseUrl: 'http://node:200', mappingId: 'physical-a' })
+    assert.equal(drift.reused, true)
+    const changed = await engine.ensureSession(task.id, agent, { online: true, baseUrl: 'http://other:100', mappingId: 'physical-b' })
+    assert.equal(changed.ok, false)
+    assert.match(changed.error, /拒绝迁移/)
+    assert.equal(f.client.created, 1)
+    assert.equal(f.store.getTask(task.id)?.sessions.__node__.remoteSessionId, first.remoteSessionId)
+    const refs: DshRef[] = []
+    engine.resolver.resolveRef = async (ref: DshRef) => { refs.push(ref); return { online: true, baseUrl: 'http://node:300', mappingId: 'physical-a' } }
+    const control = await f.engine.resolveExecTarget(task, '__node__')
+    assert.equal(control?.baseUrl, 'http://node:300')
+    assert.deepEqual(control?.executionDshRef, appRef)
+    const calls: string[] = []
+    f.client.steerSession = async (...input: any[]) => { calls.push(input[0].baseUrl); return { ok: true } }
+    assert.equal((await f.engine.steerTaskMessage(task.id, 'stable control')).ok, true)
+    assert.deepEqual(calls, ['http://node:300'])
+    assert.deepEqual(refs, [{ kind: 'mapping', mappingId: 'physical-a' }, { kind: 'mapping', mappingId: 'physical-a' }])
+    const init = await f.engine.directUploadInit(task.id, 'stable.txt', 1)
+    assert.equal(init.ok, true)
+    const registered = await f.engine.directUploadRegister(task.id, init.uploadId!, '/repo/stable.txt')
+    assert.equal(registered.ok, true); assert.match(registered.attachment!.downloadUrl, /node:300/)
+    const pending = await f.engine.directUploadInit(task.id, 'changed.txt', 1)
+    assert.equal(pending.ok, true)
+    f.store.mutateTask(task.id, t => { t.sessions.__node__.remoteSessionId = 'replacement-session' })
+    const changedUpload = await f.engine.directUploadRegister(task.id, pending.uploadId!, '/repo/changed.txt')
+    assert.equal(changedUpload.ok, false); assert.match(changedUpload.error!, /身份已变化/)
+    engine.resolver.resolveRef = async () => ({ online: false, error: 'original mapping offline' })
+    assert.equal(await f.engine.resolveExecTarget(task, '__node__'), undefined, '不得回退另一实体来访问已有会话')
+    assert.equal((await f.engine.steerTaskMessage(task.id, 'offline')).ok, false)
+    assert.deepEqual(calls, ['http://node:300'], '离线不得向旧 URL 发送控制请求')
+    const cancellations: string[] = []
+    ;(f.client as any).cancelSession = async (target: DshTarget) => { cancellations.push(target.baseUrl); return { ok: true } }
+    const canceled = await f.engine.cancelTask(task.id)
+    assert.equal(canceled.ok, true); assert.ok(canceled.warnings.length)
+    assert.deepEqual(cancellations, [], '取消也不得回退旧地址')
+    f.store.flush()
+    const restarted = new WorkStore(join(f.dir, 'store.json'))
+    assert.equal(restarted.getTask(task.id)?.sessions.__node__.resolvedMappingId, 'physical-a')
+    restarted.flush()
+  } finally { f.store.flush(); rmSync(f.dir, { recursive: true, force: true }) }
 })

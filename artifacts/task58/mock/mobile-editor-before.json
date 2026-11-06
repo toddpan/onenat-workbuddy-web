@@ -1,0 +1,75 @@
+{
+  "width": 390,
+  "scrollWidth": 390,
+  "modal": {
+    "clientWidth": 358,
+    "scrollWidth": 358
+  },
+  "elements": [
+    {
+      "id": "pj-f-node",
+      "rect": {
+        "x": 33,
+        "y": 173,
+        "width": 206.5,
+        "height": 35,
+        "top": 173,
+        "right": 239.5,
+        "bottom": 208,
+        "left": 33
+      }
+    },
+    {
+      "id": "pj-f-exec",
+      "rect": {
+        "x": 33,
+        "y": 239.5,
+        "width": 189.5,
+        "height": 35,
+        "top": 239.5,
+        "right": 222.5,
+        "bottom": 274.5,
+        "left": 33
+      }
+    },
+    {
+      "id": "pj-f-access",
+      "rect": {
+        "x": 33,
+        "y": 280.5,
+        "width": 318,
+        "height": 34.5,
+        "top": 280.5,
+        "right": 351,
+        "bottom": 315,
+        "left": 33
+      }
+    },
+    {
+      "id": "pj-f-ws",
+      "rect": {
+        "x": 33,
+        "y": 346.5,
+        "width": 199.3359375,
+        "height": 37,
+        "top": 346.5,
+        "right": 232.3359375,
+        "bottom": 383.5,
+        "left": 33
+      }
+    },
+    {
+      "id": "pj-f-browse",
+      "rect": {
+        "x": 240.3359375,
+        "y": 346.5,
+        "width": 110.6640625,
+        "height": 37,
+        "top": 346.5,
+        "right": 351,
+        "bottom": 383.5,
+        "left": 240.3359375
+      }
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "path": "/private/var/folders/4y/08lc88l53q70fh7ndn8b5brm0000gn/T/wb-task58-console-4mf9yd",
+  "verifiedProject": "proj-lzfrgdlo",
+  "removed": true,
+  "reason": "First mock fixture terminated by job cancellation before cleanup handler ran; canonical macOS temp path verified"
+}

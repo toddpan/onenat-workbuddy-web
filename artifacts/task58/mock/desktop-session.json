@@ -1,0 +1,73 @@
+{
+  "task": {
+    "id": "task-a05f1f9c",
+    "title": "Task58 desktop cross-node veri",
+    "mode": "chat",
+    "status": "completed",
+    "memberAgentIds": [],
+    "creator": "console",
+    "turns": [
+      {
+        "id": "turn-ae8816da",
+        "seq": 1,
+        "role": "user",
+        "text": "Task58 desktop cross-node verification",
+        "at": 1793984931462
+      },
+      {
+        "id": "turn-638533b9",
+        "seq": 2,
+        "role": "agent",
+        "agentId": "__node__",
+        "agentName": "Execution node · 主会话",
+        "text": "Task58 mock reply from executor",
+        "streaming": false,
+        "at": 1793984931469,
+        "endedAt": 1793984931492
+      }
+    ],
+    "sessions": {
+      "__node__": {
+        "remoteSessionId": "session-executor-1",
+        "baseUrl": "http://127.0.0.1:59165/api/v1",
+        "nodeRefKey": "mapping:execution",
+        "plannerModel": "",
+        "createdAt": 1793984931467,
+        "permission": "danger-full-access",
+        "workspaceAccessCliPath": "/executor/scratch/.workbuddy-workspace-remote-v2.mjs"
+      }
+    },
+    "createdAt": 1793984931459,
+    "updatedAt": 1793984931492,
+    "ownerUserId": "usr-1973ff6c4089d9ad",
+    "projectId": "proj-lzfrgdlo",
+    "nodeRef": {
+      "kind": "mapping",
+      "mappingId": "execution"
+    },
+    "lastRoute": {
+      "kind": "chat",
+      "agentId": "__node__",
+      "agentName": "Execution node · 主会话",
+      "source": "node"
+    },
+    "running": false
+  },
+  "requests": [
+    {
+      "url": "/onenat-workbuddy/api/tasks",
+      "method": "POST",
+      "body": {
+        "message": "Task58 desktop cross-node verification",
+        "projectId": "proj-lzfrgdlo",
+        "nodeRef": {
+          "kind": "mapping",
+          "mappingId": "execution"
+        }
+      }
+    }
+  ],
+  "errors": [],
+  "files": "📁 /owner/project 来源：文件归属：Files owner-DSH · 执行：Execution node-DSH · 跨节点远程访问（非本地 cwd）隐藏项＋文件夹⬆️ 上传⟳▸📁backlog@⧉🗑📝README.md@👁⬇⧉🗑",
+  "place": "📦 Task58 Console · 文件：Files owner-DSH · 执行：Execution node-DSH · 远程访问"
+}

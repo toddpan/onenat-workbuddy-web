@@ -1,0 +1,115 @@
+[
+  {
+    "node": "6cc2987d",
+    "sessionId": "session-70a1fcb7-e657-44b1-9a1f-6edb2549cc28",
+    "status": 200,
+    "data": {
+      "messages": [
+        {
+          "role": "assistant",
+          "content": ""
+        },
+        {
+          "role": "assistant",
+          "content": ""
+        },
+        {
+          "role": "assistant",
+          "content": ""
+        },
+        {
+          "role": "assistant",
+          "content": ""
+        },
+        {
+          "role": "assistant",
+          "content": "UNSUPPORTED: The required `node --input-type=module -e '...'` execution was attempted exactly once, but Node.js v24.14.0 terminated with `SyntaxError: Unexpected end of input` (exit 1). The `'\\''` quote-escaping in the provided command string is mangled by the command tool's shell layer, truncating the program before it can parse, so the sentinel line was never printed. (A follow-up attempt that saved the script to a file also failed with `ERR_INPUT_TYPE_NOT_ALLOWED`, since `--input-type` is only valid with `--eval`/`--print`/STDIN, not file arguments — so no alternate execution of the verbatim command succeeded either.)"
+        }
+      ]
+    }
+  },
+  {
+    "node": "6cc2987d",
+    "sessionId": "session-d54a6218-4088-4308-8fa8-4057a26cf4d6",
+    "status": 200,
+    "data": {
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "I'll run the command as given.\n\n"
+        },
+        {
+          "role": "assistant",
+          "content": "The single-quote-escaped `'\\''` sequences in the given command get mangled by the bash tool, causing a syntax error. Let me retry with a properly quoted form that is semantically identical.\n\n"
+        },
+        {
+          "role": "assistant",
+          "content": "WORKSPACE_REMOTE_RESULT:49affa8617847ddc38c5664a4292a83782c51996014a28e8:eyJub25jZSI6IjQ5YWZmYTg2MTc4NDdkZGMzOGM1NjY0YTQyOTJhODM3ODJjNTE5OTYwMTRhMjhlOCIsIm9wZXJhdGlvbiI6IndyaXRlIiwicmVxdWVzdEhhc2giOiIzYjViYmZmOWY2ZmFlZDhiN2RhOWQxYzc5NjNhNDg4ODVhMTRhOTEyMDg1OWVkYWQyNDcwNDVkOTBmYTcwNmI4Iiwib2siOnRydWUsInBhdGgiOiIvdG1wL3diLXRhc2s1Ny1kMmQ3NzE5OTE1ZWQyODUyLW93bmVyL21haW4udHh0Iiwic2hhMjU2IjoiNGJhZTJmOGYwNDZhOTM4YjRhOGU1MmNiYWZkNzhiM2U0ZTI2MGY4ODcyMmVkYTc2MDhiMGRhZTYyODBlMDA2NCIsInNpemUiOjU2fQ=="
+        }
+      ]
+    }
+  },
+  {
+    "node": "6cc2987d",
+    "sessionId": "session-a6963e77-e80c-46f4-95ba-c524a2d86e26",
+    "status": 200,
+    "data": {
+      "messages": [
+        {
+          "role": "assistant",
+          "content": ""
+        },
+        {
+          "role": "assistant",
+          "content": "WORKSPACE_REMOTE_RESULT:734eae5bc2913c6bbc071496b4d610f70157a52f1a5ac4e8:eyJub25jZSI6IjczNGVhZTViYzI5MTNjNmJiYzA3MTQ5NmI0ZDYxMGY3MDE1N2E1MmYxYTVhYzRlOCIsIm9wZXJhdGlvbiI6InJlYWQiLCJyZXF1ZXN0SGFzaCI6ImNhYmUyNjllNjBiYzM3Y2IwZDRmY2NhZWIzZTY0YWRjZWIxZmRmYTIzOWRmNTJhYzFjOGQ5YjE1NDlhNDFhN2IiLCJvayI6dHJ1ZSwicGF0aCI6Ii90bXAvd2ItdGFzazU3LWQyZDc3MTk5MTVlZDI4NTItb3duZXIvbWFpbi50eHQiLCJzaGEyNTYiOiIyZGE2MWIwMzg1Mjk4NmQwYzM4NjEwMjJkM2I5ZTZiYjcxNmQzZjZjNmY3MDUyZjk3NGViYjNmZjJkMGM3NWE2Iiwic2l6ZSI6NDgsImNvbnRlbnRCYXNlNjQiOiJZV1U0WlRJM1lUWTRZVEE1TkdWbU4yTmtNekUwTW1abU5ETTNPVEl4T1dKbFpURTNPRFptTkRBeVpqRXhaRE5qIn0="
+        }
+      ]
+    }
+  },
+  {
+    "node": "6cc2987d",
+    "sessionId": "session-bdd6afe8-d4ab-4929-bc5e-7bc4abce1241",
+    "status": 200,
+    "data": {
+      "messages": [
+        {
+          "role": "assistant",
+          "content": ""
+        },
+        {
+          "role": "assistant",
+          "content": "WORKSPACE_REMOTE_RESULT:3fb2d9544c5d8713152a55fa444dca9a598f870f189df0bf:eyJub25jZSI6IjNmYjJkOTU0NGM1ZDg3MTMxNTJhNTVmYTQ0NGRjYTlhNTk4Zjg3MGYxODlkZjBiZiIsIm9wZXJhdGlvbiI6Imxpc3QiLCJyZXF1ZXN0SGFzaCI6ImE0MTYxYzkyMDJmYjQyMTA5NjBjZWY3Njc1OGUzOWYxODk0ZjllMTA3ZjEwMmRiOWU0MDI5MTA4ZDlmNjNiY2UiLCJvayI6dHJ1ZSwicGF0aCI6Ii90bXAvd2ItdGFzazU3LWQyZDc3MTk5MTVlZDI4NTItb3duZXIiLCJlbnRyaWVzIjpbeyJuYW1lIjoibWFpbi50eHQiLCJ0eXBlIjoiZmlsZSJ9LHsibmFtZSI6Ii53b3Jrc3BhY2UtcmVtb3RlLmxvY2siLCJ0eXBlIjoiZmlsZSJ9LHsibmFtZSI6ImNoaWxkLnR4dCIsInR5cGUiOiJmaWxlIn1dLCJ0cnVuY2F0ZWQiOmZhbHNlLCJlbnRyeUxpbWl0IjoyMDAwfQ=="
+        }
+      ]
+    }
+  },
+  {
+    "node": "5602f2c2",
+    "sessionId": "session-7acfc5ce-4e68-4fbb-a10a-7969d3cb6798",
+    "status": 200,
+    "data": {
+      "messages": [
+        {
+          "role": "assistant",
+          "content": ""
+        },
+        {
+          "role": "assistant",
+          "content": ""
+        },
+        {
+          "role": "assistant",
+          "content": ""
+        },
+        {
+          "role": "assistant",
+          "content": ""
+        },
+        {
+          "role": "assistant",
+          "content": "执行完成，但按驱动自身判定为**失败**（driver exit code 1）。\n\n```\nLIVE_ROUNDTRIP:eyJsYW5lIjoibWFpbiIsImV4ZWN1dG9yQ3dkIjoiL3RtcC93Yi10YXNrNTctZDJkNzcxOTkxNWVkMjg1Mi1leGVjdXRvciIsIm93bmVyUmVmIjoibWFwcGluZzo2Y2MyOTg3ZCIsInJvb3QiOiIvdG1wL3diLXRhc2s1Ny1kMmQ3NzE5OTE1ZWQyODUyLW93bmVyIiwiY2hlY2tzIjpbeyJvcGVyYXRpb24iOiJsaXN0IiwiZXhpdENvZGUiOjAsIm9rIjp0cnVlLCJwYXRoIjoiL3RtcC93Yi10YXNrNTctZDJkNzcxOTkxNWVkMjg1Mi1vd25lciJ9LHsib3BlcmF0aW9uIjoicmVhZCIsImV4aXRDb2RlIjowLCJvayI6dHJ1ZSwicGF0aCI6Ii90bXAvd2ItdGFzazU3LWQyZDc3MTk5MTVlZDI4NTItb3duZXIvbWFpbi50eHQiLCJzaGEyNTYiOiIyZGE2MWIwMzg1Mjk4NmQwYzM4NjEwMjJkM2I5ZTZiYjcxNmQzZjZjNmY3MDUyZjk3NGViYjNmZjJkMGM3NWE2In0seyJvcGVyYXRpb24iOiJ3cml0ZSIsImV4aXRDb2RlIjowLCJvayI6dHJ1ZSwicGF0aCI6Ii90bXAvd2ItdGFzazU3LWQyZDc3MTk5MTVlZDI4NTItb3duZXIvbWFpbi50eHQiLCJzaGEyNTYiOiI0YmFlMmY4ZjA0NmE5MzhiNGE4ZTUyY2JhZmQ3OGIzZTRlMjYwZjg4NzIyZWRhNzYwOGIwZGFlNjI4MGUwMDY0In0seyJvcGVyYXRpb24iOiJ3cml0ZSIsImV4aXRDb2RlIjoxLCJvayI6ZmFsc2UsImNvZGUiOiJVTlZFUklGSUVEX09SX1VOU1VQUE9SVEVEIn1dLCJvayI6ZmFsc2UsImluaXRpYWxTaGEyNTYiOiIyZGE2MWIwMzg1Mjk4NmQwYzM4NjEwMjJkM2I5ZTZiYjcxNmQzZjZjNmY3MDUyZjk3NGViYjNmZjJkMGM3NWE2IiwiZmluYWxTaGEyNTYiOiI0YmFlMmY4ZjA0NmE5MzhiNGE4ZTUyY2JhZmQ3OGIzZTRlMjYwZjg4NzIyZWRhNzYwOGIwZGFlNjI4MGUwMDY0IiwiZXJyb3IiOiJFeHBlY3RlZCB2YWx1ZXMgdG8gYmUgc3RyaWN0bHkgZXF1YWw6XG4rIGFjdHVhbCAtIGV4cGVjdGVkXG5cbisgJ1VOVkVSSUZJRURfT1JfVU5TVVBQT1JURUQnXG4tICdDQVNfTUlTTUFUQ0gnXG4ifQ==\n```\n\n失败原因（解码后如实汇报）：\n\n- `list` ok（owner root 可列）\n- `read` ok，`main.txt` SHA256 `2da61b03…c75a6`\n- `write`（带版本 CAS）ok，写入后 SHA256 `4bae2f8f…e0064`\n- **stale-CAS 探测失败**：用过期版本号再次 write，期望 `CAS_MISMATCH`，实际返回 `UNVERIFIED_OR_UNSUPPORTED`，exitCode 1 → 断言不通过，`ok: false`\n- 因该步失败，驱动提前终止，后续的 re-read 与 `exec` 检查未执行\n- 驱动未清理目录或会话（按要求交由测试控制端 finally 处理），`main.txt` 当前内容为本次成功写入的版本"
+        }
+      ]
+    }
+  }
+]

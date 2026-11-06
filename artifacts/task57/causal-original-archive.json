@@ -1,0 +1,20 @@
+{
+  "at": "2026-11-06T18:20:54.013Z",
+  "node": "5602f2c2",
+  "sessionId": "session-01ddb29a-952e-47b3-b390-816bf1b39ca3",
+  "mode": "read-only archived history; no prompt or upload sent",
+  "requestPath": "/sessions/session-01ddb29a-952e-47b3-b390-816bf1b39ca3/history?maxMessages=200",
+  "messageCount": 43,
+  "firstPrompt": {
+    "role": "user",
+    "seq": 9,
+    "length": 1769,
+    "sha256": "51b320593110c634b87b5a87eee8b28384c9e732eb1578c8c4e4996d2bb059d3",
+    "originalRoot": true,
+    "workspaceSection": true,
+    "stableOwner": false,
+    "readOnlyFallback": true,
+    "excerpt": "[项目工作区跨机访问]\n- 文件归属工作区: \"/tmp/wb-task57-37e2ba6368bb09f1-owner\"；当前会话可在另一节点执行。该路径不是当前节点的本地 cwd。\n- 项目文件与 backlog 的唯一事实源在文件归属节点；下载副本不会自动写回。\n- 远程操作工具未能安装：当前仅提供文件 HTTP 读取指引，写入和命令执行不可用；不要改在本机创建同路径目录。\n- 浏览目录: curl -H 'Authorization: Bearer [redacted]' 'http://natpass.yikaihui.com:31399/api/v1/fs/list?path=%2Ftmp%2Fwb-task57-37e2ba6368bb09f1-owner&all=1'\n- 下载文件: curl -H 'Authorization: Bearer [redacted]' 'http://natpass.yikaihui.com:31399/api/v1/fs/download?path=%2Ftmp%2Fwb-task57-37e2ba6368bb09f1-owner%2Fa.txt' -o a.txt\n- 预览文本文件: 在下载 URL 末尾追加 &inline=1。HTTP path 必须是【绝对路径】，且需 URL 编码。\n- HTTP 文件浏览为原有节点文件服务；需要路径边界保证时使用远程工具，不跟随工作区外符号链接。\n- 上述 HTTP 浏览/下载 URL 仅是本轮快照；ONENAT 项目持续访问请使用带稳定引用的远程工具，不能缓存旧公网端口。\n\n"
+  },
+  "verdict": "Original archived child first prompt confirms fallback; helper upload response remains unavailable in original report"
+}

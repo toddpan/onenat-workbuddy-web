@@ -1,0 +1,8 @@
+{
+  "src/web-ui.ts": {
+    "sameAsContinuationBaseline": false
+  },
+  "scripts/project-node-ui-test.mjs": {
+    "sameAsContinuationBaseline": true
+  }
+}

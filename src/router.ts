@@ -12,6 +12,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { Readable } from 'node:stream'
 import { randomUUID } from 'node:crypto'
 import type { OnenatDirectory } from './onenat.js'
@@ -23,7 +24,9 @@ import { interactionGuard } from './prompt-composer.js'
 import type { Orchestrator } from './orchestrator.js'
 import type { WorkStore } from './store.js'
 import { isNodeAbsolutePath, WORK_DIR_NOT_ABSOLUTE_MSG } from './store.js'
-import { DshClient } from './remote-client.js'
+import { normalizeWorkspacePath, validateWorkspacePath, ProjectWorkspaceConflictError } from './workspace.js'
+import { requireProjectFiles, requireNodeFiles, projectFilePath, workspaceChild, requireWorkspacePath, checkWorkspaceFsPath, writeProjectFile, WorkspaceFileError } from './workspace-files.js'
+import { DshClient, type RemoteModelEntry } from './remote-client.js'
 import {
   backlogInstructionSnippet,
   createItem,
@@ -141,8 +144,11 @@ export class WorkBuddyRouter {
     return this.registry
   }
 
-  /** 当前请求会话（dispatch 时注入；权限判定与审计展示用） */
-  private session?: SessionInfo
+  /** Request-local identity: concurrent parsing/remote calls must never overwrite another user's permissions. */
+  private requestContext = new AsyncLocalStorage<{ session?: SessionInfo }>()
+  private get session(): SessionInfo | undefined {
+    return this.requestContext.getStore()?.session
+  }
 
   private isPlatformAdmin(): boolean {
     return this.session?.role === 'admin'
@@ -185,7 +191,7 @@ export class WorkBuddyRouter {
    */
   private taskForView(taskId: string): WorkTask | undefined {
     const task = this.store.getTask(taskId)
-    if (!task || !canViewTask(this.session, task, this.permContext())) return undefined
+    if (!task || (this.session && !canViewTask(this.session, task, this.permContext()))) return undefined
     return task
   }
 
@@ -274,6 +280,7 @@ export class WorkBuddyRouter {
   /** 项目导入上传令牌（token → 待入库信息）；2 小时未收到上传自动作废 */
   private pendingProjectImports = new Map<string, {
     importId: string
+    ownerUserId?: string
     name: string
     path: string
     nodeRef: DshRef
@@ -403,7 +410,17 @@ export class WorkBuddyRouter {
    * 解析 fs 通道目标节点：优先 node=<dshRef JSON>（项目工作区浏览，无需子智能体），
    * 否则回退 agent=<id>（子智能体所在节点）。三个返回字段与 list/mkdir 既有行为一致。
    */
-  private async resolveFsTarget(url: URL, fallbackAgentId?: string): Promise<{ ok: true; target: any } | { ok: false; status: number; error: string }> {
+  private async resolveFsTarget(url: URL, fallbackAgentId?: string, fileAction?: 'read' | 'write'): Promise<{ ok: true; target: any; project?: Project } | { ok: false; status: number; error: string }> {
+    const projectId = url.searchParams.get('projectId') || ''
+    if (projectId) {
+      const project = this.store.getProject(projectId)
+      if (!project || (this.session && !this.canSeeProject(project))) return { ok: false, status: 404, error: '项目不存在' }
+      if (fileAction) requireProjectFiles(this.session, project, fileAction === 'write')
+      const target = await this.resolver.resolveRef(project.dshRef, project.apiKey, 'project-workspace')
+      if (!target.online || !target.baseUrl) return { ok: false, status: 502, error: target.error || '文件归属节点不可达' }
+      return { ok: true, target, project }
+    }
+    if (fileAction) requireNodeFiles(this.session)
     const nodeParam = url.searchParams.get('node') || ''
     if (nodeParam) {
       let nref: any
@@ -417,6 +434,44 @@ export class WorkBuddyRouter {
     const target = await this.resolver.resolve(agent)
     if (!target.online || !target.baseUrl) return { ok: false, status: 502, error: target.error || '节点不可达' }
     return { ok: true, target }
+  }
+
+  /** Authorize paths before remote file IO, then reject remote descendant links. */
+  private async projectFsPath(scope: { target: any; project?: Project }, input: string | undefined, write = false, absent = false, recursive = false) {
+    if (!scope.project) return { path: input || '', exists: true, listing: undefined }
+    const path = projectFilePath(scope.project, input)
+    requireWorkspacePath(this.session, scope.project, this.store.getProjects(), this.directory, path, write, recursive)
+    const checked = await checkWorkspaceFsPath(this.client, scope.target, scope.project, path, absent)
+    return { path, ...checked }
+  }
+
+  /** Preserve completed saves if a later file conflicts or its remote outcome is uncertain. */
+  private async saveProjectUploads(scope: { target: any; project: Project }, dir: string, files: Array<{ filename: string; data: Buffer }>, expectedSha256?: string) {
+    const saved: Array<{ name: string; path: string; size: number; sha256?: string }> = []
+    let currentName: string | undefined
+    try {
+      if (!files.length) throw new WorkspaceFileError(400, 'FILES_REQUIRED', '未找到上传文件')
+      const names = new Set<string>()
+      for (const file of files) {
+        workspaceChild(projectFilePath(scope.project, dir), file.filename)
+        if (names.has(file.filename)) throw new WorkspaceFileError(400, 'DUPLICATE_FILENAME', '同一批次不能包含重复文件名')
+        names.add(file.filename)
+      }
+      for (const file of files) {
+        currentName = file.filename
+        const path = workspaceChild(projectFilePath(scope.project, dir), file.filename)
+        const checked = await this.projectFsPath(scope, path, true, true)
+        if (checked.exists && (!expectedSha256 || files.length !== 1)) throw new WorkspaceFileError(428, 'VERSION_REQUIRED', '同名文件未覆盖：更新须先读取并携带 expectedSha256，每次只更新一个文件')
+        const out = await writeProjectFile(scope.project, scope.target, this.directory, path, file.data, expectedSha256)
+        if (!out.ok) return { status: out.code === 'CAS_MISMATCH' ? 409 : 400, body: { ...out, files: saved, partial: saved.length > 0, failedFile: currentName } }
+        saved.push({ name: file.filename, path, size: file.data.length, sha256: out.sha256 })
+      }
+      return { status: 200, body: { ok: true, files: saved } }
+    } catch (err) {
+      const status = err instanceof WorkspaceFileError ? err.status : 502
+      const code = err instanceof WorkspaceFileError ? err.code : 'WORKSPACE_UPLOAD_FAILED'
+      return { status, body: { ok: false, code, error: (err as Error).message || '远端上传失败', files: saved, partial: saved.length > 0, failedFile: currentName } }
+    }
   }
 
   private async parseBody(req: IncomingMessage): Promise<any> {
@@ -474,6 +529,7 @@ export class WorkBuddyRouter {
       id: proj.id,
       name: proj.name,
       dshRef: proj.dshRef,
+      defaultExecutionNodeRef: proj.defaultExecutionNodeRef,
       nodeTitle: nodeTitle || '(未配置节点)',
       workspace: proj.workspace || '',
       instruction: proj.instruction || '',
@@ -498,12 +554,19 @@ export class WorkBuddyRouter {
 
   /** 创建/更新项目（校验名称与节点；默认协作成员必须存在；defaultAgentIds 为 canonical，expertIds 兼容别名） */
   private upsertProjectFromInput(body: any): Project {
-    const name = String(body?.name || '').trim()
+    const existing = body?.id ? this.store.getProject(String(body.id)) : undefined
+    const name = String(body?.name ?? existing?.name ?? '').trim()
     if (!name) throw new Error('缺少项目名称')
     const dshRef = body?.dshRef ? (body.dshRef as DshRef) : undefined
-    const existing = body?.id ? this.store.getProject(String(body.id)) : undefined
+    if (existing && !this.canSeeProject(existing)) throw Object.assign(new Error('项目不存在'), { status: 404 })
+    if (existing && !this.isProjectOwner(existing)) throw Object.assign(new Error('仅项目 owner 或平台管理员可编辑项目'), { status: 403 })
+    if (existing && WorkBuddyRouter.archivedBlocked(existing)) throw new Error('项目已归档（只读），请先恢复再编辑')
     const finalRef = dshRef || existing?.dshRef
     if (!finalRef) throw new Error('缺少项目 DSH 节点（dshRef）')
+    const checkedRef = normalizeDshRef(finalRef)
+    if ('error' in checkedRef) throw new Error(checkedRef.error)
+    const executionRef = body?.defaultExecutionNodeRef == null ? undefined : normalizeDshRef(body.defaultExecutionNodeRef)
+    if (executionRef && 'error' in executionRef) throw new Error(executionRef.error)
     // 显式传入（含 []）即生效并写 canonical；未传时保留既有值。expertIds 传入时视为同一字段的旧写法。
     const defaultAgentIds = projectDefaultAgentIdsFromInput(body)
     for (const eid of defaultAgentIds || []) {
@@ -512,7 +575,8 @@ export class WorkBuddyRouter {
     return this.store.upsertProject({
       id: body?.id ? String(body.id) : undefined,
       name,
-      dshRef: finalRef,
+      dshRef: checkedRef,
+      ...(body?.defaultExecutionNodeRef !== undefined ? { defaultExecutionNodeRef: executionRef as DshRef | undefined } : {}),
       apiKey: body?.apiKey !== undefined ? String(body.apiKey) : undefined,
       workspace: body?.workspace !== undefined ? String(body.workspace) : undefined,
       instruction: body?.instruction !== undefined ? String(body.instruction) : undefined,
@@ -689,9 +753,7 @@ export class WorkBuddyRouter {
         try {
           // 节点主会话（__node__）无智能体记录：按任务节点解析
           const agent = this.store.getAgent(agentId)
-          const target = agent
-            ? await this.resolver.resolve(agent)
-            : await this.engine.resolveExecTarget(task, agentId)
+          const target = await this.engine.resolveExecTarget(task, agentId)
           if (!target || !target.online || !target.baseUrl) return null
           const r = await this.client.getSessionStats(target, binding.remoteSessionId)
           if (!r.ok || !r.stats) return { agentId, ok: false, supported: r.supported !== false, error: r.error }
@@ -801,16 +863,7 @@ export class WorkBuddyRouter {
       if (!binding?.remoteSessionId) continue
       const agent = this.store.getAgent(agentId)
       try {
-        let target = agent
-          ? await this.resolver.resolve(agent).catch(() => undefined)
-          : await this.engine.resolveExecTarget(task, agentId).catch(() => undefined)
-        if (!target || !target.online || !target.baseUrl) {
-          // 回退（与 cancelTask 同款）：会话绑定自带节点直连地址时直接使用，
-          // ONENAT 解析不可达（离线/配置漂移）也能对节点直发协作指令
-          if (binding.baseUrl) {
-            target = { baseUrl: binding.baseUrl, apiKey: this.engine.taskExec(task).apiKey, agentId, online: true } as any
-          }
-        }
+        const target = await this.engine.resolveExecTarget(task, agentId).catch(() => undefined)
         if (!target || !target.online || !target.baseUrl) continue
         return { target, remoteSessionId: binding.remoteSessionId, agentId }
       } catch { /* 下一个成员 */ }
@@ -955,9 +1008,7 @@ export class WorkBuddyRouter {
         try {
           if (!binding?.remoteSessionId) return { agentId, agentName, ok: false, supported: true, error: '成员会话未建立' }
           // 节点主会话（__node__）无智能体记录：按任务节点解析
-          const target = agent
-            ? await this.resolver.resolve(agent)
-            : await this.engine.resolveExecTarget(task, agentId)
+          const target = await this.engine.resolveExecTarget(task, agentId)
           if (!target || !target.online || !target.baseUrl) return { agentId, agentName, ok: false, supported: true, error: (target as any)?.error || '节点离线' }
           const r = await this.client.getSessionTodos(target, binding.remoteSessionId)
           if (!r.ok) return { agentId, agentName, ok: false, supported: r.supported !== false, error: r.error }
@@ -1048,9 +1099,7 @@ export class WorkBuddyRouter {
           const agentName = agent?.name || (agentId === '__node__' ? '主会话' : agentId)
           if (!agent && agentId !== '__node__') return null
           // 节点主会话（__node__）无智能体记录：按任务节点解析（仅会话作用域，无默认技能根回退）
-          const target = agent
-            ? await this.resolver.resolve(agent)
-            : await this.engine.resolveExecTarget(task, agentId)
+          const target = await this.engine.resolveExecTarget(task, agentId)
           if (!target || !target.online || !target.baseUrl) return { agentId, agentName, ok: false, supported: true, skills: [] }
           const binding = task.sessions?.[agentId]
           if (binding?.remoteSessionId) {
@@ -1116,7 +1165,17 @@ export class WorkBuddyRouter {
   }
 
   public async dispatch(req: IncomingMessage, res: ServerResponse, prefix: string, opts?: { auth?: boolean; session?: SessionInfo }): Promise<boolean> {
-    this.session = opts?.session
+    return this.requestContext.run({ session: opts?.session }, async () => {
+      try { return await this.dispatchRequest(req, res, prefix, opts) }
+      catch (err) {
+        if (!(err instanceof WorkspaceFileError)) throw err
+        this.sendJson(res, err.status, { ok: false, code: err.code, error: err.message })
+        return true
+      }
+    })
+  }
+
+  private async dispatchRequest(req: IncomingMessage, res: ServerResponse, prefix: string, opts?: { auth?: boolean; session?: SessionInfo }): Promise<boolean> {
     const rawUrl = req.url || '/'
     const method = (req.method || 'GET').toUpperCase()
     if (method === 'OPTIONS') {
@@ -1212,10 +1271,11 @@ export class WorkBuddyRouter {
     if (p === '/api/projects' && method === 'POST') {
       const body = await this.parseBody(req)
       try {
+        const existing = body?.id ? this.store.getProject(String(body.id)) : undefined
         const saved = this.upsertProjectFromInput(body)
-        this.audit('project.create', 'project', saved.id, saved.name)
-        // 创建者自动成为 owner（未启用成员隔离的存量流程不受影响）
-        if (this.session?.userId && !saved.owner) {
+        this.audit(existing ? 'project.update' : 'project.create', 'project', saved.id, saved.name)
+        // Only a new project gets the creator's ACL. Editing a legacy project must not claim it or replace members.
+        if (!existing && this.session?.userId) {
           const finalized = this.store.upsertProject({
             id: saved.id,
             owner: this.session.userId,
@@ -1226,17 +1286,28 @@ export class WorkBuddyRouter {
         }
         this.sendJson(res, 200, { ok: true, data: this.projectSummary(saved) })
       } catch (err: any) {
-        this.sendJson(res, 400, { ok: false, error: err?.message || String(err) })
+        this.sendJson(res, err?.status || 400, { ok: false, error: err?.message || String(err), ...(err?.code ? { code: err.code } : {}) })
       }
       return true
     }
     // ---------- 项目：从远程 DSH 导入（发分析任务 → 节点智能体分析项目 → 回调平台接口自动建项目） ----------
     if (p === '/api/projects/import' && method === 'POST') {
       const body = await this.parseBody(req)
-      const nodeRef = body?.nodeRef && typeof body.nodeRef === 'object' && typeof body.nodeRef.kind === 'string' ? (body.nodeRef as DshRef) : undefined
-      const wsPath = String(body?.workspacePath || '').trim()
-      if (!nodeRef || !wsPath) {
-        this.sendJson(res, 400, { ok: false, error: '缺少 nodeRef（来源 DSH 主节点）或 workspacePath（远端工作区路径）' })
+      const nodeRef = normalizeDshRef(body?.nodeRef)
+      const wsPath = normalizeWorkspacePath(String(body?.workspacePath || ''))
+      if ('error' in nodeRef || !wsPath) {
+        this.sendJson(res, 400, { ok: false, error: '缺少合法 nodeRef（来源 DSH 主节点）或 workspacePath（远端工作区路径）' })
+        return true
+      }
+      try { validateWorkspacePath(wsPath) } catch (err: any) {
+        this.sendJson(res, err.status, { ok: false, code: err.code, error: err.message })
+        return true
+      }
+      const matches = this.store.getProjectsForWorkspace(nodeRef, wsPath)
+      if (matches.length) {
+        const existing = matches.find((proj) => this.canSeeProject(proj))
+        if (!existing) { this.sendJson(res, 409, { ok: false, code: 'PROJECT_WORKSPACE_CONFLICT', error: new ProjectWorkspaceConflictError().message }); return true }
+        this.sendJson(res, 200, { ok: true, data: { projectId: existing.id, project: this.projectSummary(existing), reused: true } })
         return true
       }
       const name = String(body?.name || '').trim() || wsPath.split('/').filter(Boolean).pop() || '导入项目'
@@ -1274,7 +1345,7 @@ export class WorkBuddyRouter {
       for (const [k, v] of this.pendingProjectImports) {
         if (Date.now() - v.at > 2 * 60 * 60 * 1000) this.pendingProjectImports.delete(k)
       }
-      this.pendingProjectImports.set(token, { importId, name, path: wsPath, nodeRef, nodeLabel, taskId: task.id, at: Date.now() })
+      this.pendingProjectImports.set(token, { importId, ownerUserId: this.session?.userId, name, path: wsPath, nodeRef, nodeLabel, taskId: task.id, at: Date.now() })
       this.sendJson(res, 200, { ok: true, data: { taskId: task.id, importId, nodeLabel } })
       return true
     }
@@ -1294,7 +1365,7 @@ export class WorkBuddyRouter {
       }
       // 防串号校验（载荷必须带与导入令牌一致的 node/workspace，提示词已预填）：同机并发导入可能互相
       // 覆盖载荷文件，比对不符即 409 拒收，避免把 A 项目的表单写进 B 项目（2026-10-18 线上事故）
-      const normPath = (v: string) => v.replace(/\/+$/, '')
+      const normPath = normalizeWorkspacePath
       const bodyNode = String(body.node || '').trim()
       const bodyWorkspace = String(body.workspace || '').trim()
       if (bodyNode !== this.nodeKeyOf(pending.nodeRef) || normPath(bodyWorkspace) !== normPath(pending.path)) {
@@ -1324,17 +1395,21 @@ export class WorkBuddyRouter {
         }
       }
       const instruction = String(body.instruction || '').trim().slice(0, 6000) || (String(body.summary || '').trim() ? `项目概述：${String(body.summary).trim()}` : undefined)
-      // 幂等：同节点同路径的项目已存在 → 视为重新导入，更新原项目而不是重复建卡
-      const sameRef = (a: DshRef, b: DshRef): boolean => {
-        if (a.kind !== b.kind) return false
-        if (a.kind === 'mapping' && b.kind === 'mapping') return a.mappingId === b.mappingId
-        if (a.kind === 'direct' && b.kind === 'direct') return a.apiBaseUrl === b.apiBaseUrl
-        if (a.kind === 'app' && b.kind === 'app') return a.appId === b.appId
+      // Callback identity comes from the import initiator, never the current request's cookie.
+      // Re-read account role/status and membership so revocation while analysis ran takes effect.
+      const user = pending.ownerUserId ? this.auth?.getUserById(pending.ownerUserId) : undefined
+      if (pending.ownerUserId && user?.status !== 'active') {
+        this.sendJson(res, 403, { ok: false, error: '发起导入的用户已不可用，请重新登录后发起导入' })
         return true
       }
-      const existing = this.store.getProjects().find((pr) => pr.workspace && normPath(pr.workspace) === normPath(pending.path) && sameRef(pr.dshRef, pending.nodeRef))
-      const project = this.store.upsertProject({
-        id: existing?.id,
+      const matches = this.store.getProjectsForWorkspace(pending.nodeRef, pending.path)
+      const existing = matches.find((pr) => !pending.ownerUserId || canAccessProject(user ? { userId: user.id, role: user.role } : undefined, pr, 'view'))
+      if (matches.length && !existing) {
+        this.sendJson(res, 409, { ok: false, code: 'PROJECT_WORKSPACE_CONFLICT', error: new ProjectWorkspaceConflictError().message })
+        return true
+      }
+      const project = existing || this.store.upsertProject({
+        ...(pending.ownerUserId ? { owner: pending.ownerUserId, projectMembers: [{ userId: pending.ownerUserId, role: 'owner' as const, joinedAt: Date.now() }] } : {}),
         name,
         dshRef: pending.nodeRef,
         workspace: pending.path,
@@ -1364,7 +1439,7 @@ export class WorkBuddyRouter {
         return true
       }
       if (method === 'DELETE') {
-        if (proj && WorkBuddyRouter.projectIsolated(proj) && !this.isProjectOwner(proj)) {
+        if (proj && !this.isProjectOwner(proj)) {
           this.sendJson(res, 403, { ok: false, error: '仅项目 owner 或平台管理员可删除项目' })
           return true
         }
@@ -1373,7 +1448,7 @@ export class WorkBuddyRouter {
         return true
       }
       if (method === 'PATCH' || method === 'PUT') {
-        if (proj && WorkBuddyRouter.projectIsolated(proj) && !this.isProjectOwner(proj)) {
+        if (proj && !this.isProjectOwner(proj)) {
           this.sendJson(res, 403, { ok: false, error: '仅项目 owner 或平台管理员可编辑项目' })
           return true
         }
@@ -1386,7 +1461,7 @@ export class WorkBuddyRouter {
           const saved = this.upsertProjectFromInput({ ...body, id })
           this.sendJson(res, 200, { ok: true, data: this.projectSummary(saved) })
         } catch (err: any) {
-          this.sendJson(res, 400, { ok: false, error: err?.message || String(err) })
+          this.sendJson(res, err?.status || 400, { ok: false, error: err?.message || String(err), ...(err?.code ? { code: err.code } : {}) })
         }
         return true
       }
@@ -2743,8 +2818,7 @@ export class WorkBuddyRouter {
     // 远端目录浏览与工作区文件管理
     if (p === '/api/agents/fs/list' && method === 'GET') {
       const url = new URL(req.url || '/', 'http://localhost')
-      // 项目工作目录浏览：node=<dshRef JSON>（与 agent 参数二选一）
-      const targetRes = await this.resolveFsTarget(url)
+      const targetRes = await this.resolveFsTarget(url, undefined, 'read')
       if (!targetRes.ok) {
         this.sendJson(res, targetRes.status, { ok: false, error: targetRes.error })
         return true
@@ -2752,13 +2826,19 @@ export class WorkBuddyRouter {
       const target = targetRes.target
       const dirPath = url.searchParams.get('path') || undefined
       const all = url.searchParams.get('all') === '1' || url.searchParams.get('all') === 'true'
-      const out = await this.client.fsList(target, dirPath || undefined, all)
+      const checked = await this.projectFsPath(targetRes, dirPath)
+      const out = checked.listing ? { ok: true, data: checked.listing } : await this.client.fsList(target, dirPath || undefined, all)
+      if (out.ok && out.data && targetRes.project) {
+        out.data.entries = out.data.entries.filter(entry => {
+          try { requireWorkspacePath(this.session, targetRes.project!, this.store.getProjects(), this.directory, entry.path, false); return true } catch { return false }
+        })
+      }
       this.sendJson(res, out.ok ? 200 : 400, out.ok ? out : { ok: false, error: out.error })
       return true
     }
     if (p === '/api/agents/fs/download' && method === 'GET') {
       const url = new URL(req.url || '/', 'http://localhost')
-      const targetRes = await this.resolveFsTarget(url)
+      const targetRes = await this.resolveFsTarget(url, undefined, 'read')
       if (!targetRes.ok) {
         this.sendJson(res, targetRes.status, { ok: false, error: targetRes.error })
         return true
@@ -2770,7 +2850,8 @@ export class WorkBuddyRouter {
         return true
       }
       const inline = url.searchParams.get('inline') === '1'
-      const out = await this.client.fsDownload(target, filePath, inline)
+      const checked = await this.projectFsPath(targetRes, filePath)
+      const out = await this.client.fsDownload(target, checked.path, inline)
       if (!out.ok || !out.res?.body) {
         this.sendJson(res, 404, { ok: false, error: out.error || '文件下载失败' })
         return true
@@ -2793,7 +2874,7 @@ export class WorkBuddyRouter {
     if (p === '/api/agents/fs/upload' && method === 'POST') {
       const url = new URL(req.url || '/', 'http://localhost')
       const destDir = String(url.searchParams.get('path') || '').trim()
-      const targetRes = await this.resolveFsTarget(url)
+      const targetRes = await this.resolveFsTarget(url, undefined, 'write')
       if (!targetRes.ok) {
         this.sendJson(res, targetRes.status, { ok: false, error: targetRes.error })
         return true
@@ -2803,6 +2884,7 @@ export class WorkBuddyRouter {
         this.sendJson(res, 400, { ok: false, error: '缺少目标目录 path' })
         return true
       }
+      await this.projectFsPath(targetRes, destDir, true)
       const contentType = String(req.headers['content-type'] || '')
       const raw = await readRawBuffer(req, UPLOAD_MAX_BYTES)
       if (raw.length === 0) {
@@ -2816,6 +2898,11 @@ export class WorkBuddyRouter {
         const rawName = (url.searchParams.get('filename') || String(req.headers['x-filename'] || '')).trim()
         files = [{ filename: sanitizeUploadName(rawName || `upload-${Date.now()}`), data: raw, mimeType: contentType }]
       }
+      if (targetRes.project) {
+        const out = await this.saveProjectUploads({ target, project: targetRes.project }, destDir, files, url.searchParams.get('expectedSha256') || undefined)
+        this.sendJson(res, out.status, out.body)
+        return true
+      }
       const out = await this.client.fsUpload(target, destDir, files)
       this.sendJson(res, out.ok ? 200 : 400, out.ok ? out : { ok: false, error: out.error })
       return true
@@ -2824,7 +2911,8 @@ export class WorkBuddyRouter {
       const url = new URL(req.url || '/', 'http://localhost')
       const body = method === 'POST' ? await this.parseBody(req) : null
       const targetPath = String(url.searchParams.get('path') || body?.path || '').trim()
-      const targetRes = await this.resolveFsTarget(url, body?.agent)
+      if (body?.projectId && !url.searchParams.has('projectId')) url.searchParams.set('projectId', String(body.projectId))
+      const targetRes = await this.resolveFsTarget(url, body?.agent, 'write')
       if (!targetRes.ok) {
         this.sendJson(res, targetRes.status, { ok: false, error: targetRes.error })
         return true
@@ -2834,12 +2922,27 @@ export class WorkBuddyRouter {
         this.sendJson(res, 400, { ok: false, error: '缺少 path 参数' })
         return true
       }
-      const out = await this.client.fsRemove(target, targetPath)
+      const checked = await this.projectFsPath(targetRes, targetPath, true, false, true)
+      if (targetRes.project && checked.path === projectFilePath(targetRes.project)) throw new WorkspaceFileError(403, 'WORKSPACE_ROOT_PROTECTED', '不能删除项目工作区根目录')
+      const out = await this.client.fsRemove(target, checked.path)
       this.sendJson(res, out.ok ? 200 : 400, out.ok ? out : { ok: false, error: out.error })
       return true
     }
     if (p === '/api/agents/fs/mkdir' && method === 'POST') {
       const body = await this.parseBody(req)
+      const requestUrl = new URL(req.url || '/', 'http://localhost')
+      if (body?.projectId) requestUrl.searchParams.set('projectId', String(body.projectId))
+      if (requestUrl.searchParams.has('projectId')) {
+        const result = await this.resolveFsTarget(requestUrl, undefined, 'write')
+        if (!result.ok) { this.sendJson(res, result.status, { ok: false, error: result.error }); return true }
+        const parent = projectFilePath(result.project!, String(body?.path || ''))
+        const child = workspaceChild(parent, String(body?.name || ''))
+        await this.projectFsPath(result, child, true, true)
+        const out = await this.client.fsMkdir(result.target, parent, String(body?.name || ''))
+        this.sendJson(res, out.ok ? 200 : 400, out.ok ? out : { ok: false, error: out.error })
+        return true
+      }
+      requireNodeFiles(this.session)
       // 项目工作目录浏览：node=<dshRef JSON>（与 agent 参数二选一）
       if (body?.node) {
         // 兼容字符串 JSON 与对象两种形态
@@ -3918,7 +4021,7 @@ export class WorkBuddyRouter {
       try {
         const out = await this.engine.forkTask(taskId, {
           nodeRef: body?.nodeRef && typeof body.nodeRef === 'object' ? (body.nodeRef as DshRef) : undefined,
-          projectId: body?.projectId ? String(body.projectId) : undefined,
+          projectId: body?.projectId === null ? null : body?.projectId ? String(body.projectId) : undefined,
           ownerUserId: this.session?.userId,
         })
         this.sendJson(res, 200, { ok: true, data: out })
@@ -3975,10 +4078,7 @@ export class WorkBuddyRouter {
         return true
       }
       // 节点主会话（__node__）无 store 记录：按任务节点解析答复目标
-      const agent = this.store.getAgent(agentId)
-      const target = agent
-        ? await this.resolver.resolve(agent)
-        : await this.engine.resolveExecTarget(task, agentId)
+      const target = await this.engine.resolveExecTarget(task, agentId)
       if (!target || !target.online || !target.baseUrl) {
         this.sendJson(res, 502, { ok: false, error: (target as any)?.error || '成员节点当前不可达' })
         return true
@@ -4054,11 +4154,8 @@ export class WorkBuddyRouter {
         this.sendJson(res, 400, { ok: false, error: '该成员在任务中没有远端会话绑定', code: 'NO_SESSION' })
         return true
       }
-      // 节点主会话（__node__）无 store 记录：按任务节点解析
-      const agent = this.store.getAgent(agentId)
-      const target = agent
-        ? await this.resolver.resolve(agent)
-        : await this.engine.resolveExecTarget(task, agentId)
+      // 主/子会话均按绑定的稳定节点身份实时解析，不使用旧公网地址。
+      const target = await this.engine.resolveExecTarget(task, agentId)
       if (!target || !target.online || !target.baseUrl) {
         this.sendJson(res, 502, { ok: false, error: (target as any)?.error || '成员节点当前不可达' })
         return true
@@ -4146,10 +4243,7 @@ export class WorkBuddyRouter {
         this.sendJson(res, 200, { ok: true, data: { applied: false, reason: 'no-session', saved: true } })
         return true
       }
-      const agent = this.store.getAgent(agentId)
-      const target = agent
-        ? await this.resolver.resolve(agent)
-        : await this.engine.resolveExecTarget(task, agentId)
+      const target = await this.engine.resolveExecTarget(task, agentId)
       if (!target || !target.online || !target.baseUrl) {
         this.sendJson(res, 200, { ok: true, data: { applied: false, reason: 'node-offline', saved: true } })
         return true
@@ -4179,10 +4273,7 @@ export class WorkBuddyRouter {
         })
         return true
       }
-      const agent = this.store.getAgent(agentId)
-      const target = agent
-        ? await this.resolver.resolve(agent)
-        : await this.engine.resolveExecTarget(task, agentId)
+      const target = await this.engine.resolveExecTarget(task, agentId)
       if (!target || !target.online || !target.baseUrl) {
         this.sendJson(res, 200, {
           ok: true,
@@ -4391,8 +4482,10 @@ export class WorkBuddyRouter {
     const attachMatch = /^\/api\/tasks\/([^/]+)\/attachments$/.exec(p)
     if (attachMatch && method === 'POST') {
       const taskId = decodeURIComponent(attachMatch[1])
-      // §11：附件上传 = view 级（可见即可协作）
-      if (!this.taskForView(taskId)) { this.sendJson(res, 404, { ok: false, error: 'Task not found' }); return true }
+      const task = this.taskForView(taskId)
+      if (!task) { this.sendJson(res, 404, { ok: false, error: 'Task not found' }); return true }
+      if (task.projectId) requireProjectFiles(this.session, this.store.getProject(task.projectId), true)
+      else requireNodeFiles(this.session)
       const contentType = String(req.headers['content-type'] || '')
       const raw = await readRawBuffer(req, UPLOAD_MAX_BYTES)
       if (raw.length === 0) {
@@ -4411,6 +4504,20 @@ export class WorkBuddyRouter {
         const rawName = (url.searchParams.get('filename') || String(req.headers['x-filename'] || '')).trim()
         files = [{ filename: sanitizeUploadName(rawName || `upload-${Date.now()}`), data: raw, mimeType: contentType }]
       }
+      if (task.projectId) {
+        const url = new URL(req.url || '/', 'http://localhost')
+        url.searchParams.set('projectId', task.projectId)
+        const scope = await this.resolveFsTarget(url, undefined, 'write')
+        if (!scope.ok) { this.sendJson(res, scope.status, { ok: false, error: scope.error }); return true }
+        const out = await this.saveProjectUploads({ target: scope.target, project: scope.project! }, projectFilePath(scope.project!), files, url.searchParams.get('expectedSha256') || undefined)
+        if (out.body.files.length) {
+          this.store.mutateTask(taskId, t => { t.attachments = [...(t.attachments || []), ...out.body.files.map(f => ({ name: f.name, path: f.path, size: f.size, agentId: '__node__', agentName: '项目文件', remoteSessionId: '', nodeBaseUrl: scope.target.baseUrl, source: 'relay' as const, uploadedAt: Date.now() }))] })
+        }
+        if (out.body.ok) {
+          this.sendJson(res, 200, { ok: true, data: { ok: true, results: [{ agentId: '__node__', agentName: '项目文件', ok: true, files: out.body.files }] } })
+        } else this.sendJson(res, out.status, out.body)
+        return true
+      }
       try {
         const result = await this.engine.uploadAttachments(taskId, files)
         if (!result.ok) this.sendJson(res, 404, { ok: false, error: result.error })
@@ -4425,7 +4532,10 @@ export class WorkBuddyRouter {
     const directInitMatch = /^\/api\/tasks\/([^/]+)\/attachments\/direct\/init$/.exec(p)
     if (directInitMatch && method === 'POST') {
       const taskId = decodeURIComponent(directInitMatch[1])
-      if (!this.taskForView(taskId)) { this.sendJson(res, 404, { ok: false, error: 'Task not found' }); return true }
+      const task = this.taskForView(taskId)
+      if (!task) { this.sendJson(res, 404, { ok: false, error: 'Task not found' }); return true }
+      if (task.projectId) requireProjectFiles(this.session, this.store.getProject(task.projectId), true)
+      requireNodeFiles(this.session)
       const body = await this.parseBody(req)
       const result = await this.engine.directUploadInit(taskId, String(body?.name || ''), Number(body?.size) || 0, body?.mimeType ? String(body.mimeType) : undefined)
       this.sendJson(res, result.ok ? 200 : 400, { ok: result.ok, data: result.ok ? result : undefined, error: result.error })
@@ -4434,7 +4544,10 @@ export class WorkBuddyRouter {
     const directRegMatch = /^\/api\/tasks\/([^/]+)\/attachments\/direct\/register$/.exec(p)
     if (directRegMatch && method === 'POST') {
       const taskId = decodeURIComponent(directRegMatch[1])
-      if (!this.taskForView(taskId)) { this.sendJson(res, 404, { ok: false, error: 'Task not found' }); return true }
+      const task = this.taskForView(taskId)
+      if (!task) { this.sendJson(res, 404, { ok: false, error: 'Task not found' }); return true }
+      if (task.projectId) requireProjectFiles(this.session, this.store.getProject(task.projectId), true)
+      requireNodeFiles(this.session)
       const body = await this.parseBody(req)
       const result = await this.engine.directUploadRegister(
         taskId,
@@ -4452,7 +4565,10 @@ export class WorkBuddyRouter {
     const directRelayMatch = /^\/api\/tasks\/([^/]+)\/attachments\/direct\/relay$/.exec(p)
     if (directRelayMatch && method === 'POST') {
       const taskId = decodeURIComponent(directRelayMatch[1])
-      if (!this.taskForView(taskId)) { this.sendJson(res, 404, { ok: false, error: 'Task not found' }); return true }
+      const task = this.taskForView(taskId)
+      if (!task) { this.sendJson(res, 404, { ok: false, error: 'Task not found' }); return true }
+      if (task.projectId) requireProjectFiles(this.session, this.store.getProject(task.projectId), true)
+      requireNodeFiles(this.session)
       const url = new URL(req.url || '/', 'http://localhost')
       const uploadId = String(url.searchParams.get('uploadId') || '')
       try {
@@ -4468,12 +4584,21 @@ export class WorkBuddyRouter {
     if (dlMatch && method === 'GET') {
       const taskId = decodeURIComponent(dlMatch[1])
       // §11：任务工作区文件下载随任务可见性
-      if (!this.taskForView(taskId)) { this.sendJson(res, 404, { ok: false, error: 'Task not found' }); return true }
+      const task = this.taskForView(taskId)
+      if (!task) { this.sendJson(res, 404, { ok: false, error: 'Task not found' }); return true }
       const url = new URL(req.url || '/', 'http://localhost')
       const agent = url.searchParams.get('agent') || undefined
       const filePath = url.searchParams.get('path') || ''
+      let projectDownload: Awaited<ReturnType<DshClient['fsDownload']>> | undefined
+      if (task.projectId) {
+        url.searchParams.set('projectId', task.projectId)
+        const scope = await this.resolveFsTarget(url, undefined, 'read')
+        if (!scope.ok) { this.sendJson(res, scope.status, { ok: false, error: scope.error }); return true }
+        const checked = await this.projectFsPath(scope, filePath)
+        projectDownload = await this.client.fsDownload(scope.target, checked.path)
+      } else requireNodeFiles(this.session)
       try {
-        const dl = await this.engine.prepareFileDownload(taskId, agent, filePath)
+        const dl = projectDownload || await this.engine.prepareFileDownload(taskId, agent, filePath)
         if (!dl.ok || !dl.res?.body) {
           this.sendJson(res, 404, { ok: false, error: dl.error || '下载失败' })
           return true
@@ -4556,7 +4681,8 @@ export class WorkBuddyRouter {
     if (p === '/api/planner/options' && method === 'GET') {
       const settings = this.store.getSettings()
       const picked = await this.planner.plannerTarget()
-      let models: Array<{ provider: string; id: string; name?: string; isDefault: boolean }> = []
+      let models: RemoteModelEntry[] = []
+      let defaultModel: { provider?: string; model?: string; reasoningEffort?: string } | undefined
       const providers: string[] = []
       let modelError: string | undefined
       // 调度模型作用于「任务节点的主会话」（engine.ensureSession isMain 分支）——
@@ -4566,9 +4692,10 @@ export class WorkBuddyRouter {
       let nodeMappingId = (url.searchParams.get('node') || '').trim()
       let nodeSource: string | undefined
       let nodeError: string | undefined
-      let modelsBaseUrl = picked.baseUrl
-      let modelsApiKey = picked.apiKey
-      let nodeResolvedByTask = false
+      // 显式节点/任务解析失败时不得回退到规划器节点，否则会把其他 DSH 的目录冒充当前节点。
+      const hasCatalogTarget = Boolean(nodeMappingId || url.searchParams.get('taskId')?.trim())
+      let modelsBaseUrl = hasCatalogTarget ? undefined : picked.baseUrl
+      let modelsApiKey = hasCatalogTarget ? undefined : picked.apiKey
       // taskId 权威模式：任务内的模型目录由服务端按任务/项目绑定节点解析（项目 dshRef 优先，
       // 与 engine.taskExec 同口径）。前端自己猜节点（node=）会因项目清单未加载/权限过滤而回退到
       // 所选执行位置，导致目录显示成另一个节点的引擎注册表（真实缺陷 2026-11-06：brain 项目
@@ -4577,6 +4704,8 @@ export class WorkBuddyRouter {
       if (taskIdQ) {
         if (!this.taskForView(taskIdQ)) { this.sendJson(res, 404, { ok: false, error: 'Task not found' }); return true }
         const task = this.store.getTask(taskIdQ)
+        const taskRef = task ? this.engine.taskExec(task).dshRef : undefined
+        nodeMappingId = taskRef?.kind === 'mapping' ? taskRef.mappingId : ''
         const target = task
           ? await this.engine.resolveExecTarget(task, '__node__').catch(() => undefined)
           : undefined
@@ -4586,30 +4715,37 @@ export class WorkBuddyRouter {
           nodeMappingId = (target as any).mappingId || nodeMappingId
           const ep = nodeMappingId ? this.directory.resolveMapping(nodeMappingId) : undefined
           nodeSource = ep?.appName || ep?.tunnelName || nodeMappingId || '直连节点'
-          nodeResolvedByTask = true
+        } else if (task && !this.engine.taskExec(task).dshRef) {
+          // 存量未绑定任务实际由规划器执行（engine.executeTask 同口径），这不是离线节点回退。
+          modelsBaseUrl = picked.baseUrl
+          modelsApiKey = picked.apiKey
+          nodeMappingId = ''
+          nodeSource = picked.source
+          if (!modelsBaseUrl) modelError = picked.error || '任务执行节点不可达'
         } else {
           nodeError = (target as any)?.error || '任务节点不可达'
           modelError = nodeError
         }
       }
-      if (nodeMappingId && !nodeResolvedByTask) {
-        const ep = this.directory.resolveMapping(nodeMappingId)
-        if (!ep || !ep.online || !ep.baseUrl) {
-          nodeError = ep ? `映射「${ep.appName || ep.tunnelName || nodeMappingId}」当前离线` : `映射 ${nodeMappingId} 已不存在`
+      if (nodeMappingId && !taskIdQ) {
+        // 与 Android 的 /agents/models 使用同一解析器：刷新映射入口并只取本节点凭证。
+        const target = await this.resolver.resolveRef({ kind: 'mapping', mappingId: nodeMappingId }, undefined, 'model-catalog').catch(() => undefined)
+        if (!target?.online || !target.baseUrl) {
+          nodeError = target?.error || '节点不可达'
           modelError = nodeError
         } else {
-          // 远程节点 /models 需要鉴权：映射实例凭证优先（限速保护内），失败回应用默认
-          const cred = await this.directory.fetchMappingCredentials(ep.mappingId)
-          modelsBaseUrl = ep.baseUrl
-          modelsApiKey = cred.ok ? cred.apiKey || cred.token : picked.apiKey
-          nodeSource = ep.appName || ep.tunnelName || nodeMappingId
+          modelsBaseUrl = target.baseUrl
+          modelsApiKey = target.apiKey
+          const ep = this.directory.resolveMapping(nodeMappingId)
+          nodeSource = ep?.appName || ep?.tunnelName || nodeMappingId
         }
       }
       if (modelsBaseUrl) {
         // 必须带上解析出的 apiKey：远程 DSH 节点的 /models 需要鉴权，无 key 会 401 → 列表静默变空
         const target = { baseUrl: modelsBaseUrl, online: true, resolvedAt: new Date().toISOString(), mappingId: nodeMappingId || '', apiKey: modelsApiKey }
         const mr = await this.client.getModels(target as any)
-        models = (mr.models || []).map((m) => ({ provider: m.provider, id: m.id, name: m.name, isDefault: Boolean(m.isDefault) }))
+        models = mr.ok ? mr.models || [] : []
+        defaultModel = mr.ok ? mr.defaultModel : undefined
         if (!mr.ok && !modelError) modelError = mr.error || '模型目录获取失败'
         for (const m of models) if (m.provider && !providers.includes(m.provider)) providers.push(m.provider)
       }
@@ -4617,7 +4753,8 @@ export class WorkBuddyRouter {
         ok: true,
         data: {
           agents: this.store.getAgents().map(a => ({ id: a.id, name: a.name })),
-          models: models.map(m => ({ provider: m.provider, id: m.id, name: m.name, isDefault: m.isDefault })),
+          models,
+          defaultModel,
           providers,
           current: { agentId: picked.agentId, auto: picked.auto !== false, model: settings.planner.model },
           source: picked.source,
@@ -4852,9 +4989,9 @@ export class WorkBuddyRouter {
       if (sub.result?.content) messages.push({ role: 'assistant', content: sub.result.content, time: sub.completedAt, local: true })
       return { ok: true, source: 'local', note, messages }
     }
-    // 会话绑定存在 task.sessions[agentId]（引擎写入），sub.remoteSessionId 仅作旧数据兜底
-    const remoteSessionId = task.sessions?.[sub.agentId]?.remoteSessionId || sub.remoteSessionId
-    if (!remoteSessionId) return localFallback('该子任务尚未创建远程会话，以下为本地缓存记录')
+    // A legacy subtask session ID alone cannot identify the physical node that created it.
+    const remoteSessionId = task.sessions?.[sub.agentId]?.remoteSessionId
+    if (!remoteSessionId) return localFallback('缺少远程会话节点绑定，以下为本地缓存记录')
     // 子任务执行者：子智能体实体或任务节点主会话伪成员（__node__，主智能体自留子任务）；
     // resolveExecTarget 两者通吃（实体成员回自身绑定节点，__node__ 走任务节点）
     const isNodeMain = sub.agentId === NODE_AGENT_ID
@@ -4890,8 +5027,8 @@ export class WorkBuddyRouter {
     const sub = task?.plan?.subtasks.find((s) => s.id === subtaskId)
     if (!task || !sub) return { ok: false, error: '子任务不存在' }
     const session = task.sessions?.[sub.agentId]
-    const remoteSessionId = session?.remoteSessionId || sub.remoteSessionId
-    if (!remoteSessionId) return { ok: false, error: '子任务尚未创建远程会话' }
+    const remoteSessionId = session?.remoteSessionId
+    if (!remoteSessionId) return { ok: false, error: '子任务缺少远程会话节点绑定，不能向当前节点发送旧会话 ID' }
     // 执行者：子智能体实体或任务节点主会话伪成员（__node__，主智能体自留子任务）；
     // resolveExecTarget 两者通吃（实体成员回自身绑定节点，__node__ 走任务节点）
     const isNodeMain = sub.agentId === NODE_AGENT_ID
@@ -4978,10 +5115,14 @@ function parseUsageRange(url: URL): { from: number; to: number } {
   return { from, to }
 }
 
-export function normalizeDshRef(input: any): DshRef | { error: string } {  if (!input || typeof input !== 'object') return { error: '缺少 dshRef（DSH 实体引用）' }
-  if (input.kind === 'mapping' && input.mappingId) return { kind: 'mapping', mappingId: String(input.mappingId) }
-  if (input.kind === 'app' && input.appId) return { kind: 'app', appId: String(input.appId) }
-  if (input.kind === 'direct' && input.apiBaseUrl) return { kind: 'direct', apiBaseUrl: String(input.apiBaseUrl) }
+export function normalizeDshRef(input: any): DshRef | { error: string } {
+  if (!input || typeof input !== 'object') return { error: '缺少 dshRef（DSH 实体引用）' }
+  const mappingId = String(input.mappingId || '').trim()
+  const appId = String(input.appId || '').trim()
+  const apiBaseUrl = String(input.apiBaseUrl || '').trim()
+  if (input.kind === 'mapping' && mappingId) return { kind: 'mapping', mappingId }
+  if (input.kind === 'app' && appId) return { kind: 'app', appId }
+  if (input.kind === 'direct' && apiBaseUrl) return { kind: 'direct', apiBaseUrl }
   return { error: 'dshRef 不合法: 需要 {kind: mapping|app|direct, ...}' }
 }
 

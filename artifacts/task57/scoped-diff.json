@@ -1,0 +1,17 @@
+{
+  "unchangedPreexistingTrackedSections": 23,
+  "changedPreexistingTrackedSections": [
+    "a/src/engine.test.ts b/src/engine.test.ts",
+    "a/src/engine.ts b/src/engine.ts",
+    "a/src/web-ui.ts b/src/web-ui.ts"
+  ],
+  "newTrackedSections": [
+    "a/docs/standalone-deploy.md b/docs/standalone-deploy.md",
+    "a/scripts/deploy-standalone.sh b/scripts/deploy-standalone.sh"
+  ],
+  "concurrentTask58": [
+    "src/web-ui.ts"
+  ],
+  "uiTestUnchangedSinceContinuation": true,
+  "note": "Only engine source/test changed preexisting tracked task57 hunks; concurrent UI left intact."
+}

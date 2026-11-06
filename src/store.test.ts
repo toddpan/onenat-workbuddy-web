@@ -12,7 +12,8 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { WorkStore, isNodeAbsolutePath } from './store.js'
-import type { WorkTask } from './types.js'
+import type { WorkTask, Project } from './types.js'
+import { sameDshRef, normalizeWorkspacePath, ProjectWorkspaceConflictError, ProjectWorkspacePathError } from './workspace.js'
 
 // —— 工作目录「节点侧绝对路径」判断（Windows DSH 节点兼容） ——
 test('isNodeAbsolutePath: 接受 POSIX / Windows 盘符 / UNC 绝对路径', () => {
@@ -240,4 +241,109 @@ test('批量删除：仅删已归档目标（含 data/archive/ 文件），未�
   } finally {
     await cleanup([store], dir)
   }
+})
+
+
+test('工作区身份：稳定引用与节点侧词法路径规范化', () => {
+  assert.ok(sameDshRef({ kind: 'direct', apiBaseUrl: 'HTTP://Host:80/api/' }, { kind: 'direct', apiBaseUrl: 'http://host/api' }))
+  assert.equal(sameDshRef({ kind: 'direct', apiBaseUrl: 'http://host/API' }, { kind: 'direct', apiBaseUrl: 'http://host/api' }), false)
+  assert.equal(sameDshRef(undefined, undefined), false)
+  assert.equal(normalizeWorkspacePath('/repo/./src/../'), '/repo')
+  assert.equal(normalizeWorkspacePath('/'), '/')
+  assert.equal(normalizeWorkspacePath('c:/repo/./src/../'), 'C:/repo')
+  assert.equal(normalizeWorkspacePath('C:/'), 'C:/')
+  assert.equal(normalizeWorkspacePath('\\\\server\\share\\repo\\..\\'), '//server/share/')
+  assert.ok(sameDshRef({ kind: 'mapping', mappingId: ' node ' }, { kind: 'mapping', mappingId: 'node' }))
+  assert.equal(sameDshRef({ kind: 'mapping', mappingId: 'node' }, { kind: 'app', appId: 'node' }), false)
+})
+
+test('项目工作区唯一性：拒绝同归属规范路径冲突，不合并成员；不同节点可共存', async () => {
+  const { store, dir } = makeStore()
+  try {
+    const dshRef = { kind: 'mapping' as const, mappingId: 'owner-node' }
+    const a = store.upsertProject({ name: '原项目', owner: 'alice', projectMembers: [{ userId: 'alice', role: 'owner', joinedAt: 1 }], dshRef, workspace: '/repo/' })
+    assert.throws(() => store.upsertProject({ name: '另一成员', owner: 'bob', dshRef, workspace: '/repo/./src/../' }), ProjectWorkspaceConflictError)
+    assert.equal(store.getProjects().length, 1)
+    assert.equal(store.getProject(a.id)?.owner, 'alice')
+    assert.equal(store.getProject(a.id)?.name, '原项目')
+    const b = store.upsertProject({ name: '不同节点', dshRef: { kind: 'mapping', mappingId: 'other' }, workspace: '/repo' })
+    assert.notEqual(a.id, b.id)
+    assert.throws(() => store.upsertProject({ id: b.id, dshRef }), ProjectWorkspaceConflictError)
+    const updated = store.upsertProject({ id: a.id, workspace: '/repo/./', defaultExecutionNodeRef: { kind: 'app', appId: 'executor' } })
+    assert.equal(updated.workspace, '/repo')
+    assert.deepEqual(updated.defaultExecutionNodeRef, { kind: 'app', appId: 'executor' })
+    assert.equal(store.upsertProject({ id: a.id, defaultExecutionNodeRef: undefined }).defaultExecutionNodeRef, undefined)
+    assert.equal(store.getProjects().length, 2)
+  } finally { await cleanup([store], dir) }
+})
+
+
+test('文件归属节点变化清空旧凭证；未变节点保留，显式新凭证优先', async () => {
+  const { store, dir } = makeStore()
+  try {
+    const a = store.upsertProject({ name: 'key', dshRef: { kind: 'direct', apiBaseUrl: 'http://a' }, apiKey: 'key-a' })
+    assert.equal(store.upsertProject({ id: a.id, name: 'renamed' }).apiKey, 'key-a')
+    assert.equal(store.upsertProject({ id: a.id, dshRef: { kind: 'direct', apiBaseUrl: 'http://b' } }).apiKey, undefined)
+    assert.equal(store.upsertProject({ id: a.id, dshRef: { kind: 'app', appId: 'c' }, apiKey: 'key-c' }).apiKey, 'key-c')
+  } finally { await cleanup([store], dir) }
+})
+
+test('task-55: Windows/UNC/root 规范路径与归档项目仍占用身份，失败编辑无副作用', async () => {
+  const { store, dir } = makeStore()
+  try {
+    const dshRef = { kind: 'app' as const, appId: 'file-node' }
+    for (const [root, alias] of [
+      ['c:/repo/', 'C:\\repo\\src\\..'],
+      ['//server/share/repo', '\\\\server\\share\\repo\\.\\'],
+      ['/', '/repo/../'],
+    ]) {
+      const p = store.upsertProject({ name: root, dshRef, workspace: root, archivedAt: 1 })
+      assert.throws(() => store.upsertProject({ name: 'duplicate', dshRef, workspace: alias }), ProjectWorkspaceConflictError)
+      assert.equal(store.getProjectsForWorkspace(dshRef, alias)[0].id, p.id)
+    }
+    const p = store.upsertProject({ name: 'unchanged', dshRef, workspace: '/other', owner: 'bob', projectMembers: [{ userId: 'bob', role: 'owner', joinedAt: 1 }] })
+    const before = structuredClone(p)
+    assert.throws(() => store.upsertProject({ id: p.id, name: 'bad update', workspace: '/', projectMembers: [] }), ProjectWorkspaceConflictError)
+    assert.deepEqual(store.getProject(p.id), before)
+    assert.equal(store.upsertProject({ name: 'empty-one', dshRef }).workspace, undefined)
+    assert.equal(store.upsertProject({ name: 'empty-two', dshRef, workspace: ' ' }).workspace, undefined)
+    for (const workspace of ['relative/root', './repo', 'C:repo', '/repo\0bad']) {
+      assert.throws(() => store.upsertProject({ name: 'invalid', dshRef, workspace }), ProjectWorkspacePathError)
+    }
+  } finally { await cleanup([store], dir) }
+})
+
+test('task-55: 旧库重复项目重启后保留各自成员/凭证/任务引用，允许原身份编辑但禁止第三个绑定', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wb-store-test-'))
+  const path = join(dir, 'store.json')
+  const ref = { kind: 'mapping' as const, mappingId: 'legacy-node' }
+  const legacy: Project[] = [
+    { id: 'proj-old-a', name: 'A', dshRef: ref, workspace: '/repo/', owner: 'alice', projectMembers: [{ userId: 'alice', role: 'owner', joinedAt: 1 }], visibility: 'private', expertIds: ['agent-a'], connectorIds: [], skillNames: [], apiKey: 'a-key', createdAt: 1, updatedAt: 1 },
+    { id: 'proj-old-b', name: 'B', dshRef: ref, workspace: '/repo/./', projectMembers: [{ userId: 'bob', role: 'owner', joinedAt: 2 }], visibility: 'private', expertIds: ['agent-b'], connectorIds: [], skillNames: [], apiKey: 'b-key', createdAt: 2, updatedAt: 2 },
+    { id: 'proj-old-relative', name: 'relative', dshRef: ref, workspace: './old', expertIds: [], connectorIds: [], skillNames: [], createdAt: 3, updatedAt: 3 },
+  ]
+  writeFileSync(path, JSON.stringify({ projects: legacy, tasks: [{ id: 'task-legacy', projectId: 'proj-old-b', status: 'draft', turns: [] }] }))
+  const store = new WorkStore(path)
+  const stores = [store]
+  try {
+    assert.deepEqual(store.getProjects().sort((a, b) => a.id.localeCompare(b.id)), structuredClone(legacy).sort((a, b) => a.id.localeCompare(b.id)))
+    assert.throws(() => store.upsertProject({ name: 'third', dshRef: ref, workspace: '/repo' }), ProjectWorkspaceConflictError)
+    const edited = store.upsertProject({ id: 'proj-old-b', name: 'B edited' })
+    assert.deepEqual(edited.projectMembers, legacy[1].projectMembers)
+    assert.equal(edited.owner, undefined)
+    assert.equal(edited.workspace, '/repo/./')
+    assert.equal(edited.apiKey, 'b-key')
+    assert.equal(store.upsertProject({ id: 'proj-old-relative', name: 'old edited' }).workspace, './old')
+    store.flush()
+    // Model a process restart only after the old instance's abandoned temp write settles.
+    await new Promise((r) => setTimeout(r, 50))
+    const reopened = new WorkStore(path)
+    stores.push(reopened)
+    assert.equal(reopened.getProjects().length, 3)
+    assert.deepEqual(reopened.getProject('proj-old-a'), legacy[0])
+    assert.deepEqual(reopened.getProject('proj-old-b')?.projectMembers, legacy[1].projectMembers)
+    assert.equal(reopened.getTask('task-legacy')?.projectId, 'proj-old-b')
+    assert.equal(reopened.upsertProject({ id: 'proj-old-b', workspace: '/relocated' }).id, 'proj-old-b')
+    assert.equal(reopened.getProjectsForWorkspace(ref, '/repo').length, 1)
+  } finally { await cleanup(stores, dir) }
 })

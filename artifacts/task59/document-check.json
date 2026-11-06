@@ -1,0 +1,10 @@
+{
+  "ok": true,
+  "acceptanceCriteriaChecked": 3,
+  "dependencies": {
+    "task-57": "Done",
+    "task-58": "Done"
+  },
+  "localStatus": "In Progress; normal platform writeback pending",
+  "missingDocLinks": []
+}

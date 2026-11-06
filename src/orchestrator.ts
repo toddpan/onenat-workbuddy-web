@@ -253,6 +253,34 @@ export function buildUpstreamDigests(
   return upstream
 }
 
+/**
+ * 从上游产出文本提取结果文件路径候选（跨节点文件传参：下游凭路径向上游成员节点取文件）。
+ * 设计理念（docs/design-cross-node-file-passing.md）：上游产出中引用的文件不在下游节点上，
+ * 平台把「绝对路径 → 上游节点下载 URL + 密钥」写进下游提示词，替代跨节点直读文件系统。
+ * 规则：仅取以 / 开头的绝对 POSIX 路径（目录+文件两级起）且带常见文件扩展名；
+ * 捕获后剥离粘连的中西文行尾标点；剔除下载端点与超长项；去重、上限截断。
+ */
+export function extractUpstreamFilePaths(content: string, limit = 8): string[] {
+  if (!content) return []
+  const out: string[] = []
+  const seen = new Set<string>()
+  // 左守卫排除「前缀是路径字符或 =」的误配（https://host/a.txt 的 host 段、URL ?path=/x 的查询参数归属第三方主机）
+  for (const m of content.matchAll(/(?:^|[^\w./@=\-])(\/[\w.@+/-]*\/[\w.@+-]+)/g)) {
+    const p = m[1].replace(/[.,;:!?,，。；：、！？）)】」"'\]]+$/, '')
+    // 必须带文件扩展名（末段 .字母数字尾缀）且至少两级（目录+文件），目录/裸词不算结果文件
+    if (!/\.[A-Za-z0-9]{1,8}$/.test(p)) continue
+    if ((p.match(/\//g) || []).length < 2) continue
+    // 下载端点不算文件路径（上游原文里已带下载链接的不重复注入）
+    if (p.includes('/fs/download') || p.includes('/fs/list')) continue
+    if (p.length > 512 || p.length < 4) continue
+    if (seen.has(p)) continue
+    seen.add(p)
+    out.push(p)
+    if (out.length >= limit) break
+  }
+  return out
+}
+
 /** 规划提示词组装选项（planTask opts 的提示词相关子集） */
 export interface PlannerPromptOptions {
   priorityAgentIds?: string[]

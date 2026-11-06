@@ -1,0 +1,27 @@
+--- baseline a/src/engine.ts b/src/engine.ts
++++ current a/src/engine.ts b/src/engine.ts
+@@ -1,5 +1,5 @@
+ a/src/engine.ts b/src/engine.ts
+-index 1c1d60b..b890e07 100644
++index 1c1d60b..0c0c11c 100644
+ --- a/src/engine.ts
+ +++ b/src/engine.ts
+ @@ -9,12 +9,14 @@
+@@ -11,7 +11,7 @@
+  import type { PromptResult, DshTarget } from './remote-client.js'
+  import { DshClient } from './remote-client.js'
+ +import { sameDshRef, dshRefKey } from './workspace.js'
+-+import { buildWorkspaceAccessSection, installWorkspaceAccessCli, workspaceShellQuote, WORKSPACE_ACCESS_CLI_NAME } from './workspace-access.js'
+++import { buildWorkspaceAccessSection, installWorkspaceAccessCli, isWorkspaceAccessCliPath, workspaceShellQuote } from './workspace-access.js'
+  import type { AgentResolver } from './resolver.js'
+  import type { PromptComposer } from './prompt-composer.js'
+ -import { Orchestrator, buildCompletionRequirement, buildTaskContract, buildUpstreamDigests, buildUpstreamSection, sanitizeEngineInstruction, type PlanDraft } from './orchestrator.js'
+@@ -174,7 +174,7 @@
+ +        let cliPath = binding?.workspaceAccessCliPath
+ +        // Existing long-lived sessions may still contain v1 (--base-only). Reinstall
+ +        // under a versioned name once; never silently reuse the obsolete helper.
+-+        if (cliPath && !cliPath.endsWith('/' + WORKSPACE_ACCESS_CLI_NAME)) cliPath = undefined
+++        if (cliPath && !isWorkspaceAccessCliPath(cliPath)) cliPath = undefined
+ +        if (!cliPath && binding?.remoteSessionId) {
+ +          const target = await this.resolveExecTarget(task, targetAgent.id).catch(() => undefined)
+ +          if (target?.online) {

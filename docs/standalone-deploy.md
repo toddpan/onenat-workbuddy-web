@@ -43,6 +43,8 @@ SSHPASS='服务器密码' scripts/deploy-standalone.sh root@<host> [--port 22] [
 2. 按 `tsconfig.server.json` 编译（只收 `src/server.ts` 及其 DSH 无关的依赖图）；
 3. 校验 `dist/server.js` 存在，且产物里**没有** `cordis` / `@deepseek-ai/*` 引用，否则构建失败。
 
+跨节点项目会话还会从服务包的 `scripts/workspace-remote.mjs` 读取远程工作区 helper。发布时须把该文件放在 `dist/` 的同级 `scripts/` 中；标准部署脚本会随技能资源比较哈希并同步它。只复制 `dist/*.js` 会使 helper 安装失败，降级为明确的只读 HTTP 指引；不会声称支持写回/命令。
+
 ---
 
 ## 2. 启动

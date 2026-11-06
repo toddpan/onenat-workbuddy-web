@@ -1,0 +1,56 @@
+{
+  "at": "2026-11-06T16:45:53.922Z",
+  "node": "6cc2987d",
+  "root": "/tmp/wb-task57-f267a1d857d1de3d-owner",
+  "requests": [
+    {
+      "method": "POST",
+      "route": "/api/v1/sessions",
+      "status": 201
+    },
+    {
+      "method": "POST",
+      "route": "/api/v1/sessions/session-4f8ac0f1-fdab-4184-a933-698307aa68ee/files",
+      "status": 200
+    },
+    {
+      "method": "DELETE",
+      "route": "/api/v1/sessions/session-4f8ac0f1-fdab-4184-a933-698307aa68ee",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "route": "/api/v1/sessions/session-4f8ac0f1-fdab-4184-a933-698307aa68ee/history",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "route": "/api/v1/sessions/session-4f8ac0f1-fdab-4184-a933-698307aa68ee/cancel",
+      "status": 200
+    },
+    {
+      "method": "DELETE",
+      "route": "/api/v1/sessions/session-4f8ac0f1-fdab-4184-a933-698307aa68ee",
+      "status": 200
+    }
+  ],
+  "cleanup": [
+    {
+      "sessionId": "session-4f8ac0f1-fdab-4184-a933-698307aa68ee",
+      "archived": true
+    },
+    {
+      "root": "/tmp/wb-task57-f267a1d857d1de3d-owner",
+      "removed": true
+    }
+  ],
+  "ok": false,
+  "error": {
+    "code": "OUTCOME_UNCERTAIN",
+    "message": "OUTCOME_UNCERTAIN: prompt was sent but no valid worker result was received; operation may already have occurred. Do not replay write/exec; read and verify CAS before deciding what to do next. The operation was aborted due to timeout; CLEANUP_FAILED: uploaded worker /tmp/wb-task57-f267a1d857d1de3d-owner/workbuddy-workspace-worker-cfe7b53eb309ba81c2bb54f8787ba54946e22dee9c35b177.mjs: DSH DELETE /fs/remove?path=%2Ftmp%2Fwb-task57-f267a1d857d1de3d-owner%2Fworkbuddy-workspace-worker-cfe7b53eb309ba81c2bb54f8787ba54946e22dee9c35b177.mjs: 404 \"目标不存在: /tmp/wb-task57-f267a1d857d1de3d-owner/workbuddy-workspace-worker-cfe7b53eb309ba81c2bb54f8787ba54946e22dee9c35b177.mjs\""
+  },
+  "assistantHistory": [
+    "",
+    ""
+  ]
+}

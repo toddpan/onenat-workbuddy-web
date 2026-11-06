@@ -12,7 +12,7 @@
 #   5. 验证 healthz / MCP 匿名 401（fail-closed）；--no-restart 时只上传不重启（新代码待重启生效）
 #
 # 注意：服务端从「工作目录」直接读取 skills/ 与 scripts/install-skill.sh（技能安装端点），
-#       它们不随 dist 发布，故本脚本单独做差异同步（否则线上 SKILL 会长期停在旧版）。
+#       以及 workspace-access 使用的 scripts/workspace-remote.mjs；它们不随 dist 发布，故单独做差异同步。
 #
 # 依赖: 本地 sshpass（密码登录时）或 SSH 私钥；远端 systemd 单元名默认 onenat-workbuddy（UNIT 可覆盖）。
 set -euo pipefail
@@ -71,8 +71,8 @@ if [ -n "$FILES" ]; then
 fi
 # 技能与安装脚本漂移（服务从工作目录读取 skills/ 与 scripts/install-skill.sh，不随 dist 发布）
 SKILL_DRIFT=0
-LOCAL_SKILL_HASH="$(find skills scripts/install-skill.sh -type f ! -name '.DS_Store' -exec md5 -q {} \; | sort | md5 -q)"
-REMOTE_SKILL_HASH="$(ssh_wrap "cd $REMOTE_DIR/.. && find skills scripts/install-skill.sh -type f 2>/dev/null -exec md5sum {} \; | awk '{print \$1}' | sort | md5sum | awk '{print \$1}'")"
+LOCAL_SKILL_HASH="$(find skills scripts/install-skill.sh scripts/workspace-remote.mjs -type f ! -name '.DS_Store' -exec md5 -q {} \; | sort | md5 -q)"
+REMOTE_SKILL_HASH="$(ssh_wrap "cd $REMOTE_DIR/.. && find skills scripts/install-skill.sh scripts/workspace-remote.mjs -type f 2>/dev/null -exec md5sum {} \; | awk '{print \$1}' | sort | md5sum | awk '{print \$1}'")"
 if [ "$LOCAL_SKILL_HASH" != "$REMOTE_SKILL_HASH" ]; then SKILL_DRIFT=1; fi
 
 if [ -z "$CHANGED" ]; then
@@ -144,7 +144,7 @@ SKILL_TARBALL=""
 if [ "$SKILL_DRIFT" = 1 ]; then
   SKILL_TARBALL="/tmp/wb-extra-skills-$(date +%Y%m%d-%H%M%S).tgz"
   # 注意：bsdtar（macOS）要求 --exclude 在文件列表之前，否则会把选项当文件名
-  tar -czf "$SKILL_TARBALL" --exclude='.DS_Store' --exclude='._*' skills scripts/install-skill.sh
+  tar -czf "$SKILL_TARBALL" --exclude='.DS_Store' --exclude='._*' skills scripts/install-skill.sh scripts/workspace-remote.mjs
   echo "skills/ 有变更（本地 ${LOCAL_SKILL_HASH} != 远端 ${REMOTE_SKILL_HASH}）"
   scp_wrap "$SKILL_TARBALL" "$TARGET:/tmp/wb-extra-skills.tgz"
   ssh_wrap "set -e; cd $REMOTE_DIR/..; tar -xzf /tmp/wb-extra-skills.tgz --exclude='._*' --exclude='.DS_Store'; rm -f /tmp/wb-extra-skills.tgz"

@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import type { AgentResourceBinding, DshRef, ExpertTeam, Project, StorageData, SubAgent, WorkBuddySettings, WorkTask, PlanSubtask, TaskTurn, ScheduledTask, TeamTemplateId } from './types.js'
 import { projectDefaultAgentIdsFromInput } from './types.js'
+import { sameDshRef, sameWorkspace, normalizeWorkspacePath, validateWorkspacePath, ProjectWorkspaceConflictError } from './workspace.js'
 import { BUILTIN_TEAMS } from './expert-teams.js'
 
 function defaultSettings(): WorkBuddySettings {
@@ -22,19 +23,6 @@ function defaultSettings(): WorkBuddySettings {
     // 环境变量仅作首启动默认值（升级老部署时沿用原 WORKBUDDY_ARCHIVE_DAYS 语义）；此后设置页配置为唯一权威
     archive: { taskArchiveDays: Number(process.env.WORKBUDDY_ARCHIVE_DAYS) || 7 },
   }
-}
-
-/** 判断两个 DSH 实体引用是否指向同一个目标（用于同实体去重防重复新增） */
-function sameDshRef(a: DshRef | undefined, b: DshRef): boolean {
-  if (!a) return false
-  if (a.kind === 'direct' && b.kind === 'direct') return normalizeUrl(a.apiBaseUrl || '') === normalizeUrl(b.apiBaseUrl || '')
-  if (a.kind === 'mapping' && b.kind === 'mapping') return a.mappingId === b.mappingId
-  if (a.kind === 'app' && b.kind === 'app') return a.appId === b.appId
-  return false
-}
-
-function normalizeUrl(u: string): string {
-  return u.trim().replace(/\/+$/, '').toLowerCase()
 }
 
 export class WorkStore {
@@ -661,10 +649,27 @@ export class WorkStore {
     return this.data.projects.find((p) => p.id === id)
   }
 
+  /** Includes archived and legacy duplicates; callers may reuse a visible match but must never merge their ACLs. */
+  public getProjectsForWorkspace(dshRef: DshRef, workspace: string | undefined): Project[] {
+    return this.getProjects().filter((p) => sameWorkspace(p, { dshRef, workspace }))
+  }
+
   /** 归档字段入参约定：传 null/0 表示清除（恢复），见 archivedAt 合并行 */
   public upsertProject(input: Omit<Partial<Project>, 'archivedAt'> & { archivedAt?: number | null }): Project {
     const now = Date.now()
     const existing = input.id ? this.data.projects.find((p) => p.id === input.id) : undefined
+    const dshRef = input.dshRef || existing?.dshRef || { kind: 'direct' as const, apiBaseUrl: '' }
+    const rawWorkspace = input.workspace !== undefined ? input.workspace : existing?.workspace
+    const normalizedWorkspace = normalizeWorkspacePath(rawWorkspace)
+    const identityChanged = !existing || !sameDshRef(existing.dshRef, dshRef) || normalizeWorkspacePath(existing.workspace) !== normalizedWorkspace
+    if (identityChanged) {
+      validateWorkspacePath(rawWorkspace)
+      if (this.getProjectsForWorkspace(dshRef, normalizedWorkspace).some((p) => p.id !== existing?.id)) {
+        throw new ProjectWorkspaceConflictError()
+      }
+    }
+    // Preserve untouched legacy paths and duplicate records; only explicit root changes normalize stored data.
+    const workspace = !existing || input.workspace !== undefined ? normalizedWorkspace : existing.workspace
     // 默认协作成员：defaultAgentIds 为 canonical；expertIds（旧字段）仅为兼容别名。
     // 任一字段显式传入（含 []）都更新 canonical 并镜像另一份，保证旧读者（expertIds）与新读者一致；
     // 两字段都未传 = 不变更（读取侧经 projectDefaultAgentIds 兼容旧库 expertIds）。
@@ -673,9 +678,10 @@ export class WorkStore {
     const project: Project = {
       id: existing?.id || `proj-${Math.random().toString(36).slice(2, 10)}`,
       name: String(input.name ?? existing?.name ?? '未命名项目'),
-      dshRef: (input.dshRef as Project['dshRef']) || existing?.dshRef || { kind: 'direct', apiBaseUrl: '' },
-      apiKey: input.apiKey !== undefined ? input.apiKey : existing?.apiKey,
-      workspace: input.workspace !== undefined ? (String(input.workspace).trim() || undefined) : existing?.workspace,
+      dshRef,
+      defaultExecutionNodeRef: 'defaultExecutionNodeRef' in input ? input.defaultExecutionNodeRef : existing?.defaultExecutionNodeRef,
+      apiKey: input.apiKey !== undefined ? input.apiKey : existing && sameDshRef(existing.dshRef, dshRef) ? existing.apiKey : undefined,
+      workspace,
       instruction: input.instruction !== undefined ? (String(input.instruction).trim() || undefined) : existing?.instruction,
       defaultAgentIds,
       expertIds: defaultAgentIds,

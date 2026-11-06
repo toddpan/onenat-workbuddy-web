@@ -396,19 +396,19 @@ async function main() {
   const tasks = await req('GET', `${PREFIX}/api/tasks`)
   check('任务列表可读', (tasks.json?.data || []).some((t) => t.id === taskId))
 
-  // ---------- 5.2 项目任务节点以项目为准（P0-3）：带 projectId 时忽略 nodeRef，执行节点由 project.dshRef 决定 ----------
+  // ---------- 5.2 项目工作区与执行节点解耦：项目任务保留显式 nodeRef ----------
   const proj = await req('POST', `${PREFIX}/api/projects`, { name: '冒烟项目-P0-3', dshRef: { kind: 'mapping', mappingId: 'map-dsh-01' } })
   const projId = proj.json?.data?.id
   check('创建项目（绑定 mock DSH 映射）', proj.status === 200 && proj.json?.ok === true && Boolean(projId), `id=${projId}`)
   const projTask = await req('POST', `${PREFIX}/api/tasks`, { title: '冒烟项目任务', projectId: projId, nodeRef: { kind: 'mapping', mappingId: 'map-not-this-one' }, mode: 'chat' })
   const projTaskId = projTask.json?.data?.id
-  check('项目任务忽略 nodeRef（节点以项目为准）', [200, 201].includes(projTask.status) && projTask.json?.data?.projectId === projId && !projTask.json?.data?.nodeRef, `nodeRef=${JSON.stringify(projTask.json?.data?.nodeRef ?? null)}`)
+  check('项目任务保留显式执行 nodeRef', [200, 201].includes(projTask.status) && projTask.json?.data?.projectId === projId && projTask.json?.data?.nodeRef?.mappingId === 'map-not-this-one', `nodeRef=${JSON.stringify(projTask.json?.data?.nodeRef ?? null)}`)
   const projTaskRead = await req('GET', `${PREFIX}/api/tasks/${projTaskId}`)
-  check('项目任务回读仍无 nodeRef', projTaskRead.status === 200 && !projTaskRead.json?.data?.nodeRef)
-  // 回归（2026-11-06）：任务内模型目录必须按 taskId 服务端权威解析（项目 dshRef），
+  check('项目任务回读执行节点快照', projTaskRead.status === 200 && projTaskRead.json?.data?.nodeRef?.mappingId === 'map-not-this-one')
+  // 回归（2026-11-06）：任务内模型目录必须按 taskId 服务端权威解析（实际执行节点），
   // 前端误传 node= 不得改变目录来源（曾致 brain 项目任务弹出公司笔记本的模型目录）
-  const pmTask = await req('GET', `${PREFIX}/api/planner/options?taskId=${projTaskId}&node=map-not-this-one`)
-  check('模型目录按 taskId 权威解析（项目节点，压过错误 node=）', pmTask.status === 200 && pmTask.json?.data?.node === 'map-dsh-01' && (pmTask.json?.data?.models || []).length >= 0, `node=${pmTask.json?.data?.node} err=${pmTask.json?.data?.nodeError || ''}`)
+  const pmTask = await req('GET', `${PREFIX}/api/planner/options?taskId=${projTaskId}&node=map-dsh-01`)
+  check('模型目录按 taskId 执行节点权威解析，离线不回退文件节点', pmTask.status === 200 && pmTask.json?.data?.node === 'map-not-this-one' && Boolean(pmTask.json?.data?.nodeError), `node=${pmTask.json?.data?.node} err=${pmTask.json?.data?.nodeError || ''}`)
   const pmTaskMiss = await req('GET', `${PREFIX}/api/planner/options?taskId=task-not-exist`)
   check('模型目录 taskId 不存在/不可见 → 404', pmTaskMiss.status === 404)
   const soloTask = await req('POST', `${PREFIX}/api/tasks`, { title: '冒烟单独任务', nodeRef: { kind: 'mapping', mappingId: 'map-dsh-01' }, mode: 'chat' })

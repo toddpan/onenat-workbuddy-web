@@ -519,7 +519,7 @@ users 1─* sessions
 | 技能/插件库 | 列表/下载/安装全员 | 上传/导入创建归属上传者；删除 owner∪admin（缺省=admin）；`/api/library/settings` 仅 admin |
 | 语音助手 | 仅 admin（导航隐藏，深链接拉回工作台） | status/endpoints 增删全 admin |
 | 定时任务 | owner ∪ admin；缺省=全员 | 编辑/删除/toggle/**run**（派生任务耗资源归 manage 级）：owner ∪ admin，缺省=仅 admin；不可见统一 404 防枚举；派生任务继承定时任务归属 |
-| 文件管理 | 节点工作区为团队共享盘，保持登录门禁（`/api/agents/fs/*` 不做逐用户 ACL，见遗留） | `/api/tasks/:id/files/download` 随任务 view 级 |
+| 文件管理 | 项目文件按项目 view/edit 授权并限制根目录；任务可见性仍前置检查 | `/api/agents/fs/*?projectId=`、项目任务附件与文件工具共用策略；普通成员只读，owner/admin 可写，归档只读。通用 node/agent 文件与 P2P 节点凭据仅 admin/服务令牌；详见 §12 |
 | 专家管理 | 花名册/召唤/@发任务全员（公共名册不变） | 用户专家条目（source=user）编辑/删除：owner∪admin（缺省=admin，内置=admin）；归属只在创建时写入，编辑不夺归属 |
 | 归档 | 列表=归档任务过 `canViewTask` 者（自动跟随任务可见性） | 恢复/删除逐条 `canManageTask`（bulk 逐条过滤静默跳过）；自动归档天数配置随 settings 收 admin |
 | 设置 | 非 admin 仅「当前账号」+「AI 接入」卡 | admin：GET/POST `/api/settings`（GET 对非 admin 返回裁剪版：无 aiToken、无 xiaozhi 段）、`ai-token/reset`、`/api/planner/config`（**带 taskId 的主智能体切换除外**——任务会话日常操作）、`/api/library/settings`、xiaozhi、用户管理、审计 |
@@ -548,8 +548,55 @@ users 1─* sessions
 
 **遗留（下一阶段）**
 
-- 文件管理节点级 ACL（`DshRefACL`，§10.3 ② YAGNI 未做）——`/api/agents/fs/*` 仍为登录级共享盘。
+- 文件管理节点级 ACL（`DshRefACL`，§10.3 ②）仍未实现；task-59 已用项目 scope 收紧文件入口，普通用户不得使用通用 node/agent 文件通道或获取节点直传凭据，见 §12。
 - AI 工具通道「令牌绑定用户」（token→userId），绑定后工具通道可复用同一套 perm 判定；当前 AI 通道创建的任务/定时任务为无归属宽容模式。
 - CSRF：全 JSON 响应 `Access-Control-Allow-Origin: *` + 无 Origin 校验，靠 SameSite=Lax 兜底；如收紧需加 Origin 白名单（写面）。
 - `ssrf-guard.ts`（已存在未接线）：`/api/dsh-test` 可探测任意 apiBaseUrl，建议接线后再放开表单直连。
 - 存量归属回填：不可追溯，维持宽容模式 + 管理员可手动删除/移交；`/api/mentions/candidates` 的团队条目未脱敏 coordinatorPrompt（GET /api/teams 已脱敏，候选卡不带提示词字段）。
+
+## 12. 项目工作区文件授权与并发（task-59）
+
+2026-11-06 本地实现及验收，详细证据见 [task-59 验收记录](task-59-acceptance.md)。本节覆盖文件 REST、HTTP 工具和 MCP 文件工具；不改变节点操作系统权限或把节点 API key 转化为工作区专用凭据。
+
+### 12.1 身份和权限
+
+服务端验证的登录身份传入路由请求上下文和 ToolCallContext.session；不能从工具参数伪造。项目任务先检查任务可见性，再检查当前项目权限，包含历史无 ownerUserId 的任务。失败在解析目标及发起节点请求前拒绝。
+
+| 入口/身份 | 读取 | 写入与凭据 |
+| --- | --- | --- |
+| 隔离项目 owner / 平台 admin | 项目根目录内 | 可创建/更新/删除；更新文件需要读取版本 |
+| 隔离项目普通成员 | 项目根目录内 | 403 WORKSPACE_READ_ONLY |
+| 非成员 | 404，统一显示项目/任务不存在 | 同样拒绝，不暴露项目或节点密钥 |
+| 无 owner / members 的存量项目 | 已登录用户可读 | 仅 admin 可写 |
+| 归档项目 | 仍按原读取权限 | 所有身份均只读 |
+| 通用 node / agent 文件、非项目任务文件及 P2P init/register/relay | admin 或服务令牌 | 普通用户 403 PROJECT_SCOPE_REQUIRED；项目 owner 也不能取得节点级直传 key |
+
+这里 admin 可访问隔离项目，沿用当前 canAccessProject 的实现口径；早期“管理员不穿透”的设计文字不作为当前文件权限保证。服务/AI API 令牌尚未绑定用户，文件能力仍属于受信任服务范围；持有它不等于受项目成员 ACL 限制。REST 的服务通道通过外层鉴权后可读取任务，仍经过项目文件 scope、路径及归档检查；无令牌无登录态请求返回 401。
+
+MCP 文件读取禁用结果重放，每次重新检查当前成员关系、重叠项目权限并读取。成功写入的重复 RPC 在重新授权后可幂等返回；缓存绑定调用身份、参数、项目根、文件节点和任务上下文，scope 变更要求新 RPC ID。撤权或后来新增私有子项目不能重放旧内容/写入结果。
+
+### 12.2 路径边界
+
+项目文件固定使用 Project.dshRef / workspace，不能用 agent、执行节点或请求中的 node 查询替换。拒绝工作区外路径、分隔符逃逸、非法子名称、Windows alternate stream 和 worker 保留路径；同节点 mapping/app/direct 别名下的重叠项目还要检查各自当前权限。列目录过滤不可见的私有子根；递归删除父目录不能跨越无权或归档的子项目。
+
+在调用原生文件接口前，从文件系统根逐级核验祖先、项目 root 和目标的目录元数据；symlink、未知类型、路径不一致或无法确认完整缺失均失败关闭。root/祖先是链接时返回 WORKSPACE_ROOT_UNVERIFIED；macOS 请配置真实绝对路径 /private/var，而非 /var。无法从节点获取完整可信元数据时拒绝服务，不降级为纯词法允许。
+
+这仍是预检后再调用的两阶段操作，不能消除敌对目录替换的 TOCTOU；需要受信任文件节点和非敌对本地写者。任意模型命令与节点 key 自身能力没有获得操作系统级沙箱限制。
+
+### 12.3 文件更新与控制台契约
+
+项目 upload/附件统一调用远程 worker：新建使用 expectAbsent，更新必须携带读取到的 expectedSha256；协作锁内检查版本并原子 rename。download 工具返回 SHA256；HTTP 下载仍返回原始字节，没有新增 ETag/SHA 头。已有文件缺版本返回 428 VERSION_REQUIRED，旧版本返回 409 CAS_MISMATCH，冲突不盲覆盖。worker 单次写入上限 8 MiB；mkdir/delete 仍使用原生接口，受权限/路径保护，但不是版本化 CAS。
+
+REST multipart 多文件按顺序保存，失败返回已完成 files、partial 和 failedFile；这不是批次事务。任务附件部分成功同样登记已保存文件。普通用户控制台走项目任务 multipart 创建，不请求节点 key；同名冲突和只读错误可见且不自动降级盲写。当前没有图形化带版本编辑界面，可经文件工具读取哈希后更新。
+
+### 12.4 稳定会话身份
+
+TaskSessionBinding 持久化逻辑 nodeRefKey 与实际 resolvedMappingId。已有会话的历史、追问、模型/预设/技能/待办、控制及附件操作按记录的 mapping 实时解析入口；端口变化不改变会话归属，原节点离线不回退缓存 URL 或另一节点。app 改绑另一 mapping 时拒绝把旧 sessionId 发给新节点；P2P 初始化后的节点或会话变化也拒绝登记。
+
+URL-only 或无法确认物理 mapping 的旧 app 会话不能安全控制；正常执行时新建会话，且不向当前节点探测旧 sessionId。显式 direct 节点使用固定地址，不具备 ONENAT 端口漂移能力。
+
+### 12.5 验收与交付边界
+
+本地授权矩阵覆盖 REST/HTTP 工具/实际初始化 MCP 会话、7 种文件动作、跨用户同 RPC ID、撤权、私有重叠根、CAS 并发、部分上传和稳定节点，详见独立验收报告。mock 文件节点会实际执行本地 Node worker，不证明真实 ONENAT 模型必定运行命令；本轮没有新增真实节点或浏览器验收。task-57 的真实主/子写回证据单独保留。
+
+协作锁不能阻止未使用协议的终端/编辑器进程写文件。npm 包遗漏 scripts/workspace-remote.mjs 的已知资源问题由 task-60 修复及隔离安装验收，本条不据仓库 build 成功宣称 npm 发布可用。
