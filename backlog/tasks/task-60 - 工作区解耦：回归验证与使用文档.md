@@ -100,3 +100,10 @@ AC#2/#3 沿用已登记证据不重复计入：task-57 真实 v3 4/4（双节点
 我来处理 backlog 待办 task-60「工作区解耦：回归验证与使用文档」。先了解仓库当前状态，再执行回归验证。分支上有大量未提交的工作区解耦实现（task-55~59）。先读 task-60 待办原文和相关验收文档，确认验收口径。task-60 此前已有实现与验收记录（最近一条 05:52 收口），本轮交付重点是**在本会话做一次全新的回归验证**并确认使用文档与证据完整。先看脚本定义与既有证据，再跑完整回归。证据与文档齐备（`artifacts/task60/`、`docs/project-workspace-nodes.md` 补充小节）。现在按 AC#1 做本会话全新回归验证。typecheck 通过。继续单测（修正 todo 格式）。单测 223/223 全部通过。继续 build + smoke。smoke 93/93 通过。复核 npm pack 资源清单与工作区改动状态。全部回归项通过。现在把本轮复跑记录登记进 task-60 待办文件。task-60「工作区解耦：回归验证与使用文档」本轮独立复跑完成，全部通过。
 
 ## 回归验证结果（本会话全新执行，非引用历史日
+
+### 2026-11-07T06:57:00+08:00 提交推送与阿里云线上验收（本会话）
+- commit cf50d8f（feat(workspace): 工作区解耦系列 task-55~60，189 文件）已推送 origin/feat/exec-place-ux（45b654a..cf50d8f）。
+- 线上环境 https://natpass.yikaihui.com/onenat-workbuddy healthz=2026.11.1（新部署，uptime<15min）；监控/工具通道正常（21 智能体 18 在线）。
+- 线上验收全项通过：task-55 同节点同路径 409 通用文案+路径归一化+异节点同路径合法共存；task-53 keyword 按标题/ID/ID 片段过滤（未命中回 0）；task-54 1.5MB 任务 detail:full 降级为 chatDownloadUrl（匿名 GET 200/1.68MB、TTL 600s）；task-56 nodeRef 覆盖快照到 task 并正确落执行节点；task-57 工作区根目录核验（不存在/符号链接路径拒绝 WORKSPACE_ROOT_UNVERIFIED）、原子写 sha256 双端一致、回读一致、删除 ok、根目录保护（WORKSPACE_ROOT_PROTECTED）、brain 子会话经 workspace-remote-v3.mjs --node-ref 实时解析跨节点读取 136 文件字节一致（sha256 d26e200c…）；task-59 AI 令牌 ssh exec/get 被拒（ai-token-ssh-guard）；大文件三步流程 draft 态可用。
+- 环境发现（非本系列缺陷）：brain 节点(mapping:5602f2c2)主会话上游 gpt-6.1-sol 连续两轮空流（自动重发仍空→任务失败并有明确系统提示）；同一模型在 136 节点(6cc2987d)主会话正常、brain 成员会话 glm-5.3-flash 正常、生产用户任务同期也间歇失败——建议排查 brain 节点的模型路由/上游。
+- 测试数据已清理：2 个测试项目、3 个测试任务、测试文件均已删除；136 节点残留空目录 /tmp/wb-verify-11070632（/tmp，无害）。
