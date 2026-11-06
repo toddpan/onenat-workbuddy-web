@@ -17,6 +17,7 @@ import type {
   ResolvedEndpoint,
   ResourceSnapshot,
 } from './types.js'
+import { firstUnsafeHeaderChar, unsafeApiKeyError } from './header-safe.js'
 
 const WEB_PORT_MIN = 3000
 const WEB_PORT_MAX = 9999
@@ -537,6 +538,17 @@ export class OnenatDirectory {
           token: json?.token,
           resolvedFrom: json?.resolved_from || json?.resolvedFrom,
           fetchedAt: Date.now(),
+        }
+        // 凭证内容安全校验（2026-11-06 pjy-DSH 线上事故）：ONENAT 后台把一段中文文本误存为
+        // 映射 API Key 时，下游 Authorization: Bearer <key> 会让 undici 抛 ByteString 天书。
+        // 这里把坏凭证拦成 ok:false + 可操作文案；只进短负缓存挡连环触发，
+        // 绝不写 credLastGood（防限速回落时继续把坏值当救命凭证用）。
+        const credValue = data.apiKey || data.token || ''
+        if (credValue && firstUnsafeHeaderChar(credValue)) {
+          const invalid: OnenatCredentials = { ok: false, error: unsafeApiKeyError('映射 API Key', credValue), fetchedAt: Date.now() }
+          this.credCache.set(mappingId, { at: Date.now(), data: invalid })
+          this.log(`[onenat] 映射 ${mappingId} 凭证非法已拒用：${invalid.error}`)
+          return invalid
         }
         this.credCache.set(mappingId, { at: Date.now(), data })
         this.credLastGood.set(mappingId, data)

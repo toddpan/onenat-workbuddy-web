@@ -12,6 +12,7 @@
  */
 
 import type { SubtaskLogEntry } from './types.js'
+import { firstUnsafeHeaderChar, unsafeApiKeyError } from './header-safe.js'
 
 export interface DshTarget {
   baseUrl: string
@@ -255,16 +256,31 @@ export interface RemoteSkillDetail {
 }
 
 export class DshClient {
+  /**
+   * 构造 Authorization 头。API Key 含非 ASCII/控制字符时抛可操作的中文错误（fail-fast），
+   * 不让 undici 在 fetch 内部抛 "Cannot convert argument to a ByteString …" 天书
+   * （2026-11-06 pjy-DSH 线上事故：ONENAT 映射 API Key 被误粘贴为中文文本）。
+   * 所有调用方都在 try/catch 内，错误信息会原样透出到 UI。
+   */
+  private authHeader(apiKey?: string): string {
+    const key = (apiKey || '').trim()
+    if (!key) return ''
+    if (firstUnsafeHeaderChar(key)) throw new Error(unsafeApiKeyError('节点 API Key', key))
+    return `Bearer ${key}`
+  }
+
   private headers(apiKey?: string): Record<string, string> {
     const h: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json' }
-    if (apiKey && apiKey.trim()) h.Authorization = `Bearer ${apiKey.trim()}`
+    const auth = this.authHeader(apiKey)
+    if (auth) h.Authorization = auth
     return h
   }
 
   /** 无 Content-Type 的鉴权头（FormData/流式场景） */
   private headersAuth(apiKey?: string): Record<string, string> {
     const h: Record<string, string> = { Accept: 'application/json' }
-    if (apiKey && apiKey.trim()) h.Authorization = `Bearer ${apiKey.trim()}`
+    const auth = this.authHeader(apiKey)
+    if (auth) h.Authorization = auth
     return h
   }
 
