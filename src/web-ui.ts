@@ -1036,6 +1036,10 @@ body.task-running .dsh-sysRow.sys-planning .markdown::after {
 .model-item .ck { flex: none; visibility: hidden; font-weight: 700; }
 .model-item.on .ck { visibility: visible; }
 .model-empty { padding: 14px; color: var(--tx3); font-size: 12px; text-align: center; }
+.model-search { padding: 7px 8px; position: sticky; top: 0; z-index: 1; background: var(--bg2); }
+.model-search input { width: 100%; box-sizing: border-box; border: 1px solid var(--line2); border-radius: 7px; padding: 8px 10px; background: var(--bg); color: var(--tx); font: inherit; outline: none; }
+.model-search input:focus { border-color: var(--pri); }
+.model-retry { border: 0; background: transparent; color: var(--pri); cursor: pointer; font: inherit; padding: 4px 8px; }
 
 /* 任务实时统计条（轮/步 · LLM/工具耗时 · 首 token/吞吐 · 缓存命中 · token 账本），对齐 DSH web StatsLine */
 .task-stats {
@@ -2914,6 +2918,7 @@ const VERSION = ${JSON.stringify(VERSION)};
  */
 const state = {
   resources: [],
+  resourcesAt: 0, // 目录成功加载时刻（catalogStale 60s 门控）：新加节点在执行位置/导入弹窗打开时自动可见，无需刷新页面
   agents: [],
   teams: [],
   tasks: [],
@@ -3079,6 +3084,23 @@ function fmtDateTime(ts) {
   if (!ts) return '';
   const d = new Date(ts);
   return d.toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+/**
+ * 流式 paint 专用的「语法补全」：把尚未闭合的 markdown 标记临时补齐再渲染。
+ * 生成中的正文常有未闭合的加粗/行内码/围栏代码块——直接渲染会原样裸露语法字符（观感「没按 MD 渲染、很凌乱」）。
+ * 补全只作用于流式期间的 paint；turn_end 收敛仍用服务端权威全文渲染，不影响最终排版与无损性。
+ */
+function balanceStreamingMd(text) {
+  let s = String(text || '');
+  // 1) 围栏代码块（三反引号开头行）计数为奇数 → 补闭合围栏（否则其后全部正文被吞进代码块）
+  const fences = (s.match(/^[ \\t]*\`\`\`/gm) || []).length;
+  if (fences % 2 === 1) s += '\\n\`\`\`';
+  // 2) 剔除（可能未闭合的）围栏段与已成对行内码后再数标记，避免把代码内容误当正文语法
+  const outside = s.replace(/\`\`\`[\\s\\S]*?(\`\`\`|$)/g, ' ').replace(/\`[^\`\\n]*\`/g, ' ');
+  if ((outside.match(/\\*\\*/g) || []).length % 2 === 1) s += '**';
+  if ((outside.match(/\`/g) || []).length % 2 === 1) s += '\`';
+  return s;
 }
 
 /**
@@ -4601,6 +4623,8 @@ function enterProjectWorkspace(projectId, fromView) {
 
 // ---------- 项目：从远程 DSH 导入（节点拓扑 → 工作区列表 → 勾选 → 发导入任务 → 云端自动建项目） ----------
 async function openProjectImportModal() {
+  // 目录过期先重拉（60s 门控，命中即零等待）：新加的 DSH 节点直接出现在来源下拉，无需刷新页面
+  if (catalogStale()) { try { await loadResources(); } catch (e) { /* 拉取失败用现有目录继续渲染 */ } }
   const nodes = dshNodeOptions();
   const m = libModal('从远程 DSH 导入项目');
   if (!nodes.length) { m.body.innerHTML = '<div class="lib-empty">没有可用的 DSH 节点 —— 请到「资源目录」确认 ONENAT 映射已同步</div>'; return; }
@@ -5160,6 +5184,7 @@ async function loadResources() {
   const r = await api('/resources');
   if (r.ok) {
     state.resources = r.data.endpoints || [];
+    state.resourcesAt = Date.now();
     const dshCount = state.resources.filter(x => x.kind === 'dsh').length;
     $('onenat-dot').className = 'dot ok';
     $('onenat-text').textContent = 'ONENAT · ' + state.resources.length + ' 资源 / ' + dshCount + ' DSH 节点';
@@ -5728,7 +5753,9 @@ function ensureLiveBlock(el, kind, turnId) {
   const last = blocks.length ? blocks[blocks.length - 1] : null;
   // 工具调用按 id 复用；文本/思考连续追加到现有块
   if (last && last.dataset.kind === kind && kind !== 'tool') {
-    const existing = el.blocks.__blockMap[kind];
+    // buildTurnElement 直接装配的块（中途加入/回源重建）不会初始化 __blockMap，必须容错——
+    // 否则这里抛 TypeError 会打断 RAF 冲刷循环，流式更新整轮冻结（气泡停在快照原文不再动）
+    const existing = (el.blocks.__blockMap || {})[kind];
     if (existing) return existing;
   }
   const blk = createBlock(kind);
@@ -5879,6 +5906,9 @@ function connectStream(taskId) {
           // 首轮结束后会话才建立：协作能力探测（plan/compact/goal）需重跑一次，
           // 否则节点不支持时按钮会一直显示（首次 openTask 时还没有远端会话，探测拿不到 supported）
           refreshCollab();
+          // 停止/取消没有逐轮 turn_end（服务端置 streaming=false 后直接补发 task_end）：
+          // 这里把仍处于流式态的轮次按服务端权威数据收敛渲染，否则被中止的回复永远停在未渲染的半截原文
+          finalizeStaleStreamTurns(ev.task);
         }
       }
     } catch {}
@@ -6019,7 +6049,8 @@ function createBlock(kind) {
     const st = { streamingText: '', lastPaint: 0 };
     const paint = () => {
       st.lastPaint = Date.now();
-      el.innerHTML = md(st.streamingText);
+      // 流式期间先补全未闭合语法再渲染：加粗/行内码/围栏尚未闭合时原样裸露语法字符，观感「没按 MD 渲染」
+      el.innerHTML = md(balanceStreamingMd(st.streamingText));
       const cur = document.createElement('span'); cur.className = 'dsh-cursor';
       el.appendChild(cur);
     };
@@ -6587,7 +6618,14 @@ function buildTurnElement(taskId, turn) {
     if (turn.usage) applyUsageBadge({ foot }, turn.usage, turn);
     renderTurnChanges(foot, turn, taskId);
   } else if (blocks && turn.streaming && turn.text) {
-    const te = createBlock('text'); te.el.textContent = turn.text || ''; blocks.appendChild(te.el);
+    // 中途加入/回源重建的流式轮次：快照正文必须按 markdown 渲染（textContent 会把 **、反引号等语法字符原样裸露，
+    // 用户看到的就是一段没排版的原文本）；并登记 __blockMap，让后续 delta 复用同一个块续写，
+    // 而不是另起新块造成「快照原文 + 续写」双块叠影
+    const te = createBlock('text');
+    te.append(turn.text || '');
+    blocks.appendChild(te.el);
+    blocks.__blockMap = blocks.__blockMap || {};
+    blocks.__blockMap['text'] = te;
   }
 
   state.turnEls[turn.id] = {
@@ -6839,6 +6877,20 @@ function finalizeTurnBlocks(el, turn, taskId) {
   renderTurnChanges(el.foot, turn, taskId);
 
   markTrajDirty();
+}
+
+/** 任务收敛兜底（完成/失败/停止）：把页面上仍处于流式态的轮次按服务端权威 turns 渲染成最终 markdown。
+ *  正常路径每个 turn_end 已先行收敛（kind=settled），这里是 no-op；
+ *  停止/取消由服务端直接置 streaming=false 并补发 task_end（无逐轮 turn_end），靠这里兜底收敛，
+ *  否则被中止的回复气泡永远停留在未渲染的流式半截文本上。 */
+function finalizeStaleStreamTurns(task) {
+  const turns = (task && task.turns) || [];
+  for (const turn of turns) {
+    const el = state.turnEls[turn.id];
+    if (!el || el.kind !== 'stream') continue;
+    if (!el.wrap || !el.wrap.parentNode) continue;
+    try { finalizeTurnBlocks(el, turn, task.id); } catch (e) {}
+  }
 }
 
 // ---------- 编排计划卡片 (Plan Card) ----------
@@ -9399,6 +9451,20 @@ function applyReachableNodeDefault() {
 function dshNodeOptions() {
   return state.resources.filter(function (r) { return r.kind === 'dsh' && r.mappingId; });
 }
+/**
+ * 目录新鲜度：>60s 视为过期（与 @ 菜单候选 60s 口径一致）。
+ * 背景（2026-11-06 pjy-DSH 报障）：state.resources 只在页面 boot 时加载一次，页面开着不动时
+ * ONENAT 后台新加的节点永远不出现在「执行位置」下拉 —— 用户只能刷新整页。这里提供与 @ 菜单
+ * 同款的「打开时过期重拉」语义：新节点最多 60s 后自动可见，无需刷新页面。
+ */
+function catalogStale() {
+  return Date.now() - (state.resourcesAt || 0) > 60000;
+}
+/** 目录过期时后台重拉；完成后回调（弹层是否仍开着由调用方判断） */
+function refreshCatalogIfStale(onDone) {
+  if (!catalogStale()) return;
+  loadResources().then(function () { if (onDone) onDone(); }).catch(function () { /* 静默：下拉已显示现有目录 */ });
+}
 function nodeBtnLabel() {
   const n = dshNodeOptions().find(function (x) { return x.mappingId === nodeState.cur; });
   return n ? (n.title || n.appName || n.note || n.mappingId) : '自动';
@@ -9518,6 +9584,14 @@ function openPlacePop(anchor, place, onChange, opts) {
     if (below < 260 && r.top > below) pop.style.bottom = (window.innerHeight - r.top + 6) + 'px';
     else pop.style.top = (r.bottom + 6) + 'px';
   }
+  // 目录过期时后台重拉：新加的 DSH 节点最多 60s 后自动出现在下拉里，无需刷新整页
+  // （2026-11-06 pjy-DSH 报障：页面开着不动，ONENAT 新加的映射永远不出现）
+  refreshCatalogIfStale(function () {
+    if (!placeState.pop) return;
+    const si = placeState.pop.querySelector('#place-search-input');
+    if (si && document.activeElement === si) return; // 正在输入搜索关键字时不打断，下轮打开再刷新
+    renderPlacePop();
+  });
 }
 function closePlacePop() {
   if (placeState.pop) placeState.pop.remove();
@@ -9721,7 +9795,8 @@ async function selectMainAgent(agentId) {
 // ---------- 主调度模型选择（自定义弹层：原生 select 的移动端全屏弹窗字大折行且样式失控） ----------
 // curEffort/curPreset：当前执行会话的推理强度与模式预设（任务内才有意义；打开会话时回读回显）
 // cur = 当前任务的任务级模型（空 = 跟随默认）；globalDefault = 全局默认模型（settings.planner.model，只在设置页改）
-const modelState = { groups: {}, cur: '', globalDefault: '', loaded: false, error: '', presets: [], curEffort: '', curPreset: '', presetsLoaded: false, loadedForNode: '', presetsForNode: '' };
+const modelState = { groups: {}, cur: '', globalDefault: '', loaded: false, loading: false, error: '', query: '', recent: [], presets: [], curEffort: '', curPreset: '', presetsLoaded: false, loadedForNode: '', presetsForNode: '' };
+try { modelState.recent = JSON.parse(localStorage.getItem('wb-recent-models') || '[]').filter(x => typeof x === 'string'); } catch (e) { modelState.recent = []; }
 function modelBtnTitle() { return '本任务模型（只影响当前任务的主会话；全局默认模型在设置页修改）'; }
 function curModelEntry() {
   if (!modelState.cur) return null;
@@ -9751,28 +9826,65 @@ function modelBtnLabel(v) {
   if (modelState.curPreset) t += ' · ' + modelState.curPreset;
   return t;
 }
-function renderModelPop() {
-  const pop = $('model-pop');
+/** 模型清单（含空态/错误态）列表 HTML：搜索增量刷新只重建这段，输入框保持原节点（焦点/光标不丢） */
+function modelListHtml() {
   const cur = modelState.cur;
+  const query = String(modelState.query || '').trim().toLowerCase();
   const known = Object.keys(modelState.groups).some(pv => (modelState.groups[pv] || []).some(m => pv + '/' + m.id === cur));
-  let html = '<div class="model-pop-head"><span>' + (state.currentTaskId ? '本任务模型' : '新任务模型') + '</span><span>只影响主会话 · @ 子智能体用各自模型</span></div>';
-  html += '<div class="model-item' + (!cur ? ' on' : '') + '" data-v=""><span class="n">跟随默认（' + esc(followDefaultName()) + '）</span><span class="ck">✓</span></div>';
+  let html = '';
   if (cur && !known) {
     // 目录按所选任务节点拉取：已保存模型不在目录里 = 该节点引擎没有这个模型（跨引擎配置的典型症状）
     const mismatchNote = Object.keys(modelState.groups).length ? '（已保存 · 当前节点目录不存在）' : '（已保存）';
     html += '<div class="model-item on" data-v="' + esc(cur) + '" style="color:var(--warn)"><span class="n">' + esc(cur + mismatchNote) + '</span><span class="ck">✓</span></div>';
   }
-  for (const pv of Object.keys(modelState.groups)) {
-    html += '<div class="model-group">' + esc(pv) + '</div>';
-    for (const m of modelState.groups[pv]) {
-      const v = pv + '/' + m.id;
-      html += '<div class="model-item' + (v === cur ? ' on' : '') + '" data-v="' + esc(v) + '"><span class="n">' + esc(m.id + (m.isDefault ? ' ★' : '')) + '</span><span class="ck">✓</span></div>';
+  const allModels = [];
+  for (const pv of Object.keys(modelState.groups)) for (const m of modelState.groups[pv]) allModels.push({ provider: pv, model: m, value: pv + '/' + m.id });
+  const rank = x => x.model.isDefault ? 0 : x.value === cur ? 1 : modelState.recent.includes(x.value) ? 2 + modelState.recent.indexOf(x.value) : 100;
+  const shownModels = allModels.filter(x => !query || (x.provider + ' ' + x.model.id).toLowerCase().includes(query)).sort((a, b) => rank(a) - rank(b) || a.provider.localeCompare(b.provider) || a.model.id.localeCompare(b.model.id));
+  const buckets = [];
+  const pinned = shownModels.filter(x => rank(x) < 100);
+  if (pinned.length) buckets.push({ title: '常用与默认', items: pinned });
+  for (const x of shownModels.filter(x => rank(x) >= 100)) {
+    let group = buckets.find(g => g.title === x.provider);
+    if (!group) { group = { title: x.provider, items: [] }; buckets.push(group); }
+    group.items.push(x);
+  }
+  for (const group of buckets) {
+    html += '<div class="model-group">' + esc(group.title) + '</div>';
+    for (const x of group.items) {
+      const m = x.model; const v = x.value;
+      html += '<div class="model-item' + (v === cur ? ' on' : '') + '" data-v="' + esc(v) + '"><span class="n">' + esc(m.id + (m.isDefault ? ' ★ 默认' : '')) + '</span><span class="ck">✓</span></div>';
     }
   }
-  if (!Object.keys(modelState.groups).length) {
-    if (modelState.error) html += '<div class="model-empty" style="color:var(--err);font-size:11.5px">⚠️ 模型目录获取失败: ' + esc(modelState.error) + '</div>';
-    else if (!cur) html += '<div class="model-empty">暂无可选模型</div>';
-  }
+  if (!allModels.length) {
+    if (modelState.loading) html += '<div class="model-empty">正在加载模型目录…</div>';
+    else if (modelState.error) html += '<div class="model-empty" style="color:var(--err);font-size:11.5px">模型目录获取失败: ' + esc(modelState.error) + '<br><button type="button" class="model-retry" data-model-retry>重试</button></div>';
+    else html += '<div class="model-empty">暂无可选模型</div>';
+  } else if (!shownModels.length) html += '<div class="model-empty">没有匹配的模型</div>';
+  return html;
+}
+/** 清单区行点击绑定（整体渲染与增量刷新共用） */
+function wireModelList(pop) {
+  pop.querySelectorAll('#model-list .model-item').forEach(it => it.addEventListener('click', () => selectModel(it.dataset.v)));
+  const retry = pop.querySelector('#model-list [data-model-retry]');
+  if (retry) retry.addEventListener('click', function () { loadPlannerOptions(true); });
+}
+/** 只重建模型清单区（搜索输入/加载态共用）：搜索框与输入焦点保持原节点 */
+function refreshModelList() {
+  const pop = $('model-pop');
+  if (!pop) return;
+  const box = pop.querySelector('#model-list');
+  if (!box) { renderModelPop(); return; }
+  box.innerHTML = modelListHtml();
+  wireModelList(pop);
+}
+function renderModelPop() {
+  const pop = $('model-pop');
+  const cur = modelState.cur;
+  let html = '<div class="model-pop-head"><span>' + (state.currentTaskId ? '本任务模型' : '新任务模型') + '</span><span>只影响主会话 · @ 子智能体用各自模型</span></div>';
+  html += '<div class="model-item' + (!cur ? ' on' : '') + '" data-v=""><span class="n">跟随默认（' + esc(followDefaultName()) + '）</span><span class="ck">✓</span></div>';
+  html += '<div class="model-search"><input id="model-search-input" type="search" placeholder="搜索模型或提供商" value="' + esc(modelState.query) + '" aria-label="搜索模型"></div>';
+  html += '<div id="model-list">' + modelListHtml() + '</div>';
   // 推理等级：仅当前选中模型配置了 efforts 才渲染（模型没配 = 不支持强度切换，整个入口不出现）
   const draftMode = !state.currentTaskId && !!state.draft;
   const efforts = (curModelEntry()?.reasoning?.efforts) || [];
@@ -9795,26 +9907,44 @@ function renderModelPop() {
     }
   }
   pop.innerHTML = html;
+  const searchInput = pop.querySelector('#model-search-input');
+  if (searchInput) searchInput.addEventListener('input', function () {
+    modelState.query = searchInput.value;
+    refreshModelList(); // 只重建清单区：输入框保持原节点，焦点/光标/组合输入不被打断
+  });
   pop.querySelectorAll('.model-item').forEach(it => {
+    if (it.closest('#model-list')) return; // 清单区行由 wireModelList 绑定
     if (it.dataset.effort !== undefined) it.addEventListener('click', () => selectEffort(it.dataset.effort));
     else if (it.dataset.preset !== undefined) it.addEventListener('click', () => selectPreset(it.dataset.preset));
     else it.addEventListener('click', () => selectModel(it.dataset.v));
   });
+  wireModelList(pop);
 }
-async function loadPlannerOptions() {
+async function loadPlannerOptions(force) {
   const modelBtn = $('chat-model-btn');
   const agentBtn = $('main-agent-btn');
+  if (modelState.loading) return;
+  const nodeId = taskExecNodeId(currentTaskObj());
+  if (!force && modelState.loaded && modelState.loadedForNode === nodeId) return;
+  modelState.loading = true;
+  modelState.error = '';
+  if ($('model-pop') && $('model-pop').classList.contains('on')) renderModelPop();
   if (modelBtn) modelBtn.disabled = true;
   if (agentBtn) agentBtn.disabled = true;
   // 无论成功失败/网络异常都要恢复可点：曾因 await 抛错跳过 re-enable，普通用户侧按钮永久禁用「点不动」
   try {
-    return await _loadPlannerOptionsInner();
+    return await _loadPlannerOptionsInner(modelBtn, agentBtn);
+  } catch (e) {
+    modelState.error = e && e.message ? e.message : '请求失败';
+    modelState.loaded = false;
   } finally {
+    modelState.loading = false;
     if (modelBtn) modelBtn.disabled = false;
     if (agentBtn) agentBtn.disabled = false;
+    if ($('model-pop') && $('model-pop').classList.contains('on')) renderModelPop();
   }
 }
-async function _loadPlannerOptionsInner() {
+async function _loadPlannerOptionsInner(modelBtn, agentBtn) {
   // 模型目录跟随所选任务节点（?node=）：调度模型作用于任务节点的主会话，
   // 节点切换后目录必须换成该节点引擎的注册表（否则会把 A 引擎的模型配到 B 引擎上）
   // 节点 = 当前任务实际执行节点（项目 dshRef → task.nodeRef → 所选执行位置），见 taskExecNodeId
@@ -9822,8 +9952,8 @@ async function _loadPlannerOptionsInner() {
   const nodeQs = catalogNode ? '?node=' + encodeURIComponent(catalogNode) : '';
   const r = await api('/planner/options' + nodeQs);
   if (!r.ok || !r.data) {
-    if (modelBtn) modelBtn.disabled = false;
-    if (agentBtn) agentBtn.disabled = false;
+    modelState.error = r.error || '请求失败';
+    modelState.loaded = false;
     return;
   }
   const d = r.data;
@@ -9854,6 +9984,7 @@ async function _loadPlannerOptionsInner() {
   modelState.error = d.modelError || '';
   for (const m of d.models || []) { (modelState.groups[m.provider] = modelState.groups[m.provider] || []).push(m); }
   modelState.loaded = true;
+  modelState.loadedForNode = catalogNode;
   if (modelBtn) {
     modelBtn.disabled = false;
     modelBtn.textContent = modelBtnLabel(modelState.cur);
@@ -9872,8 +10003,10 @@ $('chat-model-btn').addEventListener('click', (e) => {
   closeMainAgentPop();
   const pop = $('model-pop');
   if (pop.classList.contains('on')) { closeModelPop(); return; }
+  modelState.query = '';
   renderModelPop();
   pop.classList.add('on');
+  if (!modelState.loaded || modelState.loadedForNode !== taskExecNodeId(currentTaskObj())) loadPlannerOptions();
 });
 document.addEventListener('click', (e) => {
   const modelPop = $('model-pop');
@@ -9903,6 +10036,10 @@ function setModelStatus(text) {
 async function selectModel(v) {
   const prevModel = modelState.cur;
   modelState.cur = v;
+  if (v) {
+    modelState.recent = [v].concat(modelState.recent.filter(x => x !== v)).slice(0, 6);
+    try { localStorage.setItem('wb-recent-models', JSON.stringify(modelState.recent)); } catch (e) { /* ignore */ }
+  }
   // 切模型后原强度不再保证适用（远端 selectModel 未带 effort 会清掉），本地同步清零回默认
   modelState.curEffort = '';
   const btn = $('chat-model-btn');
