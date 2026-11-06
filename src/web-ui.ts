@@ -1036,6 +1036,14 @@ body.task-running .dsh-sysRow.sys-planning .markdown::after {
 .model-item .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-item .ck { flex: none; visibility: hidden; font-weight: 700; }
 .model-item.on .ck { visibility: visible; }
+.model-pinbtn {
+  flex: none; width: 18px; height: 18px; padding: 0; margin-left: 2px; line-height: 15px;
+  border: 1px solid var(--line2); border-radius: 50%; background: var(--bg); color: var(--tx3);
+  font-size: 12px; text-align: center; cursor: pointer; opacity: .5;
+}
+.model-pinbtn:hover { opacity: 1; color: var(--tx); }
+.model-pinbtn.add { opacity: .28; }
+.model-item:hover .model-pinbtn { opacity: .9; }
 .model-empty { padding: 14px; color: var(--tx3); font-size: 12px; text-align: center; }
 .model-search { padding: 7px 8px; position: sticky; top: 0; z-index: 1; background: var(--bg2); }
 .model-search input { width: 100%; box-sizing: border-box; border: 1px solid var(--line2); border-radius: 7px; padding: 8px 10px; background: var(--bg); color: var(--tx); font: inherit; outline: none; }
@@ -2499,9 +2507,21 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
                 </button>
                 <input type="file" id="file-input" multiple style="display:none" />
                 <button class="mini-btn" id="btn-run-config" title="运行配置：执行子智能体 / 节点与工作区 / 连接器 / 技能 / 模型">🎛 运行配置</button>
+                <div class="model-picker" id="perm-picker">
+                  <button class="mini-btn perm-btn" id="chat-perm-btn" title="运行权限（沙箱 / 审批）" style="display:none">🛡 权限</button>
+                  <div class="model-pop" id="chat-perm-pop"></div>
+                </div>
               </div>
               <div class="trailing">
                 <span class="model-status" id="model-status"></span>
+                <div class="model-picker" id="effort-picker">
+                  <button class="cfg-sel model-btn effort-btn" id="chat-effort-btn" title="模型推理强度（点选即生效）" style="display:none">⚡ 强度</button>
+                  <div class="model-pop" id="chat-effort-pop"></div>
+                </div>
+                <div class="model-picker" id="preset-picker">
+                  <button class="cfg-sel model-btn preset-btn" id="chat-preset-btn" title="Agent 模式预设（点选即生效）" style="display:none">🧩 预设</button>
+                  <div class="model-pop" id="chat-preset-pop"></div>
+                </div>
                 <div class="model-picker" id="model-picker">
                   <button class="cfg-sel model-btn" id="chat-model-btn" title="主调度模型 + 执行会话模型（点选即生效）">⚙ 主调度默认模型</button>
                   <div class="model-pop" id="model-pop"></div>
@@ -5039,7 +5059,7 @@ if (navMoreBtn && navMore) {
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     var anyPop = false;
-    ['model-pop', 'main-agent-pop'].forEach(function (id) {
+    ['model-pop', 'main-agent-pop', 'chat-effort-pop', 'chat-preset-pop', 'chat-perm-pop'].forEach(function (id) {
       var el = document.getElementById(id);
       if (el && el.classList.contains('on')) { el.classList.remove('on'); anyPop = true; }
     });
@@ -7895,7 +7915,7 @@ async function send() {
     // 草稿 / 欢迎页的首条消息：POST /tasks 带 message 一次完成「创建 + 发送」（P2-2），
     // 之后项目与节点锁定在任务上。创建失败（或并发点击）时回填输入框，错误已由创建流程 toast。
     if (document.body.classList.contains('task-running') || draftCreating) return;
-    if (!state.draft) state.draft = { place: defaultDraftPlace(), model: (state.taskEnv && state.taskEnv.model) || '', agentPreset: '', reasoningEffort: '' };
+    if (!state.draft) { const seed = draftSeedModel(); state.draft = { place: defaultDraftPlace(), model: seed.model, agentPreset: seed.agentPreset, reasoningEffort: seed.reasoningEffort }; }
     $('input').value = '';
     const createdId = await commitDraft(text);
     if (!createdId) {
@@ -8013,6 +8033,7 @@ function renderCollabState() {
       ? '运行权限：' + p.preset + (p.sandbox ? ' · sandbox=' + p.sandbox : '') + (p.approval ? ' · approval=' + p.approval : '')
       : '运行权限（沙箱 / 审批）';
   }
+  if (typeof refreshCfgBtns === 'function') refreshCfgBtns(); // composer 权限/强度/预设按钮与 collab 状态同步
 }
 
 $('btn-goal').addEventListener('click', openGoalDialog);
@@ -9260,7 +9281,7 @@ function taskExecNodeId(task) {
 }
 /** 执行节点与已加载目录的节点不一致时重拉模型目录（打开任务 / 首屏节点就绪后调用） */
 function reloadCatalogIfExecNodeChanged() {
-  if (modelState.loaded && modelState.loadedForNode !== taskExecNodeId(currentTaskObj())) loadPlannerOptions();
+  if (modelState.loaded && !modelCatalogCurrent()) loadPlannerOptions();
 }
 /**
  * 会话头部节点选择器回显「该会话实际执行节点」。
@@ -9798,8 +9819,14 @@ async function selectMainAgent(agentId) {
 // ---------- 主调度模型选择（自定义弹层：原生 select 的移动端全屏弹窗字大折行且样式失控） ----------
 // curEffort/curPreset：当前执行会话的推理强度与模式预设（任务内才有意义；打开会话时回读回显）
 // cur = 当前任务的任务级模型（空 = 跟随默认）；globalDefault = 全局默认模型（settings.planner.model，只在设置页改）
-const modelState = { groups: {}, cur: '', globalDefault: '', loaded: false, loading: false, error: '', query: '', recent: [], presets: [], curEffort: '', curPreset: '', presetsLoaded: false, loadedForNode: '', presetsForNode: '' };
+const modelState = { groups: {}, cur: '', globalDefault: '', loaded: false, loading: false, error: '', query: '', recent: [], pinnedExtra: [], pinnedHidden: [], modelCfg: {}, lastModel: { model: '', effort: '', preset: '' }, presets: [], curEffort: '', curPreset: '', presetsLoaded: false, loadedForNode: '', loadedForTask: '', presetsForNode: '' };
 try { modelState.recent = JSON.parse(localStorage.getItem('wb-recent-models') || '[]').filter(x => typeof x === 'string'); } catch (e) { modelState.recent = []; }
+// 「常用与默认」手动固定/已移除清单（wb-pinned-extra / wb-pinned-hidden）：× 移除后不再自动回置顶
+try { modelState.pinnedExtra = JSON.parse(localStorage.getItem('wb-pinned-extra') || '[]').filter(x => typeof x === 'string'); } catch (e) { modelState.pinnedExtra = []; }
+try { modelState.pinnedHidden = JSON.parse(localStorage.getItem('wb-pinned-hidden') || '[]').filter(x => typeof x === 'string'); } catch (e) { modelState.pinnedHidden = []; }
+// 每个模型记住的推理等级/模式预设（wb-model-config）+ 最近一次使用的整套配置（wb-last-model）
+try { const cfg = JSON.parse(localStorage.getItem('wb-model-config') || '{}'); if (cfg && typeof cfg === 'object') modelState.modelCfg = cfg; } catch (e) { modelState.modelCfg = {}; }
+try { const lm = JSON.parse(localStorage.getItem('wb-last-model') || 'null'); if (lm && typeof lm === 'object' && typeof lm.model === 'string') modelState.lastModel = { model: lm.model, effort: typeof lm.effort === 'string' ? lm.effort : '', preset: typeof lm.preset === 'string' ? lm.preset : '' }; } catch (e) { modelState.lastModel = { model: '', effort: '', preset: '' }; }
 function modelBtnTitle() { return '本任务模型（只影响当前任务的主会话；全局默认模型在设置页修改）'; }
 function curModelEntry() {
   if (!modelState.cur) return null;
@@ -9813,13 +9840,71 @@ function effortName(id) {
   const e = (curModelEntry()?.reasoning?.efforts || []).find(x => x.id === id);
   return e ? (e.name || e.id) : (id || '');
 }
+/** 每个模型记住的推理等级/模式预设（wb-model-config）：换回该模型自动带出，不必重设 */
+function rememberedModelCfg(v) {
+  if (!v) return null;
+  const c = modelState.modelCfg[v];
+  return c && typeof c === 'object' ? { effort: typeof c.effort === 'string' ? c.effort : '', preset: typeof c.preset === 'string' ? c.preset : '' } : null;
+}
+function applyRememberedCfg(v) {
+  const c = rememberedModelCfg(v);
+  modelState.curEffort = (c && c.effort) || '';
+  modelState.curPreset = (c && c.preset) || '';
+  refreshCfgBtns();
+}
+function saveModelCfg(v) {
+  if (!v) return;
+  modelState.modelCfg[v] = { effort: modelState.curEffort || '', preset: modelState.curPreset || '' };
+  try { localStorage.setItem('wb-model-config', JSON.stringify(modelState.modelCfg)); } catch (e) { /* ignore */ }
+}
+/** 最近一次使用的整套模型配置（wb-last-model）：新建任务默认带出，不用每个任务重设 */
+function saveLastModel() {
+  modelState.lastModel = { model: modelState.cur || '', effort: modelState.curEffort || '', preset: modelState.curPreset || '' };
+  try { localStorage.setItem('wb-last-model', JSON.stringify(modelState.lastModel)); } catch (e) { /* ignore */ }
+}
+function persistPinSets() {
+  try { localStorage.setItem('wb-pinned-extra', JSON.stringify(modelState.pinnedExtra)); } catch (e) { /* ignore */ }
+  try { localStorage.setItem('wb-pinned-hidden', JSON.stringify(modelState.pinnedHidden)); } catch (e) { /* ignore */ }
+}
+/** 「常用与默认」＋固定 / ×移除：只影响置顶分组，不改任务模型与全局默认 */
+function pinModel(v) {
+  if (!v) return;
+  modelState.pinnedHidden = modelState.pinnedHidden.filter(x => x !== v);
+  if (modelState.pinnedExtra.indexOf(v) < 0) modelState.pinnedExtra = [v].concat(modelState.pinnedExtra);
+  if (modelState.recent.indexOf(v) < 0) modelState.recent = [v].concat(modelState.recent).slice(0, 6);
+  persistPinSets();
+  try { localStorage.setItem('wb-recent-models', JSON.stringify(modelState.recent)); } catch (e) { /* ignore */ }
+  refreshModelList();
+}
+function unpinModel(v) {
+  if (!v) return;
+  modelState.pinnedExtra = modelState.pinnedExtra.filter(x => x !== v);
+  modelState.recent = modelState.recent.filter(x => x !== v);
+  if (modelState.pinnedHidden.indexOf(v) < 0) modelState.pinnedHidden = [v].concat(modelState.pinnedHidden);
+  persistPinSets();
+  try { localStorage.setItem('wb-recent-models', JSON.stringify(modelState.recent)); } catch (e) { /* ignore */ }
+  refreshModelList();
+}
+/** 新任务草稿的模型配置种子：本次显式选择 > 最近一次使用（localStorage，跨刷新记住） */
+function draftSeedModel() {
+  const envM = state.taskEnv && typeof state.taskEnv.model === 'string' ? state.taskEnv.model : null;
+  const model = envM !== null ? envM : (modelState.lastModel.model || '');
+  const cfg = rememberedModelCfg(model);
+  if (cfg) return { model: model, agentPreset: cfg.preset, reasoningEffort: cfg.effort };
+  if (model && model === modelState.lastModel.model) return { model: model, agentPreset: modelState.lastModel.preset || '', reasoningEffort: modelState.lastModel.effort || '' };
+  return { model: model, agentPreset: '', reasoningEffort: '' };
+}
 /** 「跟随默认」时实际使用的模型名：全局默认模型，未设置则为节点默认 */
 function followDefaultName() {
   return modelState.globalDefault || '节点默认';
 }
-/** 当前任务的任务级模型（空 = 跟随默认）；无当前任务时取新任务环境里选好的模型 */
+/** 当前任务的任务级模型（空 = 跟随默认）；无当前任务时取新任务环境里选好的模型（没选过则取最近一次使用的模型） */
 function currentTaskModelChoice() {
-  if (!state.currentTaskId) return state.draft ? (state.draft.model || '') : ((state.taskEnv && state.taskEnv.model) || '');
+  if (!state.currentTaskId) {
+    if (state.draft) return state.draft.model || '';
+    if (state.taskEnv && typeof state.taskEnv.model === 'string') return state.taskEnv.model;
+    return modelState.lastModel.model || '';
+  }
   const t = state.taskCache.get(state.currentTaskId) || state.tasks.find(function (x) { return x.id === state.currentTaskId; });
   return (t && t.model) || '';
 }
@@ -9840,14 +9925,20 @@ function modelListHtml() {
     const mismatchNote = Object.keys(modelState.groups).length ? '（已保存 · 当前节点目录不存在）' : '（已保存）';
     html += '<div class="model-item on" data-v="' + esc(cur) + '" style="color:var(--warn)"><span class="n">' + esc(cur + mismatchNote) + '</span><span class="ck">✓</span></div>';
   }
-  const allModels = [];
-  for (const pv of Object.keys(modelState.groups)) for (const m of modelState.groups[pv]) allModels.push({ provider: pv, model: m, value: pv + '/' + m.id });
-  const rank = x => x.model.isDefault ? 0 : x.value === cur ? 1 : modelState.recent.includes(x.value) ? 2 + modelState.recent.indexOf(x.value) : 100;
-  const shownModels = allModels.filter(x => !query || (x.provider + ' ' + x.model.id).toLowerCase().includes(query)).sort((a, b) => rank(a) - rank(b) || a.provider.localeCompare(b.provider) || a.model.id.localeCompare(b.model.id));
+  const seen = {}; const allModels = [];
+  for (const pv of Object.keys(modelState.groups)) for (const m of modelState.groups[pv]) {
+    const mv = pv + '/' + m.id;
+    if (seen[mv]) continue; // 目录里同一模型重复登记只展示一次（曾导致置顶分组出现双行）
+    seen[mv] = 1;
+    allModels.push({ provider: pv, model: m, value: mv });
+  }
+  const pinRank = x => x.model.isDefault ? 0 : x.value === cur ? 1 : modelState.pinnedExtra.indexOf(x.value) >= 0 ? 2 : modelState.recent.indexOf(x.value) >= 0 ? 3 + modelState.recent.indexOf(x.value) : 100;
+  const isPinned = x => pinRank(x) < 100 && modelState.pinnedHidden.indexOf(x.value) < 0;
+  const shownModels = allModels.filter(x => !query || (x.provider + ' ' + x.model.id).toLowerCase().includes(query)).sort((a, b) => pinRank(a) - pinRank(b) || a.provider.localeCompare(b.provider) || a.model.id.localeCompare(b.model.id));
   const buckets = [];
-  const pinned = shownModels.filter(x => rank(x) < 100);
-  if (pinned.length) buckets.push({ title: '常用与默认', items: pinned });
-  for (const x of shownModels.filter(x => rank(x) >= 100)) {
+  const pinned = shownModels.filter(isPinned);
+  if (pinned.length) buckets.push({ title: '常用与默认', items: pinned, pinGroup: true });
+  for (const x of shownModels.filter(x => !isPinned(x))) {
     let group = buckets.find(g => g.title === x.provider);
     if (!group) { group = { title: x.provider, items: [] }; buckets.push(group); }
     group.items.push(x);
@@ -9856,7 +9947,11 @@ function modelListHtml() {
     html += '<div class="model-group">' + esc(group.title) + '</div>';
     for (const x of group.items) {
       const m = x.model; const v = x.value;
-      html += '<div class="model-item' + (v === cur ? ' on' : '') + '" data-v="' + esc(v) + '"><span class="n">' + esc(m.id + (m.isDefault ? ' ★ 默认' : '')) + '</span><span class="ck">✓</span></div>';
+      // 置顶分组行带 × 移除；其余行带 ＋ 固定（只影响「常用与默认」分组，不改变任务/全局默认模型）
+      const pin = group.pinGroup
+        ? '<button type="button" class="model-pinbtn" data-unpin="' + esc(v) + '" title="从「常用与默认」移除">×</button>'
+        : '<button type="button" class="model-pinbtn add" data-pin="' + esc(v) + '" title="固定到「常用与默认」">＋</button>';
+      html += '<div class="model-item' + (v === cur ? ' on' : '') + '" data-v="' + esc(v) + '"><span class="n">' + esc(m.id + (m.isDefault ? ' ★ 默认' : '')) + '</span>' + pin + '<span class="ck">✓</span></div>';
     }
   }
   if (!allModels.length) {
@@ -9869,6 +9964,8 @@ function modelListHtml() {
 /** 清单区行点击绑定（整体渲染与增量刷新共用） */
 function wireModelList(pop) {
   pop.querySelectorAll('#model-list .model-item').forEach(it => it.addEventListener('click', () => selectModel(it.dataset.v)));
+  pop.querySelectorAll('#model-list [data-unpin]').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); unpinModel(b.dataset.unpin); }));
+  pop.querySelectorAll('#model-list [data-pin]').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); pinModel(b.dataset.pin); }));
   const retry = pop.querySelector('#model-list [data-model-retry]');
   if (retry) retry.addEventListener('click', function () { loadPlannerOptions(true); });
 }
@@ -9888,27 +9985,8 @@ function renderModelPop() {
   html += '<div class="model-item' + (!cur ? ' on' : '') + '" data-v=""><span class="n">跟随默认（' + esc(followDefaultName()) + '）</span><span class="ck">✓</span></div>';
   html += '<div class="model-search"><input id="model-search-input" type="search" placeholder="搜索模型或提供商" value="' + esc(modelState.query) + '" aria-label="搜索模型"></div>';
   html += '<div id="model-list">' + modelListHtml() + '</div>';
-  // 推理等级：仅当前选中模型配置了 efforts 才渲染（模型没配 = 不支持强度切换，整个入口不出现）
-  const draftMode = !state.currentTaskId && !!state.draft;
-  const efforts = (curModelEntry()?.reasoning?.efforts) || [];
-  if ((state.currentTaskId || draftMode) && efforts.length) {
-    html += '<div class="model-group">推理等级</div>';
-    if (modelState.curEffort && !efforts.some(e => e.id === modelState.curEffort)) {
-      html += '<div class="model-item on" data-effort="' + esc(modelState.curEffort) + '"><span class="n">' + esc(modelState.curEffort + '（已保存）') + '</span><span class="ck">✓</span></div>';
-    }
-    for (const e of efforts) {
-      html += '<div class="model-item' + (e.id === modelState.curEffort ? ' on' : '') + '" data-effort="' + esc(e.id) + '" title="' + esc(e.description || '') + '"><span class="n">' + esc(e.name || e.id) + '</span><span class="ck">✓</span></div>';
-    }
-  }
-  // 模式预设：任务节点远端 /presets 候选（拉取失败或为空 = 不渲染，对旧节点完全兼容）；
-  // 草稿态同享：候选按草稿节点拉（loadDraftPresets），选择随创建下发为任务级 agentPreset
-  if ((state.currentTaskId || draftMode) && modelState.presetsLoaded && modelState.presets.length) {
-    html += '<div class="model-group">模式预设</div>';
-    html += '<div class="model-item' + (!modelState.curPreset ? ' on' : '') + '" data-preset=""><span class="n">跟随实体默认</span><span class="ck">✓</span></div>';
-    for (const pr of modelState.presets) {
-      html += '<div class="model-item' + (pr.id === modelState.curPreset ? ' on' : '') + '" data-preset="' + esc(pr.id) + '" title="' + esc(pr.description || '') + '"><span class="n">' + esc(pr.name || pr.id) + '</span><span class="ck">✓</span></div>';
-    }
-  }
+  // 推理等级 / 模式预设已拆为 composer 上的独立入口（chat-effort-btn / chat-preset-btn），
+  // 模型弹层只做纯模型选择（搜索 / 置顶 / 常用逻辑保留）。
   pop.innerHTML = html;
   const searchInput = pop.querySelector('#model-search-input');
   if (searchInput) searchInput.addEventListener('input', function () {
@@ -9917,18 +9995,164 @@ function renderModelPop() {
   });
   pop.querySelectorAll('.model-item').forEach(it => {
     if (it.closest('#model-list')) return; // 清单区行由 wireModelList 绑定
-    if (it.dataset.effort !== undefined) it.addEventListener('click', () => selectEffort(it.dataset.effort));
-    else if (it.dataset.preset !== undefined) it.addEventListener('click', () => selectPreset(it.dataset.preset));
-    else it.addEventListener('click', () => selectModel(it.dataset.v));
+    it.addEventListener('click', () => selectModel(it.dataset.v));
   });
   wireModelList(pop);
 }
+// ---------- composer 独立配置入口：推理强度 / Agent 预设 / 运行权限 ----------
+// 参照 DSH 输入区交互：这三个配置从模型弹层与「运行配置」深处提为一级按钮，点开各自小弹层；
+// 模型弹层只留纯模型列表。状态仍复用 modelState（curEffort / curPreset）与 collab.permission。
+
+/** 运行权限短名（弹层行与按钮上显示；完整说明用 PERM_LABEL） */
+var PERM_SHORT = {
+  'read-only': '仅可查看',
+  'workspace-write': '工作区内修改',
+  'danger-full-access': '完全权限',
+};
+function permShortName(id) { return PERM_SHORT[id] || PERM_LABEL[id] || id || ''; }
+
+/** 强度/预设按钮何时可见：有任务或草稿，且对应候选非空（模型没配 efforts / 节点没下发 presets = 不出现） */
+function cfgBtnsApplicable() { return !!state.currentTaskId || !!state.draft; }
+function curEfforts() { return (curModelEntry() && curModelEntry().reasoning && curModelEntry().reasoning.efforts) || []; }
+
+/** 就地刷新三个按钮的文案与可见性（模型目录/预设候选/会话回读/切换后都调） */
+function refreshCfgBtns() {
+  const effortBtn = $('chat-effort-btn');
+  if (effortBtn) {
+    const efforts = curEfforts();
+    const show = cfgBtnsApplicable() && efforts.length > 0;
+    effortBtn.style.display = show ? '' : 'none';
+    if (show) {
+      const hit = efforts.find(e => e.id === modelState.curEffort);
+      effortBtn.textContent = '⚡ ' + (hit ? (hit.name || hit.id) : '强度');
+      effortBtn.title = '模型推理强度（当前：' + (hit ? (hit.name || hit.id) : '跟随默认') + '，点选即生效）';
+    }
+  }
+  const presetBtn = $('chat-preset-btn');
+  if (presetBtn) {
+    const show = cfgBtnsApplicable() && modelState.presetsLoaded && modelState.presets.length > 0;
+    presetBtn.style.display = show ? '' : 'none';
+    if (show) {
+      const hit = modelState.presets.find(p => p.id === modelState.curPreset);
+      presetBtn.textContent = '🧩 ' + (hit ? (hit.name || hit.id) : '预设');
+      presetBtn.title = 'Agent 模式预设（当前：' + (hit ? (hit.name || hit.id) : '跟随实体默认') + '，点选即生效）';
+    }
+  }
+  const permBtn = $('chat-perm-btn');
+  if (permBtn) {
+    // 运行权限只对已建立的任务会话有意义：草稿态隐藏（沿用原 btn-permission 的可见性口径）
+    const show = !!state.currentTaskId && collab.permSupported !== false;
+    permBtn.style.display = show ? '' : 'none';
+    const p = collab.permission;
+    if (show) permBtn.textContent = '🛡 ' + ((p && p.preset) ? permShortName(p.preset) : '权限');
+  }
+}
+function closeCfgPops(exceptId) {
+  ['chat-effort-pop', 'chat-preset-pop', 'chat-perm-pop'].forEach(function (id) {
+    if (id === exceptId) return;
+    const el = document.getElementById(id);
+    if (el) el.classList.remove('on');
+  });
+}
+function toggleCfgPop(popId, renderFn) {
+  const pop = document.getElementById(popId);
+  if (!pop) return;
+  if (pop.classList.contains('on')) { pop.classList.remove('on'); return; }
+  closeModelPop();
+  closeMainAgentPop();
+  closeCfgPops(popId);
+  renderFn();
+  pop.classList.add('on');
+}
+/** 推理强度弹层：跟随默认 + 当前模型 efforts 档位（模型没配 = 按钮不出现，进不来） */
+function renderEffortPop() {
+  const pop = $('chat-effort-pop');
+  if (!pop) return;
+  const efforts = curEfforts();
+  let html = '<div class="model-pop-head"><span>推理强度</span><span>' + esc(String(modelState.cur || '跟随默认').split('/').pop()) + '</span></div>';
+  html += '<div class="model-item' + (!modelState.curEffort ? ' on' : '') + '" data-effort=""><span class="n">跟随默认</span><span class="ck">✓</span></div>';
+  if (modelState.curEffort && !efforts.some(e => e.id === modelState.curEffort)) {
+    html += '<div class="model-item on" data-effort="' + esc(modelState.curEffort) + '"><span class="n">' + esc(modelState.curEffort + '（已保存）') + '</span><span class="ck">✓</span></div>';
+  }
+  for (const e of efforts) {
+    html += '<div class="model-item' + (e.id === modelState.curEffort ? ' on' : '') + '" data-effort="' + esc(e.id) + '" title="' + esc(e.description || '') + '"><span class="n">' + esc(e.name || e.id) + '</span><span class="ck">✓</span></div>';
+  }
+  pop.innerHTML = html;
+  pop.querySelectorAll('.model-item').forEach(it => it.addEventListener('click', () => { pop.classList.remove('on'); selectEffort(it.dataset.effort); }));
+}
+/** Agent 模式预设弹层：跟随实体默认 + 任务节点远端 presets 候选 */
+function renderPresetPop() {
+  const pop = $('chat-preset-pop');
+  if (!pop) return;
+  let html = '<div class="model-pop-head"><span>Agent 预设</span><span>模式预设 · 只影响主会话</span></div>';
+  html += '<div class="model-item' + (!modelState.curPreset ? ' on' : '') + '" data-preset=""><span class="n">跟随实体默认</span><span class="ck">✓</span></div>';
+  for (const pr of modelState.presets) {
+    html += '<div class="model-item' + (pr.id === modelState.curPreset ? ' on' : '') + '" data-preset="' + esc(pr.id) + '" title="' + esc(pr.description || '') + '"><span class="n">' + esc(pr.name || pr.id) + '</span><span class="ck">✓</span></div>';
+  }
+  pop.innerHTML = html;
+  pop.querySelectorAll('.model-item').forEach(it => it.addEventListener('click', () => { pop.classList.remove('on'); selectPreset(it.dataset.preset); }));
+}
+/** 运行权限弹层：打开时先拉 /tasks/:id/permission（harness permissionPresets），失败提示且不渲染 */
+async function renderPermPop() {
+  const pop = $('chat-perm-pop');
+  if (!pop) return;
+  const taskId = state.currentTaskId;
+  if (!taskId) return;
+  pop.innerHTML = '<div class="model-empty">正在读取运行权限…</div>';
+  const r = await api('/tasks/' + taskId + '/permission');
+  if (!r.ok || state.currentTaskId !== taskId) {
+    if (r && r.supported === false) { collab.permSupported = false; refreshCfgBtns(); }
+    pop.innerHTML = '<div class="model-empty" style="color:var(--err);font-size:11.5px">' + esc((r && r.error) || '读取运行权限失败') + '</div>';
+    return;
+  }
+  const d = r.data || {};
+  collab.permission = d;
+  const avail = Array.isArray(d.available) && d.available.length ? d.available : ['read-only', 'workspace-write', 'danger-full-access'];
+  const cur = d.preset || '';
+  let html = '<div class="model-pop-head"><span>运行权限</span><span>沙箱 / 审批 · 即时下发</span></div>';
+  for (const id of avail) {
+    html += '<div class="model-item' + (id === cur ? ' on' : '') + '" data-perm="' + esc(id) + '" title="' + esc(PERM_LABEL[id] || id) + '"><span class="n">' + esc(permShortName(id)) + '</span><span class="ck">✓</span></div>';
+  }
+  pop.innerHTML = html;
+  pop.querySelectorAll('.model-item').forEach(it => it.addEventListener('click', () => { pop.classList.remove('on'); applyPermissionQuick(it.dataset.perm); }));
+}
+/** 权限快捷切换（composer 弹层用）：单选即应用，成功后刷新按钮文案与 collab 状态 */
+async function applyPermissionQuick(preset) {
+  const taskId = state.currentTaskId;
+  if (!taskId || !preset) return;
+  const r = await api('/tasks/' + taskId + '/permission', { method: 'PUT', body: JSON.stringify({ permission: preset }) });
+  if (!r.ok) { toast(r.error || '权限切换失败', true); return; }
+  const applied = (r.data && r.data.applied) || [];
+  const failed = applied.filter(function (x) { return !x.ok; });
+  if (collab.permission) collab.permission.preset = preset;
+  refreshCfgBtns();
+  if (failed.length) {
+    toast('⚠️ 部分会话权限未生效：' + failed.map(function (x) { return (x.agentId || '?') + ' ' + (x.error || ''); }).join('；'), true);
+  } else {
+    setModelStatus('✓ 运行权限已切到「' + permShortName(preset) + '」');
+  }
+  refreshCollab();
+}
+const chatEffortBtn = $('chat-effort-btn');
+if (chatEffortBtn) chatEffortBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleCfgPop('chat-effort-pop', renderEffortPop); });
+const chatPresetBtn = $('chat-preset-btn');
+if (chatPresetBtn) chatPresetBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleCfgPop('chat-preset-pop', renderPresetPop); });
+const chatPermBtn = $('chat-perm-btn');
+if (chatPermBtn) chatPermBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleCfgPop('chat-perm-pop', renderPermPop); });
+document.addEventListener('click', (e) => {
+  [['chat-effort-pop', 'chat-effort-btn'], ['chat-preset-pop', 'chat-preset-btn'], ['chat-perm-pop', 'chat-perm-btn']].forEach(function (pair) {
+    const pop = document.getElementById(pair[0]);
+    const btn = document.getElementById(pair[1]);
+    if (pop && pop.classList.contains('on') && !pop.contains(e.target) && !(btn && (e.target === btn || btn.contains(e.target)))) {
+      pop.classList.remove('on');
+    }
+  });
+});
 async function loadPlannerOptions(force) {
   const modelBtn = $('chat-model-btn');
   const agentBtn = $('main-agent-btn');
   if (modelState.loading) return;
-  const nodeId = taskExecNodeId(currentTaskObj());
-  if (!force && modelState.loaded && modelState.loadedForNode === nodeId) return;
+  if (!force && modelState.loaded && modelCatalogCurrent()) return;
   modelState.loading = true;
   modelState.error = '';
   if ($('model-pop') && $('model-pop').classList.contains('on')) renderModelPop();
@@ -9951,8 +10175,14 @@ async function _loadPlannerOptionsInner(modelBtn, agentBtn) {
   // 模型目录跟随所选任务节点（?node=）：调度模型作用于任务节点的主会话，
   // 节点切换后目录必须换成该节点引擎的注册表（否则会把 A 引擎的模型配到 B 引擎上）
   // 节点 = 当前任务实际执行节点（项目 dshRef → task.nodeRef → 所选执行位置），见 taskExecNodeId
-  const catalogNode = taskExecNodeId(currentTaskObj());
-  const nodeQs = catalogNode ? '?node=' + encodeURIComponent(catalogNode) : '';
+  // 模型目录跟随所选任务节点：任务内带 taskId（服务端按任务/项目绑定节点权威解析，
+  // 前端猜节点在项目清单未加载时会回退到所选执行位置 → 目录错节点，真实缺陷 2026-11-06）；
+  // 欢迎页/草稿态无任务，仍按所选执行位置 node= 拉取
+  const taskIdQ = state.currentTaskId || '';
+  const catalogNode = taskIdQ ? '' : taskExecNodeId(null);
+  const nodeQs = taskIdQ
+    ? '?taskId=' + encodeURIComponent(taskIdQ)
+    : (catalogNode ? '?node=' + encodeURIComponent(catalogNode) : '');
   const r = await api('/planner/options' + nodeQs);
   if (!r.ok || !r.data) {
     modelState.error = r.error || '请求失败';
@@ -9983,11 +10213,13 @@ async function _loadPlannerOptionsInner(modelBtn, agentBtn) {
   // 2. 更新模型状态：planner.model 只是「全局默认模型」；按钮显示的是当前任务（或新任务环境）的任务级选择
   modelState.globalDefault = (d.current || {}).model || '';
   modelState.cur = currentTaskModelChoice();
+  if (!state.currentTaskId && !state.draft) applyRememberedCfg(modelState.cur); // 欢迎页按钮带出最近一次使用的整套配置
   modelState.groups = {};
   modelState.error = d.modelError || '';
   for (const m of d.models || []) { (modelState.groups[m.provider] = modelState.groups[m.provider] || []).push(m); }
   modelState.loaded = true;
-  modelState.loadedForNode = catalogNode;
+  modelState.loadedForNode = d.node || catalogNode;
+  modelState.loadedForTask = taskIdQ;
   if (modelBtn) {
     modelBtn.disabled = false;
     modelBtn.textContent = modelBtnLabel(modelState.cur);
@@ -9998,18 +10230,26 @@ async function _loadPlannerOptionsInner(modelBtn, agentBtn) {
   }
   // 服务端权威状态到位后，气泡模型标签与之一致（主智能体 = 列表选中模型）
   refreshMainAgentModelBadges();
-  modelState.loadedForNode = catalogNode;
+  refreshCfgBtns(); // 模型目录/节点到位后重估强度按钮可见性（跟随当前模型 efforts）
+}
+/** 目录缓存键是否与当前上下文一致：任务内按 taskId 对齐，欢迎页/草稿按执行位置节点对齐 */
+function modelCatalogCurrent() {
+  if (!modelState.loaded) return false;
+  if ((state.currentTaskId || '') !== modelState.loadedForTask) return false;
+  if (!state.currentTaskId && modelState.loadedForNode !== taskExecNodeId(null)) return false;
+  return true;
 }
 function closeModelPop() { $('model-pop').classList.remove('on'); }
 $('chat-model-btn').addEventListener('click', (e) => {
   e.stopPropagation();
   closeMainAgentPop();
+  closeCfgPops();
   const pop = $('model-pop');
   if (pop.classList.contains('on')) { closeModelPop(); return; }
   modelState.query = '';
   renderModelPop();
   pop.classList.add('on');
-  if (!modelState.loaded || modelState.loadedForNode !== taskExecNodeId(currentTaskObj())) loadPlannerOptions();
+  if (!modelCatalogCurrent()) loadPlannerOptions();
 });
 document.addEventListener('click', (e) => {
   const modelPop = $('model-pop');
@@ -10042,12 +10282,18 @@ async function selectModel(v) {
   if (v) {
     modelState.recent = [v].concat(modelState.recent.filter(x => x !== v)).slice(0, 6);
     try { localStorage.setItem('wb-recent-models', JSON.stringify(modelState.recent)); } catch (e) { /* ignore */ }
+    // 显式再使用 = 重新算「常用」：从已移除清单捞回置顶分组
+    if (modelState.pinnedHidden.indexOf(v) >= 0) { modelState.pinnedHidden = modelState.pinnedHidden.filter(x => x !== v); persistPinSets(); }
   }
-  // 切模型后原强度不再保证适用（远端 selectModel 未带 effort 会清掉），本地同步清零回默认
-  modelState.curEffort = '';
+  // 切模型后带出该模型记住的推理等级/模式预设（wb-model-config；无记忆 = 跟随默认）。
+  // 远端切模型本就会清强度，这里用记住值补投，做到「模型换回来，配置跟着回来」。
+  applyRememberedCfg(v);
+  if (v) saveModelCfg(v);
+  saveLastModel();
   const btn = $('chat-model-btn');
   btn.textContent = modelBtnLabel(v);
   closeModelPop();
+  refreshCfgBtns(); // 强度/预设按钮跟随新模型的记忆配置刷新
   const taskId = state.currentTaskId;
   if (!taskId) {
     state.taskEnv.model = v || '';
@@ -10084,6 +10330,10 @@ async function selectModel(v) {
   }
   const cached = state.taskCache.get(taskId);
   if (cached) { if (v) cached.model = v; else delete cached.model; }
+  // 该模型记住的推理等级/模式预设随后补投（远端切模型已清强度）；失败静默不影响主流程
+  const remember = rememberedModelCfg(v);
+  if (remember && remember.effort) { try { await api('/tasks/' + taskId + '/session-model', { method: 'PUT', body: JSON.stringify({ reasoningEffort: remember.effort }) }); } catch (e2) { /* ignore */ } }
+  if (remember && remember.preset) { try { await api('/tasks/' + taskId + '/session-preset', { method: 'PUT', body: JSON.stringify({ preset: remember.preset }) }); } catch (e3) { /* ignore */ } }
   const nodeDefault = (sr.ok && sr.data && sr.data.defaultModel && sr.data.defaultModel.model) || '';
   const actual = v ? modelId : (modelState.globalDefault || nodeDefault || '节点默认');
   flashBtnOk(btn, '✓ ' + (v ? '已切换「' + modelId + '」' : '已跟随默认「' + actual + '」'), modelBtnLabel(v));
@@ -10104,6 +10354,7 @@ async function loadSessionModelInfo() {
   modelState.curPreset = (sess && sess.agentPreset) || d.taskAgentPreset || '';
   const btn = $('chat-model-btn');
   if (btn) btn.textContent = modelBtnLabel(modelState.cur);
+  refreshCfgBtns();
   loadTaskPresets(taskId);
 }
 /** 任务节点模式预设候选（拉取失败 = 空列表，弹层不渲染预设段，对旧节点兼容） */
@@ -10114,6 +10365,7 @@ async function loadTaskPresets(taskId) {
   if (state.currentTaskId !== tid) return; // 旧会话的预设响应丢弃
   modelState.presets = (r.ok && r.data && r.data.presets) || [];
   modelState.presetsLoaded = true;
+  refreshCfgBtns(); // 预设候选就绪后按钮才出现
   const pop = $('model-pop');
   if (pop && pop.classList.contains('on')) renderModelPop();
 }
@@ -10130,15 +10382,19 @@ async function loadDraftPresets() {
   modelState.presets = (r.ok && r.data && r.data.presets) || [];
   modelState.presetsForNode = mid;
   modelState.presetsLoaded = true;
+  refreshCfgBtns(); // 预设候选就绪后按钮才出现
   const pop = $('model-pop');
   if (pop && pop.classList.contains('on')) renderModelPop();
 }
 /** 推理等级切换：单独传 reasoningEffort，远端与会话当前模型合并（dsh-web-service ≥ 本版） */
 async function selectEffort(id) {
   modelState.curEffort = id;
+  if (modelState.cur) { saveModelCfg(modelState.cur); saveLastModel(); } // 记住该模型的推理等级；新任务默认沿用
   const btn = $('chat-model-btn');
   btn.textContent = modelBtnLabel(modelState.cur);
   closeModelPop();
+  closeCfgPops();
+  refreshCfgBtns();
   // 草稿态：记进草稿，随创建请求体下发为任务级 reasoningEffort（无会话可即时生效）
   if (!state.currentTaskId) {
     if (state.draft) state.draft.reasoningEffort = id;
@@ -10162,9 +10418,12 @@ async function selectEffort(id) {
 /** 模式预设切换：任务级持久化（新会话必生效）+ 尽力对当前会话即时生效（applied=false 时提示） */
 async function selectPreset(id) {
   modelState.curPreset = id;
+  if (modelState.cur) { saveModelCfg(modelState.cur); saveLastModel(); } // 记住该模型的模式预设；新任务默认沿用
   const btn = $('chat-model-btn');
   btn.textContent = modelBtnLabel(modelState.cur);
   closeModelPop();
+  closeCfgPops();
+  refreshCfgBtns();
   // 草稿态：记进草稿，随创建请求体下发为任务级 agentPreset（建会话时优先于实体默认 cordis）
   if (!state.currentTaskId) {
     if (state.draft) state.draft.agentPreset = id;
@@ -10570,12 +10829,13 @@ function rememberPlace(place) {
 function startDraft(place) {
   const inDraft = !!state.draft && !state.currentTaskId;
   const p = defaultDraftPlace(place || (inDraft ? state.draft.place : null));
+  const seed = inDraft ? null : draftSeedModel();
   state.draft = {
     place: p,
-    model: inDraft ? (state.draft.model || '') : ((state.taskEnv && state.taskEnv.model) || ''),
-    // 草稿级的模式预设/推理等级：已是草稿则保留用户已选，新开草稿从「跟随默认」起步
-    agentPreset: inDraft ? (state.draft.agentPreset || '') : '',
-    reasoningEffort: inDraft ? (state.draft.reasoningEffort || '') : '',
+    model: inDraft ? (state.draft.model || '') : (seed ? seed.model : ''),
+    // 草稿级的模式预设/推理等级：已是草稿则保留用户已选；新开草稿带出最近一次使用的整套模型配置（跨刷新记住），不必每个任务重设
+    agentPreset: inDraft ? (state.draft.agentPreset || '') : (seed ? seed.agentPreset : ''),
+    reasoningEffort: inDraft ? (state.draft.reasoningEffort || '') : (seed ? seed.reasoningEffort : ''),
   };
   if (state.currentTaskId) { state.currentTaskId = null; disconnectStream(); }
   closePlacePop();
@@ -11236,8 +11496,12 @@ function draftModelFallback() {
   if (known) return;
   const old = d.model;
   d.model = '';
+  d.agentPreset = '';
+  d.reasoningEffort = '';
   state.taskEnv.model = '';
   modelState.cur = '';
+  modelState.curEffort = '';
+  modelState.curPreset = '';
   const mb = $('chat-model-btn');
   if (mb) mb.textContent = modelBtnLabel('');
   renderModelPop();
@@ -11254,15 +11518,12 @@ async function onDraftPlaceChange(place) {
     await loadPlannerOptions();
     if (state.draft && !state.currentTaskId) {
       draftModelFallback();
-      // 预设/强度是节点候选集的产物：换节点后旧选择不保证存在，退回「跟随默认」并按新节点重拉候选
-      if (state.draft.agentPreset || state.draft.reasoningEffort) {
-        state.draft.agentPreset = '';
-        state.draft.reasoningEffort = '';
-        modelState.curPreset = '';
-        modelState.curEffort = '';
-        const mb = $('chat-model-btn');
-        if (mb) mb.textContent = modelBtnLabel(modelState.cur);
-      }
+      // 预设/强度是节点候选集的产物：换节点后按该模型记住的配置重新带出（无记忆 = 跟随默认），并按新节点重拉候选
+      applyRememberedCfg(state.draft.model || '');
+      state.draft.agentPreset = modelState.curPreset;
+      state.draft.reasoningEffort = modelState.curEffort;
+      const mb = $('chat-model-btn');
+      if (mb) mb.textContent = modelBtnLabel(modelState.cur);
       loadDraftPresets();
     }
   }
@@ -11330,7 +11591,7 @@ async function commitDraft(message) {
 }
 /** 兼容旧入口：直接从默认位置建任务（不经草稿页），返回任务 id */
 async function createNewTaskDirectly(message) {
-  if (!state.draft) state.draft = { place: defaultDraftPlace(), model: (state.taskEnv && state.taskEnv.model) || '', agentPreset: '', reasoningEffort: '' };
+  if (!state.draft) { const seed = draftSeedModel(); state.draft = { place: defaultDraftPlace(), model: seed.model, agentPreset: seed.agentPreset, reasoningEffort: seed.reasoningEffort }; }
   const id = await commitDraft(message || '');
   const input = $('input');
   if (input) input.focus();

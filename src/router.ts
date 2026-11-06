@@ -4563,12 +4563,36 @@ export class WorkBuddyRouter {
       // 模型目录应跟随所选任务节点（?node=<mappingId>），而不是主智能体所在节点：
       // 两个节点是不同引擎时注册表互不相通（DSH 的 zai-coding-cn 在 ZCode 节点不存在）
       const url = new URL(req.url || '/', 'http://localhost')
-      const nodeMappingId = (url.searchParams.get('node') || '').trim()
+      let nodeMappingId = (url.searchParams.get('node') || '').trim()
       let nodeSource: string | undefined
       let nodeError: string | undefined
       let modelsBaseUrl = picked.baseUrl
       let modelsApiKey = picked.apiKey
-      if (nodeMappingId) {
+      let nodeResolvedByTask = false
+      // taskId 权威模式：任务内的模型目录由服务端按任务/项目绑定节点解析（项目 dshRef 优先，
+      // 与 engine.taskExec 同口径）。前端自己猜节点（node=）会因项目清单未加载/权限过滤而回退到
+      // 所选执行位置，导致目录显示成另一个节点的引擎注册表（真实缺陷 2026-11-06：brain 项目
+      // 任务里弹出了公司笔记本的模型目录）。带 taskId 时 node= 仅作展示回显，不再作为数据源。
+      const taskIdQ = (url.searchParams.get('taskId') || '').trim()
+      if (taskIdQ) {
+        if (!this.taskForView(taskIdQ)) { this.sendJson(res, 404, { ok: false, error: 'Task not found' }); return true }
+        const task = this.store.getTask(taskIdQ)
+        const target = task
+          ? await this.engine.resolveExecTarget(task, '__node__').catch(() => undefined)
+          : undefined
+        if (target?.online && target.baseUrl) {
+          modelsBaseUrl = target.baseUrl
+          modelsApiKey = target.apiKey
+          nodeMappingId = (target as any).mappingId || nodeMappingId
+          const ep = nodeMappingId ? this.directory.resolveMapping(nodeMappingId) : undefined
+          nodeSource = ep?.appName || ep?.tunnelName || nodeMappingId || '直连节点'
+          nodeResolvedByTask = true
+        } else {
+          nodeError = (target as any)?.error || '任务节点不可达'
+          modelError = nodeError
+        }
+      }
+      if (nodeMappingId && !nodeResolvedByTask) {
         const ep = this.directory.resolveMapping(nodeMappingId)
         if (!ep || !ep.online || !ep.baseUrl) {
           nodeError = ep ? `映射「${ep.appName || ep.tunnelName || nodeMappingId}」当前离线` : `映射 ${nodeMappingId} 已不存在`
