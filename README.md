@@ -35,7 +35,8 @@ node dist/server.js --port 3081 \
   scrypt 哈希落盘；改密走 `POST /api/auth/password`），未登录访问控制台返回登录页、访问 API 返回 401，
   会话为 HttpOnly Cookie（7 天滑动过期），登录失败单 IP 限速；
 - 默认只监听 `127.0.0.1`；工具通道可用 `--token` 单独保护；公网暴露请套反代 + 认证；
-- 本地验证：`npm run smoke`（91 项断言，自带 mock ONENAT）；`npm run smoke:e2e` 追加真实派发端到端。
+- **停机语义**：SIGTERM / Ctrl+C 优雅停机会同步 `store.flush()` 兜底落盘，不丢数据；`kill -9`（SIGKILL）强杀无清理机会——写盘为异步尾随合并，可能丢失停机前最后几秒的尾部变更（`store.json` 经原子 rename 不会损坏，只丢尾）。不要用 `kill -9` 作为常规停机手段，详见 `docs/standalone-deploy.md` §5「停机与信号语义」；
+- 本地验证：`npm run smoke`（91 项断言，自带 mock ONENAT）；`npm run smoke:e2e` 追加真实派发端到端；`npm run test:models`（模型目录回归 23 用例）与 `npm run test:unit` 同为提交前门禁。
 
 完整部署说明（参数表 / 接口清单 / systemd / Docker / nginx / 安全边界）见
 [`docs/standalone-deploy.md`](docs/standalone-deploy.md)。

@@ -723,6 +723,13 @@ engine.startPendingAskSweeper()
       engine.stopBacklogWritebackRetrySweeper()
       directory.stopAutoRefresh()
       await new Promise<void>((done) => server.close(() => done()))
+      // 优雅退出兜底：同步落盘，消除 TRAILING_SAVE_MS 尾随合并/异步写盘未完成窗口的丢尾
+      // （SIGKILL 无此机会，属已知权衡：原子 rename 保证 store.json 不损坏，只丢尾）
+      try {
+        store.flush()
+      } catch (err) {
+        console.error('[onenat-workbuddy] Failed to flush store on shutdown:', err)
+      }
     },
   }
 }

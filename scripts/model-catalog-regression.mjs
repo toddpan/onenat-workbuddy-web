@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import { JSDOM } from 'jsdom'
 import { renderWebUi } from '../dist/web-ui.js'
 import { WorkBuddyRouter } from '../dist/router.js'
+import { AsyncLocalStorage } from 'node:async_hooks'
 
 const model = (provider) => ({ provider, id: 'model', name: `${provider} model`, isDefault: true, reasoning: { efforts: [{ id: 'high', name: 'High' }] } })
 const options = (node) => ({ ok: true, data: { models: [model(node)], current: {}, node, defaultModel: { provider: node, model: 'model' } } })
@@ -73,6 +74,9 @@ async function plannerOptions({ node = '', task = false, online = true, modelErr
     engine: { resolveExecTarget: async () => unboundTask ? undefined : target, taskExec: () => unboundTask ? {} : {dshRef:{kind:'mapping',mappingId:'selected'}} },
     taskForView: () => ({ id: 'task' }),
     client: { getModels: async target => { requested.push(target.baseUrl); credentials.push(target.apiKey); if (modelError) return { ok: false, error: modelError }; return { ok: true, models: [model(target.baseUrl.includes('selected') ? 'selected' : 'planner')], defaultModel: { provider: 'selected', model: 'model' } } } },
+    // dispatch() relies on this.requestContext (initialized by the real constructor);
+    // the prototype-based stub must provide an equivalent session context.
+    requestContext: new AsyncLocalStorage(),
   })
   const query = explicitQuery ?? (task ? '?taskId=task' : node ? `?node=${node}` : '')
   const res = { setHeader() {}, end(text) { payload = JSON.parse(text) } }
@@ -210,7 +214,9 @@ test('changing a project node within the same task invalidates the cached catalo
   const u = ui(() => { calls++; return options(calls === 1 ? 'node-a' : 'node-b') })
   try {
     u.state.currentTaskId = 'task'
-    u.state.taskCache.set('task', { id: 'task', projectId: 'project', nodeRef: {kind:'mapping',mappingId:'ignored'} })
+    // 与服务端 engine.taskExec 同口径：task.nodeRef 优先，缺省时跟随项目 dshRef。
+    // 本用例验证「任务未显式绑定节点时，项目换节点使目录缓存失效」。
+    u.state.taskCache.set('task', { id: 'task', projectId: 'project' })
     u.state.projects = [{ id: 'project', dshRef: {kind:'mapping',mappingId:'node-a'} }]
     await u.loadPlannerOptions()
     u.state.projects[0].dshRef.mappingId = 'node-b'

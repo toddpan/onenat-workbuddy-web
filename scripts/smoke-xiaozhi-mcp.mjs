@@ -325,13 +325,28 @@ async function main() {
   const waitMs = Date.now() - waitT0
   check('MCP 通道 wait 不阻塞（<3s，快照 + nextAction）', waitMs < 3000 && waitResp?.ok === true && typeof waitResp?.nextAction === 'string', `${waitMs}ms`)
 
-  // ⑤ 单帧上限兜底：超大结果 → 结构化「结果过大」（仍是合法 JSON，不让宿主拿到半截正文）
+  // ⑤ 降级契约（task-54）：超大结果 → ok:true + oversized:true + chatDownloadUrl（绝不报「结果过大」，正文不被截断）
   const bigCreate = jsonOf(await callTool('workbuddy_task_manage', {
     action: 'create', title: '超大结果回归', message: 'X'.repeat(120 * 1024), memberAgentIds: [agentId],
   }))
   const bigStatus = await callTool('workbuddy_task_status', { taskId: bigCreate?.taskId, detail: 'full' })
   const bigJson = jsonOf(bigStatus)
-  check('超大结果被单帧上限替换为结构化提示', bigJson?.truncated === true && bigStatus.result?.isError === true, textOf(bigStatus).slice(0, 120))
+  const bigText = textOf(bigStatus)
+  const fullContent = bigJson?.chatDownloadUrl
+    ? await (await fetch(bigJson.chatDownloadUrl)).text()
+    : ''
+  const fullJson = fullContent ? JSON.parse(fullContent) : null
+  check('超大结果降级为摘要 + chatDownloadUrl（新契约：oversized + ok:true + 下载 URL）',
+    bigJson?.ok === true && bigJson?.oversized === true && bigJson?.truncated === undefined
+      && typeof bigJson?.chatDownloadUrl === 'string' && /^https?:\/\//.test(bigJson.chatDownloadUrl)
+      && bigJson?.bytes > bigJson?.thresholdBytes,
+    `${bigJson?.bytes}B > ${bigJson?.thresholdBytes}B, url=${Boolean(bigJson?.chatDownloadUrl)}`)
+  check('chatDownloadUrl 可下载完整聊天内容且未被半截返回',
+    fullJson?.ok === true && Array.isArray(fullJson?.task?.turns) && fullJson?.task?.turns.length > 0,
+    `downloaded=${fullContent.length}B, turns=${fullJson?.task?.turns?.length}`)
+  check('降级后的 MCP 应答本身在单帧上限内（小回包，正文不随 detail 爆帧）',
+    bigText.length < 64 * 1024 && !bigText.includes('truncated'),
+    `response=${bigText.length}B (<64KB 单帧上限), fullDetail=${bigJson?.bytes}B 走下载`)
 
   // ⑥ task_status 默认摘要（窄通道不发全量轮次）
   const sumResp = await callTool('workbuddy_task_status', { taskId: createdTaskId })
