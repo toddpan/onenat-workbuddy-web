@@ -11,7 +11,7 @@ import type { IncomingMessage } from 'node:http'
 import { mkdir, writeFile, appendFile, stat, readFile, readdir, rm, rename } from 'node:fs/promises'
 import { join, posix, win32 } from 'node:path'
 import type { PromptResult, DshTarget } from './remote-client.js'
-import { DshClient } from './remote-client.js'
+import { DshClient, reconstructTurnFromHistory } from './remote-client.js'
 import { sameDshRef, dshRefKey } from './workspace.js'
 import { buildWorkspaceAccessSection, installWorkspaceAccessCli, isWorkspaceAccessCliPath, workspaceShellQuote } from './workspace-access.js'
 import type { AgentResolver } from './resolver.js'
@@ -608,7 +608,7 @@ export class TaskEngine {
   public recoverInterruptedTasks(): number {
     let n = 0
     for (const t of this.store.getTasks()) {
-      if (t.status !== 'running') continue
+      if (t.status !== 'running' || t.pendingAsk) continue
       this.store.mutateTask(t.id, (x) => {
         x.status = 'failed'
         for (const turn of x.turns) {
@@ -1039,6 +1039,7 @@ export class TaskEngine {
       if (task.status === 'running') {
         this.store.mutateTask(taskId, (t) => {
           t.status = 'cancelled'
+          delete t.pendingAsk
           // 将最后一个正在流式的 turn 结束
           for (const turn of t.turns) {
             if (turn.streaming) {
@@ -1478,7 +1479,7 @@ export class TaskEngine {
         })
         await this.runChatTurn(taskId, text, mentions, new Map<string, DshTarget>([[NODE_AGENT_ID, nodeTarget]]), signal, NODE_AGENT_ID, nodeAgent)
         const fresh = this.store.getTask(taskId)!
-        this.emit(taskId, { type: 'task_end', task: fresh })
+        if (!fresh.pendingAsk) this.emit(taskId, { type: 'task_end', task: fresh })
         return
       }
       // 兜底：任务未绑定节点（存量任务/未选择节点）→ 默认智能体身份在其自身节点执行（UI 已无主智能体入口）
@@ -1494,7 +1495,7 @@ export class TaskEngine {
         })
         await this.runChatTurn(taskId, text, mentions, targetsMap, signal, pAgent.id)
         const fresh = this.store.getTask(taskId)!
-        this.emit(taskId, { type: 'task_end', task: fresh })
+        if (!fresh.pendingAsk) this.emit(taskId, { type: 'task_end', task: fresh })
         return
       }
       // 默认智能体不可用 → 落到下方任务既有成员解析（仅存量任务会出现）
@@ -1585,7 +1586,7 @@ export class TaskEngine {
       await this.runOrchestrateTurn(taskId, text, mentions, targets, signal, { teamTurn: teamOrchestrate })
     }
     const fresh = this.store.getTask(taskId)!
-    this.emit(taskId, { type: 'task_end', task: fresh })
+    if (!fresh.pendingAsk) this.emit(taskId, { type: 'task_end', task: fresh })
   }
 
   /**
@@ -1951,11 +1952,11 @@ export class TaskEngine {
     }
 
     // ask 挂起终结（桥可见）：远端在等用户答复 —— 回合立即收尾（ask 工具保持 running 供答复卡/桥使用），
-    // 任务状态落 completed + pendingAsk 标记；用户回复将由 answerPendingAndResume 路由到答复桥。
+    // pendingAsk 是进行中任务的等待子态；仅释放本地派发，不宣布远端任务完成。
     if (askWatch.fired && !signal.aborted && askWatch.mode === 'bridge') {
       this.finalizeWaitingAskTurn(taskId, turn.id, agent)
-      this.store.mutateTask(taskId, (t) => { t.status = 'completed' })
-      this.emit(taskId, { type: 'task_status', status: 'completed' })
+      this.store.mutateTask(taskId, (t) => { t.status = 'running' })
+      this.emit(taskId, { type: 'task_status', status: 'running' })
       return
     }
     // ask 挂起终结（桥不可见）：批次未登记进 /questions（被浏览器应答器持走/归属失败/节点过旧），
@@ -2319,6 +2320,8 @@ export class TaskEngine {
   ): Promise<void> {
     const signal = opts?.signal
     const promptFragment = opts?.promptFragment
+    this.store.mutateTask(taskId, (t) => { t.status = 'running' })
+    this.emit(taskId, { type: 'task_status', status: 'running' })
     const turn: TaskTurn = {
       id: `turn-${randomUUID().slice(0, 8)}`,
       seq: 0,
@@ -2335,9 +2338,20 @@ export class TaskEngine {
     // 追踪上限与远端 prompt 超时同窗（30min）：真实无人/有人大任务恢复后可能继续跑工具数十分钟
     const deadline = Date.now() + 30 * 60_000
     let pendingAgain = false
-    let ran = false
+    let completed = false
+    let streamSeq = 0
+    // 答复桥不产生新 prompt-stream；持续回源历史并经本地 SSE 推送，长工具续跑也能自动接入聊天。
+    const syncHistory = async () => {
+      const hist = await this.client.getHistory(target, sessionId, 200).catch(() => undefined)
+      if (!hist?.ok || signal?.aborted) return
+      const text = reconstructTurnFromHistory(hist.messages || [], promptFragment ? turnFragment(promptFragment) : undefined).text
+      const previous = this.store.getTask(taskId)?.turns.find((t) => t.id === turn.id)?.text || ''
+      if (!text || text === previous) return
+      this.store.updateTurn(taskId, turn.id, (tt) => { tt.text = text })
+      if (text.startsWith(previous)) this.emit(taskId, { type: 'turn_delta', turnId: turn.id, delta: text.slice(previous.length), seq: streamSeq++ })
+    }
     while (Date.now() < deadline && !(signal?.aborted)) {
-      await new Promise((res) => setTimeout(res, 5_000))
+      await new Promise((res) => setTimeout(res, 1_000))
       if (signal?.aborted) break
       const pq2 = await this.client.listPendingQuestions(target, sessionId).catch(() => undefined)
       if (pq2?.ok && pq2.supported && (pq2.count || 0) > 0) {
@@ -2346,8 +2360,8 @@ export class TaskEngine {
       }
       const st = await this.client.getSession(target, sessionId).catch(() => undefined)
       if (!st?.ok) continue
-      if (st.status && st.status !== 'running') { ran = true; break }
-      ran = true
+      await syncHistory()
+      if (st.status && st.status !== 'running') { completed = true; break }
     }
 
     if (signal?.aborted) {
@@ -2382,8 +2396,8 @@ export class TaskEngine {
         t.pendingAsk = { agentId: agent.id, sessionId, batchId: pq3?.batches?.[0]?.batchId, questions, turnId: turn.id, at: Date.now() }
       })
       this.finalizeWaitingAskTurn(taskId, turn.id, agent)
-      this.store.mutateTask(taskId, (t) => { t.status = 'completed' })
-      this.emit(taskId, { type: 'task_status', status: 'completed' })
+      this.store.mutateTask(taskId, (t) => { t.status = 'running' })
+      this.emit(taskId, { type: 'task_status', status: 'running' })
       return
     }
 
@@ -2396,25 +2410,45 @@ export class TaskEngine {
       tt.streaming = false
       tt.endedAt = Date.now()
       if (reconciled?.ok && reconciled.content) tt.text = reconciled.content
-      else if (!ran) tt.text = '（远端续跑仍在执行，本轮追踪已达 30 分钟上限 —— 稍后发任意消息即可查询进度并取回结果）'
+      else if (!completed) tt.text = tt.text || '（远端续跑追踪超时，尚未确认远端结束）'
       else tt.text = tt.text || '（远端续跑已结束，未返回新内容）'
       if (reconciled?.usage && typeof reconciled.usage === 'object') tt.usage = { ...reconciled.usage }
     })
     const finalTurn = this.store.getTask(taskId)?.turns.find((x) => x.id === turn.id)
     if (finalTurn) this.emit(taskId, { type: 'turn_end', turn: finalTurn })
-    this.store.mutateTask(taskId, (t) => { t.status = 'completed' })
-    this.emit(taskId, { type: 'task_status', status: 'completed' })
+    const status = completed ? 'completed' : 'failed'
+    this.store.mutateTask(taskId, (t) => { t.status = status })
+    this.emit(taskId, { type: 'task_status', status })
   }
 
   /** 问题卡片答复（POST /tasks/:id/ask-answer）回传成功后的续跑追踪：与自由文本桥同一套追踪与对账，
    *  否则远端续跑产出无人接收，任务「完成」却没有最终结果（线上 2026-10-23 用户实测缺陷）。 */
+  private askResumeJobs = new Set<string>()
+
   public trackAskResumeAfterCardAnswer(taskId: string, agentId: string, target: DshTarget, sessionId: string): void {
+    if (this.askResumeJobs.has(taskId)) return
+    this.askResumeJobs.add(taskId)
+    const previous = this.activeJobs.get(taskId)
+    const ctrl = new AbortController()
+    if (!previous) this.activeJobs.set(taskId, ctrl)
     void (async () => {
       try {
+        // 卡片在原派发 finally 释放作业前即可点击；等待旧观察者收尾，避免它删掉新的控制器。
+        while (previous && this.activeJobs.get(taskId) === previous) await new Promise((r) => setTimeout(r, 10))
+        if (this.store.getTask(taskId)?.status === 'cancelled') return
+        this.activeJobs.set(taskId, ctrl)
         const agentRec = this.store.getAgent(agentId)
-        await this.trackAskResume(taskId, { id: agentId, name: agentRec?.name || agentId }, target, sessionId)
+        await this.trackAskResume(taskId, { id: agentId, name: agentRec?.name || (agentId === NODE_AGENT_ID ? '主会话' : agentId) }, target, sessionId, { signal: ctrl.signal })
       } catch (err) {
         this.taskLog(taskId, 'warn', `卡片答复续跑追踪异常: ${err instanceof Error ? err.message : String(err)}`)
+        this.store.mutateTask(taskId, (t) => { t.status = ctrl.signal.aborted ? 'cancelled' : 'failed' })
+        this.emit(taskId, { type: 'task_status', status: this.store.getTask(taskId)!.status })
+      } finally {
+        this.askResumeJobs.delete(taskId)
+        if (this.activeJobs.get(taskId) === ctrl) this.activeJobs.delete(taskId)
+        const fresh = this.store.getTask(taskId)
+        if (fresh && !fresh.pendingAsk) this.emit(taskId, { type: 'task_end', task: fresh })
+        if (!this.skipQueueFlush.delete(taskId)) void this.flushMessageQueue(taskId)
       }
     })()
   }

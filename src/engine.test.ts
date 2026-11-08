@@ -280,6 +280,27 @@ async function settle(engine: TaskEngine, store: WorkStore, taskId: string, time
   }
 }
 
+// ---------- task-81：提问等待不能当作已完成，重启仍可答复 ----------
+test('task-81: 重启保留 pendingAsk 等待态，普通中断任务仍标失败', async () => {
+  const f = makeFixture()
+  try {
+    const waiting = await f.engine.createTask({ title: '等待答复' })
+    const interrupted = await f.engine.createTask({ title: '执行中断' })
+    f.store.mutateTask(waiting.id, t => {
+      t.status = 'running'
+      t.pendingAsk = { agentId: '__node__', sessionId: 'session', turnId: 'turn', questions: [{ id: 'q' }], at: Date.now() }
+    })
+    f.store.mutateTask(interrupted.id, t => { t.status = 'running' })
+    assert.equal(f.engine.recoverInterruptedTasks(), 1)
+    assert.equal(f.store.getTask(waiting.id)?.status, 'running')
+    assert.ok(f.store.getTask(waiting.id)?.pendingAsk)
+    assert.equal(f.store.getTask(interrupted.id)?.status, 'failed')
+  } finally {
+    await f.store.flush()
+    rmSync(f.dir, { recursive: true, force: true })
+  }
+})
+
 // ---------- 用例 ----------
 
 test('项目默认协作成员：create 未传 memberAgentIds 时由服务端继承；显式空数组不继承', async () => {

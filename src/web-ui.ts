@@ -5893,6 +5893,8 @@ function connectStream(taskId) {
   es.addEventListener('turn_end', e => {
     try {
       const ev = JSON.parse(e.data);
+      if (state.currentTaskId !== taskId) return;
+      if (!state.turnEls[ev.turn.id]) appendLiveTurn(taskId, ev.turn);
       const el = state.turnEls[ev.turn.id];
       if (el) {
         finalizeTurnBlocks(el, ev.turn, taskId);
@@ -5980,12 +5982,10 @@ function connectStream(taskId) {
     loadTaskTodos();
   });
 
-  // 重连补齐：EventSource 首次连接成功不算重连；此后每次 onopen 都意味着中间丢过帧，
-  // 必须回源用服务端权威文本校正（否则断连窗口内的 turn_end 会让气泡永久停在半截）
-  let sseOpened = false;
+  // 每次订阅建立后回源：覆盖首次连接空档和断线重连期间丢失的轮次。
   es.onopen = () => {
-    if (sseOpened) resyncCurrentTask();
-    sseOpened = true;
+    // 首次连接也可能错过详情快照之后的事件；订阅建立后统一补齐。
+    if (state.currentTaskId === taskId && state.es === es) resyncCurrentTask();
   };
   es.onerror = () => {};
 }
@@ -6315,29 +6315,37 @@ function renderAskUserCard(el, t, turnMeta) {
         const st = card.querySelector('.ask-status');
         if (st) st.textContent = '✓ 已提交答复';
       };
+      let answerBusy = false;
       const sendAnswer = async (answers, skip) => {
+        if (answerBusy) return;
+        const taskId = (turnMeta && turnMeta.taskId) || state.currentTaskId;
+        if (!taskId) return;
         if (!skip && answers.every(a => a.selected.length === 0 && !a.custom)) {
           toast('请至少选择一个选项、填写自定义回答，或点「跳过」', true);
           return;
         }
+        answerBusy = true;
         submitBtn.disabled = true;
         submitBtn.textContent = '提交中…';
         const st = card.querySelector('.ask-status');
         if (st) st.textContent = '⏳ 提交中…';
         const agentId = (turnMeta && turnMeta.agentId) || '';
-        const r = await api('/tasks/' + state.currentTaskId + '/ask-answer', {
+        const r = await api('/tasks/' + taskId + '/ask-answer', {
           method: 'POST',
           body: JSON.stringify({ agentId, answers }),
         });
+        if (state.currentTaskId !== taskId) return;
         if (r.ok) {
           markSubmitted();
           if (r.data && r.data.stale) {
             toast('⚠️ 提问已失效（远端批次消失），确认卡已关闭；可把选择直接发给子智能体', true);
           } else {
             toast('✓ 答复已回传，子智能体继续执行中…');
-            setSending(true);
+            if (!state.es || state.es.readyState === 2) connectStream(taskId);
           }
+          await resyncCurrentTask();
         } else {
+          answerBusy = false;
           submitBtn.disabled = false;
           submitBtn.textContent = '📤 提交答复';
           if (st) st.textContent = '⏳ 等待选择';

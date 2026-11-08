@@ -72,10 +72,15 @@ const stub = createServer((req, res) => {
       res.end(JSON.stringify({ ok: true, data: { sessionId: id } }))
       return
     }
+    if (url === '/api/v1/system/status') {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ ok: true, data: { name: 'ask-e2e-stub' } }))
+      return
+    }
     if (!sid) { res.writeHead(404); res.end(JSON.stringify({ ok: false, error: 'Endpoint not found' })); return }
     if (req.method === 'GET' && url === `/api/v1/sessions/${sid}`) {
       res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ ok: true, data: { sessionId: sid, status: st.parked ? 'running' : 'idle', cwd: '/tmp/ask-ws' } }))
+      res.end(JSON.stringify({ ok: true, data: { sessionId: sid, status: st.parked || st.resuming ? 'running' : 'idle', cwd: '/tmp/ask-ws' } }))
       return
     }
     if (req.method === 'GET' && url === `/api/v1/sessions/${sid}/questions`) {
@@ -90,8 +95,15 @@ const stub = createServer((req, res) => {
       st.answeredLog = (st.answeredLog || []).concat([answers])
       st.batches = []
       st.parked = false
-      st.history.push({ role: 'user', content: answers[0]?.custom || '' })
-      st.history.push({ role: 'assistant', content: RESUME_TEXT })
+      st.resuming = true
+      // 答复工具不会创建新的 user/message；延迟产出以覆盖答复后的运行状态。
+      setTimeout(() => {
+        st.history.push({ role: 'assistant', content: '续跑中的阶段产出' })
+      }, 500)
+      setTimeout(() => {
+        st.history.push({ role: 'assistant', content: RESUME_TEXT })
+        st.resuming = false
+      }, 2200)
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ ok: true, data: { sessionId: sid, answered: answers.length } }))
       return
@@ -146,7 +158,7 @@ async function main() {
   await new Promise((r) => stub.listen(STUB_PORT, '127.0.0.1', r))
   const server = spawn(process.execPath, [join(ROOT, 'dist', 'server.js'), '--port', String(PORT), '--data', dataDir, '--quiet'],
     { cwd: ROOT, stdio: ['ignore', 'ignore', 'pipe'],
-      env: { ...process.env, WB_ASK_WATCH_WINDOW_MS: '4000' } })
+      env: { ...process.env, WORKBUDDY_ALLOW_PRIVATE_DIRECT: '1', WB_ASK_WATCH_WINDOW_MS: '4000' } })
   server.stderr.on('data', (d) => process.stderr.write(`[server] ${d}`))
   procs.push(server)
   await waitFor(async () => (await fetch(`${BASE}/healthz`)).ok, 'server 就绪')
@@ -182,7 +194,7 @@ async function main() {
   check('ask 工具带等待提示', String(askTool?.result || '').includes('等待用户答复'))
   check('task.pendingAsk 已记录（含 2 题）', d1.pendingAsk?.questions?.length === 2, JSON.stringify(d1.pendingAsk || {}).slice(0, 120))
   check('系统提示告知可直接回复作答', (d1.turns || []).some((x) => x.role === 'system' && String(x.text).includes('直接在下方输入回复')))
-  check('任务状态落 completed（非 running 假死）', d1.status === 'completed', `status=${d1.status}`)
+  check('提问挂起保持 running，不能误判完成', d1.status === 'running', `status=${d1.status}`)
 
   // ---- 场景 2：自由文本答复 → 自动走 /answers 桥 + 续跑全文回填 ----
   await req('POST', `${PREFIX}/api/tasks/${taskId}/messages`, { message: '周报先不用管了，直接总结其余内容' })
@@ -242,6 +254,34 @@ async function main() {
   check('会话回 idle（下一条消息可作新指令直接执行）', sessionState('stub-ask2').parked === false)
   check('未记录 pendingAsk（答复桥触达不了，回复走新指令语义）', !d5.pendingAsk)
   check('任务状态 completed（非 running 假死）', d5.status === 'completed', `status=${d5.status}`)
+
+  // 卡片答复必须自动续接现有聊天 SSE，期间接受停止/排队治理。
+  const cardTask = (await req('POST', `${PREFIX}/api/tasks`, {
+    title: 'card resume', mode: 'chat',
+    nodeRef: { kind: 'direct', apiBaseUrl: `http://127.0.0.1:${STUB_PORT}/api/v1` },
+  })).json.data.id
+  const streamCtrl = new AbortController()
+  const streamRes = await fetch(`${BASE}${PREFIX}/api/tasks/${cardTask}/stream`, { headers: { Cookie: COOKIE }, signal: streamCtrl.signal })
+  let frames = ''
+  const consume = (async () => {
+    try { for await (const c of streamRes.body) frames += new TextDecoder().decode(c) } catch {}
+  })()
+  await req('POST', `${PREFIX}/api/tasks/${cardTask}/messages`, { message: '先提问再继续' })
+  await waitFor(async () => Boolean((await req('GET', `${PREFIX}/api/tasks/${cardTask}`)).json.data.pendingAsk), '卡片问题登记')
+  await sleep(300)
+  const answer = await req('POST', `${PREFIX}/api/tasks/${cardTask}/ask-answer`, { answers: [{ id: 'implement', selected: ['方案A'] }] })
+  check('卡片答复成功', answer.json?.ok)
+  const during = (await req('GET', `${PREFIX}/api/tasks/${cardTask}`)).json.data
+  check('卡片答复后任务仍 running', during.status === 'running', `status=${during.status}`)
+  check('卡片续跑登记 active job', during.running === true, `running=${during.running}`)
+  await waitFor(async () => (await req('GET', `${PREFIX}/api/tasks/${cardTask}`)).json.data.turns.some(t => t.role === 'agent' && t.text.includes(RESUME_TEXT)), '卡片自动续跑正文')
+  check('无需新消息即推送续跑全文', frames.includes(RESUME_TEXT))
+  check('续跑阶段产出通过增量 SSE 自动接入', frames.includes('event: turn_delta') && frames.includes('续跑中的阶段产出'))
+  const cardDone = (await req('GET', `${PREFIX}/api/tasks/${cardTask}`)).json.data
+  check('AI 真正结束后任务 completed', cardDone.status === 'completed')
+  check('卡片答复不发新 prompt', sessionState('stub-ask3').promptCount === 1)
+  streamCtrl.abort()
+  await consume
 
   console.log(failures === 0 ? '\n全部通过 ✅\n' : `\n${failures} 项失败 ❌\n`)
   try { rmSync(dataDir, { recursive: true, force: true }) } catch {}
