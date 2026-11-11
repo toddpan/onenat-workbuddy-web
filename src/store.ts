@@ -8,9 +8,10 @@ import { ensurePrivateDir, hardenDirFiles, hardenFile, PRIVATE_FILE_MODE } from 
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import type { AgentResourceBinding, DshRef, ExpertTeam, Project, StorageData, SubAgent, WorkBuddySettings, WorkTask, PlanSubtask, TaskTurn, ScheduledTask, TeamTemplateId } from './types.js'
-import { projectDefaultAgentIdsFromInput } from './types.js'
+import { projectDefaultAgentIds, projectDefaultAgentIdsFromInput } from './types.js'
 import { sameDshRef, sameWorkspace, normalizeWorkspacePath, validateWorkspacePath, ProjectWorkspaceConflictError } from './workspace.js'
 import { BUILTIN_TEAMS } from './expert-teams.js'
+import { mergeAgentDisplay } from './agent-display.js'
 
 function defaultSettings(): WorkBuddySettings {
   return {
@@ -87,6 +88,9 @@ export class WorkStore {
           schedules: Array.isArray(parsed.schedules) ? parsed.schedules : [],
           projects: Array.isArray(parsed.projects) ? parsed.projects : [],
           teams: Array.isArray(parsed.teams) ? parsed.teams : [],
+          taskActivities: Array.isArray(parsed.taskActivities) ? parsed.taskActivities : [],
+          taskReadPositions: Array.isArray(parsed.taskReadPositions) ? parsed.taskReadPositions : [],
+          activityClock: Number.isSafeInteger(parsed.activityClock) ? parsed.activityClock : 0,
           settings: {
             onenat: { ...defaultSettings().onenat, ...(parsed.settings?.onenat || {}) },
             planner: { ...defaultSettings().planner, ...(parsed.settings?.planner || {}) },
@@ -94,6 +98,12 @@ export class WorkStore {
             archive: { ...defaultSettings().archive, ...(parsed.settings?.archive || {}) },
           },
         }
+      }
+      // Freeze legacy implicit BOT grants before any relationship edits. Historical tasks never migrate.
+      for (const p of this.data.projects) {
+        if (p.legacyAgentAccessIds === undefined) p.legacyAgentAccessIds = projectDefaultAgentIds(p)
+        p.defaultAgentIds = projectDefaultAgentIds(p)
+        p.expertIds = [...p.defaultAgentIds]
       }
       this.rehydrateArchived()
       this.save()
@@ -345,9 +355,12 @@ export class WorkStore {
     this.save()
   }
 
-  public upsertAgent(input: Partial<SubAgent>): SubAgent {
+  public upsertAgent(input: Omit<Partial<SubAgent>, 'display'> & { display?: SubAgent['display'] | null }): SubAgent {
     const now = Date.now()
     const existing = input.id ? this.data.agents.find((a) => a.id === input.id) : undefined
+    if ((!existing || Object.prototype.hasOwnProperty.call(input, 'name')) && (typeof input.name !== 'string' || !input.name.trim())) {
+      throw Object.assign(new Error('name 必须是非空字符串'), { code: 'INVALID_PARAM', field: 'name' })
+    }
     const dshRef: DshRef = (input.dshRef as DshRef) || existing?.dshRef || { kind: 'direct', apiBaseUrl: '' }
     const resources: AgentResourceBinding[] = (input.resources as AgentResourceBinding[]) || existing?.resources || []
     // 防重复兜底：无 id 新建时，若已存在「同名 + 相同 DSH 实体」的智能体，则复用该条目（更新而非新增），
@@ -376,6 +389,7 @@ export class WorkStore {
       skills: input.skills !== undefined ? input.skills : target?.skills,
       ...(input.tags !== undefined ? { tags: input.tags } : target?.tags ? { tags: target.tags } : {}),
       description: input.description ?? target?.description,
+      display: mergeAgentDisplay(input.display, target?.display),
       enabled: input.enabled ?? target?.enabled ?? true,
       createdAt: target?.createdAt ?? now,
       updatedAt: now,
@@ -390,12 +404,8 @@ export class WorkStore {
   public deleteAgent(id: string): boolean {
     const before = this.data.agents.length
     this.data.agents = this.data.agents.filter((a) => a.id !== id)
-    // 同步从任务成员里摘除
-    for (const t of this.data.tasks) {
-      if (t.memberAgentIds.includes(id)) {
-        t.memberAgentIds = t.memberAgentIds.filter((x) => x !== id)
-      }
-    }
+    // Tasks retain participant snapshots. Project associations retain the ID as a deleted BOT
+    // until explicitly unlinked, so history and missing-member state remain understandable.
     // 同步从定时任务目标里摘除
     for (const s of this.data.schedules) {
       if (s.agentIds.includes(id)) {
@@ -571,6 +581,35 @@ export class WorkStore {
     return changed
   }
 
+  /** Observe semantic activity only: repeated polls and metadata writes keep the same revision. */
+  public observeTaskActivity(taskId: string, signature: string): number {
+    const entries = this.data.taskActivities ||= []
+    const previous = entries.find(x => x.taskId === taskId)
+    if (previous?.signature === signature) return previous.version
+    const version = (this.data.activityClock || 0) + 1
+    this.data.activityClock = version
+    if (previous) Object.assign(previous, { signature, version })
+    else entries.push({ taskId, signature, version })
+    this.save()
+    return version
+  }
+
+  public get activityClock(): number { return this.data.activityClock || 0 }
+
+  public taskReadVersion(userId: string, taskId: string): number {
+    return this.data.taskReadPositions?.find(x => x.userId === userId && x.taskId === taskId)?.version || 0
+  }
+
+  public markTaskRead(userId: string, taskId: string, version: number): number {
+    const positions = this.data.taskReadPositions ||= []
+    const previous = positions.find(x => x.userId === userId && x.taskId === taskId)
+    if (previous && previous.version >= version) return previous.version
+    if (previous) previous.version = version
+    else positions.push({ userId, taskId, version })
+    this.save()
+    return version
+  }
+
   // ---- Tasks ----
 
   public getTasks(): WorkTask[] {
@@ -581,7 +620,22 @@ export class WorkStore {
     return this.data.tasks.find((t) => t.id === id)
   }
 
+  private captureTaskProject(task: WorkTask): void {
+    const p = task.projectId ? this.getProject(task.projectId) : undefined
+    if (p && !task.projectSnapshot) task.projectSnapshot = { projectId: p.id, name: p.name, capturedAt: Date.now() }
+  }
+
+  private assertChatBinding(task: WorkTask, previous?: WorkTask): void {
+    if (previous && task.chatAgentId !== previous.chatAgentId) throw new Error('已有任务不能添加、更换或清除 chatAgentId')
+    if (task.chatAgentId && (task.mode !== 'chat' || task.memberAgentIds.length !== 1 || task.memberAgentIds[0] !== task.chatAgentId || task.teamId || task.expertMembers?.length)) throw new Error('直聊绑定与模式/成员/团队冲突')
+  }
+
   public upsertTask(task: WorkTask): WorkTask {
+    const previous = this.getTask(task.id)
+    this.assertChatBinding(task, previous)
+    // Historical project metadata is server-owned, never accepted from create payloads.
+    task.projectSnapshot = previous?.projectSnapshot
+    this.captureTaskProject(task)
     this.touchTask(task)
     task.updatedAt = Date.now()
     const idx = this.data.tasks.findIndex((t) => t.id === task.id)
@@ -596,6 +650,8 @@ export class WorkStore {
     this.data.tasks = this.data.tasks.filter((t) => t.id !== id)
     const changed = this.data.tasks.length !== before
     if (changed) {
+      this.data.taskActivities = this.data.taskActivities?.filter(x => x.taskId !== id)
+      this.data.taskReadPositions = this.data.taskReadPositions?.filter(x => x.taskId !== id)
       try {
         if (existsSync(this.archivePath(id))) unlinkSync(this.archivePath(id))
       } catch {
@@ -628,6 +684,8 @@ export class WorkStore {
     if (!victims.length) return 0
     const victimIds = new Set(victims.map((t) => t.id))
     this.data.tasks = this.data.tasks.filter((t) => !victimIds.has(t.id))
+    this.data.taskActivities = this.data.taskActivities?.filter(x => !victimIds.has(x.taskId))
+    this.data.taskReadPositions = this.data.taskReadPositions?.filter(x => !victimIds.has(x.taskId))
     for (const id of victimIds) {
       try {
         if (existsSync(this.archivePath(id))) unlinkSync(this.archivePath(id))
@@ -684,7 +742,8 @@ export class WorkStore {
       workspace,
       instruction: input.instruction !== undefined ? (String(input.instruction).trim() || undefined) : existing?.instruction,
       defaultAgentIds,
-      expertIds: defaultAgentIds,
+      expertIds: [...defaultAgentIds],
+      legacyAgentAccessIds: (existing?.legacyAgentAccessIds ?? []).filter(id => defaultAgentIds.includes(id)),
       connectorIds: input.connectorIds ? [...new Set(input.connectorIds.map(String))] : existing?.connectorIds || [],
       skillNames: input.skillNames ? [...new Set(input.skillNames.map(String))] : existing?.skillNames || [],
       owner: input.owner !== undefined ? input.owner : existing?.owner,
@@ -706,6 +765,7 @@ export class WorkStore {
 
   public deleteProject(id: string): boolean {
     const before = this.data.projects.length
+    for (const task of this.data.tasks) if (task.projectId === id) this.captureTaskProject(task)
     this.data.projects = this.data.projects.filter((p) => p.id !== id)
     const changed = this.data.projects.length !== before
     if (changed) this.save()
@@ -716,7 +776,20 @@ export class WorkStore {
     const task = this.data.tasks.find((t) => t.id === id)
     if (!task) return undefined
     this.touchTask(task)
-    const out = fn(task)
+    // Bound tasks validate a detached draft so a rejected mutation has no in-memory side effects.
+    const previousBinding = task.chatAgentId
+    const draft = previousBinding ? structuredClone(task) : task
+    const out = fn(draft)
+    if (draft.chatAgentId !== previousBinding) {
+      if (draft === task) delete task.chatAgentId
+      throw new Error('已有任务不能添加、更换或清除 chatAgentId')
+    }
+    this.assertChatBinding(draft, task)
+    if (draft !== task) {
+      for (const key of Object.keys(task)) if (!(key in draft)) delete (task as any)[key]
+      Object.assign(task, draft)
+    }
+    this.captureTaskProject(task)
     task.updatedAt = Date.now()
     this.save()
     return out

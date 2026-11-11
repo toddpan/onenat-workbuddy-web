@@ -14,6 +14,15 @@
 
 用 @ 时 `create` 的 `memberAgentIds` 可省略；两者同给也行。
 
+### 稳定 ID 与只读预检
+
+监控 overview 的智能体含 `id/name/online/busy/nodeId`；优先按稳定 ID 选择，`nodeId` 为带类型的绑定节点身份（如 `mapping:…`），不依赖漂移端口。重名提及返回 `AMBIGUOUS_AGENT` 和候选，不会静默选择第一个。
+
+`task_manage {action:"preflight", projectId:"proj-x", memberAgentIds:["agent-xxx"], message:"完整任务指令"}` 在创建前预览；已有任务可传 `taskId` 预览下一轮。返回角色、执行节点、文件归属节点/工作区、权限边界及在线/忙闲警告，不创建任务、不执行远端命令。在线/忙闲来自监控快照，不是资源预留；编排的最终子任务分配要等实际规划，预检会标明未规划。
+
+确认预检结果后，以相同参数改 `action:"create"`（下一轮用 `send`）。非空 `memberAgentIds` 是本轮显式定向意图，角色按 ID 唯一选择；也可用 `@agent-xxx`。ID 指派与名称提及走同一规划规则，不保证将整段任务直接交给单一角色。`members` 仅修改任务成员账本；项目继承的默认成员不是本轮显式派工。
+
+
 ## 发起任务前：先理清需求与项目，再用 @ 派对执行者
 
 子智能体一律**无人值守执行**（禁止 `ask_user_question`，提问会让远程 DSH 会话停等且不透传 UI），

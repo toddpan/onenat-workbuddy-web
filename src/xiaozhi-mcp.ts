@@ -20,6 +20,8 @@ import { createHash } from 'node:crypto'
 import { WebSocket } from 'undici'
 
 import type { WorkBuddyToolDef } from './tool-ops.js'
+import { toolInputSchema } from './tool-contracts.js'
+import { mcpToolResult } from './tool-output.js'
 import type { XiaozhiEndpoint } from './types.js'
 
 const INITIAL_BACKOFF_MS = 1_000
@@ -78,17 +80,9 @@ interface XiaozhiConn {
   stats: XiaozhiConnStats
 }
 
-/** 工具通道参数表 → MCP inputSchema（json 型参数用 object，模型可直接给结构化参数） */
+/** HTTP discovery and both MCP transports expose the same parameter contract. */
 export function toolDefToInputSchema(def: WorkBuddyToolDef): Record<string, unknown> {
-  const properties: Record<string, unknown> = {}
-  for (const [name, p] of Object.entries(def.parameters || {})) {
-    properties[name] = {
-      type: p.type === 'json' ? 'object' : p.type || 'string',
-      description: p.description,
-      ...(p.type === 'json' ? { additionalProperties: true } : {}),
-    }
-  }
-  return { type: 'object', properties, required: ['action'] }
+  return def.inputSchema || toolInputSchema(def.name, def.parameters)
 }
 
 function sha1(s: string): string {
@@ -351,6 +345,8 @@ export class XiaozhiMcpClient {
           name: def.name,
           description: def.description,
           inputSchema: toolDefToInputSchema(def),
+          outputSchema: def.outputSchema,
+          annotations: def.annotations,
         }))
         send({ jsonrpc: '2.0', id, result: { tools } })
         this.deps.log(`小智 MCP 接入[${conn.id}]：应答 tools/list（${tools.length} 个工具）`)
@@ -401,7 +397,7 @@ export class XiaozhiMcpClient {
       isError = true
     } else {
       try {
-        text = await def.execute(args, { channel: 'mcp', callerId: conn.id, rpcId: (id ?? null) as any, maxBlockMs: MCP_MAX_BLOCK_MS })
+        text = await def.execute(args, { channel: 'mcp', callerId: conn.id, rpcId: (id ?? null) as any, maxBlockMs: MCP_MAX_BLOCK_MS, aiTokenOnly: true })
       } catch (err: any) {
         text = JSON.stringify({ ok: false, error: err?.message || String(err) })
         isError = true
@@ -410,7 +406,7 @@ export class XiaozhiMcpClient {
     const ms = Date.now() - startedAt
 
     // ② 单帧上限兜底：超大结果换成结构化提示（保留可解析 JSON，别让宿主拿到半截正文）
-    let bytes = Buffer.byteLength(text)
+    let bytes = Buffer.byteLength(JSON.stringify(mcpToolResult(text, isError)))
     if (bytes > MAX_RESULT_BYTES) {
       conn.stats.oversize += 1
       this.deps.log(`小智 MCP 接入[${conn.id}]：工具 ${name} 结果 ${(bytes / 1024).toFixed(0)}KB 超过单帧上限 ${(MAX_RESULT_BYTES / 1024).toFixed(0)}KB，已替换为「结果过大」提示`)
@@ -429,7 +425,7 @@ export class XiaozhiMcpClient {
       if (parsed && typeof parsed === 'object' && parsed.ok === false) isError = true
     } catch { /* 非 JSON 结果按成功回 */ }
 
-    const frame = JSON.stringify({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text }], isError } })
+    const frame = JSON.stringify({ jsonrpc: '2.0', id, result: mcpToolResult(text, isError) })
     const delivered = send(frame)
     if (!delivered) {
       conn.stats.dropped += 1

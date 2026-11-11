@@ -14,14 +14,16 @@ import type { TaskTurn, WorkTask } from './types.js'
 /** token 账本求和：兼容多种字段命名（inputTokens/prompt_tokens/…）；cacheRead 单列不计入 input */
 export function usageOf(usage: Record<string, number> | undefined): { input: number; output: number; cacheRead: number } {
   const u = usage || {}
-  let input = 0
+  // 明确的未缓存输入（包括 0）优先，避免与 inputTokens 别名重复相加。
+  const explicitInput = typeof u.uncachedInputTokens === 'number' && Number.isFinite(u.uncachedInputTokens) && u.uncachedInputTokens >= 0
+  let input = explicitInput ? u.uncachedInputTokens : 0
   let output = 0
   let cacheRead = 0
   for (const [k, v] of Object.entries(u)) {
-    if (typeof v !== 'number') continue
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) continue
     const key = k.toLowerCase()
     if (key.includes('cache') && (key.includes('read') || key.includes('hit'))) cacheRead += v
-    else if (key.includes('input') || key.includes('prompt')) input += v
+    else if (key.includes('input') || key.includes('prompt')) { if (!explicitInput) input += v }
     else if (key.includes('output') || key.includes('completion')) output += v
   }
   return { input, output, cacheRead }

@@ -27,6 +27,20 @@ else
   "$TSC" -p tsconfig.server.json
 fi
 
+# Freeze the release identity into the artifact itself, including detached/copy-only dist.
+# Do not read the deployment host's package version or depend on an extra deployed file.
+node --input-type=module <<'VERSION'
+import { readFileSync, writeFileSync } from 'node:fs';
+const version = JSON.parse(readFileSync('package.json', 'utf8')).version;
+if (typeof version !== 'string' || !version.trim()) throw new Error('Missing package version');
+const file = 'dist/date-version.js';
+const source = readFileSync(file, 'utf8');
+const marker = /(['"])__WORKBUDDY_BUILD_VERSION__\1/g;
+if ([...source.matchAll(marker)].length !== 1) throw new Error('Expected exactly one build version marker');
+writeFileSync(file, source.replace(marker, () => JSON.stringify(version)));
+VERSION
+node --test scripts/date-version.test.mjs
+
 # 内联脚本语法关卡：三个页面（控制台/投屏/登录）的 <script> 必须能通过 node --check。
 # web-ui 等页面源码位于 TS 模板字符串内，\n 等转义一旦漏写双写就会让整页 JS 断裂（历史故障两次）。
 node --input-type=module -e "

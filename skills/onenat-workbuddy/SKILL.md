@@ -1,11 +1,12 @@
 ---
 name: onenat-workbuddy
+service-contract: '2026-11-08.1'
 description: OneNat WorkBuddy 多智能体工作台 AI 管理技能：发任务给智能体并取结果、看监控态势、管子智能体/专家库/定时任务/文件/项目、切换执行节点。当用户提到 "WorkBuddy / 监控大屏 / 发任务 / 子智能体 / 专家 / 定时任务 / 项目 / 多智能体协作" 时使用。
 ---
 
 # OneNat WorkBuddy 工作台技能
 
-通过 **16 个工具**操作多智能体工作台。本文件是总入口：先看核心概念与路由表，**细节按需读子技能文件**（`skills/` 目录，相对本文件所在目录）。
+通过工具通道操作多智能体工作台。首先调用 `workbuddy_capabilities {}`，核对服务契约 `2026-11-08.1`、身份和 action 权限上限；任务、大文件、提问恢复的当前流程按返回资源 URI 用 `workbuddy_capabilities {resource:uri}` 读取（MCP 也支持 resources/list 与 resources/read）。只读体验使用独立 `WORKBUDDY_READONLY_TOKEN`，自然语言“不写文件”不构成授权边界。本文件是总入口：先看核心概念与路由表，**细节按需读子技能文件**（`skills/` 目录，相对本文件所在目录）。
 
 **鉴权**：HTTP 调用带 `Authorization: Bearer <APIKEY>`（控制台「设置 → AI 接入」生成）。未配置令牌时服务端拒绝一切调用；设置/登录接口不接受令牌。
 
@@ -16,6 +17,7 @@ description: OneNat WorkBuddy 多智能体工作台 AI 管理技能：发任务�
 - **项目**：文件归属节点 + 工作目录 + 默认执行节点 + 项目指令 + 协作成员 + 连接器 + 技能。`create` 带 `projectId` 继承上下文，带 `nodeRef` 可选择本次会话执行节点；跨节点访问方法见 `skills/agents-projects.md`。
 - **@ 提及**：消息正文里 `@名称` 直接指定执行者或资源（@ 项目/智能体/专家/专家团/资源均支持，详见 `skills/tasks.md`）。
 - **资源目录**：ONENAT 平台的隧道/映射是唯一资源来源，以稳定 ID 标识；端口会漂移，**勿缓存公网 URL**。
+- **协作群（Group）**：成员 + 频道（一条 orchestrate 任务流）+ 首页分组。群元数据每用户隔离；群工具仅控制台登录会话可用（AI 令牌一律 `AI_TOKEN_DENIED`），频道内容可按普通任务只读旁观，详见 `skills/groups.md`。
 
 ## 子技能路由（按需加载，读完即用）
 
@@ -27,6 +29,7 @@ description: OneNat WorkBuddy 多智能体工作台 AI 管理技能：发任务�
 | 建/改子智能体（绑定节点）、建/改项目 | `skills/agents-projects.md` |
 | 看监控/值守、告警增量、定时任务、主调度(规划器)配置 | `skills/ops-monitoring.md` |
 | 上传/下载工作区文件、SSH 资源池、隧道资源目录 | `skills/files-resources.md` |
+| 群管理/群聊频道/讨论轮与已读语义（仅控制台身份） | `skills/groups.md` |
 | 宿主无工具通道（改用 wb.mjs 命令行） | `skills/cli.md` |
 
 **最小可用流程**（不必读子文件就能干的活）：
@@ -58,6 +61,7 @@ description: OneNat WorkBuddy 多智能体工作台 AI 管理技能：发任务�
 | `workbuddy_ssh_resource_manage` | SSH 资源池：list / get / upsert / delete / test / exec |
 | `workbuddy_team_manage` | 专家团（合同式协作）：list / get / upsert / delete / toggle（内置团只读） |
 | `workbuddy_backlog_manage` | 项目待办 backlog：projects / config / init / list / search / view / create / edit / delete / dispatch / overview / retry-writeback |
+| `workbuddy_group_manage` | 协作群（每用户隔离）：list / get / create / update / delete / sections / add_section / rename_section / remove_section / rounds / add_round / mark_read。**仅控制台登录会话可用；AI 令牌通道全部 action 返回 AI_TOKEN_DENIED** |
 
 ## 行为约定
 
@@ -72,7 +76,7 @@ description: OneNat WorkBuddy 多智能体工作台 AI 管理技能：发任务�
 
 ## 双通道：HTTP 与 MCP
 
-本技能走 HTTP 工具通道（wb.mjs / 直接 HTTP 调用）。宿主支持 MCP 时可改走/并走 MCP 通道：把 `$BASE_URL/mcp` 注册为 MCP Server（Streamable HTTP），工具与 HTTP 通道**同源同步**（同一 16 个工具、同一套约定）。**通道只解决传输，使用知识（三步大文件流程、@ 派活、轮询约定）以技能文档为准**——MCP 通道的完整说明见 `workbuddy-mcp/SKILL.md`（同一安装脚本一并装入）。
+本技能走 HTTP 工具通道（wb.mjs / 直接 HTTP 调用）。宿主支持 MCP 时可改走/并走 MCP 通道：把 `$BASE_URL/mcp` 注册为 MCP Server（Streamable HTTP），工具与 HTTP 通道**同源同步**（同一 17 个工具、同一套约定）。**通道只解决传输，使用知识（三步大文件流程、@ 派活、轮询约定）以技能文档为准**——MCP 通道的完整说明见 `workbuddy-mcp/SKILL.md`（同一安装脚本一并装入）。
 
 ## 无工具宿主
 

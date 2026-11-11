@@ -110,8 +110,31 @@ function ok(payload: Record<string, unknown>): string {
   return JSON.stringify({ ok: true, ...payload }, null, 2)
 }
 
-function fail(error: string, extra: Record<string, unknown> = {}): string {
+function fail(error: string, extra: Record<string, unknown> & { code: string }): string {
   return JSON.stringify({ ok: false, error, ...extra })
+}
+
+/** Classify structured errors only; human-readable messages are never a classification source. */
+function caughtFailure(err: unknown): { code: string; field?: string } {
+  const e = err as { code?: unknown; field?: unknown; status?: unknown; statusCode?: unknown; name?: unknown } | null
+  const field = typeof e?.field === 'string' ? e.field : undefined
+  if (e?.name === 'BacklogConflictError') return { code: 'CONFLICT', field }
+  if (typeof e?.code === 'string' && /^[A-Z][A-Z0-9_]*$/.test(e.code)) return { code: e.code, field }
+  const status = Number(e?.status ?? e?.statusCode)
+  const codes: Record<number, string> = {
+    400: 'INVALID_PARAM', 401: 'AUTH_REQUIRED', 403: 'PERMISSION_DENIED', 404: 'NOT_FOUND',
+    409: 'CONFLICT', 422: 'INVALID_PARAM', 502: 'NODE_OFFLINE', 503: 'NODE_OFFLINE', 504: 'NODE_OFFLINE',
+  }
+  return { code: codes[status] || 'EXECUTION_FAILED', field }
+}
+
+/** Once a task exists, recovery must inspect it or repair writeback, never dispatch it again. */
+function writebackRecovery(taskId: string, projectId: string) {
+  return {
+    kind: 'call' as const,
+    tool: 'workbuddy_backlog_manage',
+    arguments: { action: 'retry-writeback', projectId, taskId },
+  }
 }
 
 /** 去掉值为 undefined 的键：MCP 回包对 AI 是 token 预算，空字段没有信息量（不修改入参） */
@@ -289,14 +312,14 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
       const action = String(args.action || 'list').trim()
       // 严格解析：给了内容但 JSON 不合法要报错；静默当「未提供」会把全量列表当默认结果返回
       const filterParsed = parseJsonArg(args.filter, 'filter')
-      if (!filterParsed.ok) return fail(filterParsed.error)
+      if (!filterParsed.ok) return fail(filterParsed.error, { code: 'INVALID_PARAM', field: 'filter' })
       const itemParsed = parseJsonArg(args.item, 'item')
-      if (!itemParsed.ok) return fail(itemParsed.error)
+      if (!itemParsed.ok) return fail(itemParsed.error, { code: 'INVALID_PARAM', field: 'item' })
       // 与 REST 同一解析器：assignee+unassigned 互斥、数值/labelMatch/order 非法都在这里拦下
       const filterParsedQuery = parseToolFilter(filterParsed.value)
       if (!filterParsedQuery.ok) {
         return fail(filterParsedQuery.error, {
-          code: 'INVALID_QUERY',
+          code: 'INVALID_QUERY', field: 'filter',
           ...(filterParsedQuery.errors.length ? { errors: filterParsedQuery.errors } : {}),
         })
       }
@@ -309,19 +332,19 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
         | { ok: false; text: string }
       > => {
         const id = String(args.projectId || '').trim()
-        if (!id) return { ok: false, text: fail('缺少 projectId（先用 action:"projects" 查询可管项目）') }
+        if (!id) return { ok: false, text: fail('缺少 projectId（先用 action:"projects" 查询可管项目）', { code: 'INVALID_PARAM', field: 'projectId' }) }
         const proj = store.getProject(id)
-        if (!proj) return { ok: false, text: fail(`项目不存在: ${id}（先用 action:"projects" 查询）`, { code: 'NOT_FOUND' }) }
-        if (!proj.workspace) return { ok: false, text: fail('项目未配置工作目录（workspace），无法使用 backlog') }
+        if (!proj) return { ok: false, text: fail(`项目不存在: ${id}（先用 action:"projects" 查询）`, { code: 'NOT_FOUND', field: 'projectId' }) }
+        if (!proj.workspace) return { ok: false, text: fail('项目未配置工作目录（workspace），无法使用 backlog', { code: 'INVALID_PARAM', field: 'projectId' }) }
         const target = await resolver.resolveRef(proj.dshRef, proj.apiKey, `backlog-tool-${action}`)
         if (!target.online || !target.baseUrl) {
-          return { ok: false, text: fail(target.error || '节点不可达（端口可能已漂移，先确认节点在线）', { code: 'NODE_UNREACHABLE' }) }
+          return { ok: false, text: fail(target.error || '节点不可达（端口可能已漂移，先确认节点在线）', { code: 'NODE_UNREACHABLE', field: 'projectId' }) }
         }
         return { ok: true, proj, target: { baseUrl: target.baseUrl, apiKey: target.apiKey }, workspace: proj.workspace }
       }
 
       const writeGuard = (proj: Project): string | undefined =>
-        proj.archivedAt ? fail('项目已归档（只读），请先恢复项目再操作 backlog', { code: 'PROJECT_ARCHIVED' }) : undefined
+        proj.archivedAt ? fail('项目已归档（只读），请先恢复项目再操作 backlog', { code: 'PROJECT_ARCHIVED', field: 'projectId', recovery: { kind: 'stop' } }) : undefined
 
       try {
         // ---------------- projects：可管项目一览（含初始化状态） ----------------
@@ -395,16 +418,16 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
         // ---------------- retry-writeback：任务终态回写重试 ----------------
         if (action === 'retry-writeback') {
           const taskId = String(args.taskId || '').trim()
-          if (!taskId) return fail('缺少 taskId（dispatch 回包里的 taskId）')
+          if (!taskId) return fail('缺少 taskId（dispatch 回包里的 taskId）', { code: 'INVALID_PARAM', field: 'taskId' })
           const task = store.getTask(taskId)
-          if (!task) return fail(`任务不存在: ${taskId}`, { code: 'NOT_FOUND' })
-          if (!task.backlogRef) return fail(`任务 ${taskId} 没有 backlog 来源（非 backlog 派发的任务无法回写）`)
+          if (!task) return fail(`任务不存在: ${taskId}`, { code: 'NOT_FOUND', field: 'taskId' })
+          if (!task.backlogRef) return fail(`任务 ${taskId} 没有 backlog 来源（非 backlog 派发的任务无法回写）`, { code: 'INVALID_PARAM', field: 'taskId' })
           const pid = String(args.projectId || '').trim()
-          if (pid && pid !== task.backlogRef.projectId) return fail(`projectId(${pid}) 与任务的 backlog 来源项目(${task.backlogRef.projectId}) 不一致`)
+          if (pid && pid !== task.backlogRef.projectId) return fail(`projectId(${pid}) 与任务的 backlog 来源项目(${task.backlogRef.projectId}) 不一致`, { code: 'INVALID_PARAM', field: 'projectId' })
           // 与 HTTP 路由同语义：归档项目只读，回写也是写
           const sourceProject = store.getProject(task.backlogRef.projectId)
           if (sourceProject?.archivedAt) {
-            return fail('来源项目已归档（只读），请先恢复项目再重试回写', { code: 'PROJECT_ARCHIVED' })
+            return fail('来源项目已归档（只读），请先恢复项目再重试回写', { code: 'PROJECT_ARCHIVED', field: 'projectId', recovery: { kind: 'stop' } })
           }
           try {
             await engine.runBacklogWriteback(task)
@@ -413,7 +436,7 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
             const msg = errorText(err)
             // 统一走引擎的失败记账：失败标记 + 退避计数推进（TASK-2 补偿器共用同一退避序列）
             engine.recordWritebackFailure(task.id, err)
-            return fail(`回写仍失败：${msg}`, { taskId, projectId: task.backlogRef.projectId, itemId: task.backlogRef.itemId, retryable: true })
+            return fail(`回写仍失败：${msg}`, { ...caughtFailure(err), taskId, projectId: task.backlogRef.projectId, itemId: task.backlogRef.itemId, taskCreated: true, retryable: false, recovery: writebackRecovery(taskId, task.backlogRef.projectId) })
           }
         }
 
@@ -466,7 +489,7 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
         // ---------------- list / search ----------------
         if (action === 'list' || action === 'search') {
           if (action === 'search' && !filter.search) {
-            return fail('search 需要 filter.search（在标题/描述/标签/正文里检索关键词）', { code: 'INVALID_QUERY' })
+            return fail('search 需要 filter.search（在标题/描述/标签/正文里检索关键词）', { code: 'INVALID_QUERY', field: 'filter.search' })
           }
           const needBodies = Boolean(filter.search) || action === 'search'
           const list = await listBacklogWithTasks({ client, store }, target, workspace, proj.id, { withBodies: needBodies })
@@ -508,9 +531,9 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
         // ---------------- view ----------------
         if (action === 'view') {
           const itemId = String(args.itemId || '').trim()
-          if (!itemId) return fail('缺少 itemId（如 TASK-1）')
+          if (!itemId) return fail('缺少 itemId（如 TASK-1）', { code: 'INVALID_PARAM', field: 'itemId' })
           const found = await findItem(client, target, workspace, itemId)
-          if (!found) return fail(`待办 ${itemId} 不存在`, { code: 'NOT_FOUND' })
+          if (!found) return fail(`待办 ${itemId} 不存在`, { code: 'NOT_FOUND', field: 'itemId' })
           const raw = await readItem(client, target, workspace, found.item.fileName)
           // 单条就绪判定与列表同一规则（依赖需在全量语料里解析）
           const readiness = readinessOfItem(found.item, found.list.items, found.list.config.statuses)
@@ -548,12 +571,12 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
           const blocked = writeGuard(proj)
           if (blocked) return blocked
           const title = oneLine(itemArg.title)
-          if (!title) return fail('create 需要 item.title')
+          if (!title) return fail('create 需要 item.title', { code: 'INVALID_PARAM', field: 'item.title' })
           const cfg = await readConfig(client, target, workspace)
           let createdStatus: string | undefined
           if (itemArg.status !== undefined) {
             const r = canonicalStatus(cfg, String(itemArg.status))
-            if (r.error) return fail(r.error, { code: 'INVALID_STATUS', statuses: cfg.statuses })
+            if (r.error) return fail(r.error, { code: 'INVALID_STATUS', field: 'item.status', statuses: cfg.statuses })
             createdStatus = r.status
           }
           const created = await createItem(client, target, workspace, {
@@ -612,9 +635,9 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
           const blocked = writeGuard(proj)
           if (blocked) return blocked
           const itemId = String(args.itemId || '').trim()
-          if (!itemId) return fail('缺少 itemId（如 TASK-1）')
+          if (!itemId) return fail('缺少 itemId（如 TASK-1）', { code: 'INVALID_PARAM', field: 'itemId' })
           const found = await findItem(client, target, workspace, itemId)
-          if (!found) return fail(`待办 ${itemId} 不存在`, { code: 'NOT_FOUND' })
+          if (!found) return fail(`待办 ${itemId} 不存在`, { code: 'NOT_FOUND', field: 'itemId' })
           const cfg = found.list.config
           const raw = await readItem(client, target, workspace, found.item.fileName)
           let next = raw
@@ -622,14 +645,14 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
           if (itemArg.title !== undefined) fm.title = oneLine(itemArg.title)
           if (itemArg.status !== undefined) {
             const r = canonicalStatus(cfg, String(itemArg.status))
-            if (r.error) return fail(r.error, { code: 'INVALID_STATUS', statuses: cfg.statuses })
+            if (r.error) return fail(r.error, { code: 'INVALID_STATUS', field: 'item.status', statuses: cfg.statuses })
             fm.status = r.status
           }
           if (itemArg.priority !== undefined) fm.priority = itemArg.priority === null ? '' : String(itemArg.priority)
           if (itemArg.dueDate !== undefined) fm.dueDate = itemArg.dueDate === null ? '' : String(itemArg.dueDate)
           if (itemArg.ordinal !== undefined) {
             const n = Number(itemArg.ordinal)
-            if (!Number.isFinite(n)) return fail('ordinal 必须是数字')
+            if (!Number.isFinite(n)) return fail('ordinal 必须是数字', { code: 'INVALID_PARAM', field: 'item.ordinal' })
             fm.ordinal = n
           }
           if (itemArg.labels !== undefined) fm.labels = toStrArray(itemArg.labels)
@@ -662,13 +685,14 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
           if (next === raw) {
             return fail(
               'item 没有可修改的字段（支持 title / description / status / priority / dueDate / ordinal / labels / assignees / dependencies / type / milestone / taskProject / parentTaskId / acceptance / acceptAdd / note）',
+              { code: 'INVALID_PARAM', field: 'item' },
             )
           }
           try {
             await writeItem(client, target, workspace, found.item.fileName, () => next, { base: raw })
           } catch (err: any) {
             if (err?.name === 'BacklogConflictError') {
-              return fail('待办内容已被其他人/agent 更新（乐观并发冲突）：先 action:"view" 取最新内容，再重试编辑', { code: 'CONFLICT' })
+              return fail('待办内容已被其他人/agent 更新（乐观并发冲突）：先 action:"view" 取最新内容，再重试编辑', { code: 'CONFLICT', field: 'itemId', recovery: { kind: 'call', tool: 'workbuddy_backlog_manage', arguments: { action: 'view', projectId: proj.id, itemId } } })
             }
             throw err
           }
@@ -688,15 +712,15 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
           const blocked = writeGuard(proj)
           if (blocked) return blocked
           const itemId = String(args.itemId || '').trim()
-          if (!itemId) return fail('缺少 itemId（如 TASK-1）')
+          if (!itemId) return fail('缺少 itemId（如 TASK-1）', { code: 'INVALID_PARAM', field: 'itemId' })
           if (!isFlag(args.force)) {
             return fail(
               '物理删除不可恢复：确认要删请带 force:"true" 重试；更推荐用 edit 把 status 改为收尾状态（如 Done）保留历史',
-              { code: 'CONFIRM_REQUIRED' },
+              { code: 'CONFIRM_REQUIRED', field: 'force', recovery: { kind: 'stop' } },
             )
           }
           const found = await findItem(client, target, workspace, itemId)
-          if (!found) return fail(`待办 ${itemId} 不存在`, { code: 'NOT_FOUND' })
+          if (!found) return fail(`待办 ${itemId} 不存在`, { code: 'NOT_FOUND', field: 'itemId' })
           await deleteItem(client, target, workspace, found.item.fileName)
           return ok({ projectId: proj.id, deleted: found.item.itemId, fileName: found.item.fileName })
         }
@@ -706,14 +730,14 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
           const blocked = writeGuard(proj)
           if (blocked) return blocked
           const idsParsed = parseJsonArg(args.itemIds, 'itemIds')
-          if (!idsParsed.ok) return fail(idsParsed.error)
+          if (!idsParsed.ok) return fail(idsParsed.error, { code: 'INVALID_PARAM', field: 'itemIds' })
           if (idsParsed.value !== undefined && !Array.isArray(idsParsed.value)) {
-            return fail('itemIds 必须是数组，如 ["TASK-1","TASK-2"]')
+            return fail('itemIds 必须是数组，如 ["TASK-1","TASK-2"]', { code: 'INVALID_PARAM', field: 'itemIds' })
           }
           const batch = (idsParsed.value || []).map((x: unknown) => String(x).trim()).filter(Boolean)
           const single = String(args.itemId || '').trim()
           const ids = batch.length ? batch : single ? [single] : []
-          if (!ids.length) return fail('dispatch 需要 itemId（单条）或 itemIds（批量）')
+          if (!ids.length) return fail('dispatch 需要 itemId（单条）或 itemIds（批量）', { code: 'INVALID_PARAM', field: 'itemId' })
           const instruction = typeof itemArg.instruction === 'string' && itemArg.instruction.trim() ? itemArg.instruction.trim() : undefined
           const force = isFlag(args.force)
           const results: Array<Record<string, unknown>> = []
@@ -725,8 +749,15 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
               results.push(compact({
                 ok: false,
                 itemId: id,
-                code: err?.code,
+                ...caughtFailure(err),
                 error: errorText(err),
+                field: typeof err?.field === 'string' ? err.field : undefined,
+                ...(err?.taskCreated ? {
+                  retryable: false,
+                  recovery: typeof err?.taskId === 'string' && err.taskId
+                    ? writebackRecovery(err.taskId, proj.id)
+                    : { kind: 'call', tool: 'workbuddy_task_status', arguments: {} },
+                } : {}),
                 blocked: Array.isArray(err?.blocked) ? err.blocked : undefined,
                 // 任务已建但条目未写回：把 taskId 交回调用方，避免 AI 以为失败而重复派发
                 taskId: err?.taskId,
@@ -752,12 +783,12 @@ export function createBacklogManageTool(deps: BacklogToolDeps): WorkBuddyToolDef
           return JSON.stringify(payload, null, 2)
         }
 
-        return fail(`不支持的 action: ${action}（可选：projects / config / init / list / search / view / create / edit / delete / dispatch / overview / retry-writeback）`)
+        return fail(`不支持的 action: ${action}（可选：projects / config / init / list / search / view / create / edit / delete / dispatch / overview / retry-writeback）`, { code: 'INVALID_PARAM', field: 'action' })
       } catch (err: any) {
         if (err?.name === 'BacklogConflictError') {
           return fail('待办内容已被其他人/agent 更新（乐观并发冲突）：先 view 取最新内容再重试', { code: 'CONFLICT' })
         }
-        return fail(errorText(err))
+        return fail(errorText(err), caughtFailure(err))
       }
     },
   }

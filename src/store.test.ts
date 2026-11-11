@@ -14,6 +14,48 @@ import { join } from 'node:path'
 import { WorkStore, isNodeAbsolutePath } from './store.js'
 import type { WorkTask, Project } from './types.js'
 import { sameDshRef, normalizeWorkspacePath, ProjectWorkspaceConflictError, ProjectWorkspacePathError } from './workspace.js'
+import { agentDisplayProfile, mergeAgentDisplay } from './agent-display.js'
+
+test('task-92: display validates atomically, preserves old-client writes and survives restart', async () => {
+  const { store, path, dir } = makeStore()
+  const stores = [store]
+  try {
+    const agent = store.upsertAgent({ name: 'BOT', description: '资料说明', apiKey: 'secret', systemPrompt: 'hidden' })
+    assert.deepEqual(agentDisplayProfile(agent).display, {
+      expertise: '资料说明', welcomeMessage: '你好，我是BOT。你想先聊些什么？', quickActions: [],
+    })
+    const display = { expertise: ' 专长 ', welcomeMessage: ' 欢迎 ', quickActions: [{ label: 'B', text: 'second' }, { label: 'A', text: 'first' }] }
+    const saved = store.upsertAgent({ id: agent.id, display })
+    assert.equal(saved.display?.expertise, '专长')
+    assert.deepEqual(saved.display?.quickActions, display.quickActions)
+    assert.deepEqual(store.upsertAgent({ id: agent.id, name: '改名' }).display, saved.display)
+    const before = structuredClone(store.getAgent(agent.id))
+    assert.throws(() => store.upsertAgent({ id: agent.id, name: 'bad', display: { quickActions: Array(4).fill({ label: 'a', text: 'b' }) } }))
+    assert.deepEqual(store.getAgent(agent.id), before)
+    const patched = store.upsertAgent({ id: agent.id, display: { welcomeMessage: '' } })
+    assert.equal(patched.display?.welcomeMessage, undefined)
+    assert.equal(patched.display?.expertise, '专长')
+    store.flush()
+    await new Promise((r) => setTimeout(r, 50))
+    const reopened = new WorkStore(path)
+    stores.push(reopened)
+    assert.deepEqual(reopened.getAgent(agent.id)?.display, patched.display)
+    assert.equal(reopened.upsertAgent({ id: agent.id, display: null }).display, undefined)
+    const profile = agentDisplayProfile(saved)
+    profile.display.quickActions[0].text = 'local edit'
+    assert.equal(saved.display?.quickActions?.[0].text, 'second')
+    assert.deepEqual(Object.keys(profile).sort(), ['description', 'display', 'id', 'name'])
+  } finally { await cleanup(stores, dir) }
+})
+
+test('task-92: display Unicode limits, required text, strict shape and clear semantics', () => {
+  assert.equal(mergeAgentDisplay({ expertise: '😀'.repeat(1000) })?.expertise?.length, 2000)
+  assert.throws(() => mergeAgentDisplay({ expertise: '😀'.repeat(1001) }))
+  for (const input of [[], 'x', { systemPrompt: 'x' }, { expertise: null }, { welcomeMessage: 1 }, { quickActions: null }, { quickActions: [{ label: ' ', text: 'x' }] }, { quickActions: [{ label: 'x', text: '' }] }, { quickActions: [{ label: 'x', text: 'y', execute: true }] }]) {
+    assert.throws(() => mergeAgentDisplay(input))
+  }
+  assert.deepEqual(mergeAgentDisplay({ expertise: '', quickActions: [] }, { expertise: 'x', welcomeMessage: 'y' }), { welcomeMessage: 'y', quickActions: [] })
+})
 
 // —— 工作目录「节点侧绝对路径」判断（Windows DSH 节点兼容） ——
 test('isNodeAbsolutePath: 接受 POSIX / Windows 盘符 / UNC 绝对路径', () => {
@@ -326,7 +368,8 @@ test('task-55: 旧库重复项目重启后保留各自成员/凭证/任务引用
   const store = new WorkStore(path)
   const stores = [store]
   try {
-    assert.deepEqual(store.getProjects().sort((a, b) => a.id.localeCompare(b.id)), structuredClone(legacy).sort((a, b) => a.id.localeCompare(b.id)))
+    const migratedLegacy = legacy.map(p => ({ ...p, defaultAgentIds: [...p.expertIds], legacyAgentAccessIds: [...p.expertIds] }))
+    assert.deepEqual(store.getProjects().sort((a, b) => a.id.localeCompare(b.id)), migratedLegacy.sort((a, b) => a.id.localeCompare(b.id)))
     assert.throws(() => store.upsertProject({ name: 'third', dshRef: ref, workspace: '/repo' }), ProjectWorkspaceConflictError)
     const edited = store.upsertProject({ id: 'proj-old-b', name: 'B edited' })
     assert.deepEqual(edited.projectMembers, legacy[1].projectMembers)
@@ -340,7 +383,7 @@ test('task-55: 旧库重复项目重启后保留各自成员/凭证/任务引用
     const reopened = new WorkStore(path)
     stores.push(reopened)
     assert.equal(reopened.getProjects().length, 3)
-    assert.deepEqual(reopened.getProject('proj-old-a'), legacy[0])
+    assert.deepEqual(reopened.getProject('proj-old-a'), { ...legacy[0], defaultAgentIds: ['agent-a'], legacyAgentAccessIds: ['agent-a'] })
     assert.deepEqual(reopened.getProject('proj-old-b')?.projectMembers, legacy[1].projectMembers)
     assert.equal(reopened.getTask('task-legacy')?.projectId, 'proj-old-b')
     assert.equal(reopened.upsertProject({ id: 'proj-old-b', workspace: '/relocated' }).id, 'proj-old-b')

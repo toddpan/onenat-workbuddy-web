@@ -27,8 +27,21 @@ import type http from 'node:http'
 
 import { argBrief, MAX_RESULT_BYTES, replayKey, toolDefToInputSchema } from './xiaozhi-mcp.js'
 import type { ToolCallContext, WorkBuddyToolDef } from './tool-ops.js'
+import { normalizeToolResult, toolFailure } from './tool-errors.js'
 
-const MCP_PROTOCOL_VERSION = '2024-11-05'
+/** Keep JSON-RPC numeric codes intact; the shared tool contract lives in data. */
+function rpcError(code: number, message: string, failureCode: string): Record<string, any> {
+  const extra = failureCode === 'SESSION_EXPIRED'
+    ? { retryable: false, recovery: { kind: 'call', tool: 'initialize', arguments: {} } }
+    : {}
+  return { code, message, data: toolFailure(failureCode, message, extra) }
+}
+
+import { mcpToolResult } from './tool-output.js'
+import { listOperationResources, readOperationResource } from './operation-knowledge.js'
+import { toolActionPolicy } from './tool-policy.js'
+
+const MCP_PROTOCOL_VERSION = '2025-06-18'
 
 /**
  * MCP Server 通道单次调用允许阻塞的最长时间。
@@ -49,7 +62,7 @@ const REPLAY_MAX_ENTRIES = 300
 /** 超过该耗时的调用打一条 warn */
 const SLOW_CALL_WARN_MS = 30_000
 
-type McpRequestContext = Pick<ToolCallContext, 'aiTokenOnly' | 'session'>
+type McpRequestContext = Pick<ToolCallContext, 'aiTokenOnly' | 'session' | 'readOnly'>
 
 export interface WorkBuddyMcpDeps {
   serverName: string
@@ -134,7 +147,7 @@ export class WorkBuddyMcpServer {
       res.statusCode = 405
       res.setHeader('Allow', 'POST, DELETE')
       res.setHeader('Content-Type', 'application/json; charset=utf-8')
-      res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32000, message: 'SSE listen 未开放：本服务无服务端主动推送，请使用 POST 提交 JSON-RPC' } }))
+      res.end(JSON.stringify({ jsonrpc: '2.0', error: rpcError(-32000, 'SSE listen 未开放：本服务无服务端主动推送，请使用 POST 提交 JSON-RPC', 'UNSUPPORTED_OPERATION') }))
       return true
     }
     if (method !== 'POST') {
@@ -148,7 +161,7 @@ export class WorkBuddyMcpServer {
     try {
       body = await readBody(req)
     } catch (err: any) {
-      this.replyJson(res, 400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: `JSON 解析失败: ${err?.message || err}` } })
+      this.replyJson(res, 400, { jsonrpc: '2.0', id: null, error: rpcError(-32700, `JSON 解析失败: ${err?.message || err}`, 'PARSE_ERROR') })
       return true
     }
 
@@ -156,7 +169,7 @@ export class WorkBuddyMcpServer {
     const items = Array.isArray(body) ? body : [body]
     if (Array.isArray(body)) this.stats.batches += 1
     if (!items.length) {
-      this.replyJson(res, 400, { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request: 空 batch' } })
+      this.replyJson(res, 400, { jsonrpc: '2.0', id: null, error: rpcError(-32600, 'Invalid Request: 空 batch', 'INVALID_REQUEST') })
       return true
     }
 
@@ -184,7 +197,7 @@ export class WorkBuddyMcpServer {
     if (!responses.length) {
       // 纯通知：202 无内容（规范允许）
       if (sawNotification) { res.statusCode = 202; res.end() }
-      else { res.statusCode = 400; this.replyJson(res, 400, { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request' } }) }
+      else { res.statusCode = 400; this.replyJson(res, 400, { jsonrpc: '2.0', id: null, error: rpcError(-32600, 'Invalid Request', 'INVALID_REQUEST') }) }
       return true
     }
 
@@ -212,7 +225,7 @@ export class WorkBuddyMcpServer {
       if (isNotification) return undefined
 
       const reply = (result: unknown) => ({ jsonrpc: '2.0', id, result } as JsonRpcMessage)
-      const fail = (code: number, message: string) => ({ jsonrpc: '2.0', id, error: { code, message } } as JsonRpcMessage)
+      const fail = (code: number, message: string, failureCode: string) => ({ jsonrpc: '2.0', id, error: rpcError(code, message, failureCode) } as JsonRpcMessage)
 
       if (rpcMethod === 'initialize') {
         const p = msg?.params || {}
@@ -220,13 +233,13 @@ export class WorkBuddyMcpServer {
         const session = sessionId ? this.sessions.get(sessionId) : undefined
         if (sessionId && !session) {
           // 会话过期/未知：让客户端重新握手（协议要求 404，但在 JSON-RPC 层给明确错误更友好）
-          return fail(-32001, `未知或已过期的 MCP 会话（${sessionId.slice(0, 8)}…），请重新 initialize`)
+          return fail(-32001, `未知或已过期的 MCP 会话（${sessionId.slice(0, 8)}…），请重新 initialize`, 'SESSION_EXPIRED')
         }
         this.stats.lastCallAt = Date.now()
         this.deps.log(`MCP Server：initialize 握手 client=${p?.clientInfo?.name || '?'} v${p?.clientInfo?.version || '?'} protocol=${clientVersion || 'default'}`)
         return {
           ...reply({
-            protocolVersion: MCP_PROTOCOL_VERSION,
+            protocolVersion: ['2024-11-05', '2025-03-26', MCP_PROTOCOL_VERSION].includes(clientVersion) ? clientVersion : MCP_PROTOCOL_VERSION,
             capabilities: {
               tools: { listChanged: false },
               prompts: { listChanged: false },
@@ -241,31 +254,37 @@ export class WorkBuddyMcpServer {
       // initialize 之外的方法要求已建立会话（宽松模式：未带会话头的简单客户端也放行，仅记日志）
       if (sessionId) {
         const s = this.sessions.get(sessionId)
-        if (!s) return fail(-32001, '未知或已过期的 MCP 会话，请重新 initialize')
+        if (!s) return fail(-32001, '未知或已过期的 MCP 会话，请重新 initialize', 'SESSION_EXPIRED')
         s.lastAt = Date.now()
       }
 
       if (rpcMethod === 'ping') return reply({})
 
       if (rpcMethod === 'prompts/list') return reply({ prompts: [] })
-      if (rpcMethod === 'prompts/get') return fail(-32000, '本服务未开放 prompts')
-      if (rpcMethod === 'resources/list' || rpcMethod === 'resources/templates/list') return reply({ resources: [], resourceTemplates: [] })
-      if (rpcMethod === 'resources/read') return fail(-32000, '本服务未开放 resources（请使用 tools/call 的 workbuddy_file_manage / workbuddy_task_manage）')
+      if (rpcMethod === 'prompts/get') return fail(-32000, '本服务未开放 prompts', 'UNSUPPORTED_OPERATION')
+      if (rpcMethod === 'resources/list') return reply({ resources: listOperationResources() })
+      if (rpcMethod === 'resources/templates/list') return reply({ resourceTemplates: [] })
+      if (rpcMethod === 'resources/read') {
+        const resource = readOperationResource(String(msg.params?.uri || ''))
+        return resource ? reply({ contents: [{ uri: resource.uri, mimeType: resource.mimeType, text: resource.text }] }) : fail(-32000, 'Unknown operation resource URI; use resources/list', 'RESOURCE_NOT_FOUND')
+      }
 
       if (rpcMethod === 'tools/list') {
         const tools = this.deps.getTools().map((def) => ({
           name: def.name,
           description: def.description,
           inputSchema: toolDefToInputSchema(def),
+          outputSchema: def.outputSchema,
+          annotations: def.annotations,
         }))
         return reply({ tools })
       }
 
       if (rpcMethod === 'tools/call') return await this.handleToolCall(msg, sessionId || 'anonymous', requestBase, opts)
-      return fail(-32601, `Method not found: ${rpcMethod}`)
+      return fail(-32601, `Method not found: ${rpcMethod}`, 'METHOD_NOT_FOUND')
     } catch (err: any) {
       if (isNotification) return undefined
-      return { jsonrpc: '2.0', id, error: { code: -32603, message: err?.message || String(err) } } as JsonRpcMessage
+      return { jsonrpc: '2.0', id, error: rpcError(-32603, err?.message || String(err), 'INTERNAL_ERROR') } as JsonRpcMessage
     }
   }
 
@@ -280,13 +299,13 @@ export class WorkBuddyMcpServer {
     // ① 幂等回放：同会话 + 同 id + 同参数 = 客户端侧重投/整轮重跑，直接回放原应答，不再执行副作用
     // Cache keys include the authenticated identity; tools may require fresh authorization before replay.
     const principal = opts?.session ? `${opts.session.userId}:${opts.session.role}` : opts?.aiTokenOnly ? 'ai-token' : 'service'
-    const key = replayKey(`mcp:${sessionId}`, id, 'tools/call', { principal, params: msg?.params })
+    const key = replayKey(`mcp:${sessionId}`, id, 'tools/call', { principal, readOnly: opts?.readOnly === true, params: msg?.params })
     const def = this.deps.getTools().find((x) => x.name === name)
     const ctx: ToolCallContext = { channel: 'mcp', callerId: `mcp:${sessionId}`, rpcId: (id ?? null) as any, maxBlockMs: MCP_SERVER_MAX_BLOCK_MS, ...(requestBase ? { requestBase } : {}), ...opts }
     if (key) {
       const hit = this.replays.get(key)
       const cachedText = (hit?.result.result as any)?.content?.[0]?.text
-      if (hit && Date.now() - hit.at <= REPLAY_TTL_MS && (!def?.canReplay || (typeof cachedText === 'string' && def.canReplay(args, ctx, cachedText)))) {
+      if (hit && toolActionPolicy(name, args, ctx).allowed && Date.now() - hit.at <= REPLAY_TTL_MS && (!def?.canReplay || (typeof cachedText === 'string' && def.canReplay(args, ctx, cachedText)))) {
         this.stats.replays += 1
         const r = hit.result as JsonRpcMessage
         if (this.stats.lastTool) this.stats.lastTool = { ...this.stats.lastTool, replayed: true }
@@ -299,29 +318,54 @@ export class WorkBuddyMcpServer {
     let isError = false
     const startedAt = Date.now()
     if (!def) {
-      text = JSON.stringify({ ok: false, error: `工具不存在: ${name}`, available: this.deps.getTools().map((t) => t.name) })
+      text = JSON.stringify(toolFailure('TOOL_NOT_FOUND', `工具不存在: ${name}`, { available: this.deps.getTools().map((t) => t.name) }))
       isError = true
     } else {
       try {
         text = await def.execute(args, ctx)
       } catch (err: any) {
-        text = JSON.stringify({ ok: false, error: err?.message || String(err) })
+        text = JSON.stringify(normalizeToolResult({
+          ok: false,
+          code: typeof err?.code === 'string' ? err.code : 'INTERNAL_ERROR',
+          message: err?.message || String(err),
+        }, { tool: name, args }))
         isError = true
       }
     }
     const ms = Date.now() - startedAt
 
-    // ② 单帧上限兜底：超大结果换成结构化提示（保留可解析 JSON）
-    let bytes = Buffer.byteLength(text)
+    let parsedResult: Record<string, any> | undefined
+    try {
+      const parsed = JSON.parse(text)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        parsedResult = normalizeToolResult(parsed, { tool: name, args })
+        text = JSON.stringify(parsedResult)
+      }
+    } catch { /* 非 JSON 结果保持原样 */ }
+
+    // ② 单帧上限兜底：保留写操作回执；恢复步骤只读取结果，不重新执行副作用。
+    let bytes = Buffer.byteLength(JSON.stringify(mcpToolResult(text, isError)))
     if (bytes > MAX_RESULT_BYTES) {
       this.stats.oversize += 1
       this.deps.log(`MCP Server：工具 ${name} 结果 ${(bytes / 1024).toFixed(0)}KB 超过单帧上限 ${(MAX_RESULT_BYTES / 1024).toFixed(0)}KB，已替换为「结果过大」提示`)
-      text = JSON.stringify({
-        ok: false,
-        error: `结果过大：${(bytes / 1024).toFixed(0)}KB 超过 MCP 单帧上限 ${(MAX_RESULT_BYTES / 1024).toFixed(0)}KB`,
-        truncated: true,
-        hint: '请缩小查询范围：task_status 用默认摘要（detail:"full" 超大任务会自动降级为聊天内容下载 URL）、task_chat 用 maxMessages/maxTextChars 分页、文件改用控制台下载',
-      }, null, 2)
+      const receipt: Record<string, any> = {}
+      // Preserve compact outcome metadata, especially receipts preventing duplicate creates/dispatches.
+      for (const field of ['taskCreated', 'deduped', 'taskId', 'id', 'status', 'running', 'taskStarted', 'dispatched', 'writebackFailed', 'chatDownloadUrl']) {
+        const value = parsedResult?.[field]
+        if (value !== undefined && (typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string' && value.length <= 4096)) receipt[field] = value
+      }
+      const taskId = receipt.taskId || (typeof parsedResult?.task?.id === 'string' ? parsedResult.task.id : undefined)
+      if (taskId) receipt.taskId = taskId
+      text = JSON.stringify(toolFailure('RESULT_TOO_LARGE',
+        `结果过大：${(bytes / 1024).toFixed(0)}KB 超过 MCP 单帧上限 ${(MAX_RESULT_BYTES / 1024).toFixed(0)}KB`, {
+          ...receipt,
+          truncated: true,
+          retryable: false,
+          recovery: taskId
+            ? { kind: 'poll', tool: 'workbuddy_task_status', arguments: { taskId, detail: 'summary' } }
+            : { kind: 'stop' },
+          hint: '操作可能已经完成，请勿重新创建或派发。已有 taskId 时查询 task_status 摘要；读取结果请缩小范围或使用下载链接。',
+        }))
       isError = true
       bytes = Buffer.byteLength(text)
     }
@@ -331,7 +375,7 @@ export class WorkBuddyMcpServer {
       if (parsed && typeof parsed === 'object' && parsed.ok === false) isError = true
     } catch { /* 非 JSON 结果按成功回 */ }
 
-    const result = { content: [{ type: 'text', text }], isError }
+    const result = mcpToolResult(text, isError)
     const brief = argBrief(args)
     this.deps.log(
       `MCP Server：工具调用 ${name}${isError ? '（失败）' : ''} 会话=${sessionId.slice(0, 8)}… id=${id ?? '-'}${brief ? ` ${brief}` : ''}` +

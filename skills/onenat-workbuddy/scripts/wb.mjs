@@ -138,6 +138,7 @@ const HELP = `WorkBuddy CLI — AI 管理 OneNat WorkBuddy（配置: ${CFG.cfgPa
            init:        --project id [--json '{sample:true,updateInstruction:true}']
            retry-writeback: --task taskId
   tools                                     列出服务端全部工具（连通性自检）
+  （协作群工具 workbuddy_group_manage 仅控制台登录会话可用；本 CLI 走 AI 令牌，调用会返回 AI_TOKEN_DENIED——群管理请用 Web 控制台「群」页签）
   help                                      本帮助`
 
 async function main() {

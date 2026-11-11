@@ -1,6 +1,7 @@
 ---
 name: workbuddy-mcp
-description: 调用 OneNat WorkBuddy 多智能体工作台：任务创建/管理/查询/答复提问、监控态势、定时任务、项目管理、文件管理、专家库、SSH 资源、子智能体管理、项目待办（backlog/todo/看板）等 16 个工具。支持两种通道——MCP Server（Streamable HTTP，供 MCP 原生宿主注册）与 wbmcp.sh 脚本直连（无 MCP 宿主时的等价通道）。当用户要派任务给 WorkBuddy/子智能体/专家、查任务进度、看监控大屏、管项目或定时任务、传大文件、管理待办/backlog/todo/看板时使用。
+service-contract: '2026-11-08.1'
+description: 调用 OneNat WorkBuddy 多智能体工作台：任务创建/管理/查询/答复提问、监控态势、定时任务、项目管理、文件管理、专家库、SSH 资源、子智能体管理、项目待办（backlog/todo/看板）等工具及只读能力发现。支持两种通道——MCP Server（Streamable HTTP，供 MCP 原生宿主注册）与 wbmcp.sh 脚本直连（无 MCP 宿主时的等价通道）。当用户要派任务给 WorkBuddy/子智能体/专家、查任务进度、看监控大屏、管项目或定时任务、传大文件、管理待办/backlog/todo/看板时使用。
 ---
 
 # OneNat WorkBuddy MCP Skill
@@ -17,7 +18,7 @@ WorkBuddy 工作台的 **MCP 通道技能**：宿主支持 MCP 时把服务注�
 
 ## 为什么接了 MCP 还要这份 SKILL
 
-- **MCP 只管传输与工具发现**：`tools/list` 只有工具签名；「何时用、按什么顺序组合」的操作知识（下面的三步流程、@ 派活、轮询约定）都在本文件里。
+- **先发现当前契约**：调用 `workbuddy_capabilities {}` 读取身份、action 权限上限、风险和等待语义；服务契约版本应为 `2026-11-08.1`。任务、大文件和提问恢复流程通过 `resources/list` → `resources/read` 读取；旧宿主用 `workbuddy_capabilities {resource:uri}`。版本不一致时以服务返回的流程为准。只读体验须使用独立配置的 `WORKBUDDY_READONLY_TOKEN`，提示词中的“不写文件”不构成权限控制。
 - **触发靠 SKILL**：宿主靠 description/whenToUse 决定什么需求该想起工作台——没有它，接上了也不会主动用。
 - **复杂逻辑在脚本端**：断点续传、直连通道优选（内网自证/公网回退）、幂等对账这些状态机由 `wbmcp.sh` 承载，MCP 工具调用表达不了。
 
@@ -74,7 +75,7 @@ bash $WB call workbuddy_task_manage '{"action":"send","taskId":"task-xxxx","mess
 
 `putfile` 会在 init 时回显任务状态；任务非 draft 时服务端返回 warning（说明附件很可能传了也读不到），看到 warning 应停手改走三步流程。
 
-## 工具清单（16 个）
+## 工具清单（17 个）
 
 | 工具 | 用途 |
 |---|---|
@@ -94,6 +95,7 @@ bash $WB call workbuddy_task_manage '{"action":"send","taskId":"task-xxxx","mess
 | workbuddy_ssh_resource_manage | SSH 连接资源池：list / get / upsert / delete / test / exec |
 | workbuddy_team_manage | 专家团（合同式多成员协作单元）：list / get / upsert / delete / toggle（内置团只读） |
 | workbuddy_backlog_manage | 项目待办 backlog（Backlog.md 兼容）：projects / config / init / list / search / view / create / edit / delete / dispatch / overview / retry-writeback |
+| workbuddy_group_manage | 协作群（每用户隔离）：list / get / create / update / delete / sections / add_section / rename_section / remove_section / rounds / add_round / mark_read，最小示例 `workbuddy_group_manage {"action":"list"}`。**仅控制台登录会话可用；AI 令牌通道（wbmcp.sh）全部 action 返回 AI_TOKEN_DENIED**——频道内容可按普通任务只读旁观（group 的 channelRef 即任务 id） |
 
 ## Backlog 待办管理
 

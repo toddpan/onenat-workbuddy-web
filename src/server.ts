@@ -18,6 +18,8 @@
  */
 
 import http from 'node:http'
+import { timingSafeEqual } from 'node:crypto'
+import { structuredToolResult } from './tool-output.js'
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -36,7 +38,9 @@ import { XiaozhiMcpClient } from './xiaozhi-mcp.js'
 import { WorkBuddyMcpServer, requestPublicBase } from './mcp-server.js'
 import { ExpertMcpServer } from './mcp/expert-mcp.js'
 import { SshResourceStore } from './ssh-store.js'
+import { GroupStore } from './groups.js'
 import { createWorkBuddyToolDefs, HTTP_TOOL_CTX, type WorkBuddyToolDef } from './tool-ops.js'
+import { normalizeToolResult } from './tool-errors.js'
 import { AuthService, SESSION_COOKIE } from './auth.js'
 import { renderLoginUi } from './login-ui.js'
 import { renderInviteUi, renderResetUi, renderProjectInviteUi } from './invite-ui.js'
@@ -204,6 +208,8 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
   const sshStorePath = join(cfg.dataDir, 'ssh-resources.json')
   const store = new WorkStore(storePath)
   const sshStore = new SshResourceStore(sshStorePath)
+  // 协作群存储单例（裁定 A）：同一实例同时注入 Router 与 tool defs，防双实例内存快照互相覆盖
+  const groupsStore = new GroupStore(join(cfg.dataDir, 'groups.json'))
 
   // 优先级: 命令行/env > 存储中的设置
   const settings = store.getSettings()
@@ -245,8 +251,14 @@ engine.startPendingAskSweeper()
   const monitor = new MonitorService(store, directory, resolver, engine, scheduler, sshStore, planner, cfg.dataDir, log)
   monitor.start()
   const auth = new AuthService(cfg.dataDir, cfg.adminUsername, cfg.adminPassword)
+  const readOnlyToken = String(process.env.WORKBUDDY_READONLY_TOKEN || '')
+  const isReadOnlyToken = (token: string) => {
+    const supplied = Buffer.from(token), expected = Buffer.from(readOnlyToken)
+    return expected.length > 0 && supplied.length === expected.length && timingSafeEqual(supplied, expected)
+  }
   // --token / WORKBUDDY_TOKEN 作为种子：存储为空时写入，此后以设置页「AI APIKEY」为唯一权威
   auth.seedAiToken(cfg.apiToken)
+  if (readOnlyToken && auth.validateAiToken(readOnlyToken)) throw new Error('WORKBUDDY_READONLY_TOKEN must differ from the AI token')
   // SMTP 邮件服务（用户邀请自动发信；未配置时开发模式，邀请链接仍可手动复制）
   const mail = new MailService(cfg.dataDir)
   // 审计日志（B-03）与邮件接口限流（B-04）
@@ -271,7 +283,7 @@ engine.startPendingAskSweeper()
     xiaozhi.configureAll(endpoints)
   }
   const library = new SkillPluginLibrary(cfg.dataDir, store, log)
-  const router = new WorkBuddyRouter(store, directory, resolver, composer, planner, engine, sshStore, scheduler, monitor, auth, xiaozhi, library, mail, auditLog, mailLimiter)
+  const router = new WorkBuddyRouter(store, directory, resolver, composer, planner, engine, sshStore, scheduler, monitor, auth, xiaozhi, library, mail, auditLog, mailLimiter, groupsStore)
   // 专家团专家成员的 persona 来源：引擎与路由共用同一份 ExpertRegistry（构造顺序晚于引擎，此处回填）
   engine.attachExperts(router.expertRegistry)
 
@@ -289,7 +301,7 @@ engine.startPendingAskSweeper()
 
   const { port } = cfg
   const consoleUrl = `http://${cfg.host === '0.0.0.0' ? '127.0.0.1' : cfg.host}:${port}${cfg.prefix || '/'}`
-  const tools = createWorkBuddyToolDefs({ store, directory, resolver, composer, engine, sshStore, consoleUrl, monitor, scheduler, planner, expertRegistry: router.expertRegistry, downloadTokens: library })
+  const tools = createWorkBuddyToolDefs({ store, directory, resolver, composer, engine, sshStore, groupsStore, consoleUrl, monitor, scheduler, planner, expertRegistry: router.expertRegistry, downloadTokens: library, serverVersion: pkgVersion() })
   const toolMap = new Map(tools.map((t) => [t.name, t]))
 
   const server = http.createServer(async (req, res) => {
@@ -301,7 +313,13 @@ engine.startPendingAskSweeper()
       console.log(`[onenat-workbuddy] ${method} ${url.pathname}${url.search} → ${res.statusCode} ${Date.now() - startedAt}ms`)
     })
 
+    const readOnly = isReadOnlyToken(extractAiToken(req, url))
     try {
+      // Observational credentials cannot reach alternate REST or auth mutation paths, even with a cookie.
+      if (readOnly && !((url.pathname === `${cfg.prefix}/mcp` || url.pathname === `${cfg.prefix}/mcp/`) || url.pathname === `${cfg.prefix}/api/tools` || url.pathname.startsWith(`${cfg.prefix}/api/tools/`))) {
+        sendJson(res, 403, { ok: false, code: 'PERMISSION_DENIED', error: '只读体验凭证仅允许工具与 MCP 能力查询通道' })
+        return
+      }
       // ---------- 健康检查（永远在根路径，无需登录） ----------
       if (url.pathname === '/healthz' || (cfg.prefix && url.pathname === `${cfg.prefix}/healthz`)) {
         sendJson(res, 200, {
@@ -617,7 +635,7 @@ engine.startPendingAskSweeper()
       }
 
       // ---------- 访问控制：控制台与业务 API 均需登录；AI 令牌可访问开放面（工具通道/监控/定时任务/规划器/文件） ----------
-      const aiTokenOk = auth.validateAiToken(extractAiToken(req, url))
+      const aiTokenOk = readOnly || auth.validateAiToken(extractAiToken(req, url))
       // 项目导入建项目：公开但必须携带一次性 token（远端 DSH 节点无平台登录态；令牌在发起导入时下发到任务提示词）
       const projectImportUpload = underPrefix && method === 'POST'
         && url.pathname === `${prefix}/api/projects/import-create`
@@ -651,7 +669,7 @@ engine.startPendingAskSweeper()
             sendJson(res, 200, {
               ok: true,
               consoleUrl,
-              tools: tools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })),
+              tools: tools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters, inputSchema: t.inputSchema, outputSchema: t.outputSchema, annotations: t.annotations })),
             })
             return
           }
@@ -660,17 +678,17 @@ engine.startPendingAskSweeper()
         }
         const def = toolMap.get(name)
         if (!def) {
-          sendJson(res, 404, { ok: false, error: `工具不存在: ${name}`, available: [...toolMap.keys()] })
+          sendJson(res, 404, { ok: false, code: 'TOOL_NOT_FOUND', error: `工具不存在: ${name}`, available: [...toolMap.keys()] })
           return
         }
         const args = method === 'GET' ? Object.fromEntries(url.searchParams.entries()) : await readJsonBody(req)
         try {
           // HTTP 工具通道：调用方（AI 技能 / wb.mjs / 三方系统）可承受长阻塞，按既有语义放行；
           // requestBase 按本次请求头推导（反代优先 x-forwarded-*），工具回传的绝对端点对调用方可达
-          const raw = await def.execute(args || {}, { ...HTTP_TOOL_CTX, requestBase: requestPublicBase(req, cfg.prefix || ''), session: requestSession, ...(sessionUser ? {} : { aiTokenOnly: true }) })
-          sendJson(res, 200, { ok: true, tool: name, result: tryParse(raw) })
+          const raw = await def.execute(args || {}, { ...HTTP_TOOL_CTX, requestBase: requestPublicBase(req, cfg.prefix || ''), session: readOnly ? undefined : requestSession, readOnly, ...(sessionUser && !readOnly ? {} : { aiTokenOnly: true }) })
+          sendJson(res, 200, { ok: true, tool: name, result: tryParse(raw), structuredContent: structuredToolResult(raw) })
         } catch (err: any) {
-          sendJson(res, 500, { ok: false, tool: name, error: err?.message || String(err) })
+          sendJson(res, 500, { ok: false, code: 'EXECUTION_FAILED', tool: name, error: '工具执行失败' })
         }
         return
       }
@@ -678,7 +696,7 @@ engine.startPendingAskSweeper()
       // ---------- 对外 MCP Server（Streamable HTTP；登录会话或 AI 令牌，门禁已在上方统一完成） ----------
       const mcpPath = `${prefix}/mcp`
       if (underPrefix && (url.pathname === mcpPath || url.pathname === `${mcpPath}/`)) {
-        await mcpServer.handleRequest(req, res, method, { session: requestSession, ...(sessionUser ? {} : { aiTokenOnly: true }) })
+        await mcpServer.handleRequest(req, res, method, { session: readOnly ? undefined : requestSession, readOnly, ...(sessionUser && !readOnly ? {} : { aiTokenOnly: true }) })
         return
       }
       // MCP 运行状态（诊断 / 冒烟）
@@ -768,6 +786,8 @@ function isAiTokenAllowedPath(pathname: string, prefix: string, method = 'GET'):
   if (/^\/api\/tasks\/[^/]+\/(files\/download|attachments|todos|stats|messages|chat-export)$/.test(p)) return true
   // 附件 P2P 直传控制面：init 下发节点直连配方（地址+密钥，文件字节不经本服务），register 登记落盘结果
   if (/^\/api\/tasks\/[^/]+\/attachments\/direct\/(init|register|relay)$/.test(p)) return true
+  // History is user-scoped; generic task-id allowlisting must not admit the index.
+  if (p === '/api/tasks/history') return false
   // 任务只读面（状态/详情/流）：AI 令牌跟踪自己派发的任务用
   if (/^\/api\/tasks\/[^/]+$/.test(p)) return true
   if (p === '/api/tasks') return true
@@ -837,7 +857,10 @@ function sendJson(res: http.ServerResponse, status: number, data: unknown): void
   res.statusCode = status
   res.setHeader('Content-Type', 'application/json; charset=utf-8')
   res.setHeader('Cache-Control', 'no-store')
-  res.end(JSON.stringify(data))
+  const payload = data && typeof data === 'object' && (data as any).ok === false
+    ? normalizeToolResult({ ...(data as Record<string, any>), status: (data as any).status ?? status })
+    : data
+  res.end(JSON.stringify(payload))
 }
 
 // ---------------------------------------------------------------- 启动

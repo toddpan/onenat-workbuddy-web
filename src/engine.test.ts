@@ -280,6 +280,44 @@ async function settle(engine: TaskEngine, store: WorkStore, taskId: string, time
   }
 }
 
+// ---------- task-84：同名拒绝、ID 路由 ----------
+test('task-84: 同名/大小写/文件提及均拒绝且无任务副作用，ID 与唯一名称兼容', async () => {
+  const f = makeFixture()
+  try {
+    seedAgent(f.store, 'agent-one')
+    seedAgent(f.store, 'agent-two')
+    f.store.mutateAgent('agent-one', a => { a.name = '同名' })
+    f.store.mutateAgent('agent-two', a => { a.name = '同名' })
+    seedAgent(f.store, 'agent-unique', { name: 'Unique' })
+    for (const message of ['@同名 执行', '@同名:logs/a.log', '@[同名:logs/a.log]']) {
+      await assert.rejects(f.engine.createTask({ message }), (e: any) => {
+        assert.equal(e.code, 'AMBIGUOUS_AGENT')
+        assert.deepEqual(e.candidates.map((a: any) => a.id), ['agent-one', 'agent-two'])
+        return true
+      })
+    }
+    assert.equal(f.store.getTasks().length, 0)
+    assert.equal(f.client.created, 0)
+    assert.deepEqual((await f.engine.extractMentions('@agent-two 执行')).mentionedAgentIds, ['agent-two'])
+    assert.deepEqual((await f.engine.extractMentions('@Unique 执行')).mentionedAgentIds, ['agent-unique'])
+    assert.deepEqual((await f.engine.extractMentions('@unique 执行')).mentionedAgentIds, ['agent-unique'])
+    await assert.rejects(f.engine.createTask({ memberAgentIds: ['missing'], message: '执行' }), /不存在或已停用/)
+    assert.equal(f.store.getTasks().length, 0)
+  } finally { await f.store.flush(); rmSync(f.dir, { recursive: true, force: true }) }
+})
+
+test('task-84: 结构化 ID 是首轮定向意图，不静默落到项目主节点', async () => {
+  const f = makeFixture()
+  try {
+    seedAgent(f.store, 'agent-id', { name: '执行者' })
+    const t = await f.engine.createTask({ memberAgentIds: ['agent-id'], message: '按职责完成指令', nodeRef: { kind: 'mapping', mappingId: 'project-exec' } })
+    const done = await settle(f.engine, f.store, t.id)
+    assert.equal(done.lastRoute?.kind, 'orchestrate')
+    assert.ok(done.plan?.scope?.memberIds.includes('agent-id'))
+    assert.ok(f.planners.planOptions.length > 0)
+  } finally { await f.store.flush(); rmSync(f.dir, { recursive: true, force: true }) }
+})
+
 // ---------- task-81：提问等待不能当作已完成，重启仍可答复 ----------
 test('task-81: 重启保留 pendingAsk 等待态，普通中断任务仍标失败', async () => {
   const f = makeFixture()

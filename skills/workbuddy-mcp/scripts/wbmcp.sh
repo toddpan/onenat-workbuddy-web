@@ -12,7 +12,9 @@
 #   create 带 message 会立即执行——文件没传任务就开跑，执行者读不到附件
 # 配置: 环境变量 WORKBUDDY_BASE_URL / WORKBUDDY_TOKEN > ~/.workbuddy-skill.json（一键安装脚本写入）；
 #       MCP 地址 = $BASE_URL/mcp。缺配置时脚本会提示安装命令。
-# 会话自动握手并缓存于 $TMPDIR/workbuddy-mcp.sid；失效自动重握手重试一次。
+# 会话自动握手并缓存于 $TMPDIR/workbuddy-mcp.sid；失败清缓存，下次显式调用重新握手。
+# 请求绝不自动重放（包括超时/会话过期），避免重复执行 create/send/dispatch。
+# WORKBUDDY_TIMEOUT_SECONDS 可调整单次 HTTP 超时（默认 300 秒）。
 set -uo pipefail
 
 CFG="${WORKBUDDY_CONFIG:-$HOME/.workbuddy-skill.json}"
@@ -28,50 +30,138 @@ fi
 URL="${BASE_URL%/}/mcp"
 SID_FILE="${TMPDIR:-/tmp}/workbuddy-mcp.sid"
 
-_sse_data() { sed -n 's/^data: //p'; }
+# 只打印固定诊断，不回显远端错误文本、响应头或 curl 详情（可能含凭据）。
+_rpc_response() { # $1=request $2=HTTP status；stdin=JSON/SSE，stdout=单个匹配的 RPC 响应
+  python3 -c '
+import json, sys
+request, status = json.loads(sys.argv[1]), int(sys.argv[2])
+raw = sys.stdin.read()
+def fail(message):
+    print("wbmcp: " + message, file=sys.stderr)
+    sys.exit(1)
+try:
+    messages = []
+    if raw.strip():
+        try:
+            decoded = json.loads(raw)
+            messages = decoded if isinstance(decoded, list) else [decoded]
+        except ValueError:
+            # SSE: 按事件边界组装多行 data；解析每一帧，不能吞掉损坏帧。
+            data = []
+            for line in raw.replace("\r\n", "\n").split("\n") + [""]:
+                if not line:
+                    if data:
+                        messages.append(json.loads("\n".join(data)))
+                        data = []
+                elif line.startswith(":"):
+                    continue
+                else:
+                    field, sep, value = line.partition(":")
+                    if field not in ("data", "event", "id", "retry"):
+                        raise ValueError()
+                    if field == "data":
+                        data.append(value[1:] if value.startswith(" ") else value)
+    if any(not isinstance(m, dict) or m.get("jsonrpc") != "2.0" for m in messages):
+        raise ValueError()
+    if "id" not in request:
+        if not 200 <= status < 300: fail("HTTP request failed (status %d)" % status)
+        if any("error" in m for m in messages): fail("RPC notification failed")
+        sys.exit(0)
+    matches = [m for m in messages if "id" in m and m["id"] == request["id"]]
+    if len(matches) != 1: raise ValueError()
+    response = matches[0]
+    if ("result" in response) == ("error" in response): raise ValueError()
+    print(json.dumps(response, ensure_ascii=False))
+    if not 200 <= status < 300: fail("HTTP request failed (status %d)" % status)
+    if "error" in response: fail("RPC request failed")
+    result = response["result"]
+    if isinstance(result, dict):
+        failed = result.get("isError") is True or result.get("ok") is False
+        for content in result.get("content", []):
+            if isinstance(content, dict) and content.get("type") == "text":
+                try:
+                    business = json.loads(content.get("text", ""))
+                    failed |= isinstance(business, dict) and business.get("ok") is False
+                except (ValueError, TypeError):
+                    pass
+        structured = result.get("structuredContent")
+        failed |= isinstance(structured, dict) and structured.get("ok") is False
+        if failed: fail("tool reported failure")
+except (ValueError, TypeError, KeyError, AttributeError):
+    fail("invalid or incomplete JSON/SSE RPC response (HTTP %d)" % status)
+' "$1" "$2"
+}
 
-post() { # $1=json body → stdout: 响应体；副作用: 若响应带新 session id 则保存
-  local body="$1" hdr sid
-  hdr=$(mktemp)
+post() { # 一次 HTTP 请求；无 curl 重试，无业务请求重放。
+  local body="$1" hdr response status rc sid
+  hdr=$(mktemp) || return 1
+  response=$(mktemp) || { rm -f "$hdr"; return 1; }
   local sess_args=()
   if [[ -s "$SID_FILE" ]]; then
-    sess_args=(-H "Mcp-Session-Id: $(cat "$SID_FILE")")
+    sess_args=(-H "Mcp-Session-Id: $(<"$SID_FILE")")
   fi
-  curl -sS -D "$hdr" -X POST "$URL" \
+  status=$(curl -q -sS -D "$hdr" -o "$response" -w '%{http_code}' -X POST "$URL" \
     -H 'Content-Type: application/json' \
     -H 'Accept: application/json, text/event-stream' \
     -H "Authorization: Bearer $TOKEN" \
     "${sess_args[@]+${sess_args[@]}}" \
-    -d "$body" --max-time 300
-  # 响应可能不带 session 头（已建立会话/通知回执），grep 失败属正常
-  sid=$({ grep -i '^mcp-session-id:' "$hdr" || true; } | tr -d '\r' | awk 'NR==1{print $2}')
-  [[ -n "$sid" ]] && printf '%s' "$sid" > "$SID_FILE"
-  rm -f "$hdr"
-  return 0
+    -d "$body" --max-time "${WORKBUDDY_TIMEOUT_SECONDS:-300}" 2>/dev/null)
+  rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    _rpc_response "$body" "$status" < "$response"
+    rc=$?
+  else
+    echo "wbmcp: HTTP transport failed (curl exit $rc); request was not retried" >&2
+  fi
+  if [[ "$rc" -eq 0 ]]; then
+    sid=$({ grep -i '^mcp-session-id:' "$hdr" || true; } | tr -d '\r' | awk 'NR==1{print $2}')
+    if [[ -n "$sid" ]]; then
+      (umask 077; printf '%s' "$sid" > "$SID_FILE") || rc=1
+    fi
+  fi
+  if [[ "$rc" -ne 0 ]]; then rm -f "$SID_FILE"; fi
+  rm -f "$hdr" "$response"
+  return "$rc"
 }
 
 handshake() {
   rm -f "$SID_FILE"
-  post '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"workbuddy-mcp-skill","version":"1.0"}}}' \
-    | _sse_data | python3 -c 'import sys,json; print("handshake ok:", json.load(sys.stdin)["result"]["serverInfo"])' >&2
+  post '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"workbuddy-mcp-skill","version":"1.0"}}}' >/dev/null || return $?
   post '{"jsonrpc":"2.0","method":"notifications/initialized"}' >/dev/null
 }
 
-call_json() { # $1=json body → stdout: data 行 JSON（session 失效时重握手重试一次）
-  local out
-  out=$(post "$1" | _sse_data)
-  if [[ -z "$out" ]] || printf '%s' "$out" | grep -q '"code":-32'; then
-    handshake
-    out=$(post "$1" | _sse_data)
-  fi
-  printf '%s\n' "$out"
+call_json() { post "$1"; }
+
+ensure_session() { [[ -s "$SID_FILE" ]] || handshake; }
+
+_print_call() { # 始终输出 JSON；RPC 错误保留信封，业务结果取 text/structuredContent。
+  python3 -c '
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    if "error" in d:
+        print(json.dumps(d, ensure_ascii=False))
+    else:
+        result = d["result"]
+        texts = [c["text"] for c in result.get("content", []) if c.get("type") == "text"]
+        values = []
+        for text in texts:
+            try: values.append(json.loads(text))
+            except ValueError: values.append(text)
+        value = (values[0] if len(values) == 1 else values) if texts else result.get("structuredContent", result)
+        print(json.dumps(value, ensure_ascii=False))
+except (ValueError, TypeError, KeyError, AttributeError):
+    print("wbmcp: invalid tool result", file=sys.stderr)
+    sys.exit(1)
+'
 }
 
 cmd="${1:-help}"
 case "$cmd" in
   tools)
-    [[ -s "$SID_FILE" ]] || handshake
-    call_json '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+    ensure_session || exit $?
+    out=$(call_json '{"jsonrpc":"2.0","id":1,"method":"tools/list"}') || exit $?
+    printf '%s\n' "$out" \
       | python3 -c '
 import sys, json
 for t in json.load(sys.stdin)["result"]["tools"]:
@@ -79,20 +169,29 @@ for t in json.load(sys.stdin)["result"]["tools"]:
     print("- %s: %s" % (t["name"], desc))'
     ;;
   call)
-    tool="$2"; args="${3:-{\}}"
-    [[ -s "$SID_FILE" ]] || handshake
-    body=$(python3 -c 'import sys,json; print(json.dumps({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":sys.argv[1],"arguments":json.loads(sys.argv[2])}}))' "$tool" "$args")
-    call_json "$body" \
-      | python3 -c '
-import sys, json
-d = json.load(sys.stdin)
-if "error" in d: sys.exit("RPC error: %s" % d["error"])
-for c in d["result"].get("content", []):
-    print(c.get("text", ""))
-print("--- isError:", d["result"].get("isError", False), file=sys.stderr)'
+    tool="${2:-}"; args="${3:-{\}}"
+    [[ -n "$tool" ]] || { echo 'wbmcp: missing tool name' >&2; exit 1; }
+    body=$(python3 -c 'import sys,json
+try:
+    args = json.loads(sys.argv[2])
+    if not isinstance(args, dict): raise ValueError()
+    print(json.dumps({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":sys.argv[1],"arguments":args}}))
+except ValueError:
+    sys.exit("wbmcp: arguments must be a JSON object")' "$tool" "$args") || exit $?
+    ensure_session || exit $?
+    rc=0
+    out=$(call_json "$body") || rc=$?
+    if [[ -n "$out" ]]; then printf '%s\n' "$out" | _print_call || exit $?; fi
+    exit "$rc"
     ;;
   raw)
-    [[ -s "$SID_FILE" ]] || handshake
+    [[ -n "${2:-}" ]] || { echo 'wbmcp: missing JSON-RPC request' >&2; exit 1; }
+    python3 -c 'import json,sys
+try:
+    d=json.loads(sys.argv[1])
+    if not isinstance(d, dict) or d.get("jsonrpc") != "2.0" or not isinstance(d.get("method"), str): raise ValueError()
+except ValueError: sys.exit("wbmcp: invalid JSON-RPC request")' "$2" || exit $?
+    ensure_session || exit $?
     call_json "$2"
     ;;
   putfile)
@@ -106,11 +205,14 @@ print("--- isError:", d["result"].get("isError", False), file=sys.stderr)'
     rm -f "$SID_FILE"
     # 宿主中断时把 python 子进程一并带走，避免孤儿继续跑完造成状态错乱
     trap 'pkill -P $$ 2>/dev/null' EXIT INT TERM
-    handshake
-    body=$(python3 -c 'import sys,json; print(json.dumps({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"workbuddy_file_manage","arguments":{"action":"upload_resumable_init","taskId":sys.argv[1],"name":sys.argv[2],"size":int(sys.argv[3]),"mimeType":"application/octet-stream"}}}))' "$taskId" "$nameArg" "$sz")
-    call_json "$body" > "${TMPDIR:-/tmp}/wb-init.$$.json"
+    handshake || exit $?
+    body=$(python3 -c 'import sys,json; print(json.dumps({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"workbuddy_file_manage","arguments":{"action":"upload_resumable_init","taskId":sys.argv[1],"name":sys.argv[2],"size":int(sys.argv[3]),"mimeType":"application/octet-stream"}}}))' "$taskId" "$nameArg" "$sz") || exit $?
+    init_file=$(mktemp) || exit 1
+    rc=0
+    call_json "$body" > "$init_file" || rc=$?
+    if [[ "$rc" -ne 0 ]]; then rm -f "$init_file"; exit "$rc"; fi
     STATE_KEY=$(python3 -c 'import sys,hashlib;print(hashlib.sha1("\x00".join(sys.argv[1:]).encode()).hexdigest()[:16])' "$taskId" "$src" "$sz")
-    WB_TOKEN="$TOKEN" WB_STATE_FILE="${TMPDIR:-/tmp}/wb-putfile-$STATE_KEY.json" python3 - "$src" "$sz" "${TMPDIR:-/tmp}/wb-init.$$.json" "$taskId" "$TOKEN" "$URL" "$nameArg" <<'PYEOF'
+    WB_TOKEN="$TOKEN" WB_STATE_FILE="${TMPDIR:-/tmp}/wb-putfile-$STATE_KEY.json" python3 - "$src" "$sz" "$init_file" "$taskId" "$TOKEN" "$URL" "$nameArg" <<'PYEOF'
 import sys, os, json, time, mimetypes
 import urllib.parse
 from urllib.request import Request, urlopen
@@ -257,7 +359,9 @@ if reg.get("downloadUrl"):
     print("跨节点下载: %s" % reg["downloadUrl"])
     print('（请求头 Authorization: Bearer <节点apiKey>；多成员协作把它写进 send 的 message）')
 PYEOF
-    rm -f "${TMPDIR:-/tmp}/wb-init.$$.json"
+    rc=$?
+    rm -f "$init_file"
+    exit "$rc"
     ;;
   *)
     sed -n '2,15p' "$0"

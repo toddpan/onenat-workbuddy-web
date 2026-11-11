@@ -40,6 +40,11 @@ test('usageOf：字段命名兼容 + cacheWrite/totalTokens 等杂项不计入',
   assert.deepEqual(usageOf(undefined), { input: 0, output: 0, cacheRead: 0 })
 })
 
+test('usageOf：明确的未缓存输入优先且零值不会回退或重复计入', () => {
+  assert.deepEqual(usageOf({ inputTokens: 100, uncachedInputTokens: 0, cacheReadTokens: 100, outputTokens: 7 }), { input: 0, output: 7, cacheRead: 100 })
+  assert.deepEqual(usageOf({ inputTokens: 130, uncachedInputTokens: 30, cacheReadTokens: 100 }), { input: 30, output: 0, cacheRead: 100 })
+})
+
 test('turnUsageAt：endedAt 优先，缺失回退 at', () => {
   assert.equal(turnUsageAt({ at: Y2350, endedAt: T0010 }), T0010)
   assert.equal(turnUsageAt({ at: Y2350 }), Y2350)

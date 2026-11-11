@@ -40,6 +40,8 @@ export interface CreateTaskInput {
   /** 成员智能体；nodeRef 直发主会话任务时可省略（engine 内部以 __node__ 虚拟执行者直连节点） */
   memberAgentIds?: string[]
   mode?: 'chat' | 'orchestrate'
+  /** 显式 mode:chat 的一对一 BOT 硬绑定，旧 memberAgentIds 不推断为直聊。 */
+  chatAgentId?: string
   message?: string
   /** 由定时任务派生时记录来源（任务列表/监控屏的 ⏰ 类型标识随任务持久化） */
   scheduleId?: string
@@ -230,6 +232,19 @@ export class TaskEngine {
     let mentionedExpertAmbiguous: string | undefined
     let mentionedProjectId: string | undefined
     const agents = this.store.getAgents()
+    const findAgent = (tag: string) => {
+      // 稳定 ID 优先；同名不按存储顺序静默选取（含文件提及与大小写兜底）。
+      const byId = agents.find(a => a.id === tag)
+      if (byId) return byId
+      const pool = agents.filter(a => a.name.toLowerCase() === tag.toLowerCase())
+      if (pool.length > 1) {
+        throw Object.assign(new Error(`智能体名称「${tag}」有歧义；请用 memberAgentIds 数组或 @稳定ID 唯一指派`), {
+          code: 'AMBIGUOUS_AGENT',
+          candidates: pool.map(a => ({ id: a.id, name: a.name, nodeId: dshRefKey(a.dshRef) })),
+        })
+      }
+      return pool[0]
+    }
     const endpoints = this.directory.listEndpoints()
 
     // 1. 构建候选词典（按名称长度降序排列，优先匹配最长包含空格的完整实体名，如 "SSH Server"）
@@ -308,9 +323,7 @@ export class TaskEngine {
           if (colonIdx !== -1) {
             const prefix = inner.slice(0, colonIdx).trim()
             const filePath = inner.slice(colonIdx + 1).trim()
-            const matchedAgent = agents.find(
-              (a) => a.name.toLowerCase() === prefix.toLowerCase() || a.id.toLowerCase() === prefix.toLowerCase(),
-            )
+            const matchedAgent = findAgent(prefix)
             if (matchedAgent && filePath) {
               const raw = text.slice(startPos, startPos + 1 + bracketMatch[0].length)
               mentionedFiles.push({
@@ -352,6 +365,7 @@ export class TaskEngine {
         for (const entry of dict) {
           if (rest.startsWith(entry.name)) {
             const afterName = rest.slice(entry.name.length)
+            if (entry.type === 'agent') entry.data = findAgent(entry.name)
             // 检查紧随其后是否是冒号 : 或 ：，即 @智能体名:文件路径 形式
             if (entry.type === 'agent' && (afterName.startsWith(':') || afterName.startsWith('：'))) {
               const afterColon = afterName.slice(1)
@@ -448,9 +462,7 @@ export class TaskEngine {
             if (colonIdx !== -1) {
               const prefix = rawTag.slice(0, colonIdx).trim()
               const filePath = rawTag.slice(colonIdx + 1).trim()
-              const matchedAgent = agents.find(
-                (a) => a.name.toLowerCase() === prefix.toLowerCase() || a.id.toLowerCase() === prefix.toLowerCase(),
-              )
+              const matchedAgent = findAgent(prefix)
               if (matchedAgent && filePath) {
                 const raw = text.slice(startPos, startPos + 1 + fallbackMatch[0].length)
                 mentionedFiles.push({
@@ -489,9 +501,7 @@ export class TaskEngine {
 
             i += 1 + fallbackMatch[1].length
 
-            const matchedAgent = agents.find(
-              (a) => a.name.toLowerCase() === rawTag.toLowerCase() || a.id.toLowerCase() === rawTag.toLowerCase(),
-            )
+            const matchedAgent = findAgent(rawTag)
             if (matchedAgent && !mentionedAgentIds.includes(matchedAgent.id)) {
               mentionedAgentIds.push(matchedAgent.id)
             } else {
@@ -622,13 +632,35 @@ export class TaskEngine {
     return n
   }
 
+  /** Shared by create/send/preflight. Validate before task, queue or remote mutations. */
+  public validateChatBinding(input: { chatAgentId?: string; mode?: 'chat' | 'orchestrate'; memberAgentIds?: string[]; teamId?: string }, mentions?: ExtractedMentions, task?: WorkTask): void {
+    const reject = (message: string): never => { throw Object.assign(new Error(message), { code: 'INVALID_PARAM' }) }
+    if (input.chatAgentId !== undefined && (typeof input.chatAgentId !== 'string' || !input.chatAgentId.trim() || input.chatAgentId !== input.chatAgentId.trim())) reject('chatAgentId 必须为非空稳定智能体 ID')
+    if (task && input.mode !== undefined && input.mode !== task.mode) reject('send mode 必须与已有任务模式一致，不能通过发送消息切换模式')
+    const id = task?.chatAgentId || input.chatAgentId
+    if (task && input.chatAgentId !== undefined && input.chatAgentId !== task.chatAgentId) reject('已有任务不能添加或更换 chatAgentId；请新建直聊任务')
+    if (!id) return
+    if ((!task && input.mode !== 'chat') || (task && task.mode !== 'chat') || (input.mode !== undefined && input.mode !== 'chat')) reject('chatAgentId 必须使用 mode:chat，不能转换为编排')
+    if (input.memberAgentIds !== undefined && (!Array.isArray(input.memberAgentIds) || input.memberAgentIds.length !== 1 || input.memberAgentIds[0] !== id)) reject('直聊 memberAgentIds 只能包含 chatAgentId 同一成员')
+    if (task && (task.memberAgentIds.length !== 1 || task.memberAgentIds[0] !== id || task.teamId || task.expertMembers?.length)) reject('直聊任务绑定与成员账本冲突')
+    if (input.teamId || mentions?.mentionedTeamId || mentions?.mentionedExpertIds?.length || mentions?.mentionedExpertAmbiguous || mentions?.mentionedAgentIds.some(aid => aid !== id)) reject('直聊绑定与显式委派意图冲突；请新建普通任务进行委派')
+    if (task && mentions?.mentionedProjectId && mentions.mentionedProjectId !== task.projectId) reject('直聊任务不能通过消息更换项目上下文')
+  }
+
   public async createTask(input: CreateTaskInput): Promise<WorkTask> {
+    const initialMentions = input.message?.trim() ? await this.extractMentions(input.message.trim()) : undefined
+    this.validateChatBinding(input, initialMentions)
+    if (input.chatAgentId && initialMentions?.mentionedProjectId && initialMentions.mentionedProjectId !== input.projectId) throw new Error('直聊请通过 projectId 明确项目上下文')
     // 成员账本语义：显式传入（含显式空数组）= 用户意图优先；未传入时按来源继承（团队名册 > 项目默认协作成员），
     // 不再依赖前端把项目 expertIds 塞进请求体（控制台/REST/MCP 入口保持同一继承行为）
     const project = input.projectId ? this.store.getProject(input.projectId) : undefined
     if (input.projectId && !project) throw new Error(`项目不存在: ${input.projectId}`)
     const nodeRef = input.nodeRef || project?.defaultExecutionNodeRef || project?.dshRef
-    const explicit = Array.isArray(input.memberAgentIds) ? input.memberAgentIds.filter((id) => Boolean(id)) : undefined
+    const explicit = input.chatAgentId ? [input.chatAgentId] : Array.isArray(input.memberAgentIds) ? input.memberAgentIds.filter((id) => Boolean(id)) : undefined
+    for (const id of explicit || []) {
+      const agent = this.store.getAgent(id)
+      if (!agent || agent.enabled === false) throw new Error(`指定智能体不存在或已停用: ${id}`)
+    }
     // 专家团任务：团队名册是成员账本的默认来源（显式传入的 memberAgentIds 优先，teamId 仅作合同标记保留）
     const team = input.teamId ? this.store.getTeam(input.teamId) : undefined
     if (input.teamId && !team) throw new Error(`专家团不存在: ${input.teamId}`)
@@ -670,6 +702,7 @@ export class TaskEngine {
       id: `task-${randomUUID().slice(0, 8)}`,
       title: input.title?.trim() || titleFromMessage(input.message),
       mode,
+      ...(input.chatAgentId ? { chatAgentId: input.chatAgentId } : {}),
       status: 'draft',
       memberAgentIds,
       creator: explicit?.length ? (input.creator || 'tool') : 'console',
@@ -698,7 +731,7 @@ export class TaskEngine {
     if (input.message?.trim()) {
       // 团队任务的首页消息由发送者携带团队意图（opts.teamId）——首轮按团队合同编排；
       // 用户后续显式 @ 成员时按轮级参与者聚焦，显式 @ 团队才恢复团队语义。
-      await this.sendUserMessage(task.id, input.message.trim(), team ? { teamId: team.id } : undefined)
+      await this.sendUserMessage(task.id, input.message.trim(), { ...(team ? { teamId: team.id } : {}), ...(explicit?.length ? { memberAgentIds: explicit } : {}) })
     }
     return this.store.getTask(task.id)!
   }
@@ -706,6 +739,8 @@ export class TaskEngine {
   public updateMembers(taskId: string, memberAgentIds: string[]): WorkTask | undefined {
     const ids = Array.isArray(memberAgentIds) ? [...new Set(memberAgentIds.filter((id) => Boolean(id)))] : []
     if (!ids.length) throw new Error('members 需要至少一个非空成员子智能体 ID（memberAgentIds / CLI --agents <id,id>）')
+    const existing = this.store.getTask(taskId)
+    if (existing) this.validateChatBinding({ memberAgentIds: ids }, undefined, existing)
     return this.store.mutateTask(taskId, (task) => {
       if (this.activeJobs.has(taskId)) throw new Error('任务执行中，暂不能变更成员')
       task.memberAgentIds = ids
@@ -1128,7 +1163,7 @@ export class TaskEngine {
 
   // ---------- 多轮消息入口 ----------
 
-  public async sendUserMessage(taskId: string, text: string, opts?: { teamId?: string; reuseTurnId?: string }): Promise<{ ok: boolean; turn?: TaskTurn; queued?: boolean; error?: string }> {
+  public async sendUserMessage(taskId: string, text: string, opts?: { teamId?: string; reuseTurnId?: string; memberAgentIds?: string[]; chatAgentId?: string; mode?: 'chat' | 'orchestrate' }): Promise<{ ok: boolean; turn?: TaskTurn; queued?: boolean; error?: string }> {
     const task = this.store.getTask(taskId)
     if (!task) return { ok: false, error: '任务不存在' }
     if (!text.trim()) return { ok: false, error: '消息为空' }
@@ -1136,6 +1171,14 @@ export class TaskEngine {
     // 提及解析提前：团队首句桥接（teamFirstTurn）必须让位显式 @ —— 团队草稿首句带
     // @成员/@专家/@项目 时按用户意图聚焦，不吃掉成团队合同轮（评审确认的语义冲突）。
     const mentions = await this.extractMentions(clean)
+    this.validateChatBinding(opts || {}, mentions, task)
+    if (!task.chatAgentId && opts?.memberAgentIds?.length) {
+      for (const id of opts.memberAgentIds) {
+        const agent = this.store.getAgent(id)
+        if (!agent || agent.enabled === false) throw new Error(`指定智能体不存在或已停用: ${id}`)
+      }
+      mentions.mentionedAgentIds = [...new Set([...opts.memberAgentIds, ...mentions.mentionedAgentIds])]
+    }
     const hasExplicitMention = mentions.mentionedAgentIds.length > 0
       || (mentions.mentionedExpertIds?.length || 0) > 0
       || Boolean(mentions.mentionedTeamId)
@@ -1151,7 +1194,7 @@ export class TaskEngine {
       this.store.appendTurn(taskId, turn)
       this.store.mutateTask(taskId, (t) => {
         t.queue = t.queue || []
-        t.queue.push({ text: clean, at: Date.now(), turnId: turn.id, ...(opts?.teamId ? { teamId: opts.teamId } : {}) })
+        t.queue.push({ text: clean, at: Date.now(), turnId: turn.id, ...(opts?.teamId ? { teamId: opts.teamId } : {}), ...(opts?.memberAgentIds?.length ? { memberAgentIds: [...opts.memberAgentIds] } : {}) })
       })
       // 推送排队轮：多标签页/重连后也能立刻看到「⏳ 已排队」气泡（旧实现只落库不广播，
       // 发送方也不渲染 → 消息像丢了，刷新后又与补发轮重复出现）
@@ -1283,7 +1326,7 @@ export class TaskEngine {
       const turn = t.turns.find((x) => x.id === next.turnId)
       if (turn) delete turn.queued
     })
-    await this.sendUserMessage(taskId, next.text, { ...(next.teamId ? { teamId: next.teamId } : {}), reuseTurnId: next.turnId }).catch(() => undefined)
+    await this.sendUserMessage(taskId, next.text, { ...(next.teamId ? { teamId: next.teamId } : {}), memberAgentIds: next.memberAgentIds, reuseTurnId: next.turnId }).catch(() => undefined)
   }
 
   /**
@@ -1293,7 +1336,8 @@ export class TaskEngine {
   public async steerTaskMessage(taskId: string, text: string): Promise<{ ok: boolean; error?: string }> {
     const task = this.store.getTask(taskId)
     if (!task) return { ok: false, error: '任务不存在' }
-    const entries = Object.entries(task.sessions || {}).filter(([, b]) => b.remoteSessionId)
+    this.validateChatBinding({}, await this.extractMentions(text.trim()), task)
+    const entries = Object.entries(task.sessions || {}).filter(([id, b]) => b.remoteSessionId && (!task.chatAgentId || id === task.chatAgentId))
     if (!entries.length) return { ok: false, error: '任务尚无远端会话，无法插话' }
     const pick =
       entries.find(([k]) => k === '__node__') ||
@@ -1314,6 +1358,7 @@ export class TaskEngine {
     const task = this.store.getTask(taskId)
     const entry = task?.queue?.find((q) => q.turnId === turnId)
     if (!entry) return { ok: false, error: '排队消息不存在或已发送' }
+    if (this.activeJobs.has(taskId) && entry.memberAgentIds?.length) return { ok: false, error: 'ID 定向消息不能插话到其他执行者；请等待当前轮结束自动派发' }
     this.store.mutateTask(taskId, (t) => {
       t.queue = (t.queue || []).filter((q) => q.turnId !== turnId)
       const turn = t.turns.find((x) => x.id === turnId)
@@ -1321,7 +1366,7 @@ export class TaskEngine {
     })
     if (this.activeJobs.has(taskId)) return await this.steerTaskMessage(taskId, entry.text)
     // 复用排队轮 id：避免「立即发送」后再 append 一条同文本用户轮（刷新/切会话出现重复气泡）
-    return await this.sendUserMessage(taskId, entry.text, { ...(entry.teamId ? { teamId: entry.teamId } : {}), reuseTurnId: turnId })
+    return await this.sendUserMessage(taskId, entry.text, { ...(entry.teamId ? { teamId: entry.teamId } : {}), memberAgentIds: entry.memberAgentIds, reuseTurnId: turnId })
   }
 
   /** 队列「编辑」：更新排队条目与对应排队轮次的文本（仍保持 queued 标记与 FIFO 位置） */
@@ -1377,6 +1422,28 @@ export class TaskEngine {
   private async processUserMessage(taskId: string, text: string, mentions: ExtractedMentions, signal: AbortSignal, opts?: { teamId?: string }): Promise<void> {
     let task = this.store.getTask(taskId)
     if (!task) return
+
+    // 显式直聊在 planner/主节点/旧成员回退之前截获，每轮实时解析所绑定 BOT。
+    if (task.chatAgentId) {
+      try {
+        this.validateChatBinding({}, mentions, task)
+        const agent = this.store.getAgent(task.chatAgentId)
+        if (!agent || agent.enabled === false) throw new Error(`直聊 BOT ${task.chatAgentId} 不存在或已停用`)
+        const target = await this.resolver.resolve(agent)
+        if (!target?.online || !target.baseUrl) throw new Error(`直聊 BOT ${agent.id} 不可达: ${target?.error || '目标不可解析'}`)
+        const probe = await this.client.ping(target, { timeoutMs: 4000 })
+        if (!probe.ok) throw new Error(`直聊 BOT ${agent.id} 不可达: ${probe.error || '探活失败'}`)
+        this.store.mutateTask(taskId, t => { t.lastRoute = { kind: 'chat', agentId: agent.id, agentName: agent.name, source: 'member' } })
+        await this.runChatTurn(taskId, text, mentions, new Map([[agent.id, { ...target, executionDshRef: agent.dshRef }]]), signal, agent.id, agent)
+      } catch (err: any) {
+        this.appendSystemTurn(taskId, `⚠️ 直聊硬绑定执行失败: ${err?.message || err}；未切换执行者`)
+        this.store.mutateTask(taskId, t => { t.status = 'failed' })
+        this.emit(taskId, { type: 'task_status', status: 'failed' })
+      }
+      const fresh = this.store.getTask(taskId)!
+      if (!fresh.pendingAsk) this.emit(taskId, { type: 'task_end', task: fresh })
+      return
+    }
 
     // @ 歧义拒绝后必须阻断本轮（在一切路由之前）：若继续走默认分支，消息会按「无 @」
     // 静默降级为主会话直发，用户看到的是无关的节点执行结果，完全看不出是 @ 写法问题
@@ -1794,7 +1861,7 @@ export class TaskEngine {
     // ask_user_question 会让远程 DSH 会话停下来等待人工答复，且子智能体深层的提问
     // 无法透传回 WorkBuddy UI（交互卡只渲染在直发轮次），导致整条链路挂死。
     // 只有节点主会话（用户无 @ 直发）才是与用户面对面的有人值守对话，允许提问确认。
-    const isNodeMain = agent.id === NODE_AGENT_ID && !task.scheduleId
+    const isNodeMain = (agent.id === NODE_AGENT_ID || task.chatAgentId === agent.id) && !task.scheduleId
     const interaction: 'attended' | 'unattended' = isNodeMain ? 'attended' : 'unattended'
     const sysPrefix = [exec.instruction, persona, permLine].filter(Boolean).join('\n\n')
     const sshSection = exec.sshConnectors.length
@@ -3127,7 +3194,7 @@ export class TaskEngine {
    */
   public async prepareMainSession(taskId: string): Promise<void> {
     const task = this.store.getTask(taskId)
-    if (!task || task.mode !== 'chat' || this.activeJobs.has(taskId)) return
+    if (!task || task.chatAgentId || task.mode !== 'chat' || this.activeJobs.has(taskId)) return
     const main = this.planner.pickMainAgent()
     if (!main || !task.memberAgentIds.includes(main.id)) return
     const target = await this.resolver.resolve(main).catch(() => undefined)
@@ -3161,6 +3228,7 @@ export class TaskEngine {
     // Existing session control/file requests stay on their recorded mapping, even if an app or agent is rebound.
     const binding = task?.sessions[agentId]
     const agent = this.store.getAgent(agentId)
+    if (task?.chatAgentId && (agentId !== task.chatAgentId || !agent || agent.enabled === false)) return undefined
     if (binding?.remoteSessionId) {
       // Old URL-only/app-only records cannot prove the physical session owner.
       // Do not send their session IDs to the node currently occupying that port/app.
@@ -3182,6 +3250,7 @@ export class TaskEngine {
       const own = await this.resolver.resolve(agent).catch(() => undefined)
       if (own?.online && own.baseUrl) return { ...own, executionDshRef: agent.dshRef }
     }
+    if (task?.chatAgentId) return undefined
     // 节点主会话（__node__，无 store 记录）或自身节点不可达：按任务/项目节点解析
     const exec = task ? this.taskExec(task) : undefined
     if (exec?.dshRef) {
@@ -3493,6 +3562,7 @@ export class TaskEngine {
   private async ensureSession(taskId: string, agent: SubAgent, target: DshTarget, opts?: { cwd?: string; workspace?: string; modelOverride?: 'default' }): Promise<{ ok: boolean; remoteSessionId?: string; reused?: boolean; error?: string; target?: DshTarget }> {
     const task = this.store.getTask(taskId)!
     const exec = this.taskExec(task)
+    const strict = task.chatAgentId === agent.id
     // 任务/项目工作区只在「执行节点 = 任务节点」时适用（目录属于那台机器）；
     // sub agent 回自身节点执行时，其 workDir 才是有效目录
     const rawCwd = opts?.workspace ?? opts?.cwd ?? exec.workspace
@@ -3505,10 +3575,13 @@ export class TaskEngine {
     const sameNode = sameDshRef(targetRef, agent.dshRef)
     // 主会话的 agent.workDir 来源也是项目；异机时不能把它当本地后备目录。
     const wantedCwd = (execWorkspaceFits ? rawCwd : undefined) ?? (agent.id !== NODE_AGENT_ID && sameNode ? agent.workDir : undefined) ?? undefined
+    if (strict && task.workDir && !execWorkspaceFits) return { ok: false, error: '直聊显式 workDir 不属于 BOT 执行节点，拒绝替换目录' }
     const nodeRefKey = dshRefKey(targetRef)
     const storedBinding = task.sessions[agent.id]
     const unverifiedLegacy = !!storedBinding?.remoteSessionId && (!storedBinding.nodeRefKey || (storedBinding.nodeRefKey.startsWith('app:') && !storedBinding.resolvedMappingId))
     const existing = unverifiedLegacy ? undefined : storedBinding
+    const chatConfigKey = strict ? JSON.stringify([task.model || '', agent.provider || '', agent.model || '', task.agentPreset || agent.agentPreset || '', task.reasoningEffort || '']) : undefined
+    if (strict && storedBinding?.remoteSessionId && (unverifiedLegacy || storedBinding.nodeRefKey !== nodeRefKey)) return { ok: false, error: '直聊会话节点身份不匹配，拒绝迁移执行者' }
     if (unverifiedLegacy) this.taskLog(taskId, 'warn', '旧会话缺少稳定物理节点身份；不探测或控制旧 sessionId，按当前显式节点新建会话')
     // 调度模型（模型按钮）只对节点主会话生效；@ 的 sub agent 用自身配置的 model/provider，
     // 不被 planner.model 覆盖（否则 planner 恰好指向它时会用坏上游覆盖好配置——07:17 空回合根因）
@@ -3517,6 +3590,17 @@ export class TaskEngine {
     // 任务级模型（定时任务实例配置）优先于全局调度模型（模型按钮）
     const plannerModelSetting = String(task.model || settings.planner?.model || '').trim() || undefined
 
+    const verifyChatIdentity = async (sessionTarget: DshTarget, sessionId: string): Promise<string | undefined> => {
+      if (!strict) return undefined
+      const explicitModel = task.model || (agent.provider && agent.model ? `${agent.provider}/${agent.model}` : undefined)
+      const preset = task.agentPreset || agent.agentPreset
+      if (!explicitModel && !preset) return undefined
+      const detail = await this.client.getSessionDetail(sessionTarget, sessionId)
+      if (!detail.ok) return '直聊远端会话身份/模型无法核验'
+      if (explicitModel && `${detail.session?.model?.provider}/${detail.session?.model?.model}` !== explicitModel) return '直聊远端未采用显式模型；未发送提示词'
+      if (preset && detail.session?.agentPreset !== preset) return '直聊远端未采用显式预设；未发送提示词'
+      return undefined
+    }
     const resolvedMappingId = (target as any).mappingId as string | undefined
     if (existing?.remoteSessionId && existing.nodeRefKey === nodeRefKey && existing.resolvedMappingId && resolvedMappingId !== existing.resolvedMappingId) {
       return { ok: false, error: '已绑定会话的 app/mapping 身份发生变化；拒绝迁移到另一节点，请选择原节点或新建会话' }
@@ -3547,9 +3631,17 @@ export class TaskEngine {
       } else if ((existing.cwd || undefined) !== wantedCwd) {
         // 工作目录已变更 → 旧会话作废，重建
         this.taskLog(taskId, 'info', `工作目录变更（${agent.name}）: ${existing.cwd || '(默认)'} → ${wantedCwd || '(默认)'}，重建远端会话`)
+      } else if (strict && existing.chatConfigKey !== chatConfigKey) {
+        this.taskLog(taskId, 'info', '直聊显式模型/预设配置变更，按同一 BOT 配置重建会话')
       } else {
+        if (strict && wantedCwd) {
+          const info = await this.client.getSessionInfo(target, existing.remoteSessionId)
+          if (!info.ok || !info.cwd || !pathEquivalent(info.cwd, wantedCwd)) return { ok: false, error: `直聊工作目录校验失败: 期望 ${wantedCwd}，实际 ${info.cwd || '(未知)'}` }
+        }
         const st = await this.client.getSession(target, existing.remoteSessionId)
         if (st.ok) {
+          const identityError = await verifyChatIdentity(target, existing.remoteSessionId)
+          if (identityError) return { ok: false, error: identityError }
           await this.syncSessionPermission(taskId, agent, target, existing.remoteSessionId)
           this.store.mutateTask(taskId, (t) => { Object.assign(t.sessions[agent.id], { baseUrl: target.baseUrl, nodeRefKey, resolvedMappingId }) })
           return { ok: true, remoteSessionId: existing.remoteSessionId, reused: true, target }
@@ -3562,7 +3654,12 @@ export class TaskEngine {
     // 若为主智能体且配置了主调度模型，优先采用该模型作为远端会话创建参数
     let targetProvider = agent.provider
     let targetModel = agent.model
-    if (opts?.modelOverride === 'default') {
+    if (strict && task.model) {
+      const slash = task.model.indexOf('/')
+      if (slash < 1 || !task.model.slice(slash + 1).trim()) return { ok: false, error: '直聊显式模型必须为 provider/model' }
+      targetProvider = task.model.slice(0, slash)
+      targetModel = task.model.slice(slash + 1)
+    } else if (opts?.modelOverride === 'default') {
       // 模型回退自愈（runSubtask）：agent 自带模型上游失败后重建会话。
       // 回退目标 = 调度模型（任务级/全局 planner 选中值）——不是「不带模型」：节点默认模型
       // 本身也可能就是坏的（实测某节点 defaultModel 指向不可用的模型）。调度模型也空时才用节点默认。
@@ -3581,6 +3678,14 @@ export class TaskEngine {
       }
     }
 
+    if (strict && (targetProvider || targetModel)) {
+      const catalog = await this.client.getModels(target)
+      if (!catalog.ok || !targetProvider || !targetModel || !catalog.models.some(m => m.provider === targetProvider && m.id === targetModel)) return { ok: false, error: `直聊显式模型不可用: ${targetProvider || '(未指定)'}/${targetModel || '(未指定)'}（未使用默认模型）` }
+    }
+    if (strict && (task.agentPreset || agent.agentPreset)) {
+      const presets = await this.client.getPresets(target)
+      if (!presets.ok || !presets.presets.some(p => p.id === (task.agentPreset || agent.agentPreset))) return { ok: false, error: '直聊显式预设不可用，未使用默认身份' }
+    }
     // 工作区对齐：workspaceId 与 cwd 互斥（远端 harness 校验「accepts workspaceId or cwd, not both」）。
     // 解析出工作区时只传 workspaceId（工作区路径即工作目录）；远端无工作区体系时退回传 cwd。
     const workspaceId = wantedCwd ? await this.resolveWorkspaceId(target, wantedCwd).catch(() => undefined) : undefined
@@ -3605,6 +3710,7 @@ export class TaskEngine {
         res = await this.client.createSession(effTarget, `[WorkBuddy] ${task.title}`, createPayload)
       }
     }
+    if (strict && (!res.ok || !res.sessionId)) return { ok: false, error: `直聊会话创建失败（禁止模型/目录回退）: ${res.error || '未返回会话 ID'}` }
     // 自愈 2：工作目录在目标节点不存在（ENOENT mkdir）→ 先逐级创建（mkdir -p 语义，
     // 项目 workspace / 智能体 workDir 绑定的目录由此保证存在），再按原目录重建会话；
     // 创建失败才回退远端默认目录，并在任务日志注明
@@ -3675,8 +3781,14 @@ export class TaskEngine {
       return { ok: false, error: raw + hint }
     }
     target = effTarget
+    const identityError = await verifyChatIdentity(target, res.sessionId)
+    if (identityError) return { ok: false, error: identityError }
+    if (strict && wantedCwd) {
+      const info = await this.client.getSessionInfo(target, res.sessionId)
+      if (!info.ok || !info.cwd || !pathEquivalent(info.cwd, wantedCwd)) return { ok: false, error: `直聊工作目录校验失败: 期望 ${wantedCwd}，实际 ${info.cwd || '(未知)'}；未发送提示词` }
+    }
     this.store.mutateTask(taskId, (t) => {
-      t.sessions[agent.id] = { remoteSessionId: res.sessionId!, baseUrl: target.baseUrl, nodeRefKey, resolvedMappingId, cwd: cwdFellBack ? undefined : (wantedCwd || undefined), plannerModel: isMain ? (plannerModelSetting || '') : undefined, createdAt: Date.now() }
+      t.sessions[agent.id] = { remoteSessionId: res.sessionId!, baseUrl: target.baseUrl, nodeRefKey, resolvedMappingId, chatConfigKey, cwd: cwdFellBack ? undefined : (wantedCwd || undefined), plannerModel: isMain ? (plannerModelSetting || '') : undefined, createdAt: Date.now() }
     })
     this.taskLog(taskId, 'info', `远程会话已创建（${agent.name}${targetModel ? ' · 模型 ' + targetModel : ''}${wantedCwd ? ' · 工作目录 ' + wantedCwd : ''}）: ${res.sessionId} @ ${target.baseUrl}`)
     // 校验远端 cwd 生效

@@ -51,7 +51,40 @@ export interface StreamEventHandlers {
   onLog?: (msg: string, level?: SubtaskLogEntry['level']) => void
 }
 
-export interface PromptResult {
+export interface RemoteErrorInfo {
+  code?: string
+  status?: number
+}
+
+/** Normalize transport/business failures without interpreting localized error text. */
+export function remoteFailure(
+  status: number | undefined,
+  json?: { code?: unknown; error?: unknown },
+  fallback?: string,
+  sessionRoute = false,
+): { ok: false; error: string } & RemoteErrorInfo {
+  const remoteCode = typeof json?.code === 'string' ? json.code : undefined
+  let code = 'EXECUTION_FAILED'
+  if (remoteCode === 'SESSION_NOT_FOUND' || remoteCode === 'SESSION_EXPIRED' || (sessionRoute && status === 404)) code = 'SESSION_EXPIRED'
+  else if (status === 401 || remoteCode === 'AUTH_REQUIRED') code = 'AUTH_REQUIRED'
+  else if (status === 403 || remoteCode === 'PERMISSION_DENIED') code = 'PERMISSION_DENIED'
+  else if (status === 400 || remoteCode === 'INVALID_PARAM') code = 'INVALID_PARAM'
+  else if (status === 404 || remoteCode === 'NOT_FOUND') code = 'NOT_FOUND'
+  else if (remoteCode === 'NODE_OFFLINE') code = 'NODE_OFFLINE'
+  return { ok: false, error: String(json?.error || fallback || `HTTP ${status}`), code, ...(status !== undefined ? { status } : {}) }
+}
+
+export interface HistoryResult extends RemoteErrorInfo {
+  ok: boolean
+  messages?: any[]
+  sessionId?: string
+  totalMessages?: number
+  totalEvents?: number
+  hasMore?: boolean
+  error?: string
+}
+
+export interface PromptResult extends RemoteErrorInfo {
   ok: boolean
   content?: string
   reasoning?: string
@@ -404,7 +437,7 @@ export class DshClient {
     target: DshTarget,
     dirPath?: string,
     all?: boolean,
-  ): Promise<{
+  ): Promise<RemoteErrorInfo & {
     ok: boolean
     error?: string
     data?: {
@@ -423,10 +456,10 @@ export class DshClient {
       const url = `${clean(target.baseUrl)}/fs/list${qs ? `?${qs}` : ''}`
       const res = await fetch(url, { headers: this.headers(target.apiKey), signal: AbortSignal.timeout(15_000) })
       const json: any = await res.json().catch(() => ({}))
-      if (!res.ok || !json?.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
+      if (!res.ok || !json?.ok) return remoteFailure(res.status, json)
       return { ok: true, data: json.data }
     } catch (err: any) {
-      return { ok: false, error: err?.message || '目录浏览失败' }
+      return { ok: false, code: 'NODE_OFFLINE', error: err?.message || '目录浏览失败' }
     }
   }
 
@@ -442,8 +475,8 @@ export class DshClient {
     url: string,
     headers: Record<string, string>,
     idleMs: number,
-    readError: (res: Response) => Promise<string>,
-  ): Promise<{ ok: boolean; res?: Response; error?: string; status?: number }> {
+    readError: (res: Response) => Promise<string | ({ error: string } & RemoteErrorInfo)>,
+  ): Promise<RemoteErrorInfo & { ok: boolean; res?: Response; error?: string }> {
     const ac = new AbortController()
     let idleTimer: ReturnType<typeof setTimeout> | undefined
     const touch = () => {
@@ -461,7 +494,10 @@ export class DshClient {
       const res = await fetch(url, { headers, signal: ac.signal })
       if (!res.ok || !res.body) {
         clear()
-        return { ok: false, error: await readError(res), status: res.status }
+        const failure = await readError(res)
+        return typeof failure === 'string'
+          ? remoteFailure(res.status, undefined, failure)
+          : { ok: false, ...failure, status: res.status }
       }
       touch()
       const transformer: Transformer<Uint8Array, Uint8Array> = {
@@ -477,7 +513,7 @@ export class DshClient {
       return { ok: true, res: new Response(guarded, { status: res.status, statusText: res.statusText, headers: res.headers }) }
     } catch (err: any) {
       clear()
-      return { ok: false, error: err?.message || '下载失败' }
+      return { ok: false, code: 'NODE_OFFLINE', error: err?.message || '下载失败' }
     }
   }
 
@@ -486,18 +522,22 @@ export class DshClient {
     target: DshTarget,
     filePath: string,
     inline?: boolean,
-  ): Promise<{ ok: boolean; res?: Response; name?: string; error?: string }> {
-    const url = `${clean(target.baseUrl)}/fs/download?path=${encodeURIComponent(filePath)}${inline ? '&inline=1' : ''}`
-    const out = await this.streamDownload(url, this.headers(target.apiKey), 60_000, async (res) => {
-      const json: any = await res.json().catch(() => ({}))
-      return json?.error || `HTTP ${res.status}`
-    })
-    if (!out.ok || !out.res) return { ok: false, error: out.error || '文件读取失败' }
-    return { ok: true, res: out.res, name: filePath.split(/[\\/]/).pop() || 'file' }
+  ): Promise<RemoteErrorInfo & { ok: boolean; res?: Response; name?: string; error?: string }> {
+    try {
+      const url = `${clean(target.baseUrl)}/fs/download?path=${encodeURIComponent(filePath)}${inline ? '&inline=1' : ''}`
+      const out = await this.streamDownload(url, this.headers(target.apiKey), 60_000, async (res) => {
+        const json: any = await res.json().catch(() => ({}))
+        return remoteFailure(res.status, json)
+      })
+      if (!out.ok || !out.res) return { ...out, ok: false, error: out.error || '文件读取失败' }
+      return { ok: true, res: out.res, name: filePath.split(/[\\/]/).pop() || 'file' }
+    } catch (err: any) {
+      return { ok: false, code: 'NODE_OFFLINE', error: err?.message || '文件读取失败' }
+    }
   }
 
   /** 远端删除文件或目录 */
-  public async fsRemove(target: DshTarget, targetPath: string): Promise<{ ok: boolean; error?: string }> {
+  public async fsRemove(target: DshTarget, targetPath: string): Promise<RemoteErrorInfo & { ok: boolean; error?: string }> {
     try {
       const url = `${clean(target.baseUrl)}/fs/remove?path=${encodeURIComponent(targetPath)}`
       const res = await fetch(url, {
@@ -506,10 +546,10 @@ export class DshClient {
         signal: AbortSignal.timeout(15_000),
       })
       const json: any = await res.json().catch(() => ({}))
-      if (!res.ok || !json?.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
+      if (!res.ok || !json?.ok) return remoteFailure(res.status, json)
       return { ok: true }
     } catch (err: any) {
-      return { ok: false, error: err?.message || '删除失败' }
+      return { ok: false, code: 'NODE_OFFLINE', error: err?.message || '删除失败' }
     }
   }
 
@@ -518,7 +558,7 @@ export class DshClient {
     target: DshTarget,
     destDir: string,
     files: Array<{ filename: string; data: Buffer; mimeType?: string }>,
-  ): Promise<{ ok: boolean; files?: Array<{ name: string; path: string; size: number }>; error?: string }> {
+  ): Promise<RemoteErrorInfo & { ok: boolean; files?: Array<{ name: string; path: string; size: number }>; error?: string }> {
     try {
       const fd = new FormData()
       for (const f of files) {
@@ -533,15 +573,15 @@ export class DshClient {
         signal: AbortSignal.timeout(120_000),
       })
       const json: any = await res.json().catch(() => ({}))
-      if (!res.ok || !json?.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
+      if (!res.ok || !json?.ok) return remoteFailure(res.status, json)
       return { ok: true, files: json.data?.files || [] }
     } catch (err: any) {
-      return { ok: false, error: err?.message || '上传失败' }
+      return { ok: false, code: 'NODE_OFFLINE', error: err?.message || '上传失败' }
     }
   }
 
   /** 远端新建目录 */
-  public async fsMkdir(target: DshTarget, parent: string, name: string): Promise<{ ok: boolean; error?: string; data?: { path: string; name: string } }> {
+  public async fsMkdir(target: DshTarget, parent: string, name: string): Promise<RemoteErrorInfo & { ok: boolean; error?: string; data?: { path: string; name: string } }> {
     try {
       const res = await fetch(`${clean(target.baseUrl)}/fs/mkdir`, {
         method: 'POST',
@@ -550,10 +590,10 @@ export class DshClient {
         signal: AbortSignal.timeout(15_000),
       })
       const json: any = await res.json().catch(() => ({}))
-      if (!res.ok || !json?.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
+      if (!res.ok || !json?.ok) return remoteFailure(res.status, json)
       return { ok: true, data: json.data }
     } catch (err: any) {
-      return { ok: false, error: err?.message || '新建目录失败' }
+      return { ok: false, code: 'NODE_OFFLINE', error: err?.message || '新建目录失败' }
     }
   }
 
@@ -800,31 +840,31 @@ export class DshClient {
     }
   }
 
-  public async getModels(target: DshTarget): Promise<{ ok: boolean; defaultModel?: any; models: RemoteModelEntry[]; error?: string }> {
+  public async getModels(target: DshTarget): Promise<RemoteErrorInfo & { ok: boolean; defaultModel?: any; models: RemoteModelEntry[]; error?: string }> {
     try {
       const res = await fetch(`${clean(target.baseUrl)}/models`, {
         headers: this.headers(target.apiKey),
         signal: AbortSignal.timeout(10_000),
       })
       const json: any = await res.json().catch(() => ({}))
-      if (!res.ok || !json?.ok) return { ok: false, models: [], error: json?.error || `HTTP ${res.status}` }
+      if (!res.ok || !json?.ok) return { ...remoteFailure(res.status, json), models: [] }
       return { ok: true, defaultModel: json.data?.defaultModel, models: Array.isArray(json.data?.models) ? json.data.models : [] }
     } catch (err: any) {
-      return { ok: false, models: [], error: err?.message || '获取模型失败' }
+      return { ok: false, code: 'NODE_OFFLINE', models: [], error: err?.message || '获取模型失败' }
     }
   }
 
-  public async getPresets(target: DshTarget): Promise<{ ok: boolean; presets: Array<{ id: string; name?: string; description?: string }>; error?: string }> {
+  public async getPresets(target: DshTarget): Promise<RemoteErrorInfo & { ok: boolean; presets: Array<{ id: string; name?: string; description?: string }>; error?: string }> {
     try {
       const res = await fetch(`${clean(target.baseUrl)}/presets`, {
         headers: this.headers(target.apiKey),
         signal: AbortSignal.timeout(10_000),
       })
       const json: any = await res.json().catch(() => ({}))
-      if (!res.ok || !json?.ok) return { ok: false, presets: [], error: json?.error || `HTTP ${res.status}` }
+      if (!res.ok || !json?.ok) return { ...remoteFailure(res.status, json), presets: [] }
       return { ok: true, presets: Array.isArray(json.data?.presets) ? json.data.presets : [] }
     } catch (err: any) {
-      return { ok: false, presets: [], error: err?.message || '获取预设失败' }
+      return { ok: false, code: 'NODE_OFFLINE', presets: [], error: err?.message || '获取预设失败' }
     }
   }
 
@@ -1106,7 +1146,7 @@ export class DshClient {
         ttftSteps: d.ttftSteps || 0,
         decodeMs: d.decodeMs || 0,
         decodeTokens: d.decodeTokens || 0,
-        inputTokens: d.usage?.inputTokens || 0,
+        inputTokens: d.usage?.uncachedInputTokens ?? d.usage?.inputTokens ?? 0,
         cacheReadTokens: d.usage?.cacheReadTokens || 0,
         cacheWriteTokens: d.usage?.cacheWriteTokens || 0,
         outputTokens: d.usage?.outputTokens || 0,
@@ -1283,7 +1323,7 @@ export class DshClient {
     target: DshTarget,
     sessionId: string,
     answers: Array<{ id: string; selected: string[]; custom?: string }>,
-  ): Promise<{ ok: boolean; supported?: boolean; error?: string }> {
+  ): Promise<RemoteErrorInfo & { ok: boolean; supported?: boolean; error?: string }> {
     try {
       const res = await fetch(`${clean(target.baseUrl)}/sessions/${encodeURIComponent(sessionId)}/answers`, {
         method: 'POST',
@@ -1292,11 +1332,11 @@ export class DshClient {
         signal: AbortSignal.timeout(12_000),
       })
       const json: any = await res.json().catch(() => ({}))
-      if (res.status === 404 || res.status === 501) return { ok: false, supported: false, error: '远端 dsh-web-service 版本过低，无问题答复接口' }
-      if (!res.ok || !json?.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
+      if (res.status === 404 || res.status === 501) return { ...remoteFailure(res.status, json, '远端 dsh-web-service 版本过低，无问题答复接口', true), supported: json?.code === 'SESSION_NOT_FOUND' || json?.code === 'SESSION_EXPIRED' }
+      if (!res.ok || !json?.ok) return remoteFailure(res.status, json, undefined, true)
       return { ok: true, supported: true }
     } catch (err: any) {
-      return { ok: false, error: err?.message || '提交问题答复失败' }
+      return { ok: false, code: 'NODE_OFFLINE', error: err?.message || '提交问题答复失败' }
     }
   }
 
@@ -1339,6 +1379,7 @@ export class DshClient {
   ): Promise<PromptResult> {
     let content = ''
     let reasoning = ''
+    let responseStatus: number | undefined
     try {
       const dispatcher = await getLongIdleDispatcher()
       // stallTimeoutMs：远端「持续无会话事件」的停滞阈值（prompt-stream 只认这个字段；
@@ -1354,12 +1395,18 @@ export class DshClient {
         // bodyTimeout=0：长工具执行/压缩期间无帧的静默段不断流（undici 缺失时无此键，退回默认）
         ...(dispatcher ? { dispatcher } : {}),
       } as any)
-      if (res.status === 404 || res.status === 501) {
-        return { ok: false, error: `远端不支持 prompt-stream (HTTP ${res.status})`, sseUnsupported: true }
-      }
+      responseStatus = res.status
       if (!res.ok || !res.body) {
         const text = await res.text().catch(() => '')
-        return { ok: false, error: `prompt-stream HTTP ${res.status}: ${text.slice(0, 200)}` }
+        let json: any
+        try { json = JSON.parse(text) } catch { /* 非 JSON 错误仍按 HTTP 状态分类 */ }
+        if (res.status === 404 || res.status === 501) {
+          return {
+            ...remoteFailure(res.status, json, `远端不支持 prompt-stream (HTTP ${res.status})`, true),
+            sseUnsupported: json?.code !== 'SESSION_NOT_FOUND' && json?.code !== 'SESSION_EXPIRED',
+          }
+        }
+        return remoteFailure(res.status, json, `prompt-stream HTTP ${res.status}: ${text.slice(0, 200)}`, true)
       }
 
       const reader = res.body.getReader()
@@ -1425,13 +1472,24 @@ export class DshClient {
             case 'usage':
               // 远端透传的真实 token 账本（含缓存命中）
               if (data?.usage && typeof data.usage === 'object') {
-                const u = { ...data.usage }
+                // dsh-web-service 的 usage 帧是单个模型步骤的账本；WorkBuddy 的
+                // turn 包含多次工具/模型往返，必须累计后再发快照，不能覆盖前几步。
+                const u = { ...(usage || {}) }
+                const step = { ...data.usage }
+                // 先把每一步规整到互斥的 input/cache 账本，再累计；不同步骤可有不同别名。
+                if (typeof step.uncachedInputTokens === 'number') step.inputTokens = step.uncachedInputTokens
+                delete step.uncachedInputTokens
+                for (const [key, value] of Object.entries(step)) {
+                  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+                    u[key] = (u[key] || 0) + value
+                  }
+                }
                 usage = u
-                handlers.onUsage?.(u)
+                handlers.onUsage?.({ ...u })
               }
               break
             case 'error':
-              return { ok: false, content, reasoning, complete: false, remoteError: true, error: data?.message || '远端执行错误' }
+              return { ...remoteFailure(typeof data?.status === 'number' ? data.status : res.status, data, data?.message || '远端执行错误', true), content, reasoning, complete: false, remoteError: true }
             case 'turn_end': {
               const r = data?.reason
               const reason = typeof r === 'string' ? r : r && typeof r === 'object' && typeof r.kind === 'string' ? r.kind : r != null ? JSON.stringify(r) : 'completed'
@@ -1456,13 +1514,13 @@ export class DshClient {
         return { ok: true, content, reasoning: reasoning || undefined, via: 'sse', usage, complete: false, error: `SSE 静默超时(${Math.round(SSE_IDLE_TIMEOUT_MS / 1000)}s 无帧)` }
       }
       if (!sawTurnEnd && !content) {
-        return { ok: false, error: 'SSE 流在产出任何内容前结束', sseUnsupported: false }
+        return { ...remoteFailure(res.status, undefined, 'SSE 流在产出任何内容前结束'), sseUnsupported: false }
       }
       // complete=false：流被远端/网络提前收掉且未收到 turn_end，内容可能缺尾，交由调用方对账
       return { ok: true, content, reasoning: reasoning || undefined, via: 'sse', usage, complete: sawTurnEnd, streamDone: done }
     } catch (err: any) {
-      if (err?.name === 'AbortError') return { ok: false, content, reasoning, complete: false, error: '已中止', timedOut: true }
-      return { ok: false, content, reasoning, complete: false, error: err?.message || 'SSE 流失败' }
+      if (err?.name === 'AbortError') return { ok: false, code: 'NODE_OFFLINE', status: responseStatus, content, reasoning, complete: false, error: '已中止', timedOut: true }
+      return { ok: false, code: 'NODE_OFFLINE', status: responseStatus, content, reasoning, complete: false, error: err?.message || 'SSE 流失败' }
     }
   }
 
@@ -1482,13 +1540,13 @@ export class DshClient {
         signal: options?.signal ?? AbortSignal.timeout(localTimeoutMs),
       })
       const json: any = await res.json().catch(() => ({}))
-      if (!res.ok || !json?.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
+      if (!res.ok || !json?.ok) return remoteFailure(res.status, json, undefined, true)
       const usage = json.data?.usage && typeof json.data.usage === 'object' ? { ...json.data.usage } : undefined
       return { ok: true, content: json.data?.content || '', reasoning: json.data?.reasoning, via: 'sync', usage }
     } catch (err: any) {
       const msg = err?.message || 'prompt 失败'
       const isTimeout = err?.name === 'AbortError' || /abort|timeout/i.test(msg)
-      return { ok: false, error: msg, timedOut: isTimeout }
+      return { ok: false, code: 'NODE_OFFLINE', error: msg, timedOut: isTimeout }
     }
   }
 
@@ -1496,19 +1554,28 @@ export class DshClient {
     target: DshTarget,
     sessionId: string,
     maxMessages = 100,
-  ): Promise<{ ok: boolean; messages?: any[]; error?: string }> {
+  ): Promise<HistoryResult> {
     try {
       const res = await fetch(
         `${clean(target.baseUrl)}/sessions/${encodeURIComponent(sessionId)}/history?maxMessages=${maxMessages}`,
         { headers: this.headers(target.apiKey), signal: AbortSignal.timeout(15_000) },
       )
       const json: any = await res.json().catch(() => ({}))
-      if (!res.ok || !json?.ok) return { ok: false, error: json?.error || `HTTP ${res.status}` }
+      if (!res.ok || !json?.ok) return remoteFailure(res.status, json, undefined, true)
+      if (json.ok !== true) return remoteFailure(res.status, undefined, '远端历史协议无效：ok 必须为 boolean')
       const data = json.data
-      const messages = Array.isArray(data) ? data : Array.isArray(data?.messages) ? data.messages : []
-      return { ok: true, messages }
+      const messages = Array.isArray(data) ? data : Array.isArray(data?.messages) ? data.messages : undefined
+      if (!messages) return remoteFailure(res.status, undefined, '远端历史协议无效：data 必须为消息数组或包含 messages 数组')
+      if (Array.isArray(data)) return { ok: true, messages }
+      const result: HistoryResult = { ok: true, messages }
+      // 保留远端分页/事件账本，调用方才能区分真正空会话、空页与消息提取失败。
+      if (typeof data.sessionId === 'string') result.sessionId = data.sessionId
+      if (typeof data.totalMessages === 'number') result.totalMessages = data.totalMessages
+      if (typeof data.totalEvents === 'number') result.totalEvents = data.totalEvents
+      if (typeof data.hasMore === 'boolean') result.hasMore = data.hasMore
+      return result
     } catch (err: any) {
-      return { ok: false, error: err?.message || '获取历史失败' }
+      return { ok: false, code: 'NODE_OFFLINE', error: err?.message || '获取历史失败' }
     }
   }
 
@@ -1534,7 +1601,7 @@ export class DshClient {
       }
       if (st.status && st.status !== 'running') {
         const hist = await this.getHistory(target, sessionId, 200)
-        if (!hist.ok) return { ok: false, error: hist.error }
+        if (!hist.ok) return { ok: false, error: hist.error, code: hist.code, status: hist.status }
         const messages = hist.messages || []
         // 优先按回合起点重建整轮文本：回合内往往有多条 assistant 消息（逐步叙述），
         // 只取最后一条会把整轮压缩成结尾总结，造成与远端会话展示不一致
@@ -1573,15 +1640,12 @@ export class DshClient {
     // 8 次 × 1.5s：assistant/message 落库有滞后（尤其超长回复），重试太浅会误判「空回复」
     const attempts = options?.attempts ?? 8
     const intervalMs = options?.intervalMs ?? 1500
-    let lastError = '回合已结束但未从历史中提取到助手回复'
+    const lastError = '回合已结束但未从历史中提取到助手回复'
     for (let i = 0; i < attempts; i++) {
       if (options?.signal?.aborted) return { ok: false, error: '已中止' }
       if (i > 0) await new Promise((r) => setTimeout(r, intervalMs))
       const hist = await this.getHistory(target, sessionId, 200)
-      if (!hist.ok) {
-        lastError = hist.error || '会话历史读取失败'
-        continue
-      }
+      if (!hist.ok) return { ok: false, error: hist.error || '会话历史读取失败', code: hist.code, status: hist.status }
       const messages = hist.messages || []
       const rec = reconstructTurnFromHistory(messages, promptFragment)
       if (rec.text.trim()) return { ok: true, content: rec.text, via: 'poll', complete: true }

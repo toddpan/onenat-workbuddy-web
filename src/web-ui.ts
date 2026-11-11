@@ -225,18 +225,142 @@ main { flex: 1; display: flex; overflow: hidden; position: relative; }
   flex: 1; overflow-y: auto; padding: 2px 8px 12px;
 }
 
-/* 侧栏分组 */
-.group-header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 8px 8px 4px; font-size: 11px; font-weight: 600; color: var(--tx3);
-  cursor: pointer; user-select: none; text-transform: uppercase; letter-spacing: .04em;
+/* 侧栏分组（baocode 风：紧凑树 · chevron 旋转 · 图标 · 折叠态摘要 · hover 操作） */
+.grouping-bar {
+  display: flex; align-items: center; gap: 4px;
+  padding: 4px 12px 4px 14px; flex: none;
 }
-.group-header:hover { color: var(--tx2); }
-.group-header .gh-left { display: flex; align-items: center; gap: 4px; }
-.group-header .gh-chev { font-size: 10px; width: 12px; }
-.group-header .gh-cnt { font-size: 10.5px; opacity: .7; font-weight: 400; }
-.group-body { display: flex; flex-direction: column; gap: 2px; }
+.grouping-bar .gb-title {
+  flex: 1; font-size: 11.5px; font-weight: 500; color: var(--tx3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: .02em;
+}
+.grouping-bar .gb-act {
+  border: none; background: none; cursor: pointer; flex: none;
+  font-size: 11px; color: var(--tx3); padding: 2px 6px; border-radius: 4px;
+  display: inline-flex; align-items: center; gap: 2px;
+}
+.grouping-bar .gb-act:hover { background: var(--bg3); color: var(--tx2); }
+.grouping-bar .gb-act .gb-arrow { font-size: 10px; color: var(--tx3); }
+
+.group-header {
+  display: flex; align-items: center;
+  height: 27px; padding: 0 4px 0 4px; margin: 4px 0 0;
+  border-radius: 6px; cursor: pointer; user-select: none;
+  color: var(--tx2); font-size: 12px; font-weight: 600;
+  transition: background .12s ease;
+}
+.group-header:hover, .group-header.ctx { background: var(--bg3); }
+.group-header.dragging { opacity: .45; }
+.group-header .gh-left { display: flex; align-items: center; gap: 3px; flex: 1; min-width: 0; }
+.group-header .gh-chev {
+  font-size: 11px; width: 14px; flex: none; text-align: center; color: var(--tx3);
+  transition: transform .15s ease;
+}
+.group-header .gh-chev.open { transform: rotate(90deg); }
+.group-header .gh-icon { flex: none; width: 16px; text-align: center; font-size: 12.5px; line-height: 1; margin-right: 2px; }
+.group-header .gh-icon svg { width: 14px; height: 14px; vertical-align: -2px; }
+.group-header .gh-dot-ic {
+  display: inline-block; width: 14px; height: 14px; border-radius: 50%; vertical-align: -2.5px;
+  font-size: 9px; line-height: 14px; text-align: center; color: #fff; font-weight: 600;
+}
+.group-header .gh-title {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.group-header .gh-sub { font-size: 10px; color: var(--tx3); font-weight: 400; margin-left: 4px; flex: none; }
+.group-header .gh-pin { font-size: 10px; color: var(--tx3); margin-left: 4px; flex: none; }
+.group-header .gh-cnt { font-size: 11px; color: var(--tx3); font-weight: 400; margin: 0 4px; flex: none; }
+.group-header .gh-status { display: inline-flex; align-items: center; gap: 4px; margin-right: 4px; font-size: 10.5px; color: var(--tx3); font-weight: 400; flex: none; }
+.group-header .gh-status .gs-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.group-header .gh-status .gs-dot.run { background: var(--pri); animation: pulse 1.2s infinite; }
+.group-header .gh-status .gs-dot.ask { background: var(--warn); animation: pulse 1.2s infinite; }
+.group-header .gh-status .gs-dot.unread { background: var(--acc); }
+.group-header .gh-status .gs-dot.fail { background: var(--err); }
+.group-header .gh-hact { display: none; align-items: center; gap: 1px; flex: none; }
+.group-header:hover .gh-hact, .group-header.ctx .gh-hact { display: inline-flex; }
+.group-header:hover .gh-cnt, .group-header.ctx .gh-cnt { display: none; }
+.group-header .gh-btn {
+  border: none; background: none; cursor: pointer; color: var(--tx3);
+  font-size: 13px; line-height: 1; padding: 3px 5px; border-radius: 4px;
+}
+.group-header .gh-btn:hover { background: var(--bg-hover); color: var(--tx); }
+.group-header[draggable] .gh-left { cursor: grab; }
+.group-header.drag-over-before { box-shadow: 0 -2px 0 0 var(--pri); }
+.group-header.drag-over-after { box-shadow: 0 2px 0 0 var(--pri); }
+.group-body { display: flex; flex-direction: column; gap: 1px; padding: 2px 0 0 2px; }
 .group-body.collapsed { display: none; }
+
+/* ---- baocode 风浮层：右键/排序菜单 · 图标选择器 · 行 hover 卡 ---- */
+.wb-menu {
+  position: fixed; z-index: 4000; min-width: 168px;
+  background: var(--bg2); border: 1px solid var(--line2); border-radius: 10px;
+  box-shadow: 0 10px 32px rgba(31,35,41,.16); padding: 4px;
+}
+.wb-menu .mi {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  border: none; background: none; cursor: pointer; text-align: left;
+  padding: 5px 8px; border-radius: 6px; font-size: 12px; color: var(--tx);
+}
+.wb-menu .mi:hover { background: var(--bg3); }
+.wb-menu .mi.danger { color: var(--err); }
+.wb-menu .mi .mic { width: 16px; text-align: center; font-size: 12px; flex: none; color: var(--tx2); }
+.wb-menu .mi.danger .mic { color: var(--err); }
+.wb-menu .mi .mlb { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-menu .mi .mck { font-size: 11px; color: var(--tx3); flex: none; width: 14px; text-align: center; }
+.wb-menu .mdiv { height: 1px; background: var(--line); margin: 4px 6px; }
+.wb-menu .mcap { font-size: 10px; color: var(--tx3); padding: 4px 8px 2px; }
+
+.icon-picker {
+  position: fixed; z-index: 4000; width: 268px;
+  background: var(--bg2); border: 1px solid var(--line2); border-radius: 12px;
+  box-shadow: 0 12px 36px rgba(31,35,41,.18); padding: 10px;
+}
+.icon-picker .ip-tabs { display: flex; gap: 2px; margin-bottom: 8px; }
+.icon-picker .ip-tab {
+  flex: 1; border: none; background: none; cursor: pointer;
+  font-size: 12px; color: var(--tx2); padding: 5px 0; border-radius: 6px;
+}
+.icon-picker .ip-tab.on { background: var(--bg3); color: var(--tx); font-weight: 600; }
+.icon-picker .ip-search {
+  width: 100%; background: var(--bg); border: 1px solid var(--line2); border-radius: 8px;
+  font-size: 12px; color: var(--tx); padding: 6px 9px; outline: none; margin-bottom: 8px;
+}
+.icon-picker .ip-search:focus { border-color: var(--pri); }
+.icon-picker .ip-cap { font-size: 10.5px; color: var(--tx3); padding: 2px 2px 4px; }
+.icon-picker .ip-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; max-height: 208px; overflow-y: auto; }
+.icon-picker .ip-cell {
+  border: none; background: none; cursor: pointer; border-radius: 6px;
+  font-size: 16px; line-height: 1; padding: 5px 0;
+}
+.icon-picker .ip-cell:hover { background: var(--bg3); }
+.icon-picker .ip-cell svg { width: 16px; height: 16px; vertical-align: -3px; }
+.icon-picker .ip-colors { display: flex; flex-wrap: wrap; gap: 8px; padding: 2px; }
+.icon-picker .ip-color {
+  width: 20px; height: 20px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; padding: 0;
+}
+.icon-picker .ip-color:hover { transform: scale(1.12); }
+.icon-picker .ip-foot { display: flex; justify-content: space-between; margin-top: 8px; }
+.icon-picker .ip-clear {
+  border: none; background: none; cursor: pointer; font-size: 11px; color: var(--tx3); padding: 2px 4px; border-radius: 4px;
+}
+.icon-picker .ip-clear:hover { background: var(--bg3); color: var(--tx2); }
+
+.row-hovercard {
+  position: fixed; z-index: 3900; max-width: 300px; pointer-events: none;
+  background: var(--bg2); border: 1px solid var(--line2); border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(31,35,41,.14); padding: 9px 11px;
+}
+.row-hovercard .hc-title { font-size: 12.5px; font-weight: 600; color: var(--tx); margin-bottom: 3px; word-break: break-all; }
+.row-hovercard .hc-line { font-size: 11px; color: var(--tx3); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-hovercard .hc-prev { font-size: 11px; color: var(--tx2); margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+.task-item .t-time { flex: none; font-size: 10.5px; color: var(--tx3); white-space: nowrap; }
+.task-item .t-pin { flex: none; font-size: 10px; margin-left: -2px; }
+.task-item.pinned { background: rgba(212, 136, 6, 0.05); }
+.task-item.pinned:hover { background: var(--bg3); }
+.task-item .rename-inline {
+  flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--pri); border-radius: 5px;
+  font-size: 12px; color: var(--tx); padding: 2px 6px; outline: none;
+}
 
 /* 会话条目 */
 .task-item {
@@ -407,6 +531,15 @@ body.draft-mode .chat-empty.draft-hero { height: auto; }
 @media (max-width: 768px) { .draft-place .dp-btn { max-width: calc(100vw - 100px); } .badge.place { max-width: 100%; white-space: normal; word-break: break-word; } }
 .task-item.draft-item .t { font-style: italic; }
 
+.activity-summary { padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.activity-count { display: inline-block; margin: 3px 5px 3px 0; padding: 4px 7px; border: 1px solid var(--line2); border-radius: 6px; background: var(--bg); color: var(--tx2); cursor: pointer; font-size: 12px; }
+.activity-freshness { color: var(--tx3); font-size: 11px; margin: 4px 0; }
+.activity-badge { display: inline-block; font-size: 11px; margin: 2px 3px; color: var(--tx2); white-space: nowrap; }
+.activity-waiting_reply, .activity-failed { color: var(--warn); }
+.activity-running, .activity-unread { color: var(--pri); }
+.activity-completed { color: var(--ok); }
+.activity-unread { font-weight: 600; }
+.activity-task-link { display: block; width: 100%; text-align: left; padding: 10px; border: 0; border-bottom: 1px solid var(--line); background: var(--bg); color: var(--tx); cursor: pointer; }
 .qe-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 18px; width: min(620px, 92%); }
 .qe-card {
   display: flex; flex-direction: column; align-items: flex-start; gap: 3px; text-align: left;
@@ -1085,8 +1218,11 @@ body.task-running .dsh-sysRow.sys-planning .markdown::after {
 }
 .stat-panel.on { display: block; }
 .stat-panel .sp-h { padding: 4px 10px 6px; font-size: 11px; font-weight: 600; color: var(--tx2); border-bottom: 1px solid var(--line); margin-bottom: 3px; }
-.stat-panel .sp-r { display: flex; justify-content: space-between; gap: 18px; padding: 3px 10px; font-size: 12px; color: var(--tx2); }
-.stat-panel .sp-r b { font-weight: 500; color: var(--tx); font-variant-numeric: tabular-nums; }
+.stat-panel .sp-r, .turn-usage-detail .sp-r { display: flex; justify-content: space-between; gap: 18px; padding: 3px 10px; font-size: 12px; color: var(--tx2); }
+.stat-panel .sp-r b, .turn-usage-detail .sp-r b { font-weight: 500; color: var(--tx); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.turn-usage-detail { width: 100%; }
+.turn-usage-detail .sp-r { padding: 8px 0; font-size: 14px; border-bottom: 1px solid var(--line); }
+.turn-usage-detail .sp-r:last-child { border-bottom: 0; }
 .stat-panel .sp-foot { padding: 6px 10px 8px; border-top: 1px solid var(--line); margin-top: 3px; }
 .stat-panel .sp-foot a { color: var(--pri); font-size: 11.5px; cursor: pointer; }
 
@@ -2355,6 +2491,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
       <button data-v="work" class="on"><span class="ic">💬</span><span class="lb">工作台</span></button>
       <button data-v="projects"><span class="ic">📦</span><span class="lb">项目</span></button>
       <button data-v="backlog"><span class="ic">✅</span><span class="lb">待办</span></button>
+      <button data-v="groups"><span class="ic">👥</span><span class="lb">群</span></button>
       <button data-v="monitor"><span class="ic">📊</span><span class="lb">监控大屏</span></button>
       <button data-v="agents"><span class="ic">🤖</span><span class="lb">子智能体</span></button>
       <span class="nav-sep" aria-hidden="true"></span>
@@ -2393,6 +2530,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <input id="side-search" placeholder="搜索会话…" autocomplete="off" />
           <span class="s-clear" id="side-search-clear">✕</span>
         </div>
+        <div class="grouping-bar" id="grouping-bar"></div>
         <div class="task-list" id="task-list"></div>
       </aside>
       <section class="chat-main">
@@ -2588,6 +2726,43 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <button class="btn" id="btn-bl-refresh">↻ 刷新</button>
         </div>
         <div id="bl-root"><div class="bl-empty">加载中…</div></div>
+      </div>
+    </div>
+    <div class="view" id="view-groups">
+      <div class="panel" id="group-list-panel">
+        <div class="panel-head">
+          <h2>👥 协作群</h2>
+          <span class="sub">群 = 成员 + 频道（orchestrate 任务）+ 首页分组。群元数据平台承载，群聊复用任务通道；发送即自动开启/续接讨论轮。</span>
+          <span class="hspacer"></span>
+          <button class="btn pri" id="btn-group-new">＋ 发起群聊</button>
+        </div>
+        <div class="topo-toolbar">
+          <input id="group-q" class="topo-search" placeholder="搜索群名 / 成员 / 分组">
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--tx3);white-space:nowrap"><input type="checkbox" id="group-archived-toggle"> 显示已归档</label>
+        </div>
+        <div id="group-list"><div class="mon-empty">加载中…</div></div>
+      </div>
+      <div class="panel" id="group-chat-panel" style="display:none">
+        <div class="panel-head">
+          <button class="btn" id="group-chat-back">‹ 返回列表</button>
+          <div style="min-width:0">
+            <div id="group-chat-title" style="font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
+            <div id="group-chat-sub" class="sub"></div>
+          </div>
+          <span class="hspacer"></span>
+          <button class="btn" id="group-chat-mention" title="插入成员点名">@</button>
+          <button class="btn" id="group-chat-history">‹ 历史轮次 ›</button>
+          <button class="btn" id="group-chat-end">⏹ 结束本轮</button>
+          <button class="btn" id="group-chat-settings">⚙ 群设置</button>
+        </div>
+        <div id="group-chat-banner"></div>
+        <div id="group-chat-msgs" style="max-height:54vh;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:8px"></div>
+        <div id="group-chat-err" style="display:none;color:var(--err);font-size:12px;padding:4px 14px"></div>
+        <div style="display:flex;gap:8px;padding:8px 12px;border-top:1px solid var(--dsw-alias-border-l2)">
+          <input id="group-chat-input" style="flex:1" placeholder="发消息…（@成员名 点名；频道空闲时发送即开启新一轮）">
+          <button class="btn pri" id="group-chat-send">发送</button>
+        </div>
+        <div id="group-chat-footnote" class="hint" style="padding:2px 14px 8px;margin:0"></div>
       </div>
     </div>
     <div class="view" id="view-projects">
@@ -2963,6 +3138,13 @@ const state = {
   searchQuery: '',
   groupCollapsed: { archived: true }, // 分组折叠（localStorage 持久化；P3-1 键 = 执行位置）
   groupMore: {}, // 分组「显示更多」展开态（localStorage 持久化）
+  grouping: 'project', // baocode 风分组方式：project | date | status（localStorage wb.grouping）
+  groupOrder: [], // 手动排序的分组顺序（placeKey 数组，localStorage wb.groupOrder）
+  pinnedTasks: [], // 置顶任务（taskId 数组，localStorage wb.pinnedTasks）
+  pinnedGroups: [], // 置顶分组（placeKey 数组，localStorage wb.pinnedGroups）
+  placeIcons: {}, // 分组图标 { placeKey: {kind:'emoji'|'icon'|'color', value, color?} }（localStorage wb.placeIcons）
+  hiddenGroups: {}, // 隐藏分组 { placeKey: 1 }（localStorage wb.hiddenGroups）
+  iconRecent: [], // 图标选择器最近使用（[{kind,value}]，localStorage wb.iconRecent）
   es: null,
   turnEls: {},
   renderedTurnsCount: 0,
@@ -2979,6 +3161,126 @@ const state = {
   projQuery: '',
   topoCollapsed: {},    // envKey -> 分组是否折叠
 };
+
+// 服务端活动快照是各入口唯一的活动/已读来源；失败保留最后一次成功快照。
+var activityState = { data: null, byTask: {}, detail: null, seq: 0, successAt: 0, error: '' };
+function activityLabel(value) {
+  return ({ waiting_reply: '待答复', running: '运行中', completed: '已完成', failed: '失败', cancelled: '已取消', draft: '草稿', unknown: '未知' })[value] || '未知';
+}
+function activityBadges(item) {
+  if (!item) return '';
+  return '<span class="activity-badge activity-' + esc(item.state) + '">' + activityLabel(item.state) + '</span>' +
+    (item.unread ? '<span class="activity-badge activity-unread">未读</span>' : '');
+}
+function activityCountsHtml(counts, scope, id) {
+  if (!counts) return '<span class="sub">活动尚未同步</span>';
+  return [['waitingReply', '待答复'], ['running', '运行'], ['completed', '完成'], ['failed', '失败'], ['unread', '未读']].map(function (pair) {
+    return '<button class="activity-count" data-activity-key="' + pair[0] + '" data-activity-scope="' + scope + '" data-activity-id="' + esc(id || '') + '">' + pair[1] + ' ' + (counts[pair[0]] || 0) + '</button>';
+  }).join('');
+}
+function activityGroupCounts(kind, id) {
+  var groups = activityState.data && activityState.data[kind];
+  var field = kind === 'agents' ? 'agentId' : 'projectId';
+  var group = (groups || []).filter(function (g) { return g[field] === id; })[0];
+  return group ? group.counts : (activityState.data ? { total: 0 } : null);
+}
+function activityFreshness() {
+  return (activityState.error ? '同步失败 · ' : '') + (activityState.successAt ? '最后成功 ' + fmtDateTime(activityState.successAt) : '尚未成功同步');
+}
+function renderActivity() {
+  var summary = $('activity-summary');
+  if (!summary && $('task-list')) {
+    summary = document.createElement('div'); summary.id = 'activity-summary'; summary.className = 'activity-summary';
+    // 插在分组条之前：搜索框 → 活动计数 → 分组条 → 任务列表
+    var anchor = $('grouping-bar') || $('task-list');
+    $('task-list').parentNode.insertBefore(summary, anchor);
+  }
+  var html = activityCountsHtml(activityState.data && activityState.data.counts, 'all', '') + '<div class="activity-freshness">' + esc(activityFreshness()) + '</div>';
+  if (summary) summary.innerHTML = html;
+  var empty = $('chat-empty');
+  if (empty && !state.currentTaskId && !state.draft) {
+    var home = $('activity-home');
+    if (!home) { home = document.createElement('div'); home.id = 'activity-home'; home.className = 'activity-summary'; empty.appendChild(home); }
+    home.innerHTML = '<strong>任务动态</strong><div>' + html + '</div>';
+  }
+  var head = $('activity-task-state');
+  if (!head && $('chat-title')) { head = document.createElement('span'); head.id = 'activity-task-state'; $('chat-title').parentNode.appendChild(head); }
+  var projectId = state.currentTaskId && state.task ? state.task.projectId : state.draft && state.draft.place && state.draft.place.projectId;
+  var projectSummary = $('activity-project-work');
+  if (!projectSummary && $('chat-scroll')) {
+    projectSummary = document.createElement('div'); projectSummary.id = 'activity-project-work'; projectSummary.className = 'activity-summary';
+    $('chat-scroll').parentNode.insertBefore(projectSummary, $('chat-scroll'));
+  }
+  if (projectSummary) {
+    projectSummary.style.display = projectId ? '' : 'none';
+    projectSummary.innerHTML = projectId ? '<span>项目任务动态</span> ' + activityCountsHtml(activityGroupCounts('projects', projectId), 'project', projectId) + '<span class="activity-freshness">' + esc(activityFreshness()) + '</span>' : '';
+  }
+  var detail = activityState.detail;
+  if (head) head.innerHTML = activityBadges(activityState.byTask[state.currentTaskId] || (detail && detail.taskId === state.currentTaskId ? detail : null));
+}
+async function loadActivity() {
+  var seq = ++activityState.seq;
+  var result = await api('/activity');
+  if (seq !== activityState.seq) return;
+  if (result.ok && result.data && Array.isArray(result.data.items)) {
+    activityState.data = result.data;
+    var byTask = {};
+    result.data.items.forEach(function (item) { byTask[item.taskId] = item; });
+    activityState.byTask = byTask;
+    activityState.successAt = typeof result.data.snapshotAt === 'number' && isFinite(result.data.snapshotAt) && result.data.snapshotAt > 0 ? result.data.snapshotAt : Date.now(); activityState.error = '';
+  } else { activityState.error = result.error || '活动摘要不可用'; }
+  renderActivity(); renderTaskList();
+  if (currentView === 'agents') renderAgents();
+  if (currentView === 'projects') renderProjects();
+}
+// 仅显式打开任务时取水位，且先于内容请求；缓存、列表刷新和历史回看均不确认已读。
+async function captureActivityVersion(taskId) {
+  var result = await api('/activity?taskId=' + encodeURIComponent(taskId));
+  var items = result.ok && result.data && result.data.items;
+  var item = Array.isArray(items) ? items.filter(function (x) { return x.taskId === taskId; })[0] : null;
+  if (state.currentTaskId === taskId && item) { activityState.detail = item; }
+  return item && typeof item.activityVersion === 'number' ? item.activityVersion : null;
+}
+var activityRenderSeq = 0;
+function ackRenderedActivity(taskId, version, seq, task) {
+  if (version === null) return;
+  var renderSeq = activityRenderSeq;
+  requestAnimationFrame(function () { requestAnimationFrame(async function () {
+    var scroll = $('chat-scroll');
+    if (seq !== openTaskSeq || renderSeq !== activityRenderSeq || state.currentTaskId !== taskId || state.task !== task || currentView !== 'work' || document.hidden ||
+        state.convView === 'trajectory' || !scroll || scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight > 160 ||
+        !scroll.querySelector('.dsh-chat-column') || scroll.querySelector('.chat-loading') || !(task.turns || []).length) return;
+    var result = await api('/tasks/' + encodeURIComponent(taskId) + '/read', { method: 'POST', body: JSON.stringify({ activityVersion: version }) });
+    if (result.ok) {
+      var detail = activityState.detail;
+      // 单任务活动可含归档历史，不混入默认聚合计数；只合并同一活动版本的读水位。
+      if (detail && detail.taskId === taskId && result.data && detail.activityVersion === result.data.activityVersion) {
+        detail.readVersion = Math.max(detail.readVersion || 0, result.data.readVersion || 0);
+        detail.unread = detail.activityVersion > detail.readVersion;
+      }
+      await loadActivity();
+    }
+  }); });
+}
+document.addEventListener('click', function (event) {
+  var button = event.target.closest ? event.target.closest('[data-activity-key]') : null;
+  if (!button) return;
+  event.preventDefault(); event.stopPropagation();
+  var key = button.getAttribute('data-activity-key');
+  var scope = button.getAttribute('data-activity-scope');
+  var id = button.getAttribute('data-activity-id');
+  var items = ((activityState.data && activityState.data.items) || []).filter(function (item) {
+    if (scope === 'agent' && (item.agentIds || []).indexOf(id) < 0 && item.agentId !== id) return false;
+    if (scope === 'project' && item.projectId !== id) return false;
+    return key === 'unread' ? item.unread : item.state === (key === 'waitingReply' ? 'waiting_reply' : key);
+  });
+  openModal('任务动态 · ' + ({ waitingReply: '待答复', running: '运行', completed: '完成', failed: '失败', unread: '未读' })[key],
+    '<div class="activity-freshness">' + esc(activityFreshness()) + '</div>' + (items.length ? items.map(function (item) {
+      var task = state.tasks.filter(function (t) { return t.id === item.taskId; })[0];
+      return '<button class="activity-task-link" data-activity-task="' + esc(item.taskId) + '">' + esc(task ? task.title : item.taskId) + ' ' + activityBadges(item) + '</button>';
+    }).join('') : '<div class="sub">暂无任务</div>'));
+  document.querySelectorAll('[data-activity-task]').forEach(function (link) { link.addEventListener('click', function () { closeModal(); jumpToTask(link.getAttribute('data-activity-task')); }); });
+}, true);
 
 // ---------- DSH 对话窗口 / 轨迹窗口共享素材 ----------
 // 14px 线性图标（移植 DSH ui-primitives 图形语言）
@@ -4022,7 +4324,7 @@ function renderMonTasks(tasks) {
       '<div class="mon-row1"><span>' + t.typeIcon + '</span><span class="mon-nm">' + esc(monTaskTitle(t)) + '</span>' +
       '<span class="mon-spacer"></span>' +
       (t.running ? '<span class="mon-badge run">⏱ ' + monFmtElapse(t.elapsedMs) + '</span>' : '') +
-      '<span class="mon-badge ' + (t.running ? 'run' : (!t.running && t.pendingAsk) ? 'warn' : monHlCls(t) === 'bad' ? 'bad' : monHlCls(t) === 'ok' ? 'ok' : monHlCls(t) === 'stop' ? 'warn' : '') + '">' + esc((!t.running && t.pendingAsk) ? '⏳ 等待答复' : t.status === 'running' ? '运行中' : t.status === 'completed' || t.status === 'success' ? '完成' : t.status === 'failed' ? '失败' : t.status === 'cancelled' ? '已中止' : t.status === 'draft' ? '草稿' : '部分成功') + '</span>' +
+      (activityState.byTask[t.id] ? activityBadges(activityState.byTask[t.id]) : '<span class="mon-badge ' + (t.pendingAsk ? 'warn' : t.running ? 'run' : monHlCls(t) === 'bad' ? 'bad' : monHlCls(t) === 'ok' ? 'ok' : monHlCls(t) === 'stop' ? 'warn' : '') + '">' + esc(t.pendingAsk ? '⏳ 等待答复' : t.status === 'running' ? '运行中' : t.status === 'completed' || t.status === 'success' ? '完成' : t.status === 'failed' ? '失败' : t.status === 'cancelled' ? '已中止' : t.status === 'draft' ? '草稿' : t.status === 'partial_success' ? '部分成功' : '未知') + '</span>') +
       '</div>' +
       (t.running && t.headline ? '<div class="mon-hl ' + monHlCls(t) + '">' + esc(t.headline) + '</div>' : '') +
       (metaBits.length ? '<div class="mon-meta">' + metaBits.join('<span class="sep">·</span>') + '</div>' : '') +
@@ -4563,6 +4865,7 @@ function projectCardHtml(p) {
   ].filter(Boolean).join(' ｜ ');
   return '<div class="proj-card" data-proj="' + esc(p.id) + '">' +
     '<div class="pj-name">' + esc(p.name) + '</div>' +
+    '<div class="pj-activity">' + activityCountsHtml(activityGroupCounts('projects', p.id), 'project', p.id) + '<div class="activity-freshness">' + esc(activityFreshness()) + '</div></div>' +
     '<div class="pj-meta">' + (p.workspace ? '📁 ' + esc(p.workspace) + ' · ' : '') + '📋 ' + taskCount + ' 个任务</div>' +
     '<div class="pj-meta">文件归属：' + esc(nodeRefLabel(p.dshRef)) + ' · 默认执行：' + esc(nodeRefLabel(projectExecutionRef(p))) + ' · ' + (sameNodeRef(p.dshRef, projectExecutionRef(p)) ? '同节点直接访问' : '跨节点远程访问') + '</div>' +
     (p.importedFrom ? '<div class="pj-chips" style="margin-top:6px"><span class="tag" title="自 ' + esc(p.importedFrom.sourceNode + p.importedFrom.sourcePath) + ' 导入 · 导入任务 ' + esc(p.importedFrom.taskId) + '">☁ 云端导入 · 来自 ' + esc(p.importedFrom.sourceNode) + '</span></div>' : '') +
@@ -5126,6 +5429,7 @@ function switchView(v) {
   if (v === 'monitor') monitorStart(); else monitorStop();
   if (v === 'projects') renderProjects();
   if (v === 'backlog') renderBacklogView();
+  if (v === 'groups') renderGroupsView(); else if (typeof groupState !== 'undefined' && groupState.pollTimer) stopGroupPoll();
   if (v === 'library' || v === 'plugins') libLoad();
   // 当前页签写入 hash：刷新/分享链接都停留在原页签（replaceState 不产生历史噪音）
   // 注意：这里必须保留 location.hash !== h 的条件，不能无条件 replaceState ——
@@ -5213,11 +5517,19 @@ async function boot() {
   document.querySelectorAll('.qe-card[data-qe]').forEach((card) => {
     card.addEventListener('click', () => switchView(card.dataset.qe));
   });
-  await Promise.all([loadResources(), loadAgents(), loadTasks(), loadSettings(), loadSchedules(), loadPlannerOptions(), loadProjects(), loadTeams()]);
+  await Promise.all([loadResources(), loadAgents(), loadTasks(), loadSettings(), loadSchedules(), loadPlannerOptions(), loadProjects(), loadTeams(), loadGroups()]);
   await refreshMentionCandidates();
   // 恢复侧栏分组折叠/展开偏好（localStorage，P3-1）
   try { const gc = JSON.parse(localStorage.getItem('wb.groupCollapsed') || 'null'); if (gc && typeof gc === 'object') state.groupCollapsed = gc; } catch (e) { /* ignore */ }
   try { const gm = JSON.parse(localStorage.getItem('wb.groupMore') || 'null'); if (gm && typeof gm === 'object') state.groupMore = gm; } catch (e) { /* ignore */ }
+  // baocode 风侧栏偏好（分组方式/手动排序/置顶/图标/隐藏组）恢复
+  try { const gg = localStorage.getItem('wb.grouping'); if (gg === 'project' || gg === 'date' || gg === 'status') state.grouping = gg; } catch (e) { /* ignore */ }
+  try { const go = JSON.parse(localStorage.getItem('wb.groupOrder') || 'null'); if (Array.isArray(go)) state.groupOrder = go.filter(function (x) { return typeof x === 'string'; }); } catch (e) { /* ignore */ }
+  try { const pt = JSON.parse(localStorage.getItem('wb.pinnedTasks') || 'null'); if (Array.isArray(pt)) state.pinnedTasks = pt.filter(function (x) { return typeof x === 'string'; }); } catch (e) { /* ignore */ }
+  try { const pg = JSON.parse(localStorage.getItem('wb.pinnedGroups') || 'null'); if (Array.isArray(pg)) state.pinnedGroups = pg.filter(function (x) { return typeof x === 'string'; }); } catch (e) { /* ignore */ }
+  try { const pi = JSON.parse(localStorage.getItem('wb.placeIcons') || 'null'); if (pi && typeof pi === 'object') state.placeIcons = pi; } catch (e) { /* ignore */ }
+  try { const hg = JSON.parse(localStorage.getItem('wb.hiddenGroups') || 'null'); if (hg && typeof hg === 'object') state.hiddenGroups = hg; } catch (e) { /* ignore */ }
+  try { const ir = JSON.parse(localStorage.getItem('wb.iconRecent') || 'null'); if (Array.isArray(ir)) state.iconRecent = ir.slice(0, 14); } catch (e) { /* ignore */ }
   initNodeState();
   // 后台探测节点健康（TTL 门控），拿到结果后校正默认节点：不可达的默认节点不应被新任务选中
   void refreshNodeEngines(false).then(applyReachableNodeDefault).catch(function () {});
@@ -5226,6 +5538,8 @@ async function boot() {
   // hash 携带查询参数（如 #monitor?from=share）时只取视图段
   var initial = ((location.hash || '').replace('#', '').split('?')[0]);
   if (initial && document.getElementById('view-' + initial)) switchView(initial);
+  await loadActivity();
+  setInterval(loadActivity, 5000);
   setInterval(loadTasksQuiet, 4000);
   // ONENAT 状态自愈：资源目录未加载成功时每 8s 重试（覆盖启动瞬间网络抖动/服务重启窗口），成功或超 2 分钟后停止
   const heal = setInterval(async () => {
@@ -5322,6 +5636,382 @@ window.addEventListener('pageshow', function () {
   requestAnimationFrame(resetSearchBoxesUI);
 });
 
+// ---------- baocode 风侧栏交互组件（浮层菜单 · 图标选择器 · 行 hover 卡 · 相对时间） ----------
+let wbMenuEl = null;
+function closeWbMenu() { if (wbMenuEl) { wbMenuEl.remove(); wbMenuEl = null; } }
+/** 通用浮层菜单：items = [{label,icon,checked,danger,onClick}] 或 '-'（分隔线）；自动视口内收拢 */
+function wbMenu(x, y, items) {
+  closeWbMenu(); closeIconPicker();
+  const el = document.createElement('div');
+  el.className = 'wb-menu';
+  for (const it of items) {
+    if (it === '-') { const d = document.createElement('div'); d.className = 'mdiv'; el.appendChild(d); continue; }
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'mi' + (it.danger ? ' danger' : '');
+    b.innerHTML = '<span class="mic">' + (it.icon || '') + '</span><span class="mlb">' + esc(it.label) + '</span><span class="mck">' + (it.checked ? '✓' : '') + '</span>';
+    b.addEventListener('click', function (e) { e.stopPropagation(); closeWbMenu(); if (it.onClick) it.onClick(); });
+    el.appendChild(b);
+  }
+  document.body.appendChild(el);
+  const r = el.getBoundingClientRect();
+  let px = Math.min(x, window.innerWidth - r.width - 8);
+  let py = Math.min(y, window.innerHeight - r.height - 8);
+  if (px < 8) px = 8;
+  if (py < 8) py = 8;
+  el.style.left = px + 'px';
+  el.style.top = py + 'px';
+  wbMenuEl = el;
+}
+document.addEventListener('click', function () {
+  closeWbMenu();
+  // 组头菜单态样式随菜单关闭一并还原
+  document.querySelectorAll('.group-header.ctx').forEach(function (h) { h.classList.remove('ctx'); });
+}, true);
+document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { closeWbMenu(); closeIconPicker(); hideRowHovercard(); } });
+window.addEventListener('resize', function () { closeWbMenu(); closeIconPicker(); hideRowHovercard(); });
+
+/** baocode 式短相对时间：刚刚 / N分钟 / N小时 / N天 / N周 / M月D日 */
+function fmtRelTime(ts) {
+  if (!ts) return '';
+  const diff = Date.now() - ts;
+  if (diff < 0) return '刚刚';
+  if (diff < 60000) return '刚刚';
+  const m = Math.floor(diff / 60000);
+  if (m < 60) return m + '分钟';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + '小时';
+  const d = Math.floor(h / 24);
+  if (d < 7) return d + '天';
+  if (d < 35) return Math.floor(d / 7) + '周';
+  const dt = new Date(ts);
+  return (dt.getMonth() + 1) + '月' + dt.getDate() + '日';
+}
+/** 任务状态归一（活动快照优先，任务字段兜底）：needsInput / running / unread / failed / done / other */
+function taskUiState(t) {
+  const act = activityState.byTask[t.id];
+  if (act) {
+    if (act.state === 'waiting_reply') return { k: 'needsInput', label: '待答复' };
+    if (act.state === 'running') return { k: 'running', label: '运行中' };
+    if (act.state === 'failed') return { k: 'failed', label: '失败' };
+    if (act.unread) return { k: 'unread', label: '未读' };
+    if (act.state === 'completed' || act.state === 'cancelled') return { k: 'done', label: '已完成' };
+  }
+  if (t.pendingAsk) return { k: 'needsInput', label: '待答复' };
+  if (t.running) return { k: 'running', label: '运行中' };
+  if (t.status === 'failed') return { k: 'failed', label: '失败' };
+  if (t.status === 'completed' || t.status === 'success' || t.status === 'cancelled' || t.status === 'partial_success') return { k: 'done', label: '已完成' };
+  return { k: 'other', label: t.status === 'draft' ? '草稿' : '未知' };
+}
+/** 分组位置短标签（hover 卡用）：项目名 · 节点名 / 节点名 · 单独任务 */
+function taskPlaceShort(t) {
+  if (t.projectId) {
+    const p = (state.projects || []).find(function (x) { return x.id === t.projectId; });
+    const pn = p ? (p.name || p.id) : t.projectId;
+    const nt = p && p.nodeTitle ? p.nodeTitle : '';
+    return '📦 ' + pn + (nt ? ' · 🖥 ' + nt : '');
+  }
+  const ref = t.nodeRef;
+  const mid = ref && ref.kind === 'mapping' && ref.mappingId ? ref.mappingId : '';
+  const n = mid ? dshNodeOptions().find(function (x) { return x.mappingId === mid; }) : null;
+  return '🖥 ' + (n ? (n.title || n.appName || n.note || mid) : (mid || '默认节点')) + ' · 单独任务';
+}
+
+// ---- 图标选择器数据（Emoji 网格 + 简笔图标 + 色点自定义） ----
+const IP_EMOJIS = [
+  ['😀', '笑脸 开心'], ['😃', '大笑 开心'], ['😄', '笑 开心'], ['😁', '咧嘴 笑'], ['😆', '斜眼 笑'], ['😅', '苦笑 汗'], ['🤣', '笑哭 大笑'], ['😂', '笑哭'], ['🙂', '微笑'], ['😉', '眨眼'],
+  ['😊', '脸红 微笑'], ['😍', '花痴 爱'], ['😘', '亲 亲吻'], ['😎', '墨镜 酷'], ['🤩', '好崇拜 星'], ['🥳', '庆祝 派对'], ['😏', '得意'], ['😌', '安心'], ['🤗', '拥抱'], ['🤔', '思考 想想'],
+  ['🤨', '挑眉'], ['😐', '面无表情'], ['😴', '睡觉 睡'], ['🤤', '流口水'], ['😪', '困 疲'], ['😵', '晕'], ['🥺', '求你 可怜'], ['😣', '难受'], ['😤', '生气 哼'], ['😡', '怒 愤怒'],
+  ['🤬', '骂人'], ['🥶', '冷'], ['🥵', '热'], ['😱', '惊恐 吓'], ['🤡', '小丑'], ['👻', '鬼 幽灵'], ['👽', '外星人'], ['🤖', '机器人 机器人'], ['😺', '猫 笑猫'], ['🙈', '捂眼 猴'],
+  ['👋', '挥手 你好'], ['🤚', '举手'], ['✌️', '胜利 耶'], ['🤞', '祈祷 好运'], ['🤙', '电话我'], ['👌', '好的 OK'], ['👍', '赞 点赞'], ['👎', '踩'], ['✊', '拳头 加油'], ['👏', '鼓掌 拍手'],
+  ['🙌', '举手庆祝'], ['🤝', '握手 合作'], ['🙏', '感谢 拜托'], ['💪', '加油 肌肉'], ['🧠', '大脑 智能'], ['👀', '看 眼睛'], ['🗣', '说话'], ['💡', '灯泡 想法'], ['🔥', '火 热门'], ['⭐', '星 收藏'],
+  ['🌟', '发光 星'], ['✨', '闪 亮'], ['⚡', '闪电 快'], ['💥', '爆炸'], ['🎉', '庆祝 礼花'], ['🎊', '彩带'], ['🎈', '气球'], ['🎁', '礼物'], ['🏆', '奖杯 赢'], ['🥇', '金牌'],
+  ['📌', '图钉 置顶'], ['📍', '定位'], ['🔗', '链接'], ['📎', '回形针 附件'], ['📁', '文件夹 目录'], ['📂', '打开文件夹'], ['📅', '日历 日期'], ['🕰', '时钟 时间'], ['⏰', '闹钟 定时'], ['🔔', '铃 提醒'],
+  ['📈', '涨 趋势'], ['📊', '图表 统计'], ['📋', '剪贴板 计划'], ['🗒', '笔记'], ['📝', '写 备忘'], ['✅', '完成 勾'], ['☑️', '勾选'], ['❌', '错 叉'], ['⚠️', '警告'], ['🚫', '禁止'],
+  ['❓', '问 疑问'], ['❗', '感叹'], ['💬', '对话 聊天'], ['💭', '想法 气泡'], ['🎯', '目标 靶'], ['🚀', '火箭 发射'], ['🛠', '工具 修'], ['🔧', '扳手'], ['⚙️', '齿轮 设置'], ['🧩', '拼图 插件'],
+  ['📦', '包 项目'], ['🗃', '归档'], ['🗄️', '档案柜'], ['🗑️', '垃圾桶 删'], ['🔒', '锁 安全'], ['🔑', '钥匙 密钥'], ['🌐', '地球 网络'], ['🗺', '地图'], ['🧭', '指南针'], ['🛰', '卫星'],
+  ['💻', '电脑 代码'], ['🖥', '显示器 机器'], ['📱', '手机'], ['☎️', '电话'], ['📧', '邮件'], ['📮', '邮箱'], ['☁️', '云'], ['🌈', '彩虹'], ['🌙', '月亮 夜'], ['☀️', '太阳 晴'],
+  ['🐱', '猫'], ['🐶', '狗'], ['🦊', '狐狸'], ['🐼', '熊猫'], ['🐨', '考拉'], ['🦁', '狮子'], ['🐸', '青蛙'], ['🐧', '企鹅'], ['🦉', '猫头鹰'], ['🐝', '蜜蜂'],
+  ['🍎', '苹果'], ['🌿', '草 叶'], ['🌵', '仙人掌'], ['🍄', '蘑菇'], ['🌊', '浪 水'], ['🍀', '幸运草'], ['🌺', '花'], ['🌻', '向日葵'],
+];
+const IP_ICONS = [
+  ['folder', '文件夹 目录', 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'],
+  ['folder-open', '打开 目录', 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1H5l-2 9z M5 10h16l-2 9H5z'],
+  ['star', '星 收藏', 'M12 3l2.7 5.6 6.1.8-4.4 4.3 1 6.1L12 17l-5.4 2.8 1-6.1L3.2 9.4l6.1-.8z'],
+  ['heart', '心 喜欢', 'M12 20s-7-4.3-9.3-8.6C1.2 8.7 3.3 5.5 6.5 5.5c2 0 3.7 1.1 5.5 3.3 1.8-2.2 3.5-3.3 5.5-3.3 3.2 0 5.3 3.2 3.8 5.9C19 15.7 12 20 12 20z'],
+  ['bolt', '闪电 快', 'M13 2L4 14h6l-1 8 9-12h-6z'],
+  ['rocket', '火箭 发射', 'M12 2c3 2 5 6 5 10l2.5 3.5-3.5-.5c-1 1.3-2.5 2-4 2s-3-.7-4-2l-3.5.5L7 12c0-4 2-8 5-10z M12 10.5m-1.5 0a1.5 1.5 0 1 0 3 0 1.5 1.5 0 1 0-3 0'],
+  ['terminal', '终端 命令', 'M4 17l6-5-6-5 M12 19h8'],
+  ['code', '代码', 'M16 18l6-6-6-6 M8 6l-6 6 6 6'],
+  ['database', '数据库', 'M12 3c4.4 0 8 1.3 8 3s-3.6 3-8 3-8-1.3-8-3 3.6-3 8-3z M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6 M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3'],
+  ['globe', '地球 网络', 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z M3 12h18 M12 3c2.5 2.6 4 5.7 4 9s-1.5 6.4-4 9c-2.5-2.6-4-5.7-4-9s1.5-6.4 4-9z'],
+  ['box', '盒子 包', 'M21 8l-9-5-9 5v8l9 5 9-5z M3 8l9 5 9-5 M12 22V13'],
+  ['doc', '文档 文件', 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6 M8 13h8 M8 17h5'],
+  ['chat', '对话 聊天', 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'],
+  ['users', '团队 成员', 'M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M23 21v-2a4 4 0 0 0-3-3.9 M16 3.1a4 4 0 0 1 0 7.8'],
+  ['clock', '时间', 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z M12 7v5l3 3'],
+  ['calendar', '日历 日期', 'M3 6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z M16 2v4 M8 2v4 M3 10h18'],
+  ['bell', '铃 提醒', 'M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9 M13.7 21a2 2 0 0 1-3.4 0'],
+  ['flag', '旗 标记', 'M4 22V4 M4 4c3-2 6 2 9 0s5-1 7 0v10c-2-1-4-2-7 0s-6-2-9 0'],
+  ['pin', '图钉 置顶', 'M12 17v5 M9 3h6l1 7 2 2H6l2-2z'],
+  ['search', '搜索', 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z M21 21l-4.35-4.35'],
+  ['link', '链接', 'M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7 M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7'],
+  ['key', '钥匙 密钥', 'M21 2l-2 2m-7.6 7.6a5.5 5.5 0 1 1-7.8 7.8 5.5 5.5 0 0 1 7.8-7.8z m0 0L15.5 7.5m3 3L21 8l-3-3m-3 3l2 2'],
+  ['lock', '锁 安全', 'M5 11h14v10H5z M8 11V7a4 4 0 0 1 8 0v4'],
+  ['tag', '标签', 'M20.6 13.4L11 3.8A2 2 0 0 0 9.6 3H4a1 1 0 0 0-1 1v5.6a2 2 0 0 0 .6 1.4l9.6 9.6a2 2 0 0 0 2.8 0l4.6-4.6a2 2 0 0 0 0-2.6z M7.5 7.5m-.5 0a.5.5 0 1 0 1 0 .5.5 0 1 0-1 0'],
+  ['chart', '图表 统计', 'M18 20V10 M12 20V4 M6 20v-6'],
+];
+const IP_COLORS = ['#e5484d', '#e0684b', '#d48806', '#5f8f3e', '#2ba471', '#0ea5a4', '#4d6bfe', '#6f7bf7', '#9c6ade', '#8f959e'];
+function svgIcon(id, size) {
+  const def = IP_ICONS.find(function (x) { return x[0] === id; });
+  if (!def) return '';
+  const s = size || 14;
+  return '<svg viewBox="0 0 24 24" width="' + s + '" height="' + s + '" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="' + def[2] + '"/></svg>';
+}
+/** 分组图标 HTML（emoji / 简笔图标 / 色点首字），无定制时回退 fallback 字符 */
+function placeIconHtml(key, fallbackChar, firstChar) {
+  const ic = (state.placeIcons || {})[key];
+  if (!ic) return fallbackChar ? '<span class="gh-icon">' + fallbackChar + '</span>' : '';
+  if (ic.kind === 'emoji') return '<span class="gh-icon">' + esc(ic.value) + '</span>';
+  if (ic.kind === 'icon') return '<span class="gh-icon">' + svgIcon(ic.value) + '</span>';
+  if (ic.kind === 'color') return '<span class="gh-icon"><span class="gh-dot-ic" style="background:' + esc(ic.value) + '">' + esc(firstChar || '') + '</span></span>';
+  return fallbackChar ? '<span class="gh-icon">' + fallbackChar + '</span>' : '';
+}
+function pushIconRecent(rec) {
+  const arr = (state.iconRecent || []).filter(function (x) { return !(x.kind === rec.kind && x.value === rec.value); });
+  arr.unshift(rec);
+  state.iconRecent = arr.slice(0, 14);
+  try { localStorage.setItem('wb.iconRecent', JSON.stringify(state.iconRecent)); } catch (e) { /* ignore */ }
+}
+
+let iconPickerEl = null, iconPickerKey = null, iconPickerTab = 'emoji', iconPickerQuery = '';
+function closeIconPicker() { if (iconPickerEl) { iconPickerEl.remove(); iconPickerEl = null; iconPickerKey = null; } }
+/** baocode 风图标选择器（Emoji / 图标 / 自定义色点 + 搜索 + 最近使用），锚定分组头下方右对齐 */
+function openIconPicker(anchorEl, placeKey, firstChar) {
+  closeWbMenu(); closeIconPicker();
+  iconPickerKey = placeKey;
+  iconPickerTab = 'emoji';
+  iconPickerQuery = '';
+  const el = document.createElement('div');
+  el.className = 'icon-picker';
+  document.body.appendChild(el);
+  iconPickerEl = el;
+  const r = anchorEl.getBoundingClientRect();
+  let px = r.right - 268 + 12;
+  if (px < 8) px = 8;
+  if (px + 268 > window.innerWidth - 8) px = window.innerWidth - 276;
+  el.style.left = px + 'px';
+  el.style.top = Math.max(8, Math.min(r.bottom + 6, window.innerHeight - 300)) + 'px';
+  const renderBody = function () {
+    let bodyHtml = '';
+    const recent = (state.iconRecent || []).filter(function (x) { return x.kind === (iconPickerTab === 'emoji' ? 'emoji' : iconPickerTab === 'icon' ? 'icon' : 'color'); });
+    if (recent.length && !iconPickerQuery) {
+      bodyHtml += '<div class="ip-cap">最近使用</div><div class="ip-grid">' + recent.map(function (x) {
+        return x.kind === 'emoji'
+          ? '<button class="ip-cell" data-ic="emoji" data-v="' + esc(x.value) + '">' + esc(x.value) + '</button>'
+          : x.kind === 'icon'
+            ? '<button class="ip-cell" data-ic="icon" data-v="' + esc(x.value) + '">' + svgIcon(x.value, 16) + '</button>'
+            : '<button class="ip-cell" data-ic="color" data-v="' + esc(x.value) + '"><span class="gh-dot-ic" style="background:' + esc(x.value) + '">' + esc(firstChar || '') + '</span></button>';
+      }).join('') + '</div><div class="ip-cap">全部</div>';
+    }
+    if (iconPickerTab === 'emoji') {
+      const q = iconPickerQuery.toLowerCase();
+      const list = IP_EMOJIS.filter(function (x) { return !q || x[1].toLowerCase().indexOf(q) >= 0 || x[0] === iconPickerQuery; });
+      bodyHtml += '<div class="ip-grid">' + list.map(function (x) {
+        return '<button class="ip-cell" data-ic="emoji" data-v="' + esc(x[0]) + '" title="' + esc(x[1]) + '">' + x[0] + '</button>';
+      }).join('') + '</div>';
+    } else if (iconPickerTab === 'icon') {
+      const q = iconPickerQuery.toLowerCase();
+      const list = IP_ICONS.filter(function (x) { return !q || x[1].indexOf(q) >= 0 || x[0].indexOf(q) >= 0; });
+      bodyHtml += '<div class="ip-grid">' + list.map(function (x) {
+        return '<button class="ip-cell" data-ic="icon" data-v="' + x[0] + '" title="' + esc(x[1]) + '">' + svgIcon(x[0], 16) + '</button>';
+      }).join('') + '</div>';
+    } else {
+      bodyHtml += '<div class="ip-cap">选一个底色，图标显示分组名首字</div><div class="ip-colors">' + IP_COLORS.map(function (c) {
+        return '<button class="ip-color" data-ic="color" data-v="' + c + '" style="background:' + c + '"></button>';
+      }).join('') + '</div>';
+    }
+    return bodyHtml;
+  };
+  const updateBody = function () {
+    const bodyEl = el.querySelector('.ip-body');
+    if (!bodyEl) return;
+    bodyEl.innerHTML = renderBody();
+    bodyEl.querySelectorAll('[data-ic]').forEach(function (b) {
+      b.addEventListener('click', function (e) {
+        e.stopPropagation();
+        const rec = { kind: b.dataset.ic, value: b.dataset.v };
+        (state.placeIcons = state.placeIcons || {})[iconPickerKey] = rec;
+        try { localStorage.setItem('wb.placeIcons', JSON.stringify(state.placeIcons)); } catch (err) { /* ignore */ }
+        pushIconRecent(rec);
+        closeIconPicker();
+        renderTaskList();
+      });
+    });
+  };
+  const render = function () {
+    el.innerHTML =
+      '<div class="ip-tabs">' +
+      ['emoji|Emoji', 'icon|图标', 'color|自定义'].map(function (p) {
+        const kv = p.split('|');
+        return '<button class="ip-tab' + (iconPickerTab === kv[0] ? ' on' : '') + '" data-tab="' + kv[0] + '">' + kv[1] + '</button>';
+      }).join('') + '</div>' +
+      (iconPickerTab !== 'color' ? '<input class="ip-search" placeholder="搜索…" value="' + esc(iconPickerQuery) + '" />' : '') +
+      '<div class="ip-body"></div>' +
+      '<div class="ip-foot"><button class="ip-clear">清除图标（用默认）</button><span style="font-size:10px;color:var(--tx3)">仅本浏览器生效</span></div>';
+    el.querySelectorAll('.ip-tab').forEach(function (b) {
+      b.addEventListener('click', function (e) { e.stopPropagation(); iconPickerTab = b.dataset.tab; render(); });
+    });
+    const search = el.querySelector('.ip-search');
+    if (search) {
+      // 只重绘网格区（.ip-body），不重建输入框本身：保住输入焦点与光标
+      search.addEventListener('input', function () { iconPickerQuery = search.value.trim(); updateBody(); });
+      search.addEventListener('click', function (e) { e.stopPropagation(); });
+    }
+    const clearBtn = el.querySelector('.ip-clear');
+    if (clearBtn) clearBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      delete (state.placeIcons || {})[iconPickerKey];
+      try { localStorage.setItem('wb.placeIcons', JSON.stringify(state.placeIcons)); } catch (err) { /* ignore */ }
+      closeIconPicker();
+      renderTaskList();
+    });
+    updateBody();
+  };
+  render();
+}
+document.addEventListener('click', function (e) {
+  if (iconPickerEl && !iconPickerEl.contains(e.target)) closeIconPicker();
+}, true);
+
+// ---- 行 hover 信息卡（完整标题 / 位置 / 状态 / 预览 / 时间） ----
+let hcEl = null, hcTimer = null;
+function hideRowHovercard() {
+  if (hcTimer) { clearTimeout(hcTimer); hcTimer = null; }
+  if (hcEl) { hcEl.remove(); hcEl = null; }
+}
+function scheduleRowHovercard(div, t) {
+  hideRowHovercard();
+  hcTimer = setTimeout(function () {
+    const r = div.getBoundingClientRect();
+    const st = taskUiState(t);
+    const el = document.createElement('div');
+    el.className = 'row-hovercard';
+    el.innerHTML =
+      '<div class="hc-title">' + esc(t.title || '未命名会话') + '</div>' +
+      '<div class="hc-line">' + esc(taskPlaceShort(t)) + '</div>' +
+      '<div class="hc-line">' + esc(st.label) + ' · ' + esc(fmtRelTime(t.updatedAt || t.createdAt)) + (t.scheduleId ? ' · ⏰ 定时创建' : '') + (t.memberAgentIds && t.memberAgentIds.length ? ' · ' + t.memberAgentIds.length + ' 个成员' : '') + '</div>' +
+      (t.lastPreview ? '<div class="hc-prev">' + esc(t.lastPreview) + '</div>' : '');
+    document.body.appendChild(el);
+    const wr = el.getBoundingClientRect();
+    let px = r.right + 10;
+    if (px + wr.width > window.innerWidth - 8) px = Math.max(8, r.left - wr.width - 10);
+    let py = Math.max(8, Math.min(r.top - 6, window.innerHeight - wr.height - 8));
+    el.style.left = px + 'px';
+    el.style.top = py + 'px';
+    hcEl = el;
+  }, 420);
+}
+function hoverRowHovercard(div, t) {
+  div.addEventListener('mouseenter', function () { scheduleRowHovercard(div, t); });
+  div.addEventListener('mouseleave', hideRowHovercard);
+}
+
+// ---- baocode 风分组状态持久化 ----
+function saveGroupOrder() { try { localStorage.setItem('wb.groupOrder', JSON.stringify(state.groupOrder || [])); } catch (e) { /* ignore */ } }
+function savePinned() { try { localStorage.setItem('wb.pinnedTasks', JSON.stringify(state.pinnedTasks || [])); localStorage.setItem('wb.pinnedGroups', JSON.stringify(state.pinnedGroups || [])); } catch (e) { /* ignore */ } }
+function saveHiddenGroups() { try { localStorage.setItem('wb.hiddenGroups', JSON.stringify(state.hiddenGroups || {})); } catch (e) { /* ignore */ } }
+function togglePinTask(t) {
+  const i = (state.pinnedTasks || []).indexOf(t.id);
+  if (i >= 0) state.pinnedTasks.splice(i, 1);
+  else state.pinnedTasks.unshift(t.id);
+  savePinned();
+  renderTaskList();
+}
+function togglePinGroup(key) {
+  const i = (state.pinnedGroups || []).indexOf(key);
+  if (i >= 0) state.pinnedGroups.splice(i, 1);
+  else state.pinnedGroups.unshift(key);
+  savePinned();
+  renderTaskList();
+}
+function setGrouping(g) {
+  if (state.grouping === g) return;
+  state.grouping = g;
+  try { localStorage.setItem('wb.grouping', g); } catch (e) { /* ignore */ }
+  renderTaskList();
+}
+function setOrderByManual() {
+  // 固化当前可视分组顺序为手动排序基线，此后拖拽组头可调
+  if (lastRenderPlaceKeys.length) { state.groupOrder = lastRenderPlaceKeys.slice(); saveGroupOrder(); }
+  renderTaskList();
+}
+function setOrderByRecent() {
+  state.groupOrder = [];
+  saveGroupOrder();
+  renderTaskList();
+}
+function restoreHiddenGroups() {
+  state.hiddenGroups = {};
+  saveHiddenGroups();
+  renderTaskList();
+  toast('已恢复全部隐藏分组');
+}
+async function archiveGroupAll(grp) {
+  const list = (grp.items || []).filter(function (t) { return canManageTaskUi(t) && !t.archivedAt; });
+  if (!list.length) { toast('该分组下没有可归档的会话', true); return; }
+  if (!confirm('将归档「' + grp.title.replace(/<[^>]*>/g, '') + '」下的 ' + list.length + ' 个会话？归档后可在「归档管理」中恢复。')) return;
+  let ok = 0;
+  for (const t of list) {
+    const r = await api('/tasks/' + t.id + '/archive', { method: 'POST', body: JSON.stringify({ archived: true }) });
+    if (r.ok) { ok++; t.archivedAt = Date.now(); }
+  }
+  toast('已归档 ' + ok + '/' + list.length + ' 个会话');
+  await loadTasks();
+}
+async function renameTaskTo(t, title) {
+  const r = await api('/tasks/' + t.id + '/rename', { method: 'POST', body: JSON.stringify({ title: title }) });
+  if (r.ok) {
+    t.title = title;
+    const cached = state.taskCache.get(t.id);
+    if (cached) cached.title = title;
+    renderTaskList();
+    if (state.currentTaskId === t.id) $('chat-title').textContent = title;
+    toast('✓ 已重命名');
+  } else toast(r.error || '重命名失败', true);
+}
+function beginInlineRename(div, t) {
+  if (!canManageTaskUi(t) || !div || !div.isConnected) return;
+  const span = div.querySelector('.t');
+  if (!span || div.querySelector('.rename-inline')) return;
+  const input = document.createElement('input');
+  input.className = 'rename-inline';
+  input.value = t.title || '';
+  span.style.display = 'none';
+  span.parentNode.insertBefore(input, span);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = function (save) {
+    if (done) return;
+    done = true;
+    const v = input.value.trim();
+    input.remove();
+    span.style.display = '';
+    if (save && v && v !== t.title) renameTaskTo(t, v);
+    else if (!save) hideRowHovercard();
+  };
+  input.addEventListener('keydown', function (e) {
+    e.stopPropagation();
+    if (e.key === 'Enter') finish(true);
+    else if (e.key === 'Escape') finish(false);
+  });
+  input.addEventListener('blur', function () { finish(false); });
+  input.addEventListener('click', function (e) { e.stopPropagation(); });
+  input.addEventListener('dblclick', function (e) { e.stopPropagation(); });
+}
+
+let lastRenderPlaceKeys = []; // 最近一次渲染的分组键序（手动排序固化 / 全部折叠用）
 let taskListSig = '';
 function saveGroupPrefs() {
   try {
@@ -5336,6 +6026,198 @@ function taskPlaceKey(t) {
   if (ref && ref.kind === 'mapping' && ref.mappingId) return 'node:' + ref.mappingId;
   return 'node:';
 }
+/** 分组条（baocode 风）：左「智能体」+ 右 [全部折叠/展开] [按项目 ▾]，搜索态显示命中数 */
+function renderGroupingBar(searching, count) {
+  const bar = $('grouping-bar');
+  if (!bar) return;
+  if (searching) {
+    bar.innerHTML = '<span class="gb-title">找到 ' + count + ' 条会话</span>';
+    return;
+  }
+  const foldable = lastRenderPlaceKeys.filter(function (k) { return k !== 'archived'; });
+  const allCollapsed = foldable.length > 1 && foldable.every(function (k) { return state.groupCollapsed[k]; });
+  let hiddenCount = 0;
+  for (const k in (state.hiddenGroups || {})) if (state.hiddenGroups[k]) hiddenCount++;
+  const byLabel = ({ project: '按项目', date: '按日期', status: '按状态' })[state.grouping] || '按项目';
+  bar.innerHTML =
+    '<span class="gb-title">智能体</span>' +
+    (foldable.length > 1 ? '<button class="gb-act" id="gb-collapse" title="' + (allCollapsed ? '展开全部分组' : '折叠全部分组') + '">' + (allCollapsed ? '全部展开' : '全部折叠') + '</button>' : '') +
+    '<button class="gb-act" id="gb-sort" title="切换分组方式与排序">' + byLabel + ' <span class="gb-arrow">▾</span></button>';
+  const sortBtn = bar.querySelector('#gb-sort');
+  if (sortBtn) sortBtn.addEventListener('click', function (e) {
+    e.stopPropagation();
+    const r = sortBtn.getBoundingClientRect();
+    const items = [
+      { label: '项目', icon: '📁', checked: state.grouping === 'project', onClick: function () { setGrouping('project'); } },
+      { label: '日期', icon: '🕒', checked: state.grouping === 'date', onClick: function () { setGrouping('date'); } },
+      { label: '状态', icon: '◉', checked: state.grouping === 'status', onClick: function () { setGrouping('status'); } },
+    ];
+    if (state.grouping === 'project') {
+      items.push('-');
+      items.push({ label: '最近活动', icon: '↻', checked: !(state.groupOrder || []).length, onClick: setOrderByRecent });
+      items.push({ label: '手动', icon: '⠿', checked: Boolean((state.groupOrder || []).length), onClick: setOrderByManual });
+    }
+    if (hiddenCount) {
+      items.push('-');
+      items.push({ label: '恢复 ' + hiddenCount + ' 个隐藏分组', icon: '👁', onClick: restoreHiddenGroups });
+    }
+    wbMenu(r.right - 168, r.bottom + 4, items);
+  });
+  const collapseBtn = bar.querySelector('#gb-collapse');
+  if (collapseBtn) collapseBtn.addEventListener('click', function (e) {
+    e.stopPropagation();
+    const keys = lastRenderPlaceKeys.filter(function (k) { return k !== 'archived'; });
+    for (const k of keys) {
+      if (allCollapsed) delete state.groupCollapsed[k];
+      else state.groupCollapsed[k] = true;
+    }
+    saveGroupPrefs();
+    renderTaskList();
+  });
+}
+/** 折叠组头上的隐藏状态摘要（运行/待答复/未读/失败 计数 + 最高优彩点） */
+function groupStatusSummary(grp) {
+  const st = { running: 0, needsInput: 0, unread: 0, failed: 0 };
+  for (const t of grp.items) {
+    const s = taskUiState(t);
+    if (st[s.k] !== undefined) st[s.k]++;
+  }
+  const parts = [];
+  if (st.running) parts.push({ dot: 'run', label: '运行 ' + st.running });
+  if (st.needsInput) parts.push({ dot: 'ask', label: '待答复 ' + st.needsInput });
+  if (st.unread) parts.push({ dot: 'unread', label: '未读 ' + st.unread });
+  if (st.failed) parts.push({ dot: 'fail', label: '失败 ' + st.failed });
+  if (!parts.length) return '';
+  return '<span class="gh-status"><span class="gs-dot ' + parts[0].dot + '"></span>' + parts.map(function (p) { return p.label; }).join(' · ') + '</span>';
+}
+/** baocode 风组头：chevron 旋转 / 图标 / 置顶钉 / 折叠态计数与摘要 / hover 操作 / 右键菜单 / 拖拽排序 */
+function buildGroupHeader(grp, isCollapsed) {
+  const head = document.createElement('div');
+  head.className = 'group-header';
+  head.dataset.key = grp.key;
+  const isFirstCharIcon = grp.place && grp.key.indexOf('proj:') === 0;
+  const iconHtml = grp.pinnedZone
+    ? '<span class="gh-icon">📌</span>'
+    : grp.archived
+      ? '<span class="gh-icon">🗄️</span>'
+      : grp.place
+        ? placeIconHtml(grp.key, grp.key.indexOf('proj:') === 0 ? '📦' : '🖥', isFirstCharIcon ? (grp.title || '').slice(0, 1) : '')
+        : (grp.dot ? '<span class="gh-icon"><span class="gs-dot ' + grp.dot + '" style="width:8px;height:8px"></span></span>' : '');
+  head.innerHTML =
+    '<span class="gh-left">' +
+    '<span class="gh-chev' + (isCollapsed ? '' : ' open') + '">▸</span>' +
+    iconHtml +
+    '<span class="gh-title">' + esc(grp.title) + (grp.sub ? ' <span class="gh-sub">' + esc(grp.sub) + '</span>' : '') + '</span>' +
+    ((state.pinnedGroups || []).indexOf(grp.key) >= 0 ? '<span class="gh-pin">📌</span>' : '') +
+    '</span>' +
+    (isCollapsed ? groupStatusSummary(grp) : '') +
+    (isCollapsed ? '<span class="gh-cnt">' + grp.items.length + '</span>' : '') +
+    '<span class="gh-hact">' +
+    (grp.archived ? '<button class="gh-btn gh-manage" title="搜索 / 批量恢复 / 批量删除已归档会话" style="font-size:11px;color:var(--pri)">管理</button>' : '') +
+    '<button class="gh-btn gh-menu-btn" title="更多操作">⋯</button>' +
+    (grp.place ? '<button class="gh-btn gh-add" title="在此位置新建会话（草稿）">＋</button>' : '') +
+    '</span>';
+  let suppressClick = false;
+  head.addEventListener('click', function (e) {
+    if (suppressClick) { suppressClick = false; return; }
+    if (e.target.closest('.gh-btn')) return;
+    state.groupCollapsed[grp.key] = !isCollapsed;
+    saveGroupPrefs();
+    renderTaskList();
+  });
+  const addBtn = head.querySelector('.gh-add');
+  if (addBtn) addBtn.addEventListener('click', function (e) { e.stopPropagation(); startDraft(grp.place); });
+  const manageBtn = head.querySelector('.gh-manage');
+  if (manageBtn) manageBtn.addEventListener('click', function (e) { e.stopPropagation(); switchView('archive'); });
+  // 右键 / 「⋯」菜单（baocode _projectItems）：新建 / 置顶 / 图标 / 全部归档 / 移除
+  const openMenu = function (x, y) {
+    if (grp.pinnedZone || grp.archived) return;
+    head.classList.add('ctx');
+    const items = [];
+    if (grp.place) items.push({ label: '在此新建会话', icon: '➕', onClick: function () { startDraft(grp.place); } });
+    items.push({ label: (state.pinnedGroups || []).indexOf(grp.key) >= 0 ? '取消置顶' : '置顶', icon: '📌', onClick: function () { togglePinGroup(grp.key); } });
+    if (grp.place) items.push({ label: '更改图标…', icon: '😀', onClick: function () { openIconPicker(head, grp.key, (grp.title || '').slice(0, 1)); } });
+    if (grp.place) {
+      items.push('-');
+      items.push({ label: '全部归档' + (grp.items.length ? '（' + grp.items.length + '）' : ''), icon: '🗄️', onClick: function () { archiveGroupAll(grp); } });
+      items.push({ label: '从列表移除', icon: '🙈', onClick: function () {
+        state.hiddenGroups = state.hiddenGroups || {};
+        state.hiddenGroups[grp.key] = 1;
+        saveHiddenGroups();
+        renderTaskList();
+        toast('已从列表隐藏「' + grp.title.replace(/<[^>]*>/g, '') + '」，可在排序菜单恢复');
+      } });
+    }
+    wbMenu(x, y, items);
+  };
+  head.addEventListener('contextmenu', function (e) { e.preventDefault(); openMenu(e.clientX, e.clientY); });
+  const menuBtn = head.querySelector('.gh-menu-btn');
+  if (menuBtn) menuBtn.addEventListener('click', function (e) {
+    e.stopPropagation();
+    const r = menuBtn.getBoundingClientRect();
+    openMenu(r.left, r.bottom + 4);
+  });
+  // 手动排序拖拽（仅按项目分组的位置组）
+  if (grp.place && state.grouping === 'project' && !state.searchQuery) {
+    const left = head.querySelector('.gh-left');
+    left.title = '拖动调整分组顺序（手动排序）';
+    left.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0) return;
+      const startY = e.clientY;
+      let dragging = false;
+      let targetKey = null, after = false;
+      const headers = function () { return Array.prototype.slice.call(document.querySelectorAll('.task-list .group-header[data-key]')).filter(function (h) { const k = h.dataset.key; return k.indexOf('proj:') === 0 || k.indexOf('node:') === 0; }); };
+      const onMove = function (ev) {
+        if (!dragging && Math.abs(ev.clientY - startY) < 4) return;
+        if (!dragging) {
+          dragging = true;
+          head.classList.add('dragging');
+          hideRowHovercard();
+          closeWbMenu();
+        }
+        suppressClick = true;
+        targetKey = null; after = false;
+        for (const h of headers()) {
+          if (h === head) continue;
+          const r = h.getBoundingClientRect();
+          if (ev.clientY >= r.top - 3 && ev.clientY <= r.bottom + 3) {
+            targetKey = h.dataset.key;
+            after = ev.clientY > r.top + r.height / 2;
+            break;
+          }
+        }
+        for (const h of headers()) {
+          if (h === head) continue;
+          h.classList.toggle('drag-over-before', targetKey === h.dataset.key && !after);
+          h.classList.toggle('drag-over-after', targetKey === h.dataset.key && after);
+        }
+      };
+      const onUp = function () {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        head.classList.remove('dragging');
+        for (const h of headers()) { h.classList.remove('drag-over-before'); h.classList.remove('drag-over-after'); }
+        if (!dragging) return;
+        const seq = lastRenderPlaceKeys.filter(function (k) { return k !== 'archived' && k !== 'pinned'; });
+        const from = seq.indexOf(grp.key);
+        if (from >= 0 && targetKey && targetKey !== grp.key) {
+          seq.splice(from, 1);
+          let to = seq.indexOf(targetKey);
+          if (to >= 0) { if (after) to += 1; } else to = seq.length;
+          seq.splice(to, 0, grp.key);
+          state.groupOrder = seq;
+          saveGroupOrder();
+          renderTaskList();
+        } else {
+          renderTaskList();
+        }
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    });
+  }
+  return head;
+}
 function renderTaskList() {
   const el = $('task-list');
   const prevScroll = el.scrollTop;
@@ -5344,23 +6226,50 @@ function renderTaskList() {
   const draftOn = !!(state.draft && !state.currentTaskId);
   if (!state.tasks.length) {
     taskListSig = '';
+    lastRenderPlaceKeys = [];
+    renderGroupingBar(false, 0);
     if (draftOn) { el.appendChild(draftTaskItemElement()); return; }
     el.innerHTML = '<div style="color:var(--tx3);font-size:12.5px;padding:16px 12px;text-align:center">还没有任务，点击上方「新建任务」发起第一个会话。</div>';
     return;
   }
 
-  // 搜索：平铺结果列表（归档命中仍归入归档组）
+  // 搜索：平铺结果列表（baocode 同样搜索时平铺）
   const q = state.searchQuery;
   const filtered = q
     ? state.tasks.filter(t => (t.title && t.title.toLowerCase().includes(q)) || (t.lastPreview && t.lastPreview.toLowerCase().includes(q)))
     : state.tasks;
 
-  if (q && !filtered.length) {
-    el.innerHTML = '<div style="color:var(--tx3);font-size:12px;padding:16px 12px;text-align:center">未找到匹配的会话</div>';
+  if (q) {
+    // 搜索态：分组条变成命中数，结果平铺（含已置顶）
+    lastRenderPlaceKeys = [];
+    renderGroupingBar(true, filtered.length);
+    const sig = buildTaskListSig(filtered, draftOn, { searching: true });
+    if (sig === taskListSig && el.childElementCount) { el.scrollTop = prevScroll; return; }
+    taskListSig = sig;
+    if (draftOn) el.appendChild(draftTaskItemElement());
+    if (!filtered.length) {
+      el.innerHTML = '<div style="color:var(--tx3);font-size:12px;padding:16px 12px;text-align:center">未找到匹配的会话</div>';
+      return;
+    }
+    const sorted = filtered.slice().sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+    for (const t of sorted) el.appendChild(createTaskItemElement(t, Boolean(t.archivedAt)));
+    el.scrollTop = prevScroll;
     return;
   }
 
-  // 按执行位置分组：每个项目一组（📦 名称 · 🖥 节点）+ 每个节点一组「单独任务」；归档恒为最后一组
+  // 置顶任务组（baocode 已置顶区）：单独展示，普通组内不再重复
+  const pinnedGrp = {
+    key: 'pinned', title: '已置顶', pinnedZone: true, place: null, items: [],
+  };
+  const pinnedIds = state.pinnedTasks || [];
+  for (const id of pinnedIds) {
+    const t = filtered.find(function (x) { return x.id === id && !x.archivedAt; });
+    if (t) pinnedGrp.items.push(t);
+  }
+  const inPinned = {};
+  for (const t of pinnedGrp.items) inPinned[t.id] = 1;
+
+  // 按当前分组方式构建分组；归档恒为最后一组
   const nodeTitleOf = function (mid) {
     const n = dshNodeOptions().find(x => x.mappingId === mid);
     return n ? (n.title || n.appName || n.note || mid) : (mid || '未指定节点');
@@ -5369,75 +6278,114 @@ function renderTaskList() {
   const groups = [];
   const byKey = {};
   const archivedGrp = { key: 'archived', title: '已归档会话', place: null, items: [], archived: true };
-  for (const t of filtered) {
-    if (t.archivedAt) { archivedGrp.items.push(t); continue; }
-    const key = taskPlaceKey(t);
-    let g = byKey[key];
-    if (!g) {
-      if (key.indexOf('proj:') === 0) {
-        const p = (state.projects || []).find(x => x.id === key.slice(5));
-        const nt = p && p.nodeTitle ? p.nodeTitle : '';
-        g = { key, title: '📦 ' + ((p && p.name) || '项目') + (nt ? ' · 🖥 ' + nt : ''), place: { projectId: key.slice(5) }, items: [] };
-      } else {
-        const mid = key.slice(5);
-        g = { key, title: '🖥 ' + nodeTitleOf(mid), sub: '单独任务', place: { nodeMappingId: mid, projectId: null }, items: [] };
+  const rest = filtered.filter(function (t) { return !inPinned[t.id]; });
+  if (state.grouping === 'project') {
+    for (const t of rest) {
+      if (t.archivedAt) { archivedGrp.items.push(t); continue; }
+      const key = taskPlaceKey(t);
+      // 「从列表移除」的分组不再展示（可在排序菜单恢复）
+      if ((state.hiddenGroups || {})[key]) continue;
+      let g = byKey[key];
+      if (!g) {
+        if (key.indexOf('proj:') === 0) {
+          const p = (state.projects || []).find(x => x.id === key.slice(5));
+          const nt = p && p.nodeTitle ? p.nodeTitle : '';
+          g = { key, title: ((p && p.name) || '项目'), sub: nt ? '🖥 ' + nt : '', place: { projectId: key.slice(5) }, items: [] };
+        } else {
+          const mid = key.slice(5);
+          g = { key, title: nodeTitleOf(mid), sub: '单独任务', place: { nodeMappingId: mid, projectId: null }, items: [] };
+        }
+        byKey[key] = g;
+        groups.push(g);
       }
-      byKey[key] = g;
-      groups.push(g);
+      g.items.push(t);
     }
-    g.items.push(t);
+  } else if (state.grouping === 'date') {
+    const dayMs = 86400000;
+    const midnight = function (v) { const d = new Date(v); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
+    const now0 = midnight(Date.now());
+    const defs = [
+      { key: 'date:today', title: '今天' },
+      { key: 'date:yesterday', title: '昨天' },
+      { key: 'date:week', title: '过去 7 天' },
+      { key: 'date:older', title: '更早' },
+    ];
+    const bucket = {};
+    for (const t of rest) {
+      if (t.archivedAt) { archivedGrp.items.push(t); continue; }
+      const ts = t.updatedAt || t.createdAt || Date.now();
+      const age = now0 - midnight(ts);
+      const k = age <= 0 ? 'date:today' : age <= dayMs ? 'date:yesterday' : age <= 7 * dayMs ? 'date:week' : 'date:older';
+      (bucket[k] = bucket[k] || []).push(t);
+    }
+    for (const def of defs) {
+      def.items = bucket[def.key] || [];
+      if (def.items.length) groups.push(def);
+    }
+  } else {
+    const defs = [
+      { key: 'st:needsInput', title: '待答复', dot: 'ask', st: 'needsInput' },
+      { key: 'st:running', title: '运行中', dot: 'run', st: 'running' },
+      { key: 'st:unread', title: '未读', dot: 'unread', st: 'unread' },
+      { key: 'st:failed', title: '失败', dot: 'fail', st: 'failed' },
+      { key: 'st:done', title: '已完成', dot: 'ok', st: 'done' },
+    ];
+    const bucket = {};
+    for (const t of rest) {
+      if (t.archivedAt) { archivedGrp.items.push(t); continue; }
+      const s = taskUiState(t).k;
+      (bucket[s] = bucket[s] || []).push(t);
+    }
+    for (const def of defs) {
+      def.items = bucket[def.st] || [];
+      if (def.items.length) groups.push(def);
+    }
   }
   const tsOf = (t) => t.updatedAt || t.createdAt || 0;
   for (const g of groups) g.items.sort((a, b) => tsOf(b) - tsOf(a));
-  groups.sort((a, b) => tsOf(b.items[0]) - tsOf(a.items[0])); // 活跃分组靠前
+  // 组排序：置顶组优先（按置顶序）→ 手动顺序 → 最近活动
+  const pinIdx = function (k) { return (state.pinnedGroups || []).indexOf(k); };
+  const orderIdx = function (k) { return (state.groupOrder || []).indexOf(k); };
+  const manual = (state.groupOrder || []).length > 0;
+  groups.sort(function (a, b) {
+    const pa = pinIdx(a.key), pb = pinIdx(b.key);
+    if (pa >= 0 && pb >= 0) return pa - pb;
+    if (pa >= 0) return -1;
+    if (pb >= 0) return 1;
+    if (manual && state.grouping === 'project') {
+      const oa = orderIdx(a.key), ob = orderIdx(b.key);
+      if (oa >= 0 && ob >= 0) return oa - ob;
+      if (oa >= 0) return -1;
+      if (ob >= 0) return 1;
+    }
+    return tsOf(b.items[0]) - tsOf(a.items[0]);
+  });
+  lastRenderPlaceKeys = groups.map(function (g) { return g.key; });
+  if (pinnedGrp.items.length) groups.unshift(pinnedGrp);
   if (archivedGrp.items.length) { archivedGrp.items.sort((a, b) => tsOf(b) - tsOf(a)); groups.push(archivedGrp); }
 
   // 稳态轮询不该整列重建：内容签名一致时跳过（保滚动位置与悬停按钮）
-  const sig = JSON.stringify({
-    q: state.searchQuery || '', cur: state.currentTaskId || '',
-    gc: state.groupCollapsed || {}, gm: state.groupMore || {},
-    d: draftOn ? JSON.stringify(state.draft.place) : '',
-    items: filtered.map(function (t) {
-      return [t.id, t.title, t.lastPreview, t.status, t.running ? 1 : 0, t.pendingAsk ? 1 : 0, t.scheduleId || '', t.archivedAt ? 1 : 0, (t.memberAgentIds || []).join(','), t.updatedAt];
-    }),
-  });
+  const sig = buildTaskListSig(filtered, draftOn, {});
   if (sig === taskListSig && el.childElementCount) { el.scrollTop = prevScroll; return; }
   taskListSig = sig;
 
+  renderGroupingBar(false, filtered.length);
   if (draftOn) el.appendChild(draftTaskItemElement());
   for (const grp of groups) {
     if (!grp.items.length) continue;
     const isCollapsed = (state.groupCollapsed || {})[grp.key] ?? Boolean(grp.archived);
     const grpDiv = document.createElement('div');
-    grpDiv.style.marginBottom = '6px';
-
-    const head = document.createElement('div');
-    head.className = 'group-header';
-    head.innerHTML = '<span class="gh-left"><span class="gh-chev">' + (isCollapsed ? '▸' : '▾') + '</span><span class="gh-title">' + esc(grp.title) +
-      (grp.sub ? ' <span class="gh-sub">' + esc(grp.sub) + '</span>' : '') + '</span></span>' +
-      '<span style="display:flex;align-items:center;gap:2px"><span class="gh-cnt">' + grp.items.length + '</span>' +
-      (grp.place ? '<button class="gh-add" title="在此位置新建草稿">＋</button>' : '') +
-      (grp.archived ? '<button class="gh-manage" title="搜索 / 批量恢复 / 批量删除已归档会话">管理</button>' : '') + '</span>';
-    head.addEventListener('click', () => {
-      state.groupCollapsed[grp.key] = !isCollapsed;
-      saveGroupPrefs();
-      renderTaskList();
-    });
-    const addBtn = head.querySelector('.gh-add');
-    if (addBtn) addBtn.addEventListener('click', (e) => { e.stopPropagation(); startDraft(grp.place); });
-    const manageBtn = head.querySelector('.gh-manage');
-    if (manageBtn) manageBtn.addEventListener('click', (e) => { e.stopPropagation(); switchView('archive'); });
-    grpDiv.appendChild(head);
-
+    grpDiv.style.marginBottom = '4px';
+    grpDiv.appendChild(buildGroupHeader(grp, isCollapsed));
     const body = document.createElement('div');
     body.className = 'group-body' + (isCollapsed ? ' collapsed' : '');
     const expanded = Boolean((state.groupMore || {})[grp.key]);
-    const shown = expanded ? grp.items : grp.items.slice(0, PLACE);
+    const shown = (grp.pinnedZone || expanded) ? grp.items : grp.items.slice(0, PLACE);
     for (const t of shown) body.appendChild(createTaskItemElement(t, Boolean(grp.archived)));
-    if (grp.items.length > PLACE) {
+    if (!grp.pinnedZone && grp.items.length > PLACE) {
       const more = document.createElement('button');
       more.className = 'gh-more';
-      more.textContent = expanded ? '收起' : ('显示更多（还有 ' + (grp.items.length - PLACE) + ' 条）');
+      more.textContent = expanded ? '收起' : ('显示更多（' + (grp.items.length - PLACE) + '）');
       more.addEventListener('click', () => {
         state.groupMore[grp.key] = !expanded;
         saveGroupPrefs();
@@ -5450,6 +6398,25 @@ function renderTaskList() {
   }
   // 重建后恢复滚动位置（内容确实变化时也不跳回顶部）
   el.scrollTop = prevScroll;
+}
+/** 任务列表签名（轮询稳态跳过整列重建）；baocode 风偏好（分组/排序/置顶/图标/隐藏）一并参与 */
+function buildTaskListSig(filtered, draftOn, opts) {
+  return JSON.stringify({
+    activity: activityState.data ? activityState.data.snapshotVersion : null,
+    activityItems: filtered.map(function (t) { var item = activityState.byTask[t.id]; return item ? [item.state, item.unread, item.activityVersion, item.readVersion] : null; }),
+    q: state.searchQuery || '', cur: state.currentTaskId || '',
+    searching: opts.searching ? 1 : 0,
+    gc: state.groupCollapsed || {}, gm: state.groupMore || {},
+    grouping: state.grouping,
+    order: JSON.stringify(state.groupOrder || []),
+    pins: JSON.stringify([state.pinnedTasks || [], state.pinnedGroups || []]),
+    icons: JSON.stringify(state.placeIcons || {}),
+    hidden: JSON.stringify(state.hiddenGroups || {}),
+    d: draftOn ? JSON.stringify(state.draft.place) : '',
+    items: filtered.map(function (t) {
+      return [t.id, t.title, t.lastPreview, t.status, t.running ? 1 : 0, t.pendingAsk ? 1 : 0, t.scheduleId || '', t.archivedAt ? 1 : 0, (t.memberAgentIds || []).join(','), t.updatedAt];
+    }),
+  });
 }
 
 /** 侧栏顶部的临时草稿行（P2-2）：点击回到草稿页，✕ 放弃草稿 */
@@ -5465,11 +6432,37 @@ function draftTaskItemElement() {
   div.querySelector('[data-a=discard]').addEventListener('click', function (e) { e.stopPropagation(); discardDraft(); });
   return div;
 }
+async function toggleArchiveTask(t, want) {
+  const r = await api('/tasks/' + t.id + '/archive', { method: 'POST', body: JSON.stringify({ archived: want }) });
+  if (r.ok) {
+    toast(want ? '🗄️ 已归档' : '↩️ 已恢复到列表');
+    t.archivedAt = want ? Date.now() : undefined;
+    renderTaskList();
+    loadTasksQuiet();
+  } else toast(r.error || '操作失败', true);
+}
+async function deleteTaskRow(t) {
+  if (!confirm('确定删除会话「' + t.title + '」？')) return;
+  const del = await api('/tasks/' + t.id, { method: 'DELETE' });
+  // 删除失败不能动本地缓存/视图（旧实现不校验 → 弱网下提示「已删除」但服务端还在）
+  if (!del.ok) { toast(del.error || '删除失败', true); return; }
+  state.taskCache.delete(t.id);
+  if (state.currentTaskId === t.id) {
+    state.currentTaskId = null;
+    disconnectStream();
+    resetChatView();
+  }
+  toast('已删除');
+  loadTasks();
+}
 function createTaskItemElement(t, archived) {
   const div = document.createElement('div');
   const isSelected = t.id === state.currentTaskId;
-  div.className = 'task-item' + (isSelected ? ' on' : '') + (archived ? ' archived' : '');
-  div.title = (archived ? '已归档 · ' : '') + t.title + (t.lastPreview ? '\\n最新: ' + t.lastPreview : '');
+  const activity = activityState.byTask[t.id];
+  const activityColor = activity ? ({ waiting_reply: 'ask', running: 'running', completed: 'ok', failed: 'error', cancelled: '', draft: 'draft', unknown: '' })[activity.state] : null;
+  const isPinned = (state.pinnedTasks || []).indexOf(t.id) >= 0 && !archived;
+  div.className = 'task-item' + (isSelected ? ' on' : '') + (archived ? ' archived' : '') + (isPinned ? ' pinned' : '');
+  div.setAttribute('aria-label', t.title + (t.lastPreview ? ' · ' + t.lastPreview : ''));
 
 
   const memberNames = (t.memberAgentIds || []).map(id => {
@@ -5483,10 +6476,12 @@ function createTaskItemElement(t, archived) {
   const tManaged = canManageTaskUi(t);
   div.innerHTML =
     '<div class="row-top">' +
-    '<span class="s ' + (t.pendingAsk ? 'ask' : statusColor(t.running ? 'running' : t.status)) + '"' + (t.pendingAsk ? ' title="等待用户回答（ask_user）"' : '') + '></span>' +
+    '<span class="s ' + (activity ? activityColor : (t.pendingAsk ? 'ask' : statusColor(t.running ? 'running' : t.status))) + '"' + (t.pendingAsk ? ' title="等待用户回答（ask_user）"' : '') + '></span>' +
+    (isPinned ? '<span class="t-pin" title="已置顶">📌</span>' : '') +
     '<span class="t">' + (t.scheduleId ? '<span title="定时任务创建">⏰</span> ' : '') + esc(t.title) + '</span>' +
+    '<span class="t-time">' + esc(fmtRelTime(t.updatedAt || t.createdAt)) + '</span>' +
     '</div>' +
-    '<div class="row-sub">' + subText + '</div>' +
+    '<div class="row-sub">' + activityBadges(activityState.byTask[t.id]) + subText + '</div>' +
     '<span class="acts">' +
     (tManaged ? '<button data-a="rename" title="重命名">✏️</button>' : '') +
     (tManaged ? (archived ? '<button data-a="toggle-archive" title="取消归档">↩️</button>' : '<button data-a="toggle-archive" title="归档">🗄️</button>') : '') +
@@ -5494,33 +6489,31 @@ function createTaskItemElement(t, archived) {
     '</span>';
 
   div.addEventListener('click', () => openTask(t.id));
-  div.querySelector('[data-a=rename]')?.addEventListener('click', (e) => { e.stopPropagation(); promptRenameTask(t); });
-  div.querySelector('[data-a=toggle-archive]')?.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    const want = !archived;
-    const r = await api('/tasks/' + t.id + '/archive', { method: 'POST', body: JSON.stringify({ archived: want }) });
-    if (r.ok) {
-      toast(want ? '🗄️ 已归档' : '↩️ 已恢复到列表');
-      t.archivedAt = want ? Date.now() : undefined;
-      renderTaskList();
-      loadTasksQuiet();
-    } else toast(r.error || '操作失败', true);
+  // baocode 风：悬停信息卡（完整标题 / 位置 / 状态 / 预览 / 相对时间）
+  hoverRowHovercard(div, t);
+  // baocode 风：右键菜单（置顶 / 重命名 / 归档 / 删除）
+  div.addEventListener('contextmenu', function (e) {
+    e.preventDefault();
+    hideRowHovercard();
+    const items = [
+      { label: isPinned ? '取消置顶' : '置顶', icon: '📌', onClick: function () { togglePinTask(t); } },
+    ];
+    if (tManaged) items.push({ label: '重命名', icon: '✏️', onClick: function () { beginInlineRename(div, t); } });
+    if (tManaged) items.push({ label: archived ? '取消归档' : '归档', icon: archived ? '↩️' : '🗄️', onClick: function () { toggleArchiveTask(t, !archived); } });
+    if (tManaged) items.push('-');
+    if (tManaged) items.push({ label: '删除', icon: '🗑️', danger: true, onClick: function () { deleteTaskRow(t); } });
+    wbMenu(e.clientX, e.clientY, items);
   });
-  div.querySelector('[data-a=delete]')?.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    if (!confirm('确定删除会话「' + t.title + '」？')) return;
-    const del = await api('/tasks/' + t.id, { method: 'DELETE' });
-    // 删除失败不能动本地缓存/视图（旧实现不校验 → 弱网下提示「已删除」但服务端还在）
-    if (!del.ok) { toast(del.error || '删除失败', true); return; }
-    state.taskCache.delete(t.id);
-    if (state.currentTaskId === t.id) {
-      state.currentTaskId = null;
-      disconnectStream();
-      resetChatView();
-    }
-    toast('已删除');
-    loadTasks();
+  // baocode 风：双击行内重命名（单击先打开会话，重命名的是当前会话）
+  div.addEventListener('dblclick', function (e) {
+    e.preventDefault();
+    if (e.target.closest('.acts')) return;
+    hideRowHovercard();
+    beginInlineRename(div, t);
   });
+  div.querySelector('[data-a=rename]')?.addEventListener('click', (e) => { e.stopPropagation(); beginInlineRename(div, t); });
+  div.querySelector('[data-a=toggle-archive]')?.addEventListener('click', (e) => { e.stopPropagation(); toggleArchiveTask(t, !archived); });
+  div.querySelector('[data-a=delete]')?.addEventListener('click', (e) => { e.stopPropagation(); deleteTaskRow(t); });
   return div;
 }
 
@@ -5532,16 +6525,8 @@ function promptRenameTask(t) {
   const doSave = async () => {
     const title = input.value.trim();
     if (!title) { toast('标题不能为空', true); return; }
-    const r = await api('/tasks/' + t.id + '/rename', { method: 'POST', body: JSON.stringify({ title }) });
-    if (r.ok) {
-      closeModal();
-      t.title = title;
-      const cached = state.taskCache.get(t.id);
-      if (cached) cached.title = title;
-      renderTaskList();
-      if (state.currentTaskId === t.id) $('chat-title').textContent = title;
-      toast('✓ 已重命名');
-    } else toast(r.error || '重命名失败', true);
+    closeModal();
+    await renameTaskTo(t, title);
   };
   $('rn-ok').addEventListener('click', doSave);
   $('rn-cancel').addEventListener('click', closeModal);
@@ -5560,10 +6545,7 @@ async function jumpToTask(taskId) {
 }
 
 async function openTask(taskId) {
-  if (state.currentTaskId === taskId && state.taskCache.has(taskId)) {
-    return; // 已在当前会话
-  }
-
+  // 显式再次打开当前任务也重新加载：只确认本次实际展示的版本。
   const isSwitching = state.currentTaskId !== taskId;
   state.currentTaskId = taskId;
   clearFileTags(); // 引用标签属于输入草稿，切会话不带走（F3-1）
@@ -5599,6 +6581,8 @@ async function openTask(taskId) {
   }
 
   // 2. 后台发起异步同步，更新缓存并增量/静默渲染
+  const readActivityVersion = await captureActivityVersion(taskId);
+  if (seq !== openTaskSeq || state.currentTaskId !== taskId) return;
   const r = await api('/tasks/' + taskId);
   if (seq !== openTaskSeq || state.currentTaskId !== taskId) return; // 已切到别的会话，丢弃旧响应
   if (!r.ok) {
@@ -5610,6 +6594,8 @@ async function openTask(taskId) {
   state.taskCache.set(taskId, freshTask);
   primeTrajData(freshTask);
   applyTaskToView(freshTask, !cachedTask);
+  renderActivity();
+  ackRenderedActivity(taskId, readActivityVersion, seq, freshTask);
   connectStream(taskId);
   startTaskStatsPolling();
   startTaskTodosPolling();
@@ -5634,6 +6620,7 @@ function chatColumn() {
 
 /** 将任务数据渲染到对话视图（支持高性能批量/分块装配） */
 function applyTaskToView(task, isInitialRender) {
+  activityRenderSeq++;
   state.task = task; // 当前任务完整对象（teamId/expertMembers 供编排视图解析专家成员名）
   const ce = $('chat-empty'); if (ce) ce.style.display = 'none';
   if ($('chat-title')) $('chat-title').textContent = task.title || '未命名任务';
@@ -6443,7 +7430,7 @@ function renderNormalToolRow(el, t) {
 function cacheHitPercent(usage) {
   if (!usage) return null;
   const read = Number(usage.cacheReadTokens) || 0;
-  const miss = Number(usage.uncachedInputTokens) || Number(usage.inputTokens) || 0;
+  const miss = Number(usage.uncachedInputTokens != null ? usage.uncachedInputTokens : usage.inputTokens) || 0;
   const write = Number(usage.cacheWriteTokens) || 0;
   const denom = read + miss + write;
   if (denom <= 0) return null;
@@ -6457,7 +7444,7 @@ function applyUsageBadge(el, usage, turn) {
   const old = el.foot.querySelector('.dsh-usage-pill[data-role="usage"]');
   if (old) old.remove();
   if (!usage || typeof usage !== 'object') return;
-  const miss = Number(usage.uncachedInputTokens) || Number(usage.inputTokens) || 0;
+  const miss = Number(usage.uncachedInputTokens != null ? usage.uncachedInputTokens : usage.inputTokens) || 0;
   const read = Number(usage.cacheReadTokens) || 0;
   const write = Number(usage.cacheWriteTokens) || 0;
   const out = Number(usage.outputTokens) || 0;
@@ -6482,8 +7469,8 @@ function applyUsageBadge(el, usage, turn) {
 function openTurnUsageDetail(usage, durMs, pct, total) {
   const row = function (label, val) { return '<div class="sp-r"><span>' + esc(label) + '</span><b>' + esc(val || '—') + '</b></div>'; };
   const n = function (v) { return (Number(v) || 0).toLocaleString() + ' tok'; };
-  let html = '<div style="min-width:280px">'
-    + row('输入（未命中缓存）', n(usage.uncachedInputTokens || usage.inputTokens))
+  let html = '<div class="turn-usage-detail">'
+    + row('输入（未命中缓存）', n(usage.uncachedInputTokens != null ? usage.uncachedInputTokens : usage.inputTokens))
     + row('输出', n(usage.outputTokens))
     + row('缓存读', n(usage.cacheReadTokens))
     + row('缓存写', n(usage.cacheWriteTokens))
@@ -7348,7 +8335,7 @@ function buildTrajRecords(task) {
     const usage = turn.usage && typeof turn.usage === 'object' ? turn.usage : null;
     let totalTokens = 0;
     if (usage) {
-      totalTokens = (Number(usage.uncachedInputTokens) || Number(usage.inputTokens) || 0)
+      totalTokens = (Number(usage.uncachedInputTokens != null ? usage.uncachedInputTokens : usage.inputTokens) || 0)
         + (Number(usage.cacheReadTokens) || 0) + (Number(usage.cacheWriteTokens) || 0)
         + (Number(usage.outputTokens) || 0);
     }
@@ -7741,7 +8728,7 @@ function selectTrajRecord(index) {
 
 function trajUsageRows(usage) {
   if (!usage) return '<div class="traj-usagerow"><dt>Token</dt><dd>未报告用量</dd></div>';
-  const uncached = Number(usage.uncachedInputTokens) || Number(usage.inputTokens) || 0;
+  const uncached = Number(usage.uncachedInputTokens != null ? usage.uncachedInputTokens : usage.inputTokens) || 0;
   const cacheRead = Number(usage.cacheReadTokens) || 0;
   const cacheWrite = Number(usage.cacheWriteTokens) || 0;
   const output = Number(usage.outputTokens) || 0;
@@ -10621,10 +11608,10 @@ function renderStatPanel() {
     const elapsed = statsLiveElapsed();
     html = '<div class="sp-h">耗时</div>'
       + row(todoState.running ? '本轮运行（进行中）' : '上轮运行', elapsed > 0 || todoState.running ? fmtTodoDuration(elapsed) : '')
-      + row('LLM 耗时', s.llmMs > 0 ? fmtStatsDuration(s.llmMs) : '')
-      + row('工具耗时', s.toolMs > 0 ? fmtStatsDuration(s.toolMs) : '')
-      + row('首 token 平均', s.ttftSteps > 0 ? fmtStatsDuration(s.ttftMs / s.ttftSteps) : '')
-      + row('输出速度', statsSpeed(s));
+      + row('LLM 耗时（会话累计）', s.llmMs > 0 ? fmtStatsDuration(s.llmMs) : '节点未提供')
+      + row('工具耗时（会话累计）', s.toolMs > 0 ? fmtStatsDuration(s.toolMs) : '节点未提供')
+      + row('首 token 平均（会话）', s.ttftSteps > 0 ? fmtStatsDuration(s.ttftMs / s.ttftSteps) : '节点未提供')
+      + row('输出速度（会话）', statsSpeed(s) || '节点未提供');
   } else {
     const n = function (v) { return (v || 0) > 0 ? fmtStatsTokens(v) + ' tok' : '0'; };
     html = '<div class="sp-h">Token</div>'
@@ -10836,7 +11823,15 @@ function renderTodoDock(data) {
   if (!dock) return;
   const todos = Array.isArray(data && data.todos) ? data.todos : [];
   const running = !!(data && data.running);
-  const elapsed = (data && data.elapsedMs) || 0;
+  let elapsed = (data && data.elapsedMs) || 0;
+  // 兼容节点可能只返回 running=true、elapsedMs=0；使用 WorkBuddy 持久回合起点，
+  // 不能每次轮询都从零重启。远端有有效耗时时仍以远端为准（避免跨节点时钟差）。
+  if (!(elapsed > 0)) {
+    const turns = (state.task && state.task.turns) || [];
+    const active = turns.slice().reverse().find(function (t) { return t.role === 'agent' && (running ? !t.endedAt : !!t.endedAt); });
+    if (active && active.at > 0) elapsed = Math.max(0, (running ? Date.now() : active.endedAt) - active.at);
+    else if (running && todoState.running) elapsed = todoState.baseElapsed + Math.max(0, Date.now() - todoState.anchorAt);
+  }
   // 运行时长：服务端 elapsedMs 为锚点，前端每秒本地递增（运行中）；显示在状态栏时间胶囊（renderStatPills）
   todoState.running = running;
   todoState.baseElapsed = elapsed;
@@ -11621,6 +12616,7 @@ function renderDraftView() {
   const mbAlways = $('chat-model-btn');
   if (mbAlways) mbAlways.textContent = modelBtnLabel(modelState.cur);
   loadDraftPresets();
+  renderActivity();
 }
 function hideDraftView() {
   document.body.classList.remove('draft-mode');
@@ -11879,6 +12875,7 @@ function agentCardHtml(a) {
     (a.model ? '<span class="tag">' + esc(a.model) + '</span>' : '') +
     (a.workDir ? '<span class="tag" title="远端工作目录">📁 ' + esc(a.workDir) + '</span>' : '') +
     (skillNames.length ? '<span class="tag" title="绑定技能（派发时手势加载）">🎯 ' + skillNames.length + ' 技能</span>' : '') + '</div>' +
+    '<div class="bot-activity">' + activityCountsHtml(activityGroupCounts('agents', a.id), 'agent', a.id) + '<div class="activity-freshness">' + esc(activityFreshness()) + '</div></div>' +
     (lv && lv.busy && lv.currentActivity ? '<div class="activity" title="' + esc(lv.currentActivity) + '">⏳ ' + esc(lv.currentActivity) + '</div>' : '') +
     (lv && lv.online === false && lv.error ? '<div class="activity" style="color:var(--err)" title="' + esc(lv.error) + '">✗ ' + esc(lv.error) + '</div>' : '') +
     '<div class="desc">DSH 实体: <span class="mono">' + esc(dshDesc) + '</span><br>绑定资源: ' + esc(resDesc) +
@@ -15340,7 +16337,7 @@ $('drawer-mask').addEventListener('click', closeDrawer);
 function openModal(title, bodyHtml, actions) {
   $('modal-title').textContent = title; $('modal-body').innerHTML = bodyHtml;
   if (actions && actions.length) {
-    $('modal-foot').innerHTML = actions.map((a, i) => '<button class="btn ' + (a.cls || '') + '" data-mact="' + i + '">' + esc(a.label) + '</button>').join(' ');
+    $('modal-foot').innerHTML = actions.map((a, i) => '<button class="btn ' + (a.cls || '') + '"' + (a.danger ? ' style="color:var(--err)"' : '') + ' data-mact="' + i + '">' + esc(a.label) + '</button>').join(' ');
     actions.forEach((a, i) => {
       const b = document.querySelector('#modal-foot [data-mact="' + i + '"]');
       if (b) b.addEventListener('click', a.act);
@@ -16964,6 +17961,683 @@ if (blRefreshBtn && !blRefreshBtn._wired) {
     if (blState.board) { blReloadBoard(); return; }
     blState.data = null; renderBacklogView(true);
   });
+}
+
+// ---------- 协作群（契约 docs/groups-web-sync-plan-2026-11-11.md §4；对照 Android GroupChat/CreateGroupWizard/GroupSettings；空转折叠词表照抄 GroupRoom.kt isIdleRelayText） ----------
+var groupState = { rooms: [], sections: [], loaded: false, q: '', showArchived: false, openRoomId: null, historyId: null, historyTask: null, rounds: [], chatTask: null, sending: false, creatingRound: false, busy: false, err: '', errKey: '', errAt: 0, pollTimer: null, collapsed: {} };
+// 频道轮终态集（照抄 GroupChat.kt ROUND_TERMINAL_STATES；经 effectiveStatus 归一后判定）
+var GROUP_ROUND_TERMINAL = { completed: 1, success: 1, done: 1, failed: 1, cancelled: 1, canceled: 1, partial_success: 1 };
+// §4.9 空转折叠词表（逐字照抄 GroupRoom.kt IDLE_ACK_WORDS / IDLE_STATUS_WORDS）
+var GROUP_IDLE_ACK = '收到|好的|好|明白|明白了|了解|了解了|没问题|谢谢|多谢|感谢|辛苦了|辛苦|不客气|不用谢|完毕|完成|好嘞|行|ok|okay|got\\\\s+it|understood|noted|thanks|thank\\\\s+you|you\\\\s+are\\\\s+welcome|welcome|np|no\\\\s+problem|roger|ack|done|all\\\\s+good|sounds\\\\s+good';
+var GROUP_IDLE_STATUS = ['(?:收口)?(?:当前|目前|今日|今天)*(?:暂无|没有|无)+(?:待办|任务|新进展|新内容|进展|动作|变化|安排)', '待命', '保持待命', '继续待命', '原地待命', '静候', '静候下一步', '静候指令', '等候指令', '等待指令', '等待指示', '等待下一步', '等待安排', '等待新任务', '无事可做', '空转', 'standby', 'standing\\\\s+by', 'idle', 'nothing\\\\s+(?:pending|to\\\\s+do|new)', 'no\\\\s+pending\\\\s+(?:tasks?|work)', 'no\\\\s+new\\\\s+(?:work|tasks?|progress|updates?)', 'no\\\\s+changes?', 'no\\\\s+updates?', 'waiting\\\\s+for\\\\s+(?:instructions?|the\\\\s+next\\\\s+steps?)'].join('|');
+var GROUP_IDLE_RE = new RegExp('^(?:(?:' + GROUP_IDLE_ACK + '|' + GROUP_IDLE_STATUS + ')(?:[\\\\s，,、。.!！~～：:；;]+|$))+$', 'i');
+var GROUP_IDLE_TEXT_MAX = 45;
+// 归一化：剔除成员 @点名 与全员 @，再压空白/标点并小写（照抄 GroupRoom.kt normalizeRelayBody；@名 清除用 split/join 规避正则元字符）
+var GROUP_NAME_ESC_RE = new RegExp('[.*+?^' + '$' + '{}()|[' + '\\\\]' + '\\\\\\\\' + ']', 'g');  // 正则元字符转义（expert W3-3 验证写法：类含转义的 ] 与 \；三层转义已对齐）
+function groupNormalizeRelay(text, memberNames) {
+  var out = String(text || '');
+  for (var i = 0; i < memberNames.length; i++) {
+    var n = memberNames[i];
+    if (!n) continue;
+    try { out = out.replace(new RegExp('@' + n.replace(GROUP_NAME_ESC_RE, '\\\\$&') + '\\\\b', 'gi'), ''); } catch (e) { /* 名含边界字符时退化为下方逐字清除 */ }
+    out = out.split('@' + n).join('');
+  }
+  return out.replace(/@(?:all|everyone|所有人|全体)/gi, '').replace(/[\\s，,、。.!！?？;；:：'\"“”‘’()（）\\[\\]【】~～-]+/g, ' ').trim().toLowerCase();
+}
+// 空转折叠判定：空串或（≤45 码点且）命中词表 → true；与近期消息体重复（≥8 码点包含关系）→ true
+function groupIsIdleRelayText(text, memberNames, priorBodies) {
+  var norm = groupNormalizeRelay(text, memberNames);
+  if (!norm || (norm.length <= GROUP_IDLE_TEXT_MAX && GROUP_IDLE_RE.test(norm))) return true;
+  var prior = priorBodies || [];
+  for (var i = 0; i < prior.length; i++) {
+    var prev = prior[i];
+    if (prev && (prev === norm || (prev.length >= 8 && norm.length >= 8 && (prev.indexOf(norm) >= 0 || norm.indexOf(prev) >= 0)))) return true;
+  }
+  return false;
+}
+// 折叠行构建（三条豁免：工具调用/附件或跨节点链接/@点名；流式中永不折叠；连续 ≥2 条才折叠，只折叠不拦截）
+function buildGroupChatLines(turns, memberNames) {
+  var lines = [], idleBuf = [];
+  function flush() {
+    if (idleBuf.length >= 2) lines.push({ idle: true, speakers: idleBuf.map(function (x) { return x.speaker; }).filter(function (v, i, a) { return a.indexOf(v) === i; }), count: idleBuf.length, turns: idleBuf.map(function (x) { return x.turn; }) });
+    else for (var j = 0; j < idleBuf.length; j++) lines.push({ idle: false, turn: idleBuf[j].turn, speaker: idleBuf[j].speaker });
+    idleBuf = [];
+  }
+  for (var i = 0; i < turns.length; i++) {
+    var t = turns[i];
+    var text = String(t.text || '');
+    var exempt = (t.tools && t.tools.length > 0) || t.streaming || text.indexOf('[附件') >= 0 || text.indexOf('[跨节点下载') >= 0 || memberNames.some(function (n) { return n && text.indexOf('@' + n) >= 0; });
+    var speaker = t.agentName || (t.role === 'user' ? '你' : '成员');
+    // W3-2（契约 §4 裁定）：≥8 码点重复包含判定代码保留于 groupIsIdleRelayText（priorBodies 传参），调用侧停用对齐 Android 基线；启用记遗留池
+    if (!exempt && groupIsIdleRelayText(text, memberNames)) idleBuf.push({ speaker: speaker, turn: t });
+    else { flush(); lines.push({ idle: false, turn: t, speaker: speaker }); }
+  }
+  flush();
+  return lines;
+}
+function groupRoom() { return groupState.rooms.find(function (r) { return r.id === groupState.openRoomId; }) || null; }
+function groupDisplayName(room) {
+  if (room && room.name) return room.name;
+  var ids = (room && room.memberAgentIds) || [];
+  var names = ids.map(function (id) { var a = state.agents.find(function (x) { return x.id === id; }); return a ? a.name : id; });
+  return names.length ? names.join('、') : '协作群';
+}
+function groupEffectiveStatus(t) { if (!t) return 'running'; if (t.running) return 'running'; if (t.pendingAsk) return 'ask_pending'; return t.status || ''; }
+// 错误行去重（契约 §4.5：类型+taskId+时间窗；10s 窗口内同键不重复刷）
+function groupSetErr(key, msg) {
+  var now = Date.now();
+  if (groupState.errKey === key && now - groupState.errAt < 10000) return;
+  groupState.errKey = key; groupState.errAt = now;
+  var el = document.getElementById('group-chat-err');
+  if (el) { el.textContent = '⚠ ' + msg; el.style.display = ''; }
+}
+function groupClearErr() { groupState.err = ''; groupState.errKey = ''; var el = document.getElementById('group-chat-err'); if (el) { el.style.display = 'none'; el.textContent = ''; } }
+async function loadGroups() {
+  const r = await api('/groups');
+  const s = await api('/group-sections');
+  if (r.ok && Array.isArray(r.data)) groupState.rooms = r.data;
+  if (s.ok && Array.isArray(s.data)) groupState.sections = s.data;
+  groupState.loaded = true;
+  if (currentView === 'groups') renderGroupsView();
+}
+function groupUnread(room) {
+  var t = room.channelRef ? state.tasks.find(function (x) { return x.id === room.channelRef; }) : null;
+  if (t && typeof t.turnsCount === 'number') return Math.max(0, t.turnsCount - (room.lastReadSeq || 0));
+  return room.unreadCount || 0;
+}
+function renderGroupsView() {
+  if (currentView !== 'groups') return;
+  var wire = function (id, fn) { var el = document.getElementById(id); if (el && !el._gwired) { el._gwired = true; el.addEventListener('click', fn); } };
+  wire('btn-group-new', openGroupWizard);
+  wire('group-chat-back', closeGroupChat);
+  wire('group-chat-history', openGroupHistory);
+  wire('group-chat-end', openGroupEndRound);
+  wire('group-chat-settings', function () { openGroupSettings(groupState.openRoomId); });
+  wire('group-chat-mention', openGroupMention);
+  wire('group-chat-send', groupSend);
+  var qEl = document.getElementById('group-q');
+  if (qEl && !qEl._gwired) { qEl._gwired = true; qEl.addEventListener('input', function () { groupState.q = this.value.trim().toLowerCase(); renderGroupsList(); }); }
+  var arch = document.getElementById('group-archived-toggle');
+  if (arch && !arch._gwired) { arch._gwired = true; arch.checked = groupState.showArchived; arch.addEventListener('change', function () { groupState.showArchived = this.checked; renderGroupsList(); }); }
+  var inputEl = document.getElementById('group-chat-input');
+  if (inputEl && !inputEl._gwired) { inputEl._gwired = true; inputEl.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); groupSend(); } }); }
+  if (groupState.openRoomId) {
+    document.getElementById('group-list-panel').style.display = 'none';
+    document.getElementById('group-chat-panel').style.display = '';
+    renderGroupChatHead(); renderGroupChatMsgs();
+  } else {
+    document.getElementById('group-list-panel').style.display = '';
+    document.getElementById('group-chat-panel').style.display = 'none';
+    renderGroupsList();
+  }
+}
+function renderGroupsList() {
+  var el = document.getElementById('group-list');
+  if (!el) return;
+  var rooms = groupState.rooms.filter(function (r) { return groupState.showArchived || !r.archived; });
+  if (groupState.q) rooms = rooms.filter(function (r) {
+    var hay = groupDisplayName(r) + ' ' + (r.section || '') + ' ' + r.memberAgentIds.map(function (id) { var a = state.agents.find(function (x) { return x.id === id; }); return a ? a.name : id; }).join(' ');
+    return hay.toLowerCase().indexOf(groupState.q) >= 0;
+  });
+  if (!rooms.length) { el.innerHTML = '<div class="mon-empty">' + (groupState.rooms.length ? '没有匹配的群' : '还没有协作群 —— 点右上角「＋ 发起群聊」建一个。群聊 = 多人任务频道：成员共享一条 orchestrate 频道流，可 @ 点名，多轮延续。') + '</div>'; return; }
+  var order = [];
+  groupState.sections.forEach(function (s) { if (rooms.some(function (r) { return (r.section || '') === s; }) && order.indexOf(s) < 0) order.push(s); });
+  rooms.forEach(function (r) { var sec = r.section || ''; if (order.indexOf(sec) < 0 && sec !== '') order.push(sec); });
+  if (rooms.some(function (r) { return !r.section; })) order.push('');
+  el.innerHTML = order.map(function (sec) {
+    var list = rooms.filter(function (r) { return (r.section || '') === sec; });
+    var collapsed = !!groupState.collapsed[sec];
+    return '<div class="topo-group"><div class="topo-group-head" data-gsec="' + esc(sec) + '" style="cursor:pointer;user-select:none"><span style="display:inline-block;width:14px">' + (collapsed ? '▸' : '▾') + '</span> <b>' + esc(sec || '未分组') + '</b> <span class="cnt">' + list.length + ' 群</span></div>' +
+      '<div class="topo-group-body' + (collapsed ? ' collapsed' : '') + '">' + list.map(groupRowHtml).join('') + '</div></div>';
+  }).join('');
+  el.querySelectorAll('[data-gsec]').forEach(function (head) {
+    head.addEventListener('click', function () { var sec = head.dataset.gsec; groupState.collapsed[sec] = !groupState.collapsed[sec]; renderGroupsList(); });
+  });
+  el.querySelectorAll('[data-group]').forEach(function (row) {
+    row.addEventListener('click', function () { openGroupChat(row.dataset.group); });
+  });
+  el.querySelectorAll('[data-gset]').forEach(function (btn) {
+    btn.addEventListener('click', function (e) { e.stopPropagation(); openGroupSettings(btn.dataset.gset); });
+  });
+}
+function groupRowHtml(r) {
+  var unread = groupUnread(r);
+  var names = r.memberAgentIds.map(function (id) { var a = state.agents.find(function (x) { return x.id === id; }); return a ? a.name : id; });
+  var badge = unread > 0 ? '<span style="background:var(--err);color:var(--dsw-static-neutral-50);border-radius:9px;padding:1px 7px;font-size:11px;flex:none">' + (unread > 99 ? '99+' : unread) + '</span>' : '';
+  var tags = (r.archived ? '<span class="tag">📦 已归档</span> ' : '') + (!r.channelRef ? '<span class="tag">空闲</span> ' : '') + '<span class="tag">' + (r.mode === 'everyone' ? '所有人' : '管理员主持') + '</span>';
+  return '<div class="task-item" data-group="' + esc(r.id) + '" style="display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer">' +
+    '<div style="flex:1;min-width:0"><div style="font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(groupDisplayName(r)) + ' <span style="font-weight:400">' + tags + '</span></div>' +
+    '<div style="font-size:11px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px">' + esc(names.join('、') || '未选成员') + ' · 提醒 ' + ({ all: '全部提醒', mention: '仅@我', mute: '静默' }[r.notifyLevel] || r.notifyLevel) + (r.permissionOverride ? ' · 权限覆写 ' + esc(r.permissionOverride) : '') + '</div></div>' +
+    badge +
+    '<button class="mini-btn" data-gset="' + esc(r.id) + '" title="群设置">⚙</button>' +
+    '</div>';
+}
+function openGroupChat(roomId) {
+  groupState.openRoomId = roomId;
+  groupState.historyId = null; groupState.historyTask = null; groupState.chatTask = null;
+  groupClearErr();
+  document.getElementById('group-list-panel').style.display = 'none';
+  document.getElementById('group-chat-panel').style.display = '';
+  loadGroupRounds();
+  refreshGroupChat();
+  stopGroupPoll();
+  groupState.pollTimer = setInterval(function () { if (currentView === 'groups' && groupState.openRoomId) refreshGroupChat(); }, 3000);
+}
+function closeGroupChat() { groupState.openRoomId = null; stopGroupPoll(); renderGroupsView(); }
+function stopGroupPoll() { if (groupState.pollTimer) { clearInterval(groupState.pollTimer); groupState.pollTimer = null; } }
+function loadGroupRounds() {
+  var room = groupRoom(); if (!room) return;
+  api('/groups/' + room.id + '/rounds').then(function (r) { if (r.ok && Array.isArray(r.data)) { groupState.rounds = r.data; renderGroupChatHead(); } });
+}
+async function refreshGroupChat() {
+  var room = groupRoom(); if (!room) return;
+  var tid = groupState.historyId || room.channelRef;
+  if (!tid) { groupState.chatTask = null; renderGroupChatHead(); renderGroupChatMsgs(); return; }
+  const r = await api('/tasks/' + tid);
+  if (!r.ok) { groupSetErr('task:' + tid, (r.error || '频道任务加载失败')); renderGroupChatMsgs(); return; }
+  groupState.chatTask = r.data;
+  if (groupState.historyId) groupState.historyTask = r.data;
+  if (!groupState.historyId) {
+    var seq = (r.data.turns || []).length;
+    if (seq > (room.lastReadSeq || 0) || (room.unreadCount || 0) > 0) {
+      api('/groups/' + room.id + '/read', { method: 'POST', body: JSON.stringify({ lastReadSeq: seq }) }).then(function (rr) { if (rr.ok && rr.data) { room.lastReadSeq = rr.data.lastReadSeq; room.unreadCount = rr.data.unreadCount; } });
+    }
+  }
+  renderGroupChatHead(); renderGroupChatMsgs();
+}
+function renderGroupChatHead() {
+  var room = groupRoom(); if (!room) return;
+  var titleEl = document.getElementById('group-chat-title');
+  var historyMode = !!groupState.historyId;
+  titleEl.textContent = (historyMode ? '📖 ' : '') + groupDisplayName(room);
+  var adminName = '';
+  for (var i = 0; i < room.memberAgentIds.length; i++) { var a = state.agents.find(function (x) { return x.id === room.adminAgentId; }); if (a) { adminName = a.name; break; } }
+  document.getElementById('group-chat-sub').textContent = Math.max(room.memberAgentIds.length, 0) + ' 位成员 · 管理员 ' + (adminName || '无') + (room.channelRef ? '' : ' · 频道空闲');
+  var banner = '';
+  if (historyMode) {
+    var t = groupState.historyTask;
+    var projName = '';
+    if (t && t.projectId) { var p = state.projects.find(function (x) { return x.id === t.projectId; }); projName = p ? p.name : t.projectId; }
+    var names = t ? (t.memberAgentIds || []).map(function (id) { var a = state.agents.find(function (x) { return x.id === id; }); return a ? a.name : id; }).join('、') : '';
+    banner = '<div style="background:var(--dsw-alias-state-warn-tertiary);padding:8px 14px;font-size:12px"><div style="display:flex;align-items:center;gap:10px"><span style="color:var(--warn)">📖 历史轮只读回看</span><span class="hspacer"></span><button class="mini-btn" id="group-chat-backlive">返回当前频道</button></div>' +
+      '<div style="color:var(--tx3);margin-top:3px">归属项目：' + esc(projName || '未绑定') + ' · 成员：' + esc(names || '无记录') + ' · <a href="#" id="group-chat-opentask" style="color:var(--pri)">任务中心 ›</a></div></div>';
+  } else if (room.archived) {
+    banner = '<div style="background:var(--dsw-alias-state-warn-tertiary);padding:8px 14px;font-size:12px;color:var(--warn)">📦 已归档：只读可查；恢复群聊请进 ⚙ 群设置。</div>';
+  } else if ((room.projectIds || []).length && state.projects.length) {
+    var chips = room.projectIds.map(function (pid) {
+      var p = state.projects.find(function (x) { return x.id === pid; });
+      if (!p) return '';
+      var on = room.activeProjectId === pid;
+      return '<button class="mini-btn gp-chip" data-gp="' + esc(pid) + '" style="' + (on ? 'border-color:var(--pri);color:var(--pri)' : '') + '">' + esc(p.name) + '</button>';
+    }).join(' ');
+    banner = '<div style="padding:6px 14px;font-size:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span>📦</span>' + chips + '<span style="color:var(--tx3)">下一轮归属</span></div>';
+  }
+  document.getElementById('group-chat-banner').innerHTML = banner;
+  var backLive = document.getElementById('group-chat-backlive');
+  if (backLive) backLive.addEventListener('click', function () { groupState.historyId = null; groupState.historyTask = null; groupClearErr(); refreshGroupChat(); });
+  var openT = document.getElementById('group-chat-opentask');
+  if (openT) openT.addEventListener('click', function (e) { e.preventDefault(); var rid = groupState.historyId; closeGroupChat(); switchView('work'); void openTask(rid); });
+  document.querySelectorAll('.gp-chip').forEach(function (chip) {
+    chip.addEventListener('click', async function () {
+      var room2 = groupRoom(); if (!room2 || room2.activeProjectId === chip.dataset.gp) return;
+      const rr = await api('/groups/' + room2.id, { method: 'PUT', body: JSON.stringify({ activeProjectId: chip.dataset.gp }) });
+      if (rr.ok && rr.data) { room2.activeProjectId = rr.data.activeProjectId; toast('✓ 下一轮归属：' + (state.projects.find(function (x) { return x.id === room2.activeProjectId; }) || { name: room2.activeProjectId }).name); renderGroupChatHead(); }
+    });
+  });
+  var endBtn = document.getElementById('group-chat-end');
+  if (endBtn) endBtn.disabled = !room.channelRef || groupState.busy;
+  var foot = document.getElementById('group-chat-footnote');
+  if (foot) {
+    if (historyMode) foot.textContent = '历史轮不提供发言入口；发送消息将自动开启新一轮。';
+    else if (room.mode !== 'everyone') {
+      var an = ''; var aa = state.agents.find(function (x) { return x.id === room.adminAgentId; }); if (aa) an = aa.name;
+      foot.textContent = '管理员主持中：普通消息先由管理员（' + (an || '未指定') + '）@ 分派。';
+    } else foot.textContent = '';
+  }
+}
+function renderGroupChatMsgs() {
+  var room = groupRoom(); var el = document.getElementById('group-chat-msgs');
+  if (!room || !el) return;
+  var t = groupState.historyId ? groupState.historyTask : groupState.chatTask;
+  var parts = [];
+  if (!t) {
+    parts.push('<div style="color:var(--tx3);font-size:13px">' + (room.channelRef ? '正在加载频道…' : '本轮尚未建立：发送第一条消息即开启新一轮讨论。') + '</div>');
+  } else {
+    var logs = (t.taskLogs || []).filter(function (line) { return String(line).indexOf('[error]') >= 0 || String(line).indexOf('[warn]') >= 0; }).slice(0, 3);
+    logs.forEach(function (line) { parts.push('<div style="font-size:11px;color:var(--warn);padding:1px 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(line) + '">🛠 ' + esc(line) + '</div>'); });
+    var memberNames = room.memberAgentIds.map(function (id) { var a = state.agents.find(function (x) { return x.id === id; }); return a ? a.name : id; });
+    var turns = (t.turns || []).map(function (x) { return { text: x.text, role: x.role, agentName: x.agentName || '', streaming: !!x.streaming, tools: x.tools || [] }; });
+    var lines = buildGroupChatLines(turns, memberNames);
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      if (line.idle) {
+        // W3-1：折叠行保留原文——展开可见全量原始消息（只折叠不拦截；原文回看亦可走任务中心）
+        var detail = line.turns.map(function (t2) { return '<div style="padding:1px 0">' + esc(t2.agentName || '成员') + '：' + esc(String(t2.text || '')) + '</div>'; }).join('');
+        parts.push('<div style="font-size:11px;color:var(--tx3);background:var(--dsw-alias-bg-module-platform);border-radius:10px;padding:6px 10px" data-gx="1"><div class="gx-sum" style="cursor:pointer">' + esc(line.speakers.join('、').slice(0, 24)) + ' 互发了 ' + line.count + ' 条无新内容消息 ▸</div><div class="gx-detail" style="display:none;margin-top:4px;border-top:1px solid var(--dsw-alias-border-l2);padding-top:4px">' + detail + '<div style="margin-top:2px">折叠不拦截继续发言。</div></div></div>');
+      } else {
+        var turn = line.turn;
+        var toolCount = (turn.tools || []).length;
+        var awaiting = (turn.tools || []).some ? turn.tools.some(function (x) { return x && x.awaiting; }) : false;
+        var badges = (turn.streaming ? ' <span style="color:var(--pri);font-size:10px">· 深度求索中…</span>' : '') + (awaiting ? ' <span style="color:var(--warn);font-size:10px">⏳ 等待答复</span>' : '') + (toolCount > 0 ? ' <span style="color:var(--tx3);font-size:10px">🔧' + toolCount + '</span>' : '');
+        parts.push('<div><div style="display:flex;align-items:center;gap:6px"><span style="width:22px;height:22px;border-radius:50%;background:var(--dsw-alias-state-business-tertiary);color:var(--pri);font-size:10px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;flex:none">' + esc(line.speaker.slice(0, 1)) + '</span><b style="font-size:12px;color:var(--tx2)">' + esc(line.speaker) + '</b>' + badges + '</div>' +
+          '<div class="dsh-md" style="font-size:13px;padding:2px 0 0 28px;word-break:break-word">' + md(turn.text || '') + '</div></div>');
+      }
+    }
+    if (groupState.creatingRound) parts.push('<div style="color:var(--tx3);font-size:12px">正在开启新一轮…</div>');
+  }
+  el.innerHTML = parts.join('');
+  el.querySelectorAll('[data-gx]').forEach(function (row) {
+    row.addEventListener('click', function () {
+      var detail = row.querySelector('.gx-detail');
+      if (!detail) return;
+      var open = detail.style.display !== 'none';
+      detail.style.display = open ? 'none' : '';
+      var sum = row.querySelector('.gx-sum');
+      if (sum) sum.textContent = sum.textContent.replace(' ▸', open ? ' ▸' : ' ▾');
+    });
+  });
+  el.scrollTop = el.scrollHeight;
+}
+async function groupSend() {
+  var inputEl = document.getElementById('group-chat-input');
+  var text = ((inputEl && inputEl.value) || '').trim();
+  var room = groupRoom();
+  if (!room || groupState.sending || groupState.creatingRound || groupState.busy) return;
+  if (!text) return;
+  if (room.archived) { groupSetErr('archived', '群已归档：只读可查；恢复群聊请进 ⚙ 群设置。'); return; }
+  if (groupState.historyId) { groupSetErr('history', '历史轮不提供发言入口；请先「返回当前频道」。'); return; }
+  groupState.sending = true; renderGroupChatMsgs();
+  try {
+    var cid = room.channelRef || '';
+    var lastSummary = null;
+    if (cid) {
+      var s = state.tasks.find(function (x) { return x.id === cid; });
+      if (GROUP_ROUND_TERMINAL[groupEffectiveStatus(s)]) {
+        if (s && s.lastPreview) lastSummary = s.lastPreview;
+        if (!lastSummary && groupState.chatTask && groupState.chatTask.id === cid) {
+          var turns = groupState.chatTask.turns || [];
+          for (var i = turns.length - 1; i >= 0; i--) { if (turns[i].role !== 'user') { lastSummary = String(turns[i].text || '').slice(0, 200); break; } }
+        }
+        await api('/groups/' + room.id + '/rounds', { method: 'POST', body: JSON.stringify({ taskId: cid }) });
+        await api('/groups/' + room.id, { method: 'PUT', body: JSON.stringify({ channelRef: '' }) });
+        room.channelRef = ''; cid = '';
+        loadGroupRounds();
+      }
+    }
+    if (!cid) {
+      groupState.creatingRound = true; renderGroupChatMsgs();
+      var roundNo = groupState.rounds.length + 2;
+      var msgText = '新一轮讨论已开启（第 ' + roundNo + ' 轮）。' + (lastSummary ? '【上轮结论】' + String(lastSummary).slice(0, 400) + '\\n' : '');
+      var body = { mode: 'orchestrate', memberAgentIds: room.memberAgentIds.slice(), message: msgText, title: groupDisplayName(room) + '（第 ' + roundNo + ' 轮）' };
+      if (room.activeProjectId) body.projectId = room.activeProjectId;
+      const cr = await api('/tasks', { method: 'POST', body: JSON.stringify(body) });
+      if (!cr.ok) throw new Error(cr.error || '新一轮创建失败');
+      var newId = cr.data && cr.data.id;
+      if (!newId) throw new Error('平台未返回任务 ID，新一轮未建立');
+      // W3-4 孤儿频道补偿：create 成功 → PUT channelRef 失败的窗口里，cancel 刚建的编排任务并提示重试，不留无主频道
+      try {
+        await api('/groups/' + room.id, { method: 'PUT', body: JSON.stringify({ channelRef: newId }) });
+      } catch (putErr) {
+        try { await api('/tasks/' + newId + '/cancel', { method: 'POST' }); } catch (e2) { /* cancel 失败时任务留在任务中心可手动处理，不再叠加报错 */ }
+        throw new Error('频道绑定失败（已回滚新建任务）：' + ((putErr && putErr.error) || (putErr && putErr.message) || '请重试'));
+      }
+      room.channelRef = newId; cid = newId;
+      groupState.creatingRound = false;
+      loadGroupRounds();
+    }
+    const sr = await api('/tasks/' + cid + '/messages', { method: 'POST', body: JSON.stringify({ message: text }) });
+    if (!sr.ok) throw new Error(sr.error || '发送失败');
+    if (inputEl) inputEl.value = '';
+    groupClearErr();
+    refreshGroupChat();
+  } catch (e) {
+    var roomNow = groupRoom();
+    groupSetErr('send:' + ((roomNow && roomNow.channelRef) || 'new'), (e && e.message) || '发送失败');
+  } finally {
+    groupState.sending = false; groupState.creatingRound = false;
+    renderGroupChatHead(); renderGroupChatMsgs();
+  }
+}
+function openGroupEndRound() {
+  var room = groupRoom();
+  if (!room || !room.channelRef || groupState.busy) return;
+  openModal('⏹ 结束本轮讨论', '<div style="font-size:13px;line-height:1.7">成员正在进行的回合将被终止（频道任务取消）；本轮转入历史轮保留只读可查。<br>确定结束「' + esc(groupDisplayName(room)) + '」当前频道？</div>', [
+    { label: '取消', cls: '', act: function () { closeModal(); } },
+    { label: '结束本轮', cls: 'pri', act: function () { closeModal(); doGroupEndRound(); } },
+  ]);
+}
+async function doGroupEndRound() {
+  var room = groupRoom();
+  var cid = room && room.channelRef;
+  if (!cid) return;
+  groupState.busy = true; renderGroupChatHead();
+  try {
+    await api('/tasks/' + cid + '/cancel', { method: 'POST' });
+    await api('/groups/' + room.id + '/rounds', { method: 'POST', body: JSON.stringify({ taskId: cid }) });
+    await api('/groups/' + room.id, { method: 'PUT', body: JSON.stringify({ channelRef: '' }) });
+    room.channelRef = '';
+    loadGroupRounds(); refreshGroupChat();
+    toast('✓ 本轮已结束，转入历史轮');
+  } catch (e) { groupSetErr('end:' + cid, (e && e.message) || '结束本轮失败'); }
+  finally { groupState.busy = false; renderGroupChatHead(); }
+}
+function openGroupHistory() {
+  var room = groupRoom(); if (!room) return;
+  var rows = ['<div class="gh-row" data-ghr="" style="padding:8px 10px;cursor:pointer;font-weight:600;color:var(--pri)">✓ 当前频道</div>'];
+  for (var i = groupState.rounds.length - 1; i >= 0; i--) {
+    var rid = groupState.rounds[i];
+    rows.push('<div class="gh-row" data-ghr="' + esc(rid) + '" style="padding:8px 10px;cursor:pointer;color:var(--tx2);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + (groupState.historyId === rid ? '✓ ' : '') + esc(rid) + '</div>');
+  }
+  if (!groupState.rounds.length) rows.push('<div style="color:var(--tx3);font-size:12px;padding:8px 10px">暂无历史轮次</div>');
+  openModal('‹ 历史轮次 ›', '<div style="max-height:50vh;overflow:auto">' + rows.join('') + '</div>', [{ label: '关闭', cls: '', act: function () { closeModal(); } }]);
+  document.querySelectorAll('#modal-body [data-ghr]').forEach(function (row) {
+    row.addEventListener('click', function () {
+      groupState.historyId = row.dataset.ghr || null; groupState.historyTask = null; groupClearErr(); closeModal();
+      renderGroupChatHead(); renderGroupChatMsgs();
+      if (groupState.historyId) refreshGroupChat();
+    });
+  });
+}
+function openGroupMention() {
+  var room = groupRoom(); if (!room) return;
+  var members = room.memberAgentIds.map(function (id) { var a = state.agents.find(function (x) { return x.id === id; }); return a ? a.name : id; });
+  var rows = members.map(function (n) { return '<div class="gh-row" data-gm="' + esc(n) + '" style="padding:8px 10px;cursor:pointer">@' + esc(n) + '</div>'; }).join('');
+  openModal('@ 点名成员', '<div style="max-height:50vh;overflow:auto">' + (rows || '<div style="color:var(--tx3);font-size:12px">群内暂无成员</div>') + '</div>', [{ label: '关闭', cls: '', act: function () { closeModal(); } }]);
+  document.querySelectorAll('#modal-body [data-gm]').forEach(function (row) {
+    row.addEventListener('click', function () {
+      var inputEl = document.getElementById('group-chat-input');
+      if (inputEl) { inputEl.value = (inputEl.value || '') + '@' + row.dataset.gm + ' '; inputEl.focus(); }
+      closeModal();
+    });
+  });
+}
+
+// ---------- 群设置侧板（对照 Android GroupSettingsSheet：全字段 + 分组管理 + 危险操作二次确认） ----------
+function groupAgentName(id) { var a = state.agents.find(function (x) { return x.id === id; }); return a ? a.name : id; }
+function groupMemberOptions() { return state.agents.filter(function (a) { return a.enabled !== false; }); }
+function openGroupSettings(roomId) {
+  var room = groupState.rooms.find(function (r) { return r.id === roomId; });
+  if (!room) { toast('群不存在或已被删除', true); return; }
+  var members = groupMemberOptions();
+  var projects = state.projects.filter(function (p) { return !p.archived; });
+  var memberRows = members.map(function (a) {
+    var on = room.memberAgentIds.indexOf(a.id) >= 0;
+    return '<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:13px"><input type="checkbox" name="gs-member" value="' + esc(a.id) + '"' + (on ? ' checked' : '') + '><span>' + esc(a.name) + '</span><span class="sub" style="margin:0">' + esc(a.id) + '</span></label>';
+  }).join('');
+  var adminOptions = '<option value="">（无管理员）</option>' + room.memberAgentIds.map(function (id) {
+    return '<option value="' + esc(id) + '"' + (room.adminAgentId === id ? ' selected' : '') + '>' + esc(groupAgentName(id)) + '</option>';
+  }).join('');
+  var projRows = projects.map(function (p) {
+    var on = (room.projectIds || []).indexOf(p.id) >= 0;
+    return '<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:13px"><input type="checkbox" name="gs-proj" value="' + esc(p.id) + '"' + (on ? ' checked' : '') + '><span>' + esc(p.name) + '</span></label>';
+  }).join('') || '<div class="sub" style="margin:0">暂无可绑定项目</div>';
+  var activeOptions = '<option value="">（未指定）</option>' + projects.map(function (p) {
+    return '<option value="' + esc(p.id) + '"' + (room.activeProjectId === p.id ? ' selected' : '') + '>' + esc(p.name) + '</option>';
+  }).join('');
+  // ⛔ G-W-P0-1：下拉 options 并入 room.section 当前值（存量/REST 直写的 section 重开必须回显，防保存静默清空）
+  var sectionList = groupState.sections.slice();
+  if (room.section && sectionList.indexOf(room.section) < 0) sectionList.unshift(room.section);
+  var sectionOptions = '<option value="">（未分组）</option>' + sectionList.map(function (s) {
+    return '<option value="' + esc(s) + '"' + (room.section === s ? ' selected' : '') + '>' + esc(s) + '</option>';
+  }).join('') + '<option value="__new__">＋ 新分组…</option>';
+  var sectionMgmt = groupState.sections.map(function (s) {
+    return '<div class="gs-secrow" data-sec="' + esc(s) + '" style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px"><span style="flex:1">' + esc(s) + '</span><button class="mini-btn gs-sec-rename" data-sec="' + esc(s) + '">重命名</button><button class="mini-btn gs-sec-del" data-sec="' + esc(s) + '">删除</button></div>';
+  }).join('') || '<div class="sub" style="margin:0">暂无分组</div>';
+  var body =
+    '<div class="field"><label>群名称（留空 = 成员名拼接）</label><input id="gs-name" value="' + esc(room.name || '') + '" placeholder="' + esc(groupDisplayName(Object.assign({}, room, { name: '' })).slice(0, 30)) + '"></div>' +
+    '<div class="field"><label>群公告（<span id="gs-notice-cnt">' + [...(room.notice || '')].length + '</span>/2000 字，发言前请先读）</label><textarea id="gs-notice" rows="3" style="width:100%;font-size:12px">' + esc(room.notice || '') + '</textarea></div>' +
+    '<div style="display:flex;gap:12px"><div class="field" style="flex:1"><label>模式</label><select id="gs-mode" style="width:100%"><option value="admin"' + (room.mode !== 'everyone' ? ' selected' : '') + '>管理员主持（新建群默认）</option><option value="everyone"' + (room.mode === 'everyone' ? ' selected' : '') + '>所有人</option></select></div>' +
+    '<div class="field" style="flex:1"><label>提醒档</label><select id="gs-notify" style="width:100%"><option value="all"' + (room.notifyLevel === 'all' ? ' selected' : '') + '>全部提醒</option><option value="mention"' + (room.notifyLevel !== 'all' && room.notifyLevel !== 'mute' ? ' selected' : '') + '>仅@我</option><option value="mute"' + (room.notifyLevel === 'mute' ? ' selected' : '') + '>静默</option></select></div></div>' +
+    '<div class="hint" style="margin-top:-4px">静默档 ask_user 只保留首页红点，不响铃不进通知栏。</div>' +
+    '<div class="field"><label>管理员（∈成员，可无）</label><select id="gs-admin" style="width:100%">' + adminOptions + '</select></div>' +
+    '<div class="field"><label>成员（勾选即群成员）</label><div style="max-height:180px;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:4px 8px">' + memberRows + '</div></div>' +
+    '<div class="field"><label>绑定项目（0..N；共享文件夹 = 各项目空间并集）</label><div style="max-height:140px;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:4px 8px">' + projRows + '</div></div>' +
+    '<div class="field"><label>当前项目（必须 ∈ 绑定项目，决定下一轮归属）</label><select id="gs-active" style="width:100%">' + activeOptions + '</select></div>' +
+    '<div class="field"><label>权限覆写（留空 = 沿用各成员权限档；非空 = 群内派发统一注入，如 workspace-write / danger-full-access）</label><input id="gs-perm" value="' + esc(room.permissionOverride || '') + '" style="font-family:var(--mono)"></div>' +
+    '<div class="field"><label>首页分组</label><select id="gs-section" style="width:100%">' + sectionOptions + '</select><input id="gs-section-new" placeholder="新分组名" style="display:none;margin-top:6px"></div>' +
+    '<div class="field"><label>归档</label><label style="display:flex;align-items:center;gap:8px;font-size:13px"><input type="checkbox" id="gs-archived"' + (room.archived ? ' checked' : '') + '><span>已归档（列表默认隐藏，只读可查）</span></label></div>' +
+    '<div class="field"><label>分组管理（级联迁移群引用，不留孤儿）</label>' + sectionMgmt + '<div style="display:flex;gap:6px;margin-top:6px"><input id="gs-sec-add" placeholder="新分组名" style="flex:1"><button class="mini-btn" id="gs-sec-add-btn">新增分组</button></div></div>' +
+    '<div class="hint" style="margin-top:8px">保存走 PUT /api/groups/:id 部分更新；当前项目不在绑定集时服务端归一化为空（不报错）。删除群在「保存」旁的「删除群」按钮（二次确认）。</div>';
+  openModal('⚙ 群设置 · ' + groupDisplayName(room), body, [
+    { label: '删除群', cls: '', act: function () { openGroupDeleteConfirm(room); } },
+    { label: '取消', cls: '', act: function () { closeModal(); } },
+    { label: '保存', cls: 'pri', act: function () { saveGroupSettings(room); } },
+  ]);
+  var noticeEl = document.getElementById('gs-notice');
+  if (noticeEl) noticeEl.addEventListener('input', function () {
+    var n = [...this.value].length;
+    var cnt = document.getElementById('gs-notice-cnt');
+    if (cnt) cnt.textContent = String(n);
+    if (n > 2000) cnt.style.color = 'var(--err)'; else cnt.style.color = '';
+  });
+  var secSel = document.getElementById('gs-section');
+  var secNew = document.getElementById('gs-section-new');
+  if (secSel && secNew) secSel.addEventListener('change', function () { secNew.style.display = this.value === '__new__' ? '' : 'none'; });
+  var addBtn = document.getElementById('gs-sec-add-btn');
+  if (addBtn) addBtn.addEventListener('click', async function () {
+    var nameEl = document.getElementById('gs-sec-add');
+    var name = (nameEl && nameEl.value || '').trim();
+    if (!name) { toast('分组名不能为空', true); return; }
+    const r = await api('/group-sections', { method: 'POST', body: JSON.stringify({ name: name }) });
+    if (!r.ok) { toast(r.error || '新增分组失败', true); return; }
+    if (r.data && r.data.added === false) toast('分组已存在（幂等）'); else toast('✓ 分组已新增');
+    await loadGroups(); openGroupSettings(roomId);
+  });
+  document.querySelectorAll('#modal-body .gs-sec-del').forEach(function (btn) {
+    btn.addEventListener('click', async function () {
+      const r = await api('/group-sections/' + encodeURIComponent(btn.dataset.sec), { method: 'DELETE' });
+      if (!r.ok) { toast(r.error || '删除分组失败', true); return; }
+      toast('✓ 分组已删除，引用群已级联置未分组');
+      await loadGroups(); openGroupSettings(roomId);
+    });
+  });
+  document.querySelectorAll('#modal-body .gs-sec-rename').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var sec = btn.dataset.sec;
+      var row = btn.closest('.gs-secrow');
+      if (!row) return;
+      row.innerHTML = '<input class="gs-rename-input" value="' + esc(sec) + '" style="flex:1;font-size:12px"><button class="mini-btn gs-rename-ok" data-sec="' + esc(sec) + '">✓</button><button class="mini-btn gs-rename-cancel">✗</button>';
+      var input = row.querySelector('.gs-rename-input');
+      if (input) input.focus();
+      var okBtn = row.querySelector('.gs-rename-ok');
+      if (okBtn) okBtn.addEventListener('click', async function () {
+        var to = (input && input.value || '').trim();
+        if (!to || to === sec) { row.innerHTML = '<span style="flex:1">' + esc(sec) + '</span><button class="mini-btn gs-sec-rename" data-sec="' + esc(sec) + '">重命名</button><button class="mini-btn gs-sec-del" data-sec="' + esc(sec) + '">删除</button>'; openGroupSettings(roomId); return; }
+        const r = await api('/group-sections/' + encodeURIComponent(sec), { method: 'PUT', body: JSON.stringify({ to: to }) });
+        if (!r.ok) { toast((r.error || '重命名失败') + (r.code === 'SECTION_CONFLICT' ? '（旧分组不存在或新分组已存在）' : ''), true); return; }
+        toast('✓ 分组已重命名并级联迁移');
+        await loadGroups(); openGroupSettings(roomId);
+      });
+      var cancelBtn = row.querySelector('.gs-rename-cancel');
+      if (cancelBtn) cancelBtn.addEventListener('click', function () { openGroupSettings(roomId); });
+    });
+  });
+}
+async function saveGroupSettings(room) {
+  // ⛔ 数据丢失回归修复：patch 必须在打开确认门前快照（此处是唯一 DOM 读取点），
+  // 确认门会替换销毁设置表单 DOM——确认回调只能应用门前快照，绝不允许重读 DOM（force 路径已删除）。
+  var patch = collectGroupSettingsPatch(room);
+  if (!patch) return;
+  // P1-6/P1-7 破坏性动作二次确认（危险操作规范②）：归档 / 移除成员合并单次确认列出，确认后才落库
+  var reasons = [];
+  if (patch.archived && !room.archived) reasons.push('归档群（终止成员当前回合，频道任务取消，历史轮保留只读）');
+  var removed = room.memberAgentIds.filter(function (id) { return patch.memberAgentIds.indexOf(id) < 0; });
+  if (removed.length) reasons.push('移除成员：' + removed.map(groupAgentName).join('、'));
+  if (reasons.length) {
+    openModal('⚠ 确认保存破坏性变更', '<div style="font-size:13px;line-height:1.9">本次保存将执行：<br>' + reasons.map(function (r, i) { return (i + 1) + '. ' + esc(r); }).join('<br>') + '<br><span style="color:var(--err)">确认继续？</span></div>', [
+      { label: '取消', cls: '', act: function () { closeModal(); patch = null; } },
+      { label: '确认保存', cls: '', danger: true, act: function () { closeModal(); applyGroupSettingsPatch(room, patch); } },
+    ]);
+    return;
+  }
+  applyGroupSettingsPatch(room, patch);
+}
+/** 收集设置表单为 patch（纯读取 DOM + 校验；非法返回 null 并 toast）。 */
+function collectGroupSettingsPatch(room) {
+  var val = function (id) { var el = document.getElementById(id); return el ? el.value : ''; };
+  var memberIds = Array.prototype.map.call(document.querySelectorAll('input[name="gs-member"]:checked'), function (x) { return x.value; });
+  var projectIds = Array.prototype.map.call(document.querySelectorAll('input[name="gs-proj"]:checked'), function (x) { return x.value; });
+  var notice = val('gs-notice');
+  if ([...notice].length > 2000) { toast('群公告最多 2000 字（当前 ' + [...notice].length + ' 字）', true); return null; }
+  var admin = val('gs-admin');
+  if (admin && memberIds.indexOf(admin) < 0) { toast('管理员必须在成员列表内（先勾选该成员）', true); return null; }
+  var section = val('gs-section');
+  if (section === '__new__') section = (val('gs-section-new') || '').trim();
+  return {
+    name: val('gs-name'),
+    notice: notice,
+    mode: val('gs-mode'),
+    notifyLevel: val('gs-notify'),
+    adminAgentId: admin,
+    memberAgentIds: memberIds,
+    projectIds: projectIds,
+    activeProjectId: val('gs-active'),
+    permissionOverride: val('gs-perm'),
+    section: section,
+    archived: document.getElementById('gs-archived') ? document.getElementById('gs-archived').checked : room.archived,
+  };
+}
+/** 应用 patch：新建分组先 POST sections（W3-5 幂等）再 PUT 群；成功刷新列表。 */
+async function applyGroupSettingsPatch(room, patch) {
+  if (patch.section) {
+    // W3-5（契约 §2）：新建分组必须先落分组（重名幂等 added:false），再落群——未知 section 服务端虽容差渲染未分组，但客户端不依赖容差
+    const sr = await api('/group-sections', { method: 'POST', body: JSON.stringify({ name: patch.section }) });
+    if (!sr.ok) { toast(sr.error || '新增分组失败', true); return; }
+  }
+  const r = await api('/groups/' + room.id, { method: 'PUT', body: JSON.stringify(patch) });
+  if (!r.ok) { toast(r.error || '保存失败', true); return; }
+  closeModal();
+  toast('✓ 群设置已保存');
+  await loadGroups();
+}
+function openGroupDeleteConfirm(room) {
+  openModal('🗑 删除协作群（不可恢复）', '<div style="font-size:13px;line-height:1.7">即将删除「<b>' + esc(groupDisplayName(room)) + '</b>」。<br>删除内容：群元数据（成员/公告/分组/历史轮记录）；频道任务本体保留在任务中心。<br><span style="color:var(--err)">此操作不可恢复，确认删除？</span></div>', [
+    { label: '取消', cls: '', act: function () { closeModal(); } },
+    { label: '确认删除', cls: '', danger: true, act: async function () {
+      const r = await api('/groups/' + room.id, { method: 'DELETE' });
+      if (!r.ok) { toast(r.error || '删除失败', true); return; }
+      closeModal();
+      toast('✓ 群已删除');
+      if (groupState.openRoomId === room.id) closeGroupChat();
+      await loadGroups();
+    } },
+  ]);
+}
+// ---------- 建群向导（对照 Android CreateGroupWizard 3 步：①选成员 ②模式+公告+管理员 ③绑定项目+当前项目+分组） ----------
+var groupWizard = null;
+function openGroupWizard() {
+  groupWizard = { step: 1, members: [], mode: 'admin', notice: '', admin: '', projectIds: [], activeProjectId: '', section: '', sectionNew: '', q: '' };
+  renderGroupWizard();
+}
+function renderGroupWizard() {
+  var w = groupWizard; if (!w) return;
+  var members = groupMemberOptions();
+  var projects = state.projects.filter(function (p) { return !p.archived; });
+  var stepsBar = '<div style="display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:10px">' +
+    ['① 选成员', '② 模式与公告', '③ 项目与分组'].map(function (s, i) {
+      var on = w.step === i + 1;
+      return '<span style="padding:2px 10px;border-radius:10px;' + (on ? 'background:var(--pri);color:var(--dsw-static-neutral-50)' : 'background:var(--dsw-alias-bg-module-platform);color:var(--tx3)') + '">' + s + '</span>';
+    }).join('<span style="color:var(--tx3)">→</span>') + '</div>';
+  var body = '';
+  if (w.step === 1) {
+    var q = w.q.toLowerCase();
+    var rows = members.filter(function (a) { return !q || (a.name || '').toLowerCase().indexOf(q) >= 0 || a.id.toLowerCase().indexOf(q) >= 0; }).map(function (a) {
+      var on = w.members.indexOf(a.id) >= 0;
+      return '<label style="display:flex;align-items:center;gap:8px;padding:5px 2px;font-size:13px;cursor:pointer"><input type="checkbox" name="gw-member" value="' + esc(a.id) + '"' + (on ? ' checked' : '') + '><span>' + esc(a.name) + '</span><span class="sub" style="margin:0">' + esc(a.id) + '</span></label>';
+    }).join('') || '<div class="sub" style="margin:0">没有可选择的子智能体（先在「子智能体」页创建）</div>';
+    body = stepsBar + '<div class="field"><label>选择成员（多选；口径同 @ 列表）</label><input id="gw-q" placeholder="搜索成员" value="' + esc(w.q) + '"><div style="max-height:260px;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:4px 8px;margin-top:6px">' + rows + '</div><div class="hint" style="margin-top:6px">已选 ' + w.members.length + ' 人。群名留空时显示为成员名拼接。</div></div>';
+  } else if (w.step === 2) {
+    var adminOptions = '<option value="">（无管理员）</option>' + w.members.map(function (id) {
+      return '<option value="' + esc(id) + '"' + (w.admin === id ? ' selected' : '') + '>' + esc(groupAgentName(id)) + '</option>';
+    }).join('');
+    var n = [...w.notice].length;
+    body = stepsBar +
+      '<div class="field"><label>模式（新建群默认 = 管理员主持）</label><select id="gw-mode" style="width:100%"><option value="admin"' + (w.mode !== 'everyone' ? ' selected' : '') + '>管理员主持（普通消息先由管理员 @ 分派）</option><option value="everyone"' + (w.mode === 'everyone' ? ' selected' : '') + '>所有人（成员自由发言）</option></select></div>' +
+      '<div class="field"><label>群公告（<span id="gw-notice-cnt">' + n + '</span>/2000 字，发言前请先读）</label><textarea id="gw-notice" rows="4" style="width:100%;font-size:12px">' + esc(w.notice) + '</textarea></div>' +
+      '<div class="field"><label>管理员（∈成员，可无）</label><select id="gw-admin" style="width:100%">' + adminOptions + '</select></div>';
+  } else {
+    var projRows = projects.map(function (p) {
+      var on = w.projectIds.indexOf(p.id) >= 0;
+      return '<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:13px"><input type="checkbox" name="gw-proj" value="' + esc(p.id) + '"' + (on ? ' checked' : '') + '><span>' + esc(p.name) + '</span></label>';
+    }).join('') || '<div class="sub" style="margin:0">暂无可绑定项目</div>';
+    var activeOptions = '<option value="">（未指定）</option>' + w.projectIds.map(function (pid) {
+      return '<option value="' + esc(pid) + '"' + (w.activeProjectId === pid ? ' selected' : '') + '>' + esc(groupAgentName(pid) === pid ? (state.projects.find(function (x) { return x.id === pid; }) || { name: pid }).name : pid) + '</option>';
+    }).join('');
+    var sectionOptions = '<option value="">（未分组）</option>' + groupState.sections.map(function (s) {
+      return '<option value="' + esc(s) + '"' + (w.section === s ? ' selected' : '') + '>' + esc(s) + '</option>';
+    }).join('') + '<option value="__new__">＋ 新分组…</option>';
+    body = stepsBar +
+      '<div class="field"><label>绑定项目（0..N）</label><div style="max-height:150px;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:4px 8px">' + projRows + '</div></div>' +
+      '<div class="field"><label>当前项目（∈ 绑定项目；决定下一轮频道归属）</label><select id="gw-active" style="width:100%">' + activeOptions + '</select></div>' +
+      '<div class="field"><label>首页分组</label><select id="gw-section" style="width:100%">' + sectionOptions + '</select><input id="gw-section-new" placeholder="新分组名" style="display:none;margin-top:6px" value="' + esc(w.sectionNew) + '"></div>';
+  }
+  var actions = [];
+  if (w.step > 1) actions.push({ label: '‹ 上一步', cls: '', act: function () { collectGroupWizard(); w.step--; renderGroupWizard(); } });
+  if (w.step < 3) actions.push({ label: '下一步 ›', cls: 'pri', act: function () { if (!collectGroupWizard()) return; w.step++; renderGroupWizard(); } });
+  if (w.step === 3) actions.push({ label: '🎉 创建群聊', cls: 'pri', act: function () { createGroupFromWizard(); } });
+  actions.push({ label: '取消', cls: '', act: function () { groupWizard = null; closeModal(); } });
+  openModal('👥 发起群聊 · 第 ' + w.step + '/3 步', body, actions);
+  var qEl = document.getElementById('gw-q');
+  if (qEl) qEl.addEventListener('input', function () { w.q = this.value.trim(); w.members = Array.prototype.map.call(document.querySelectorAll('input[name="gw-member"]:checked'), function (x) { return x.value; }).filter(function (id) { return members.some(function (a) { return a.id === id; }); }); renderGroupWizard(); });
+  document.querySelectorAll('input[name="gw-member"]').forEach(function (cb) {
+    cb.addEventListener('change', function () {
+      w.members = Array.prototype.map.call(document.querySelectorAll('input[name="gw-member"]:checked'), function (x) { return x.value; });
+      var hint = document.getElementById('gw-q'); if (hint) { /* 计数在重渲染里刷新 */ }
+      collectGroupWizard();
+      var el = document.getElementById('gw-member-cnt');
+      renderGroupWizard();
+    });
+  });
+  var noticeEl = document.getElementById('gw-notice');
+  if (noticeEl) noticeEl.addEventListener('input', function () {
+    w.notice = this.value;
+    var cnt = document.getElementById('gw-notice-cnt');
+    if (cnt) { cnt.textContent = String([...w.notice].length); cnt.style.color = [...w.notice].length > 2000 ? 'var(--err)' : ''; }
+  });
+  var secSel = document.getElementById('gw-section');
+  var secNew = document.getElementById('gw-section-new');
+  if (secSel && secNew) secSel.addEventListener('change', function () { secNew.style.display = this.value === '__new__' ? '' : 'none'; w.section = this.value === '__new__' ? '' : this.value; });
+  if (secNew) secNew.addEventListener('input', function () { w.sectionNew = this.value; });
+}
+function collectGroupWizard() {
+  var w = groupWizard; if (!w) return false;
+  if (w.step === 1) {
+    w.members = Array.prototype.map.call(document.querySelectorAll('input[name="gw-member"]:checked'), function (x) { return x.value; });
+    if (w.members.length < 2) { toast('请至少选择两位成员', true); return false; }
+    return true;
+  }
+  if (w.step === 2) {
+    var modeEl = document.getElementById('gw-mode'); if (modeEl) w.mode = modeEl.value;
+    var noticeEl = document.getElementById('gw-notice'); if (noticeEl) w.notice = noticeEl.value;
+    var adminEl = document.getElementById('gw-admin'); if (adminEl) w.admin = adminEl.value;
+    if ([...w.notice].length > 2000) { toast('群公告最多 2000 字', true); return false; }
+    if (w.admin && w.members.indexOf(w.admin) < 0) { toast('管理员必须在已选成员内', true); return false; }
+    return true;
+  }
+  var projChecked = Array.prototype.map.call(document.querySelectorAll('input[name="gw-proj"]:checked'), function (x) { return x.value; });
+  if (projChecked.length) w.projectIds = projChecked;
+  var activeEl = document.getElementById('gw-active'); if (activeEl) w.activeProjectId = activeEl.value;
+  var secEl = document.getElementById('gw-section'); if (secEl) w.section = secEl.value === '__new__' ? '' : secEl.value;
+  var secNew = document.getElementById('gw-section-new'); if (secNew) w.sectionNew = secNew.value;
+  if (secEl && secEl.value === '__new__') { w.section = (w.sectionNew || '').trim(); w.sectionIsNew = true; } else { w.sectionIsNew = false; }
+  if (w.activeProjectId && w.projectIds.indexOf(w.activeProjectId) < 0) { toast('当前项目必须在绑定项目内', true); return false; }
+  return true;
+}
+async function createGroupFromWizard() {
+  var w = groupWizard; if (!w) return;
+  if (!collectGroupWizard()) return;
+  // W3-5（契约 §2）：新建分组先 POST /api/group-sections（重名幂等 added:false）再落群
+  if (w.sectionIsNew && w.section) {
+    const sr = await api('/group-sections', { method: 'POST', body: JSON.stringify({ name: w.section }) });
+    if (!sr.ok) { toast(sr.error || '新增分组失败', true); return; }
+  }
+  var body = { name: '', notice: w.notice, mode: w.mode, adminAgentId: w.admin, memberAgentIds: w.members.slice(), projectIds: w.projectIds.slice(), activeProjectId: w.activeProjectId, section: w.section };
+  const r = await api('/groups', { method: 'POST', body: JSON.stringify(body) });
+  if (!r.ok) { toast(r.error || '建群失败', true); return; }
+  groupWizard = null; closeModal();
+  toast('✓ 群已创建：' + groupDisplayName(r.data));
+  await loadGroups();
+  openGroupChat(r.data.id);
 }
 
 boot();

@@ -41,6 +41,7 @@ export interface PermProjectLike {
   connectorIds?: string[]
   /** 默认协作子智能体（引用 SubAgent.id） */
   defaultAgentIds?: string[]
+  legacyAgentAccessIds?: string[]
 }
 
 /** 资源判定所需的最小字段集 */
@@ -259,7 +260,7 @@ function boundToUserProjectAgent(
     ctx?.projects?.some((p) => {
       const binds = Boolean(
         (agent.sharedProjectIds?.length && agent.sharedProjectIds.includes(p.id)) ||
-          p.defaultAgentIds?.includes(agent.id),
+          (p.legacyAgentAccessIds ?? p.defaultAgentIds)?.includes(agent.id),
       )
       if (!binds) return false
       // 绑定成立后，可见性跟随项目可见性：宽容模式项目 → 所有登录用户；隔离模式 → 仅成员/admin

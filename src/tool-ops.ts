@@ -5,7 +5,7 @@
  * 本文件严禁 import 任何 DSH / cordis 包，保证独立部署零依赖 DSH。
  */
 
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 import { DshClient } from './remote-client.js'
 import type { OnenatDirectory } from './onenat.js'
@@ -20,15 +20,27 @@ import type { SshResourceStore } from './ssh-store.js'
 import type { ScheduleRunner } from './scheduler.js'
 import { normalizeRule, nextRun, ruleText } from './scheduler.js'
 import { execOnSshResource, maskSshResource, normalizeSshResource, testSshResource } from './ssh-resources.js'
+import { GroupStore, GroupStoreError, normalizeGroupRoom } from './groups.js'
 import { normalizeDshRef } from './router.js'
 import { dshRefKey, sameDshRef, ProjectWorkspaceConflictError, ProjectWorkspacePathError } from './workspace.js'
-import { canAccessProject, canViewTask, type PermSession } from './perm.js'
+import { canAccessProject, canAccessResource, canUseAgent, canViewTask, type PermSession } from './perm.js'
 import { requireProjectFiles, requireNodeFiles, projectFilePath, workspaceChild, requireWorkspacePath, checkWorkspaceFsPath, writeProjectFile, WorkspaceFileError } from './workspace-files.js'
 import type { Project } from './types.js'
 import type { ExpertRegistry } from './expert-registry.js'
 import { BUILTIN_TEAMS, parseTeamInput } from './expert-teams.js'
 import { projectDefaultAgentIds, projectDefaultAgentIdsFromInput } from './types.js'
 import { createBacklogManageTool } from './backlog-tool.js'
+import { taskPreflight } from './task-preflight.js'
+import { taskReadFields, taskChatTargets, ledgerMessages } from './task-read.js'
+import { toolInputSchema, validateToolArgs } from './tool-contracts.js'
+import { normalizeToolResult, toolFailure } from './tool-errors.js'
+import { ProjectAgents } from './project-agents.js'
+import { queryProjects, compactProject } from './project-query.js'
+import { queryMonitorOverview } from './monitor-query.js'
+
+import { createCapabilitiesTool } from './capabilities.js'
+import { toolActionPolicy, toolAnnotations } from './tool-policy.js'
+import { TOOL_OUTPUT_SCHEMA } from './tool-output.js'
 
 export type ToolParamType = 'string' | 'json'
 
@@ -65,6 +77,8 @@ export interface ToolCallContext {
    * 安全基线（task-51 V7）：AI 令牌禁止读取 SSH 明文凭据、禁止经 SSH 通道任意 exec。
    */
   aiTokenOnly?: boolean
+  /** Server-authenticated observational credential; never sourced from tool arguments. */
+  readOnly?: boolean
   /** Validated console identity, supplied by the server; never accepted from tool arguments. */
   session?: PermSession
 }
@@ -80,7 +94,7 @@ function ctxOf(ctx?: ToolCallContext): ToolCallContext {
 function denyAiTokenSsh(action: string, resourceId: string): string {
   console.warn(`[安全审计] AI 令牌尝试 SSH ${action} 已拒绝（resource=${resourceId || 'unknown'}）`)
   return JSON.stringify({
-    ok: false,
+    ok: false, code: 'PERMISSION_DENIED',
     error: `AI 令牌无权执行 SSH ${action}（安全基线：AI 令牌禁止读取 SSH 明文凭据与远程执行；请在控制台登录后操作）`,
     denied: 'ai-token-ssh-guard',
   })
@@ -117,8 +131,8 @@ function pruneSendDedupe(): void {
   }
 }
 
-function createFingerprint(title: unknown, message: unknown, memberIds: string[], mode: unknown, projectId: string | undefined, nodeKey: string | undefined): string {
-  const material = [String(title ?? '').trim(), String(message ?? '').trim(), [...memberIds].sort().join(','), String(mode ?? ''), projectId || '', nodeKey || ''].join('\u0001')
+function createFingerprint(title: unknown, message: unknown, memberIds: string[], mode: unknown, projectId: string | undefined, nodeKey: string | undefined, chatAgentId?: string, teamId?: string): string {
+  const material = [String(title ?? '').trim(), String(message ?? '').trim(), [...memberIds].sort().join(','), String(mode ?? ''), projectId || '', nodeKey || '', chatAgentId || '', teamId || ''].join('\u0001')
   return createHash('sha1').update(material).digest('hex')
 }
 
@@ -147,9 +161,15 @@ export interface WorkBuddyToolDef {
   name: string
   description: string
   parameters: Record<string, ToolParamDef>
+  /** Shared model-facing contract; execution validates this contract on every channel. */
+  inputSchema?: Record<string, unknown>
+  outputSchema?: Record<string, unknown>
+  annotations?: { readOnlyHint: boolean; destructiveHint: boolean; idempotentHint: boolean; openWorldHint: boolean }
   execute(args: Record<string, any>, ctx?: ToolCallContext): Promise<string>
   /** Optional authorization check before replaying a cached MCP result (not a model-facing parameter). */
   canReplay?(args: Record<string, any>, ctx: ToolCallContext, result: string): boolean
+  /** 声明后：AI 令牌（无登录身份）调用本工具的全部 action 在参数校验之前一律拒绝（先身份后校验，契约 §3） */
+  denyAiToken?: boolean
 }
 
 export interface ToolOpsDeps {
@@ -160,6 +180,8 @@ export interface ToolOpsDeps {
   planner: Orchestrator
   engine: TaskEngine
   sshStore: SshResourceStore
+  /** 协作群存储（group_manage 用）：server.ts 单例装配（裁定 A）注入；未装配时该工具返回错误，不做懒建兜底（防双实例互相覆盖） */
+  groupsStore?: GroupStore
   /** 监控服务（monitor_read 用；未装配时该工具返回错误） */
   monitor?: MonitorService
   /** 调度器（schedule_manage 的 run 手动触发用） */
@@ -168,6 +190,7 @@ export interface ToolOpsDeps {
   expertRegistry?: ExpertRegistry
   /** 控制台地址（回显给调用方，便于人接手查看 UI） */
   consoleUrl: string
+  serverVersion?: string
   /**
    * 签名下载令牌服务（task-54：超大任务详情回传聊天内容下载 URL 用）。
    * 仅需 downloadToken(id, ttlMs) 签发 `exp.sig` 形态的 HMAC 短期令牌；
@@ -189,7 +212,7 @@ function asJson(value: unknown): any {
 }
 
 export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
-  const { store, directory, resolver, composer, planner, engine, sshStore, consoleUrl } = deps
+  const { store, directory, resolver, composer, planner, engine, sshStore, groupsStore, consoleUrl } = deps
   const client = new DshClient()
 
   /**
@@ -219,7 +242,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
         if (action === 'resolve') {
           await directory.refresh(true)
           const ep = directory.resolveMapping(String(args.mappingId || ''))
-          return JSON.stringify({ ok: Boolean(ep), endpoint: ep }, null, 2)
+          return JSON.stringify({ ok: Boolean(ep), ...(ep ? {} : { code: 'NOT_FOUND', field: 'mappingId', error: '资源不存在' }), endpoint: ep }, null, 2)
         }
         await directory.refresh(false)
         const endpoints = action === 'dsh' ? directory.listDshEndpoints() : directory.listEndpoints()
@@ -252,7 +275,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
   const agentManage: WorkBuddyToolDef = {
     name: 'workbuddy_agent_manage',
     description:
-      '管理 WorkBuddy 子智能体（绑定 ONENAT 上 DSH 实体，端口漂移免疫）: list / upsert / delete / ping / preview（资源提示词预览）/ models（远端可用模型）/ presets（远端预设）/ enable / disable',
+      '管理 WorkBuddy 子智能体（绑定 ONENAT 上 DSH 实体，端口漂移免疫）: list / upsert / delete / ping / preview（资源提示词预览）/ models（远端可用模型）/ presets（远端预设）/ enable / disable；projects 查询正式关联与历史参与项目，link_project/unlink_project 幂等关联/解除。',
     parameters: {
       action: { type: 'string', description: '操作: list / upsert / delete / ping / preview / models / presets / enable / disable' },
       agent: {
@@ -260,22 +283,31 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
         description:
           '子智能体配置（upsert 用）: { id?, name, dshRef: {kind:"mapping",mappingId} | {kind:"app",appId} | {kind:"direct",apiBaseUrl}, apiKey?, agentPreset?, provider?, model?, systemPrompt?, workDir?, resources?: [{ref:{kind:"mapping",mappingId}, alias?, credentialMode:"inline|self-fetch|omit", skillMode:"all|none|{names}", note?}] }',
       },
-      agentId: { type: 'string', description: '目标子智能体 ID（delete/ping/preview/models/presets/enable/disable 用）' },
+      agentId: { type: 'string', description: '目标 BOT 稳定 ID（除 list/upsert 外必填）' },
+      projectId: { type: 'string', description: 'link_project/unlink_project 必填项目 ID；需要登录身份及项目管理权。projects 查询已关联与历史实际参与项目，关联不授予访问权。' },
     },
-    async execute(args) {
+    async execute(args, ctx) {
       const action = args.action || 'list'
+      if (['projects', 'link_project', 'unlink_project'].includes(action)) {
+        try {
+          const service = new ProjectAgents(store)
+          const data = action === 'projects' ? service.forAgent(String(args.agentId || ''), ctx)
+            : service.change(String(args.projectId || ''), String(args.agentId || ''), action === 'link_project', ctx)
+          return JSON.stringify({ ok: true, data })
+        } catch (err: any) { return JSON.stringify({ ok: false, status: err.status || 400, code: err.code, error: err.message }) }
+      }
       if (action === 'list') {
         const agents = store.getAgents().map((a) => ({ ...a, apiKey: a.apiKey ? '***' : undefined }))
         return JSON.stringify({ ok: true, agents, consoleUrl }, null, 2)
       }
       if (action === 'upsert') {
         const agent: any = asJson(args.agent)
-        if (!agent?.name) return JSON.stringify({ ok: false, error: '缺少 name' })
+        if (!agent?.name) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: '缺少 name' })
         const dshRef = normalizeDshRef(agent.dshRef || (agent.apiBaseUrl ? { kind: 'direct', apiBaseUrl: agent.apiBaseUrl } : undefined))
-        if ('error' in dshRef) return JSON.stringify({ ok: false, error: dshRef.error })
+        if ('error' in dshRef) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', field: 'dshRef', error: dshRef.error })
         // 工作目录与 HTTP 通道同规则：POSIX / Windows 盘符 / UNC 均可，纯相对路径拒绝
         const workDirIn = String(agent?.workDir ?? '').trim()
-        if (workDirIn && !isNodeAbsolutePath(workDirIn)) return JSON.stringify({ ok: false, error: WORK_DIR_NOT_ABSOLUTE_MSG })
+        if (workDirIn && !isNodeAbsolutePath(workDirIn)) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', field: 'agent.workDir', error: WORK_DIR_NOT_ABSOLUTE_MSG })
         const saved = store.upsertAgent({ ...agent, dshRef })
         return JSON.stringify({ ok: true, message: '子智能体已保存', agent: { ...saved, apiKey: saved.apiKey ? '***' : undefined } }, null, 2)
       }
@@ -285,11 +317,11 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
         return JSON.stringify({ ok: true, deleted: store.deleteAgent(id) })
       }
       if (action === 'enable' || action === 'disable') {
-        if (!agent) return JSON.stringify({ ok: false, error: '子智能体不存在' })
+        if (!agent) return JSON.stringify({ ok: false, code: 'NOT_FOUND', error: '子智能体不存在' })
         store.mutateAgent(id, (a) => { a.enabled = action === 'enable' })
         return JSON.stringify({ ok: true, agentId: id, enabled: action === 'enable' })
       }
-      if (!agent) return JSON.stringify({ ok: false, error: '子智能体不存在' })
+      if (!agent) return JSON.stringify({ ok: false, code: 'NOT_FOUND', error: '子智能体不存在' })
       if (action === 'ping') {
         const { target, ping } = await resolver.resolveWithPing(agent)
         return JSON.stringify({ ok: true, agent: agent.name, ping, resolved: target?.baseUrl }, null, 2)
@@ -301,15 +333,15 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       }
       if (action === 'models' || action === 'presets') {
         const target = await resolver.resolve(agent)
-        if (!target.online) return JSON.stringify({ ok: false, error: target.error || '节点不可达' })
+        if (!target.online) return JSON.stringify({ ok: false, code: 'NODE_OFFLINE', error: target.error || '节点不可达' })
         if (action === 'models') {
           const r = await client.getModels(target)
-          return JSON.stringify({ ok: r.ok, agent: agent.name, models: r.models, defaultModel: r.defaultModel, error: r.error }, null, 2)
+          return JSON.stringify({ ok: r.ok, code: r.code, status: r.status, agent: agent.name, models: r.models, defaultModel: r.defaultModel, error: r.error }, null, 2)
         }
         const r = await client.getPresets(target)
-        return JSON.stringify({ ok: r.ok, agent: agent.name, presets: r.presets, error: r.error }, null, 2)
+        return JSON.stringify({ ok: r.ok, code: r.code, status: r.status, agent: agent.name, presets: r.presets, error: r.error }, null, 2)
       }
-      return JSON.stringify({ ok: false, error: `不支持的 action: ${action}` })
+      return JSON.stringify({ ok: false, code: 'INVALID_PARAM', field: 'action', error: `不支持的 action: ${action}` })
     },
   }
 
@@ -317,7 +349,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
   const taskManage: WorkBuddyToolDef = {
     name: 'workbuddy_task_manage',
     description:
-      '管理 WorkBuddy 任务会话（每任务一个聊天窗口，多轮对话）: list / create（可带首条消息立即发起，**立即回执不等待执行**）/ send（多轮发言）/ wait（查看进度快照；HTTP 通道可同步等结果，MCP 通道不阻塞）/ delete / members / cancel。list 支持 keyword 关键词过滤（匹配任务 ID/标题，任务多时先用它缩小范围）。' +
+      '管理 WorkBuddy 任务会话（每任务一个聊天窗口，多轮对话）: list / preflight（只读预检，不创建/执行；返回角色候选、节点、文件工作区与权限边界）/ create（可带首条消息立即发起，**立即回执不等待执行**）/ send（多轮发言）/ wait（查看进度快照；HTTP 通道可同步等结果，MCP 通道不阻塞）/ delete / members / cancel。list 支持 keyword 关键词过滤（匹配任务 ID/标题，任务多时先用它缩小范围）。' +
       '发起约定：① 先 project_manage list 判断归属，能确定项目就带 projectId 从项目发起（上下文全继承）；' +
       '② 需求有歧义先向用户问清再 create——任务里的子智能体/专家一律无人值守执行，不会反问澄清；' +
       '③ 在 message 里用 @ 派活：@子智能体名（回其绑定节点执行，@ 多个=编排）、@专家名、@专家团名（按团队合同展开成员编排）、@项目名（对项目发起任务：未绑定项目的任务自动绑定该项目，节点/工作区/项目指令全继承）、@资源名（注入连接信息）；用 @ 时 memberAgentIds 可省略。' +
@@ -326,12 +358,14 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       '⚠ create 带 message 会立即开始执行——附件还没上传任务就已开跑，执行者拿不到文件；不要在 message 里写「文件随后上传」，必须先传完再 send；' +
       '重要：创建后不要重复 create 同一任务（重复内容 2 分钟内会被自动去重复用既有任务），要进度请用 wait 或 workbuddy_task_status 轮询',
     parameters: {
-      action: { type: 'string', description: '操作: list / create / send / wait / delete / members / cancel' },
-      taskId: { type: 'string', description: '任务 ID（send/wait/delete/members/cancel 用）' },
+      action: { type: 'string', description: '操作: list / preflight / create / send / wait / delete / members / cancel' },
+      taskId: { type: 'string', description: '任务 ID（send/wait/delete/members/cancel 用；preflight 可传以预检已有任务下一轮）' },
       keyword: { type: 'string', description: 'list 可选，关键词过滤：对任务 ID 与标题做大小写不敏感的包含匹配，只返回命中任务；不传返回全部' },
       title: { type: 'string', description: '任务标题（create 可选）' },
-      memberAgentIds: { type: 'json', description: '成员子智能体 ID 数组（create 可省略：推荐改在 message 里 @子智能体名/@专家团名 指派；members 必填且非空）' },
-      mode: { type: 'string', description: '模式: chat（单成员直通）或 orchestrate（多成员编排），缺省按成员数推断；@ 多个成员或 @专家团时自动编排' },
+      memberAgentIds: { type: 'json', description: '成员 ID 数组，HTTP/MCP 传原生数组或 JSON 字符串，如 ["agent-xxx"]（create/send/preflight 可选；members 必填非空）。非空数组作为本轮显式定向意图，与 @稳定ID 走相同规划规则；members 只修改账本。用 agent_manage list/monitor overview 发现稳定 id' },
+      mode: { type: 'string', description: 'create/preflight 可选 chat 或 orchestrate；chatAgentId 新建硬绑定必须显式 chat。send 仅作为路由断言，不修改模式。未绑定任务沿用既有规划规则' },
+      chatAgentId: { type: 'string', description: 'create 持久绑定 BOT，必须显式 mode:chat；send 仅断言既有绑定，不可给旧任务新增或换绑；preflight 同步检查。成员可省略或仅同一 ID，冲突路由拒绝执行；绑定离线失败，不回退' },
+      teamId: { type: 'string', description: 'create/send/preflight 显式专家团路由 ID；不可与 chatAgentId 硬绑定同时使用' },
       message: { type: 'string', description: '消息内容（create 可选首条消息；send 必填）。派活写法：@子智能体名 / @专家名 / @专家团名 / @项目名 / @资源名（名称须与列表完全一致）；指令要自包含：目标、路径参数、验收标准——执行者拿不到你们的对话上下文' },
       nodeRef: { type: 'json', description: 'create 可选，主会话执行节点：{kind:"mapping",mappingId:"…"}、{kind:"app",appId:"…"} 或 {kind:"direct",apiBaseUrl:"…"}。不传则快照项目默认执行节点，再回退文件归属节点；子智能体使用自身绑定节点' },
       projectId: { type: 'string', description: 'create 可选，归属项目 ID（workbuddy_project_manage list 取得）。发起前先判项目归属：能定项目必带此参——项目任务继承文件归属工作区/指令/默认协作成员及默认执行节点；nodeRef 可覆盖执行节点，创建时快照' },
@@ -350,6 +384,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
             id: t.id,
             title: t.title,
             mode: t.mode,
+            chatAgentId: t.chatAgentId,
             status: t.status,
             running: engine.isRunning(t.id),
             members: t.memberAgentIds,
@@ -358,21 +393,59 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
           }))
         return JSON.stringify({ ok: true, ...(keyword ? { keyword: args.keyword, matched: tasks.length } : {}), tasks, consoleUrl }, null, 2)
       }
+      // Validate dispatch intent before create/dedup/send can mutate state or deliver messages.
+      let checkedMembers: string[] | undefined
+      let mentions: Awaited<ReturnType<TaskEngine['extractMentions']>> | undefined
+      if (['create', 'send', 'preflight', 'members'].includes(action)) {
+        if (args.memberAgentIds !== undefined) {
+          const ids = asJson(args.memberAgentIds)
+          if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string' || !id.trim())) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: 'memberAgentIds 必须是非空字符串 ID 数组（允许 create/preflight 显式空数组）' })
+          checkedMembers = [...new Set(ids.map(id => id.trim()))]
+          const missing = checkedMembers.filter(id => !store.getAgent(id))
+          if (missing.length) return JSON.stringify({ ok: false, code: 'AGENT_NOT_FOUND', error: '成员 ID 不存在', memberAgentIds: missing })
+        }
+        if (args.mode !== undefined && !['chat', 'orchestrate'].includes(args.mode)) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: 'mode 必须是 chat 或 orchestrate' })
+        const task = args.taskId ? store.getTask(String(args.taskId)) : undefined
+        if ((action === 'send' || action === 'preflight' && args.taskId) && (!task || ctx.session && !canViewTask(ctx.session, task, { projects: store.getProjects() }))) return JSON.stringify({ ok: false, code: 'TASK_NOT_FOUND', error: '任务不存在' })
+        if (!task && args.chatAgentId) {
+          const agent = store.getAgent(String(args.chatAgentId))
+          if (!agent || !canUseAgent(ctx.session, agent, { projects: store.getProjects() })) return JSON.stringify({ ok: false, code: 'AGENT_NOT_FOUND', error: 'BOT 不存在或无权使用' })
+        }
+        try {
+          if (String(args.message || '').trim() || action === 'preflight') mentions = await engine.extractMentions(String(args.message || ''))
+          if (action !== 'members') engine.validateChatBinding({ chatAgentId: args.chatAgentId, mode: args.mode, memberAgentIds: checkedMembers, teamId: args.teamId }, mentions, task)
+          if (!task && args.chatAgentId && mentions?.mentionedProjectId && mentions.mentionedProjectId !== args.projectId) throw Object.assign(new Error('直聊请通过 projectId 明确项目上下文'), { code: 'INVALID_PARAM' })
+        } catch (err: any) {
+          // Whitelist fields: a candidate must never leak agent keys or resource credentials.
+          return JSON.stringify({ ok: false, code: typeof err?.code === 'string' ? err.code : 'MENTION_ERROR', error: err?.message || '提及解析失败', candidates: Array.isArray(err?.candidates) ? err.candidates.map((c: any) => ({ id: c.id, name: c.name, type: c.type })) : undefined, nextAction: '用 message 中的 @稳定ID 指派；成员 ID 可从 agent_manage list / monitor overview 查询' })
+        }
+        const ids = [...new Set([args.projectId, task?.projectId, mentions?.mentionedProjectId].filter(Boolean).map(String))]
+        for (const id of ids) {
+          const project = store.getProject(id)
+          if (!project || ctx.session && !canAccessProject(ctx.session, project, 'view')) return JSON.stringify({ ok: false, code: 'PROJECT_NOT_FOUND', error: '项目不存在或无权访问' })
+        }
+      }
+      if (action === 'preflight') {
+        const nodeRef = args.nodeRef == null ? undefined : normalizeDshRef(asJson(args.nodeRef))
+        if (nodeRef && 'error' in nodeRef) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: nodeRef.error })
+        const overview = deps.monitor?.peekOverview()
+        return JSON.stringify(await taskPreflight(store, engine, { task: args.taskId ? store.getTask(String(args.taskId)) : undefined, projectId: args.projectId, nodeRef, memberAgentIds: checkedMembers, mode: args.mode, chatAgentId: args.chatAgentId, teamId: args.teamId }, mentions!, overview), null, 2)
+      }
       if (action === 'create') {
-        const memberIds: string[] = asJson(args.memberAgentIds)
+        const memberIds = checkedMembers
         const explicit = Array.isArray(memberIds) ? memberIds.filter(Boolean) : []
         const projectId = args.projectId ? String(args.projectId) : undefined
         // 归属项目校验（提前失败，避免建出无节点上下文的任务）
         const project = projectId ? store.getProject(projectId) : undefined
         if (projectId && !project) {
-          return JSON.stringify({ ok: false, error: `项目不存在: ${projectId}（用 workbuddy_project_manage {action:"list"} 查看可用项目）` }, null, 2)
+          return JSON.stringify({ ok: false, code: 'NOT_FOUND', field: 'projectId', error: `项目不存在: ${projectId}（用 workbuddy_project_manage {action:"list"} 查看可用项目）` }, null, 2)
         }
         const nodeRef = args.nodeRef == null ? undefined : normalizeDshRef(asJson(args.nodeRef))
-        if (nodeRef && 'error' in nodeRef) return JSON.stringify({ ok: false, error: nodeRef.error })
+        if (nodeRef && 'error' in nodeRef) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', field: 'nodeRef', error: nodeRef.error })
         const executionRef = nodeRef || project?.defaultExecutionNodeRef || project?.dshRef
 
         // ① 业务级幂等：同内容重复到达（平台重投/整轮重跑、AI 误重发）→ 复用既有任务，不再建第二个
-        const fp = createFingerprint(args.title, args.message, explicit, args.mode, projectId, dshRefKey(executionRef))
+        const fp = createFingerprint(args.title, args.message, explicit, args.mode, projectId, dshRefKey(executionRef), args.chatAgentId, args.teamId)
         const hit = createDedupe.get(fp)
         if (hit) {
           const existing = store.getTask(hit.taskId)
@@ -403,6 +476,8 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
           if (sentKey) {
             const now = Date.now()
             const fuzzy = store.getTasks().find((t) => {
+              if (t.chatAgentId !== args.chatAgentId || t.teamId !== args.teamId || args.mode !== undefined && t.mode !== args.mode) return false
+              if (explicit.length && [...t.memberAgentIds].sort().join(',') !== [...explicit].sort().join(',')) return false
               if (now - t.createdAt > CREATE_FUZZY_WINDOW_MS || t.projectId !== projectId) return false
               const existingRef = t.nodeRef || (t.projectId ? store.getProject(t.projectId)?.dshRef : undefined)
               if (executionRef || existingRef) {
@@ -435,7 +510,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
         const creatorAgentId = args.creatorAgentId ? String(args.creatorAgentId).trim() : ''
         const creatorAgent = creatorAgentId ? store.getAgent(creatorAgentId) : undefined
         if (creatorAgentId && !creatorAgent) {
-          return JSON.stringify({ ok: false, error: `创建者子智能体不存在: ${creatorAgentId}（用 workbuddy_agent_manage {action:"list"} 查看可用 ID）` }, null, 2)
+          return JSON.stringify({ ok: false, code: 'NOT_FOUND', field: 'creatorAgentId', error: `创建者子智能体不存在: ${creatorAgentId}（用 workbuddy_agent_manage {action:"list"} 查看可用 ID）` }, null, 2)
         }
         const inheritedSkills = [...new Set(creatorAgent?.skills || [])]
         const task = await engine.createTask({
@@ -444,6 +519,8 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
           // 显式空数组保留「确实不要成员」的意图，不被默认成员覆盖
           ...(Array.isArray(memberIds) ? { memberAgentIds: explicit } : {}),
           mode: args.mode,
+          chatAgentId: args.chatAgentId,
+          teamId: args.teamId,
           message: args.message,
           creator: 'tool',
           ...(projectId ? { projectId } : {}),
@@ -459,6 +536,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
           taskId: task.id,
           title: task.title,
           mode: task.mode,
+          chatAgentId: task.chatAgentId,
           status: task.status,
           running: engine.isRunning(task.id),
           members: task.memberAgentIds,
@@ -477,10 +555,10 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       }
       const taskId = String(args.taskId || '')
       if (action === 'send') {
-        if (!args.message) return JSON.stringify({ ok: false, error: '缺少 message' })
+        if (!args.message) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: '缺少 message' })
         const text = String(args.message)
         // 同任务 + 同正文的重复投递（平台整轮重跑）直接忽略，避免重复派发同一句话
-        const fp = sha1(`${taskId}\u0001${text}`)
+        const fp = sha1(JSON.stringify([taskId, text, checkedMembers?.slice().sort(), args.chatAgentId, args.mode, args.teamId]))
         const lastAt = sendDedupe.get(fp)
         if (lastAt && Date.now() - lastAt <= SEND_DEDUP_WINDOW_MS) {
           return JSON.stringify({
@@ -492,7 +570,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
         }
         sendDedupe.set(fp, Date.now())
         pruneSendDedupe()
-        const out = await engine.sendUserMessage(taskId, text)
+        const out = await engine.sendUserMessage(taskId, text, { memberAgentIds: checkedMembers, chatAgentId: args.chatAgentId, mode: args.mode, teamId: args.teamId })
         return JSON.stringify({
           ...out,
           accepted: out.ok,
@@ -502,7 +580,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       }
       if (action === 'wait') {
         const task0 = store.getTask(taskId)
-        if (!task0) return JSON.stringify({ ok: false, error: '任务不存在' })
+        if (!task0) return JSON.stringify({ ok: false, code: 'NOT_FOUND', error: '任务不存在' })
         const requested = Number(args.timeoutMs)
         // 通道能力决定阻塞预算：MCP 默认 0（立即快照），显式给 timeoutMs 也最多到通道上限
         const budget = ctx.channel === 'mcp'
@@ -514,19 +592,12 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
         }
         const task = store.getTask(taskId)!
         const stillRunning = engine.isRunning(taskId)
-        const agentTurns = task.turns.filter((t) => t.role === 'agent')
-        const lastReply = agentTurns.length ? preview(agentTurns[agentTurns.length - 1].text, 800) : ''
         return JSON.stringify({
           ok: true,
           timedOut: stillRunning && budget > 0,
-          taskId,
-          title: task.title,
-          status: task.status,
-          running: stillRunning,
           turns: task.turns.length,
           waitedMs: budget - Math.max(deadline - Date.now(), 0),
-          summary: preview(task.summary, 800),
-          lastReply,
+          ...taskReadFields(task, stillRunning),
           nextAction: stillRunning
             ? `任务仍在执行：不要长阻塞、不要重复 create，用 workbuddy_task_status {taskId:"${taskId}"} 轮询进度`
             : '任务已结束，可读取 summary/lastReply 或 workbuddy_task_evaluate 取汇总',
@@ -539,14 +610,14 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
         return JSON.stringify({ ok: true })
       }
       if (action === 'members') {
-        const memberIds = asJson(args.memberAgentIds)
+        const memberIds = checkedMembers
         if (!Array.isArray(memberIds) || !memberIds.some((id) => Boolean(id))) {
           return JSON.stringify({ ok: false, error: 'members 需要 memberAgentIds（至少一个非空成员子智能体 ID）：HTTP 传数组或 JSON 字符串，CLI 用 --agents <id,id>' })
         }
         const t = engine.updateMembers(taskId, memberIds)
-        return JSON.stringify({ ok: Boolean(t), task: t }, null, 2)
+        return JSON.stringify({ ok: Boolean(t), ...(t ? {} : { code: 'NOT_FOUND', error: '任务不存在' }), task: t }, null, 2)
       }
-      return JSON.stringify({ ok: false, error: `不支持的 action: ${action}` })
+      return JSON.stringify({ ok: false, code: 'INVALID_PARAM', field: 'action', error: `不支持的 action: ${action}` })
     },
   }
 
@@ -573,15 +644,14 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
         }, null, 2)
       }
       const task = store.getTask(String(args.taskId))
-      if (!task) return JSON.stringify({ ok: false, error: '任务不存在' })
+      if (!task) return JSON.stringify({ ok: false, code: 'NOT_FOUND', error: '任务不存在' })
       if (String(args.detail || 'summary') === 'full') {
         // task-54：超大任务不直回全文——先量化字节，>32KB 时降级为「摘要 + 聊天内容下载 URL」
-        const fullJson = JSON.stringify({ ok: true, running: engine.isRunning(task.id), task })
+        const fullJson = JSON.stringify({ ok: true, ...taskReadFields(task, engine.isRunning(task.id)), task })
         const bytes = Buffer.byteLength(fullJson)
         if (bytes > TASK_FULL_OVERSIZE_BYTES && deps.downloadTokens) {
           const token = deps.downloadTokens.downloadToken(`chat-export:${task.id}`, CHAT_EXPORT_TOKEN_TTL_MS)
           const base = (ctxOf(rawCtx).requestBase || consoleUrl).replace(/\/+$/, '')
-          const agentTurns = task.turns.filter((t) => t.role === 'agent')
           const userTurns = task.turns.filter((t) => t.role === 'user')
           engine.logTask(task.id, 'info', `task_status full 回包 ${(bytes / 1024).toFixed(0)}KB 超 ${TASK_FULL_OVERSIZE_BYTES / 1024}KB 阈值，已降级为下载 URL（10 分钟内有效）`)
           return JSON.stringify({
@@ -589,18 +659,12 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
             oversized: true,
             bytes,
             thresholdBytes: TASK_FULL_OVERSIZE_BYTES,
-            running: engine.isRunning(task.id),
-            taskId: task.id,
-            title: task.title,
             mode: task.mode,
-            status: task.status,
             members: task.memberAgentIds,
             turns: task.turns.length,
             createdAt: task.createdAt,
             updatedAt: task.updatedAt,
-            summary: preview(task.summary, 800),
             lastUserMessage: preview(userTurns[userTurns.length - 1]?.text, 200),
-            lastReply: preview(agentTurns[agentTurns.length - 1]?.text, 600),
             plan: task.plan
               ? {
                   strategy: task.plan.strategy,
@@ -608,34 +672,25 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
                   subtasks: (task.plan.subtasks || []).map((s) => ({ id: s.id, agentId: s.agentId, title: preview(s.title, 40), status: s.status })),
                 }
               : undefined,
+            ...taskReadFields(task, engine.isRunning(task.id)),
+            clipped: true,
             chatDownloadUrl: `${base}/api/tasks/${encodeURIComponent(task.id)}/chat-export?token=${encodeURIComponent(token)}&format=json`,
             chatDownloadUrlMarkdown: `${base}/api/tasks/${encodeURIComponent(task.id)}/chat-export?token=${encodeURIComponent(token)}&format=markdown`,
             downloadTokenTtlMs: CHAT_EXPORT_TOKEN_TTL_MS,
             hint: `任务完整内容 ${(bytes / 1024).toFixed(0)}KB 超过单帧安全阈值，已降级：GET chatDownloadUrl（无需额外鉴权头，token 10 分钟内有效，过期重调本接口取新 URL）即可下载完整任务聊天内容（format=json 或 markdown）`,
           }, null, 2)
         }
-        return JSON.stringify({ ok: true, running: engine.isRunning(task.id), task }, null, 2)
+        return JSON.stringify({ ok: true, ...taskReadFields(task, engine.isRunning(task.id)), task }, null, 2)
       }
-      const agentTurns = task.turns.filter((t) => t.role === 'agent')
       const userTurns = task.turns.filter((t) => t.role === 'user')
       return JSON.stringify({
         ok: true,
-        running: engine.isRunning(task.id),
-        taskId: task.id,
-        title: task.title,
         mode: task.mode,
-        status: task.status,
         members: task.memberAgentIds,
         turns: task.turns.length,
         createdAt: task.createdAt,
         updatedAt: task.updatedAt,
-        // 最近一轮实际由谁处理：member = 任务指定成员；main = 主智能体（改派）。让调用方看清「先回执 A、实际 B」的情况
-        route: task.lastRoute
-          ? { kind: task.lastRoute.kind, agentId: task.lastRoute.agentId, agentName: task.lastRoute.agentName, source: task.lastRoute.source }
-          : undefined,
         lastUserMessage: preview(userTurns[userTurns.length - 1]?.text, 200),
-        lastReply: preview(agentTurns[agentTurns.length - 1]?.text, 600),
-        summary: preview(task.summary, 800),
         plan: task.plan
           ? {
               strategy: task.plan.strategy,
@@ -649,6 +704,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
               })),
             }
           : undefined,
+        ...taskReadFields(task, engine.isRunning(task.id)),
         hint: '需要完整轮次/工具日志请传 detail:"full"（回包很大）或用控制台',
       }, null, 2)
     },
@@ -658,11 +714,11 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
   const taskChat: WorkBuddyToolDef = {
     name: 'workbuddy_task_chat',
     description:
-      '查看 WorkBuddy 任务中某个子任务（或成员会话）在远端 DSH 的聊天记录（默认最近 20 条 + 单条截断，可 maxMessages/maxTextChars 调整）；' +
+      '读取任务聊天；默认主会话，多成员无主会话时返回 targets 供选择。source 区分 remote_history 与 platform_ledger；远端为空或不可达但平台有回复时带 fallback 解释。默认最近 20 条并标记 clipped；' +
       '带 followupMessage 时向远端会话追问：HTTP 通道同步等回复，MCP 通道立即回执、用下一次不带 followupMessage 的调用取结果',
     parameters: {
       taskId: { type: 'string', description: '任务 ID' },
-      subtaskId: { type: 'string', description: '子任务 ID（编排任务的子任务）或成员 agentId（chat 模式）' },
+      subtaskId: { type: 'string', description: '可选：子任务 ID 或成员 agentId；省略优先主会话，多个成员无主会话时返回 targets；__node__ 仍可显式指定主会话' },
       followupMessage: { type: 'string', description: '可选的追问消息；MCP 通道为异步投递（立即回执），HTTP 通道同步等待回复' },
       maxMessages: { type: 'string', description: '最多返回最近多少条消息（默认 20，上限 200）' },
       maxTextChars: { type: 'string', description: '单条消息正文截断字数（默认 2000，上限 20000；full=true 时不截断）' },
@@ -671,19 +727,31 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
     async execute(args, rawCtx) {
       const ctx = ctxOf(rawCtx)
       const task = store.getTask(String(args.taskId || ''))
-      if (!task || (ctx.session && !canViewTask(ctx.session, task, { projects: store.getProjects() }))) return JSON.stringify({ ok: false, error: '任务不存在' })
-      const subId = String(args.subtaskId || '')
-      if (!subId) return JSON.stringify({ ok: false, error: '缺少 subtaskId（子任务 ID 或成员 agentId）：先 workbuddy_task_status 看子任务/成员列表' })
+      if (!task || (ctx.session && !canViewTask(ctx.session, task, { projects: store.getProjects() }))) return JSON.stringify({ ok: false, code: 'NOT_FOUND', error: '任务不存在' })
+      const common = taskReadFields(task, engine.isRunning(task.id))
+      const targets = taskChatTargets(task)
+      let subId = String(args.subtaskId || '')
+      if (!subId) {
+        // Prefer an actual main binding; multiple member sessions require explicit selection.
+        if (task.sessions.__node__) subId = '__node__'
+        else if (targets.length === 1) subId = targets[0].id
+        else if (!targets.length) subId = '__node__'
+        else return JSON.stringify({ ok: false, ...common, code: 'CHAT_TARGET_REQUIRED', error: '存在多个会话目标，请指定 subtaskId', targets })
+      }
       const sub = task.plan?.subtasks.find((s) => s.id === subId)
       const agentId = sub?.agentId || subId
       const binding = task.sessions[agentId]
+      const sessionId = sub ? sub.remoteSessionId : binding?.remoteSessionId
       const agent = store.getAgent(agentId)
-      if (!agent && agentId !== '__node__') return JSON.stringify({ ok: false, error: `未找到 ID「${subId}」对应的子任务或成员子智能体：请用 workbuddy_task_status {taskId:"${task.id}", detail:"full"} 查看该任务的子任务 ID / 成员 agentId，再用其作为 subtaskId` })
-      if (!binding?.remoteSessionId) return JSON.stringify({ ok: false, error: '该成员尚未创建远程会话' })
-      const target = await engine.resolveExecTarget(task, agentId)
-      if (!target?.online) return JSON.stringify({ ok: false, error: target?.error || '绑定的会话节点不可达或缺少稳定身份' })
+      if (!agent && agentId !== '__node__' && !sub && !binding) return JSON.stringify({ ok: false, ...common, code: 'CHAT_TARGET_NOT_FOUND', targets, error: `未找到会话目标「${subId}」` })
+      let target: Awaited<ReturnType<TaskEngine['resolveExecTarget']>>
+      let remoteError: string | undefined
+      if (sessionId) {
+        try { target = await engine.resolveExecTarget(task, agentId) } catch (err: any) { remoteError = String(err?.message || err) }
+      }
+      if (args.followupMessage && (!sessionId || !target?.online)) return JSON.stringify({ ok: false, ...common, code: !sessionId ? 'SESSION_EXPIRED' : 'NODE_OFFLINE', error: remoteError || target?.error || '该成员尚未创建远程会话或绑定节点不可达' })
       const client = new DshClient()
-      const stateKey = `${task.id}:${agentId}`
+      const stateKey = `${task.id}:${agentId}:${sessionId || ''}`
       if (args.followupMessage) {
         const msg = String(args.followupMessage)
         // MCP 通道：异步投递，立即回执（绝不阻塞等远端跑完——那正是宿主断链的诱因）
@@ -703,7 +771,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
           followupState.set(stateKey, { at: Date.now(), status: 'running' })
           engine.logTask(task.id, 'info', `追问已投递（异步）→ ${agent?.name || '节点主会话'}：${preview(msg, 80)}`)
           const startedAt = Date.now()
-          void client.prompt(target, binding.remoteSessionId, msg, { timeoutMs: 1_800_000 })
+          void client.prompt(target!, sessionId!, msg, { timeoutMs: 1_800_000 })
             .then((reply) => {
               followupState.set(stateKey, {
                 at: Date.now(),
@@ -728,23 +796,31 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
             nextAction: `稍后用 workbuddy_task_chat {taskId:"${task.id}", subtaskId:"${agentId}"}（不带 followupMessage）取结果`,
           }, null, 2)
         }
-        const reply = await client.prompt(target, binding.remoteSessionId, msg, {
+        const reply = await client.prompt(target!, sessionId!, msg, {
           timeoutMs: clamp(ctx.maxBlockMs || 120_000, 5_000, 120_000),
         })
-        return JSON.stringify({ ok: reply.ok, reply: preview(reply.content, 8000), error: reply.error }, null, 2)
+        return JSON.stringify({ ok: reply.ok, code: reply.code, status: reply.status, reply: preview(reply.content, 8000), error: reply.error }, null, 2)
       }
       // 读聊天记录：条数 + 单条字数 + 总字节三重收敛（回包过大是 MCP 会话被打断的头号原因）
       const full = String(args.full || '') === 'true'
       const maxMessages = full ? 200 : clamp(Number(args.maxMessages) || 20, 1, 200)
       const maxTextChars = full ? 0 : clamp(Number(args.maxTextChars) || 2_000, 200, 20_000)
-      const hist = await client.getHistory(target, binding.remoteSessionId, maxMessages)
-      if (!hist.ok) return JSON.stringify({ ok: false, error: hist.error })
-      const all = hist.messages || []
+      const hist = sessionId && target?.online
+        ? await client.getHistory(target, sessionId, maxMessages).catch((err: any) => ({ ok: false, error: String(err?.message || err), messages: [] }))
+        : { ok: false, error: remoteError || target?.error || '绑定的会话节点不可达或尚无远端会话', messages: [] }
+      const remote = hist.messages || []
+      const ledger = ledgerMessages(task, agentId, sub?.id)
+      const fallback = !hist.ok || !remote.length
+        ? { reason: !sessionId ? 'remote_session_missing' : !hist.ok ? 'remote_history_unavailable' : 'remote_history_empty', error: hist.ok ? undefined : hist.error, explanation: '远端历史不可用或为空；平台账本独立记录已收到的回复，不据此判断消息丢失。' }
+        : undefined
+      const source = fallback && ledger.length ? 'platform_ledger' : 'remote_history'
+      if (!hist.ok && !ledger.length) return JSON.stringify({ ok: false, ...common, agentId, targets, source: 'none', code: !sessionId ? 'SESSION_EXPIRED' : !target?.online ? 'NODE_OFFLINE' : ('code' in hist && hist.code) || 'REMOTE_HISTORY_UNAVAILABLE', error: hist.error, fallback, messages: [] })
+      const all = source === 'platform_ledger' ? ledger : remote
       const pick = full ? all : all.slice(-maxMessages)
       const messages: any[] = []
       let bytes = 0
       let clipped = all.length > pick.length
-      for (const m of pick) {
+      for (const m of [...pick].reverse()) {
         let item: any = m
         if (!full) {
           item = { ...m }
@@ -754,24 +830,42 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
             clipped = true
           }
         }
-        const size = Buffer.byteLength(JSON.stringify(item))
-        // 总字节闸门：超过 32KB 就从最旧的开始丢
+        let size = Buffer.byteLength(JSON.stringify(item))
+        // Keep the newest reply even when multi-byte text alone exceeds the budget.
+        if (!full && size > 32 * 1024 && !messages.length && typeof item.content === 'string') {
+          item = { ...item }
+          let lo = 0, hi = item.content.length
+          const text = item.content
+          while (lo < hi) {
+            const mid = Math.ceil((lo + hi) / 2)
+            if (Buffer.byteLength(JSON.stringify({ ...item, content: `${text.slice(0, mid)}…（字节预算截断）` })) <= 32 * 1024) lo = mid
+            else hi = mid - 1
+          }
+          item.content = `${text.slice(0, lo)}…（字节预算截断）`
+          size = Buffer.byteLength(JSON.stringify(item))
+          clipped = true
+        }
         if (!full && bytes + size > 32 * 1024) {
           clipped = true
           break
         }
         bytes += size
-        messages.push(item)
+        messages.unshift(item)
       }
       const followup = followupState.get(stateKey)
       return JSON.stringify({
         ok: true,
-        taskId: task.id,
+        ...common,
         agentId,
-        sessionId: binding.remoteSessionId,
+        source,
+        targets,
+        fallback,
+        emptyReason: !all.length ? '远端会话没有消息，平台也没有该目标的回复记录' : undefined,
+        sessionId,
+        remoteHistory: { ok: hist.ok, returned: remote.length, ...('totalMessages' in hist ? { totalMessages: hist.totalMessages } : {}), ...('totalEvents' in hist ? { totalEvents: hist.totalEvents } : {}), ...('hasMore' in hist ? { hasMore: hist.hasMore } : {}) },
         returned: messages.length,
         fetched: all.length,
-        clipped,
+        clipped: clipped || common.clipped || Boolean('hasMore' in hist && hist.hasMore),
         followup: followup ? followup : undefined,
         messages,
         hint: clipped ? '内容已裁剪；需要更多请调大 maxMessages/maxTextChars，或传 full:"true"（回包很大）' : undefined,
@@ -786,7 +880,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
     parameters: { taskId: { type: 'string', description: '任务 ID' } },
     async execute(args) {
       const task = store.getTask(String(args.taskId || ''))
-      if (!task?.plan) return JSON.stringify({ ok: false, error: '任务不存在或无编排计划' })
+      if (!task?.plan) return JSON.stringify({ ok: false, code: 'NOT_FOUND', error: '任务不存在或无编排计划' })
       const summary = task.summary
       return JSON.stringify({
         ok: true,
@@ -825,13 +919,18 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       }
       const key = String(args.resourceId || '')
       const r = sshStore.get(key) || sshStore.list().find((x) => x.name === key)
-      if (!r) return JSON.stringify({ ok: false, error: 'SSH 资源不存在' })
+      if (!r) return JSON.stringify({ ok: false, code: 'NOT_FOUND', error: 'SSH 资源不存在' })
       // 安全基线（task-51 V7）：AI 令牌是低信任调用方——
       //  ① get 返回明文凭据 → 拒绝；② exec 可在远端主机任意执行命令 → 拒绝。
       // 两者均需控制台登录会话（人工二次授权）方可操作。
       if (ctxOf(rawCtx).aiTokenOnly) {
         if (action === 'get') return denyAiTokenSsh('get(明文凭据读取)', r.id)
         if (action === 'exec') return denyAiTokenSsh('exec(远程命令执行)', r.id)
+      }
+      const session = ctxOf(rawCtx).session
+      const resourceAction = action === 'get' ? 'reveal' : action === 'delete' ? 'manage' : 'use'
+      if (session && !canAccessResource(session, r, resourceAction, { projects: store.getProjects() })) {
+        return JSON.stringify({ ok: false, code: 'PERMISSION_DENIED', error: '无权访问该 SSH 资源' })
       }
       if (action === 'get') return JSON.stringify({ ok: true, resource: r }, null, 2)
       if (action === 'delete') return JSON.stringify({ ok: true, deleted: sshStore.delete(r.id) })
@@ -841,20 +940,126 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
         return JSON.stringify({ ok: true, result }, null, 2)
       }
       if (action === 'exec') {
-        if (!args.command) return JSON.stringify({ ok: false, error: '缺少 command' })
+        if (!args.command) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: '缺少 command' })
         // 通道能力决定单次阻塞上限：MCP 宿主等不住长命令（长阻塞 → 断链 → 平台重发整轮请求）
         const ctx = ctxOf(rawCtx)
         const cap = ctx.channel === 'mcp' ? clamp(ctx.maxBlockMs, 1_000, 20_000) : 60_000
         const timeoutMs = clamp(Number(args.timeoutMs) || (ctx.channel === 'mcp' ? 10_000 : 30_000), 1_000, cap)
         const result = await execOnSshResource(r, String(args.command), timeoutMs)
-        const timedOut = !result.ok && /超时/.test(String(result.error || ''))
         return JSON.stringify({
-          ok: true,
+          ok: result.ok,
+          ...(result.ok ? {} : { code: 'EXECUTION_FAILED', error: result.error, retryable: false }),
           result: { ...result, timeoutMs },
-          hint: timedOut ? '命令未在通道预算内结束：请改成后台执行（nohup … &）后分段查询，或用控制台执行' : undefined,
         }, null, 2)
       }
-      return JSON.stringify({ ok: false, error: `不支持的 action: ${action}` })
+      return JSON.stringify({ ok: false, code: 'INVALID_PARAM', field: 'action', error: `不支持的 action: ${action}` })
+    },
+  }
+
+  // 7.5 协作群（契约 docs/groups-web-sync-plan-2026-11-11.md §3；与 REST /api/groups 共用 server.ts 注入的同一 GroupStore 单例，禁止旁路直改 JSON）
+  const groupManage: WorkBuddyToolDef = {
+    name: 'workbuddy_group_manage',
+    description:
+      '管理协作群（每用户隔离，AI 令牌不可访问）: list/get/create/update/delete 群 CRUD、sections/add_section/rename_section/remove_section 首页分组、rounds/add_round 历史讨论轮、mark_read 已读落位；幂等语义与 REST /api/groups 一致（upsert 保位覆盖/追加末尾、delete 幂等清轮表、分组重名幂等、重命名冲突 SECTION_CONFLICT、已读单调）',
+    denyAiToken: true,
+    parameters: {
+      action: { type: 'string', description: '操作: list / get / create / update / delete / sections / add_section / rename_section / remove_section / rounds / add_round / mark_read' },
+      roomId: { type: 'string', description: '群 ID（get/update/delete/rounds/add_round/mark_read 用）' },
+      room: { type: 'json', description: '群对象：create 传完整 GroupRoom（缺 id 服务端生成 UUID）；update 传部分字段（缺省字段保留原值；id/createdBy/createdAt 服务端权威会被覆盖）' },
+      name: { type: 'string', description: '分组名（add_section/remove_section 用）' },
+      old: { type: 'string', description: '原分组名（rename_section 用）' },
+      to: { type: 'string', description: '新分组名（rename_section 用；新名已存在或旧名不存在 → SECTION_CONFLICT）' },
+      taskId: { type: 'string', description: '历史轮 orchestrate 任务 ID（add_round 用；同 taskId 去重幂等）' },
+      lastReadSeq: { type: 'string', description: '已读位点（mark_read 用；非负整数，取 max 单调不回退）' },
+      compact: { type: 'string', description: 'list 传 true 返回精简视图（省 notice/permissionOverride 等长字段）' },
+    },
+    async execute(args, rawCtx) {
+      // 双保险（外层 wrapper 已按 denyAiToken 先于参数校验拒绝；此处防绕过直达 execute）
+      const ctx = ctxOf(rawCtx)
+      if (ctx.aiTokenOnly) {
+        console.warn(`[安全审计] AI 令牌尝试群操作 ${args.action || 'list'} 已拒绝（ai-token-group-guard）`)
+        return JSON.stringify({ ok: false, code: 'AI_TOKEN_DENIED', status: 403, error: 'AI 令牌无权访问协作群（群数据按登录用户隔离，无共享桶；请在控制台登录后操作）', denied: 'ai-token-group-guard' })
+      }
+      if (!groupsStore) return JSON.stringify(normalizeToolResult({ ok: false, code: 'INTERNAL_ERROR', status: 500, error: 'GroupStore 未装配（server.ts 单例注入缺失）' }, { tool: 'workbuddy_group_manage', args }))
+      const uid = ctx.session?.userId
+      if (!uid) return JSON.stringify(normalizeToolResult({ ok: false, code: 'UNAUTHORIZED', status: 401, error: '群功能需要控制台登录身份（群数据按用户隔离，无共享桶）', nextAction: '在控制台登录后重试' }, { tool: 'workbuddy_group_manage', args }))
+      // PermSession 类型只含 userId/role；HTTP 通道注入的会话运行时携带 username（登录用户名），工具通道缺失时回退 userId
+      const username = (ctx.session as { username?: string } | undefined)?.username || uid
+      const action = String(args.action || 'list')
+      const notFound = () => JSON.stringify(normalizeToolResult({ ok: false, code: 'NOT_FOUND', status: 404, error: '群不存在', nextAction: '用 list 查看当前登录用户可见的群（每用户隔离，跨用户不可见）' }, { tool: 'workbuddy_group_manage', args }), null, 2)
+      try {
+        switch (action) {
+          case 'list': {
+            const rooms = groupsStore.list(uid)
+            const compact = /^true$/i.test(String(args.compact || '').trim())
+            const data = compact
+              ? rooms.map((r) => ({ id: r.id, name: r.name, section: r.section, archived: r.archived, unreadCount: r.unreadCount, lastReadSeq: r.lastReadSeq, memberAgentIds: r.memberAgentIds, channelRef: r.channelRef, activeProjectId: r.activeProjectId }))
+              : rooms
+            return JSON.stringify({ ok: true, rooms: data }, null, 2)
+          }
+          case 'get': {
+            const room = groupsStore.get(uid, String(args.roomId || ''))
+            if (!room) return notFound()
+            return JSON.stringify({ ok: true, room }, null, 2)
+          }
+          case 'create': {
+            const input = asJson(args.room)
+            const bodyId = typeof input?.id === 'string' ? input.id.trim() : ''
+            const existing = bodyId ? groupsStore.get(uid, bodyId) : undefined
+            const room = normalizeGroupRoom(input, undefined, { id: existing?.id ?? (bodyId || randomUUID()), now: Date.now(), createdAt: existing?.createdAt, createdBy: existing?.createdBy ?? username, prevLastReadSeq: existing?.lastReadSeq })
+            return JSON.stringify({ ok: true, room: groupsStore.upsert(uid, room) }, null, 2)
+          }
+          case 'update': {
+            const existing = groupsStore.get(uid, String(args.roomId || ''))
+            if (!existing) return notFound()
+            const room = normalizeGroupRoom(asJson(args.room), existing, { id: existing.id, now: Date.now(), createdAt: existing.createdAt, createdBy: existing.createdBy, prevLastReadSeq: existing.lastReadSeq })
+            return JSON.stringify({ ok: true, room: groupsStore.upsert(uid, room) }, null, 2)
+          }
+          case 'delete':
+            return JSON.stringify({ ok: true, deleted: groupsStore.delete(uid, String(args.roomId || '')) }, null, 2)
+          case 'sections':
+            return JSON.stringify({ ok: true, sections: groupsStore.sections(uid) }, null, 2)
+          case 'add_section':
+            return JSON.stringify({ ok: true, ...groupsStore.addSection(uid, args.name) }, null, 2)
+          case 'rename_section': {
+            const r = groupsStore.renameSection(uid, args.old, args.to)
+            return JSON.stringify({ ok: true, renamed: true, sections: r.sections }, null, 2)
+          }
+          case 'remove_section':
+            return JSON.stringify({ ok: true, ...groupsStore.removeSection(uid, args.name) }, null, 2)
+          case 'rounds': {
+            const roomId = String(args.roomId || '')
+            if (!groupsStore.get(uid, roomId)) return notFound()
+            return JSON.stringify({ ok: true, rounds: groupsStore.rounds(uid, roomId) }, null, 2)
+          }
+          case 'add_round': {
+            const roomId = String(args.roomId || '')
+            if (!groupsStore.get(uid, roomId)) return notFound()
+            return JSON.stringify({ ok: true, ...groupsStore.addRound(uid, roomId, args.taskId) }, null, 2)
+          }
+          case 'mark_read': {
+            const roomId = String(args.roomId || '')
+            if (!groupsStore.get(uid, roomId)) return notFound()
+            const seq = Number(args.lastReadSeq)
+            if (!Number.isSafeInteger(seq) || seq < 0) return JSON.stringify(normalizeToolResult({ ok: false, code: 'INVALID_PARAM', field: 'lastReadSeq', error: 'lastReadSeq 必须是非负整数', nextAction: '先 get 取当前 lastReadSeq，再传不小于它的非负整数（单调不回退）' }, { tool: 'workbuddy_group_manage', args }), null, 2)
+            return JSON.stringify({ ok: true, room: groupsStore.markRead(uid, roomId, seq) }, null, 2)
+          }
+          default:
+            return JSON.stringify({ ok: false, code: 'INVALID_PARAM', field: 'action', error: `不支持的 action: ${action}` })
+        }
+      } catch (err) {
+        const e = err as any
+        const code = e instanceof GroupStoreError ? e.code : 'INTERNAL_ERROR'
+        const status = code === 'SECTION_CONFLICT' ? 409 : code === 'INVALID_PARAM' ? 400 : 500
+        const nextAction = code === 'SECTION_CONFLICT'
+          ? 'rename_section 要求旧分组存在且新分组不存在；先用 sections 查看现有分组'
+          : code === 'STORE_UNHEALTHY'
+            ? '群存储文件损坏处于保护态（拒绝写入保现场）；请联系管理员人工检查数据文件'
+            : code === 'STORE_WRITE_FAILED'
+              ? '落盘失败（磁盘满/权限），请检查存储目录后重试'
+              : code === 'INTERNAL_ERROR' ? '意外异常，请携带操作与参数联系管理员排查' : '修正参数后重试；字段口径见群契约 §1'
+        return JSON.stringify(normalizeToolResult({ ok: false, code, status, error: e?.message || String(err), nextAction }, { tool: 'workbuddy_group_manage', args }), null, 2)
+      }
     },
   }
 
@@ -865,31 +1070,30 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       '读取 WorkBuddy 监控大屏数据（一眼看全局运行态势）: overview（KPI/智能体在线忙闲/任务一句话状态/资源调用/告警）/ events（最近事件流，可增量拉取）/ history（近 N 天小时快照趋势）/ task（单任务当前活动与最近对话摘要）',
     parameters: {
       action: { type: 'string', description: '操作: overview / events / history / task' },
-      limit: { type: 'string', description: 'events 返回条数（默认 50，最大 200）' },
+      projectId: { type: 'string', description: 'overview 限定项目 ID；省略查看全局' },
+      section: { type: 'string', description: 'overview 所需部分，逗号分隔：kpi,agents,nodes,tasks,schedules,sshPool,alerts,events；省略全部' },
+      compact: { type: 'string', description: 'overview 紧凑摘要，默认 true；false 展开所选部分详情' },
+      limit: { type: 'string', description: 'overview 每部分条数默认30；events默认50；整数1–200，裁剪见metadata' },
       since: { type: 'string', description: 'events 只返回该毫秒时间戳之后的事件（增量轮询用）' },
       days: { type: 'string', description: 'history 天数（默认 7，最大 30）' },
       taskId: { type: 'string', description: 'task 操作的目标任务 ID' },
     },
-    async execute(args) {
+    async execute(args, ctx) {
+      if (ctx?.session && ctx.session.role !== 'admin') return JSON.stringify({ ok: false, status: 403, error: '仅平台管理员可查看监控大屏' })
       const monitor = deps.monitor
-      if (!monitor) return JSON.stringify({ ok: false, error: '监控服务未装配' })
+      if (!monitor) return JSON.stringify({ ok: false, code: 'SERVICE_UNAVAILABLE', error: '监控服务未装配' })
       const action = args.action || 'overview'
       if (action === 'overview') {
         const ov = await monitor.getOverview()
-        // MCP 单帧上限 64KB：生产环境全量 overview 可达 100KB+，这里做紧凑投影
-        // （智能体/节点/任务只留关键字段；明细用 task action 或各管理工具精确查询）
-        const compact = {
-          at: (ov as any).at,
-          kpi: (ov as any).kpi,
-          agents: (ov as any).agents?.map((a: any) => ({ name: a.name, online: a.online, status: a.status, model: a.model })) || [],
-          nodes: (ov as any).nodes?.map((n: any) => ({ name: n.name, online: n.online, runningTasks: n.runningTasks })) || [],
-          tasks: ((ov as any).tasks || []).slice(0, 30).map((t: any) => ({ id: t.id, title: t.title, status: t.status, agentName: t.agentName, updatedAt: t.updatedAt })),
-          resources: ((ov as any).resources || []).map((r: any) => ({ name: r.name || r.mappingId, kind: r.kind, online: r.online })),
-          alerts: (ov as any).alerts,
-          consoleUrl,
-          hint: '任务明细用 workbuddy_task_status {taskId}；事件流用 action:"events"；单任务对话摘要用 action:"task"',
+        try {
+          const result = queryMonitorOverview(ov, { ...args, compact: args.compact ?? 'true' }, {
+            projects: store.getProjects().filter(p => !ctx?.session || canAccessProject(ctx.session, p, 'view')),
+            tasks: store.getTasks().filter(t => !ctx?.session || canViewTask(ctx.session, t, { projects: store.getProjects() })),
+          })
+          return JSON.stringify({ ok: true, ...result, consoleUrl })
+        } catch (err: any) {
+          return JSON.stringify({ ok: false, status: err.status || 400, code: 'INVALID_PARAMS', error: err.message })
         }
-        return JSON.stringify(compact, null, 2)
       }
       if (action === 'events') {
         const limit = Math.min(Math.max(Number(args.limit) || 50, 1), 200)
@@ -903,7 +1107,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       }
       if (action === 'task') {
         const task = store.getTask(String(args.taskId || ''))
-        if (!task) return JSON.stringify({ ok: false, error: '任务不存在' })
+        if (!task) return JSON.stringify({ ok: false, code: 'NOT_FOUND', error: '任务不存在' })
         const ov = await monitor.getOverview()
         const view = ov.tasks.find((x) => x.id === task.id)
         const lastTurns = (task.turns || []).slice(-4).map((t) => ({
@@ -915,7 +1119,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
         }))
         return JSON.stringify({ ok: true, view, plan: task.plan, summary: task.summary, lastTurns, consoleUrl }, null, 2)
       }
-      return JSON.stringify({ ok: false, error: `不支持的 action: ${action}` })
+      return JSON.stringify({ ok: false, code: 'INVALID_PARAM', field: 'action', error: `不支持的 action: ${action}` })
     },
   }
 
@@ -946,18 +1150,18 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       }
       if (action === 'upsert') {
         const input = asJson(args.schedule)
-        if (!input?.name || !String(input.name).trim()) return JSON.stringify({ ok: false, error: '缺少 name' })
+        if (!input?.name || !String(input.name).trim()) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: '缺少 name' })
         const agentIds: string[] = Array.isArray(input.agentIds) ? input.agentIds.map(String) : []
-        if (!agentIds.length) return JSON.stringify({ ok: false, error: 'agentIds 至少一个子智能体' })
+        if (!agentIds.length) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: 'agentIds 至少一个子智能体' })
         for (const aid of agentIds) {
-          if (!store.getAgent(aid)) return JSON.stringify({ ok: false, error: `子智能体不存在: ${aid}` })
+          if (!store.getAgent(aid)) return JSON.stringify({ ok: false, code: 'NOT_FOUND', field: 'agentId', error: `子智能体不存在: ${aid}` })
         }
-        if (!String(input.message || '').trim()) return JSON.stringify({ ok: false, error: '缺少 message（固定任务文本）' })
+        if (!String(input.message || '').trim()) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: '缺少 message（固定任务文本）' })
         let rule
         try {
           rule = normalizeRule(input.rule)
         } catch (err: any) {
-          return JSON.stringify({ ok: false, error: err?.message || '规则非法' })
+          return JSON.stringify({ ok: false, code: 'INVALID_PARAM', field: 'schedule.rule', error: err?.message || '规则非法' })
         }
         const existing = input.id ? store.getSchedule(String(input.id)) : undefined
         const enabled = input.enabled === undefined ? (existing?.enabled ?? true) : Boolean(input.enabled)
@@ -975,7 +1179,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       }
       const id = String(args.scheduleId || '')
       const s = store.getSchedule(id)
-      if (!s) return JSON.stringify({ ok: false, error: '定时任务不存在' })
+      if (!s) return JSON.stringify({ ok: false, code: 'NOT_FOUND', error: '定时任务不存在' })
       if (action === 'get') {
         return JSON.stringify({ ok: true, schedule: { ...summarize(s), description: s.description, runs: (s.runs || []).slice(0, 10) } }, null, 2)
       }
@@ -991,11 +1195,11 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
         return JSON.stringify({ ok: true, schedule: summarize(store.getSchedule(id)!) })
       }
       if (action === 'run') {
-        if (!deps.scheduler) return JSON.stringify({ ok: false, error: '调度器未装配' })
+        if (!deps.scheduler) return JSON.stringify({ ok: false, code: 'SERVICE_UNAVAILABLE', error: '调度器未装配' })
         const run = await deps.scheduler.fire(id, true)
         return JSON.stringify({ ok: Boolean(run), run }, null, 2)
       }
-      return JSON.stringify({ ok: false, error: `不支持的 action: ${action}` })
+      return JSON.stringify({ ok: false, code: 'INVALID_PARAM', field: 'action', error: `不支持的 action: ${action}` })
     },
   }
 
@@ -1019,9 +1223,9 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       if (action === 'set') {
         const hasAgent = typeof args.agentId === 'string'
         const hasModel = typeof args.model === 'string'
-        if (!hasAgent && !hasModel) return JSON.stringify({ ok: false, error: '至少提供 agentId 或 model（空串=恢复默认）' })
+        if (!hasAgent && !hasModel) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: '至少提供 agentId 或 model（空串=恢复默认）' })
         const agentId = hasAgent ? (String(args.agentId).trim() || undefined) : undefined
-        if (agentId && !store.getAgent(agentId)) return JSON.stringify({ ok: false, error: `子智能体不存在: ${agentId}` })
+        if (agentId && !store.getAgent(agentId)) return JSON.stringify({ ok: false, code: 'NOT_FOUND', field: 'agentId', error: `子智能体不存在: ${agentId}` })
         const model = hasModel ? (String(args.model).trim() || undefined) : undefined
         store.updateSettings({ planner: { ...(hasAgent ? { agentId } : {}), ...(hasModel ? { model } : {}) } } as any)
         return JSON.stringify({ ok: true, planner: store.getSettings().planner, message: '主调度配置已更新' })
@@ -1045,7 +1249,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
           modelError,
         }, null, 2)
       }
-      return JSON.stringify({ ok: false, error: `不支持的 action: ${action}` })
+      return JSON.stringify({ ok: false, code: 'INVALID_PARAM', field: 'action', error: `不支持的 action: ${action}` })
     },
   }
 
@@ -1130,12 +1334,12 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
         const tid = String(args.taskId || '').trim()
         if (!tid) return JSON.stringify({ ok: false, error: '缺少 taskId（先用 workbuddy_task_manage {action:"create"} 建任务，再往该任务上传）' })
         const task0 = store.getTask(tid)
-        if (!task0) return JSON.stringify({ ok: false, error: `任务不存在: ${tid}（用 workbuddy_task_manage {action:"list"} 查看可用任务）` })
+        if (!task0) return JSON.stringify({ ok: false, code: 'NOT_FOUND', field: 'taskId', error: `任务不存在: ${tid}（用 workbuddy_task_manage {action:"list"} 查看可用任务）` })
         const base = String(ctx.requestBase || consoleUrl).replace(/\/$/, '')
         const enc = encodeURIComponent
         if (action === 'upload_resumable_init') {
           const size = Number(args.size)
-          if (!Number.isFinite(size) || size <= 0) return JSON.stringify({ ok: false, error: '缺少或非法 size（文件字节大小）' })
+          if (!Number.isFinite(size) || size <= 0) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: '缺少或非法 size（文件字节大小）' })
           const out = await engine.directUploadInit(tid, String(args.name || ''), size, args.mimeType ? String(args.mimeType) : undefined)
           if (!out.ok) return JSON.stringify(out, null, 2)
           const t = out.target!
@@ -1207,9 +1411,9 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       // 目标解析优先级：① agent 命中子智能体 → 其节点 + workDir；② taskId（或 agent=__node__）→ 任务/项目文件归属节点 + 项目 workspace
       const agentId = String(args.agent || '').trim()
       const task = String(args.taskId || '').trim() ? store.getTask(String(args.taskId).trim()) : undefined
-      if (args.taskId && String(args.taskId).trim() && !task) return JSON.stringify({ ok: false, error: `任务不存在: ${args.taskId}` })
+      if (args.taskId && String(args.taskId).trim() && !task) return JSON.stringify({ ok: false, code: 'NOT_FOUND', field: 'taskId', error: `任务不存在: ${args.taskId}` })
       const agent = agentId && agentId !== '__node__' ? store.getAgent(agentId) : undefined
-      if (agentId && agentId !== '__node__' && !agent) return JSON.stringify({ ok: false, error: '子智能体不存在' })
+      if (agentId && agentId !== '__node__' && !agent) return JSON.stringify({ ok: false, code: 'NOT_FOUND', error: '子智能体不存在' })
       if (!agent && !task) return JSON.stringify({ ok: false, error: '缺少 agent（子智能体 ID）或 taskId（任务 ID，操作任务/项目文件归属工作区）：二者至少给一个' })
       let target: Awaited<ReturnType<typeof resolver.resolve>>
       let workDir = '.'
@@ -1220,11 +1424,11 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
         if (!task) return JSON.stringify({ ok: false, error: '缺少 agent（子智能体 ID）或 taskId（任务 ID）' })
         const workspace = engine.taskWorkspaceExec(task)
         const t = workspace.dshRef ? await resolver.resolveRef(workspace.dshRef, workspace.apiKey, 'task-workspace').catch(() => undefined) : await engine.resolveExecTarget(task, '__node__').catch(() => undefined)
-        if (!t || !t.online || !t.baseUrl) return JSON.stringify({ ok: false, error: t?.error || '任务节点不可达' })
+        if (!t || !t.online || !t.baseUrl) return JSON.stringify({ ok: false, code: 'NODE_OFFLINE', error: t?.error || '任务节点不可达' })
         target = t as typeof target
         workDir = workspace.workspace || '.'
       }
-      if (!target.online || !target.baseUrl) return JSON.stringify({ ok: false, error: target.error || '节点不可达' })
+      if (!target.online || !target.baseUrl) return JSON.stringify({ ok: false, code: 'NODE_OFFLINE', error: target.error || '节点不可达' })
       const checkedPath = async (input?: string, absent = false, recursive = false) => {
         if (!project) return { path: input || workDir, exists: true, listing: undefined }
         const path = projectFilePath(project, input)
@@ -1240,7 +1444,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
         return JSON.stringify(out, null, 2)
       }
       if (action === 'mkdir') {
-        if (!args.name) return JSON.stringify({ ok: false, error: '缺少 name（新目录名）' })
+        if (!args.name) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: '缺少 name（新目录名）' })
         const parent = project ? projectFilePath(project, args.path) : String(args.path || '') || workDir
         if (project) await checkedPath(workspaceChild(parent, String(args.name)), true)
         const out = await client.fsMkdir(target, parent, String(args.name))
@@ -1248,19 +1452,19 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       }
       if (action === 'upload') {
         const filename = String(args.name || '').trim()
-        if (!filename) return JSON.stringify({ ok: false, error: '缺少 name（文件名）' })
+        if (!filename) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: '缺少 name（文件名）' })
         let data: Buffer
         if (args.contentBase64) {
           data = Buffer.from(String(args.contentBase64), 'base64')
-          if (!data.length) return JSON.stringify({ ok: false, error: 'contentBase64 无效' })
-          if (data.length > 1024 * 1024) return JSON.stringify({ ok: false, error: 'base64 内容解码后超过 1MB' })
+          if (!data.length) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: 'contentBase64 无效' })
+          if (data.length > 1024 * 1024) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: 'base64 内容解码后超过 1MB' })
         } else if (args.url) {
           const res = await fetch(String(args.url), { signal: AbortSignal.timeout(clamp(ctx.maxBlockMs || 30_000, 5_000, 30_000)) }).catch(() => undefined)
           if (!res || !res.ok) return JSON.stringify({ ok: false, error: `URL 拉取失败: ${res?.status || '网络错误'}` })
           data = Buffer.from(await res.arrayBuffer())
-          if (data.length > 10 * 1024 * 1024) return JSON.stringify({ ok: false, error: 'URL 文件超过 10MB' })
+          if (data.length > 10 * 1024 * 1024) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: 'URL 文件超过 10MB' })
         } else {
-          return JSON.stringify({ ok: false, error: 'upload 需要 contentBase64 或 url 之一' })
+          return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: 'upload 需要 contentBase64 或 url 之一' })
         }
         if (project) {
           const path = workspaceChild(projectFilePath(project, args.path), filename)
@@ -1274,10 +1478,10 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       }
       if (action === 'download') {
         const p = String(args.path || '')
-        if (!p) return JSON.stringify({ ok: false, error: '缺少 path（文件路径）' })
+        if (!p) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: '缺少 path（文件路径）' })
         const checked = await checkedPath(p)
         const out = await client.fsDownload(target, checked.path)
-        if (!out.ok || !out.res) return JSON.stringify({ ok: false, error: out.error })
+        if (!out.ok || !out.res) return JSON.stringify({ ok: false, code: out.code, status: out.status, error: out.error })
         const buf = Buffer.from(await out.res.arrayBuffer())
         // MCP 宿主单帧过大会被断链：窄通道只回小文件，大文件引导到控制台
         const downloadCap = ctx.channel === 'mcp' ? 512 * 1024 : 8 * 1024 * 1024
@@ -1304,13 +1508,13 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       }
       if (action === 'delete') {
         const p = String(args.path || '')
-        if (!p) return JSON.stringify({ ok: false, error: '缺少 path' })
+        if (!p) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: '缺少 path' })
         const checked = await checkedPath(p, false, true)
         if (project && checked.path === projectFilePath(project)) throw new WorkspaceFileError(403, 'WORKSPACE_ROOT_PROTECTED', '不能删除项目工作区根目录')
         const out = await client.fsRemove(target, checked.path)
         return JSON.stringify(out, null, 2)
       }
-      return JSON.stringify({ ok: false, error: `不支持的 action: ${action}` })
+      return JSON.stringify({ ok: false, code: 'INVALID_PARAM', field: 'action', error: `不支持的 action: ${action}` })
       } catch (err) { return JSON.stringify({ ok: false, code: (err as WorkspaceFileError).code, error: (err as Error).message }) }
     },
   }
@@ -1331,7 +1535,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
     async execute(args) {
       const taskId = String(args.taskId || '').trim()
       const task = store.getTask(taskId)
-      if (!task) return JSON.stringify({ ok: false, error: `任务不存在: ${taskId}` })
+      if (!task) return JSON.stringify({ ok: false, code: 'NOT_FOUND', field: 'taskId', error: `任务不存在: ${taskId}` })
       let agentId = String(args.agentId || '').trim()
       if (!agentId) {
         const turns = task.turns || []
@@ -1340,19 +1544,19 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
           if (ask) { agentId = turns[i].agentId || '__node__'; break }
         }
       }
-      if (!agentId) return JSON.stringify({ ok: false, error: '任务里没有找到挂起的 ask_user_question 提问（先用 task_status detail=full 查看工具列表确认）' })
+      if (!agentId) return JSON.stringify({ ok: false, code: 'INVALID_STATE', error: '任务里没有找到挂起的 ask_user_question 提问（先用 task_status detail=full 查看工具列表确认）' })
       const binding = task.sessions?.[agentId]
       if (!binding?.remoteSessionId) return JSON.stringify({ ok: false, error: '该成员在任务中没有远端会话绑定', code: 'NO_SESSION' })
       const agent = store.getAgent(agentId)
       const target = await engine.resolveExecTarget(task, agentId).catch(() => undefined)
       if (!target || !target.online || !target.baseUrl) {
-        return JSON.stringify({ ok: false, error: (target as any)?.error || '成员节点当前不可达' })
+        return JSON.stringify({ ok: false, code: 'NODE_OFFLINE', error: (target as any)?.error || '成员节点当前不可达' })
       }
       const answers = asJson(args.answers)
       if (!Array.isArray(answers) || !answers.length) return JSON.stringify({ ok: false, error: 'answers 必须是非空数组 [{id, selected, custom?}]' })
       const r = await askClient.answerQuestion(target, binding.remoteSessionId, answers)
       if (!r.ok) {
-        return JSON.stringify({ ok: false, error: r.error || '答复提交失败', ...(r.supported !== undefined ? { supported: r.supported } : {}) })
+        return JSON.stringify({ ok: false, code: r.code, status: r.status, error: r.error || '答复提交失败', ...(r.supported !== undefined ? { supported: r.supported } : {}) })
       }
       return JSON.stringify({ ok: true, data: { answered: answers.length, agentId, taskId, consoleUrl } })
     },
@@ -1364,10 +1568,18 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
     description:
       '管理 WorkBuddy 项目：list / get / upsert / delete。项目把「文件归属节点(DSH) + 工作目录 + 可选默认执行节点 + 项目指令 + 默认协作成员 + 连接器 + 技能」捆绑成一个可复用上下文；' +
       'task_manage create 带 projectId 即创建项目工作台任务（自动继承全部上下文，主会话在默认执行节点执行，task.nodeRef 可覆盖）。' +
-      'defaultAgentIds 是项目默认协作成员（创建任务时服务端自动继承，可随时 @ 其他成员补充；不限制 @，也不自动全员派工）。',
+      'defaultAgentIds 是项目默认协作成员（创建任务时服务端自动继承，可随时 @ 其他成员补充；不限制 @，也不自动全员派工）。' +
+      'agents 查询已关联与历史实际参与 BOT；link_agent/unlink_agent 幂等修改单条关联，需要登录身份与项目管理权，关联不授予文件、节点或 BOT 使用权限。',
     parameters: {
       action: { type: 'string', description: '操作: list / get / upsert / delete' },
-      projectId: { type: 'string', description: '项目 ID（get/delete 用）' },
+      projectId: { type: 'string', description: '项目 ID（get/delete/agents/link_agent/unlink_agent 用）' },
+      agentId: { type: 'string', description: 'BOT 稳定 ID（link_agent/unlink_agent 必填）' },
+      name: { type: 'string', description: 'list 项目名包含匹配，忽略大小写' },
+      workspace: { type: 'string', description: 'list 工作目录包含匹配，忽略大小写' },
+      keyword: { type: 'string', description: 'list 按ID/名称/工作目录/指令/技能搜索；空白分词全部命中' },
+      limit: { type: 'string', description: 'list 每页数量，默认20，整数1–200' },
+      offset: { type: 'string', description: 'list 起始偏移，默认0；按nextOffset续取' },
+      compact: { type: 'string', description: 'list true返回ID/名称/节点引用/目录/成员ID/任务数，详情用get；默认false' },
       project: {
         type: 'json',
         description:
@@ -1393,8 +1605,22 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       const session = ctx?.session
       const canView = (p: import('./types.js').Project) => !session || canAccessProject(session, p, 'view')
       const canEdit = (p: import('./types.js').Project) => !session || canAccessProject(session, p, 'edit')
+      if (['agents', 'link_agent', 'unlink_agent'].includes(action)) {
+        try {
+          const service = new ProjectAgents(store)
+          const data = action === 'agents' ? service.forProject(String(args.projectId || ''), ctx)
+            : service.change(String(args.projectId || ''), String(args.agentId || ''), action === 'link_agent', ctx)
+          return JSON.stringify({ ok: true, data })
+        } catch (err: any) { return JSON.stringify({ ok: false, status: err.status || 400, code: err.code, error: err.message }) }
+      }
       if (action === 'list') {
-        const projects = store.getProjects().filter(canView).map((p) => {
+        let query: ReturnType<typeof queryProjects>
+        try { query = queryProjects(store.getProjects().filter(canView), args) }
+        catch (err: any) { return JSON.stringify({ ok: false, status: err.status || 400, code: 'INVALID_PARAMS', error: err.message }) }
+        const visibleTasks = store.getTasks().filter(t => !session || canViewTask(session, t, { projects: store.getProjects() }))
+        const projects = query.rows.map((p) => {
+          const taskCount = visibleTasks.filter(t => t.projectId === p.id).length
+          if (query.compact) return compactProject(p, taskCount)
           const nodeTitle = p.dshRef.kind === 'direct'
             ? p.dshRef.apiBaseUrl
             : (p.dshRef.kind === 'mapping'
@@ -1411,40 +1637,41 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
             experts: projectDefaultAgentIds(p).map((id) => ({ id, name: store.getAgent(id)?.name || id })),
             skillNames: p.skillNames,
             connectorIds: p.connectorIds,
-            taskCount: store.getTasks().filter((t) => t.projectId === p.id).length,
+            taskCount,
           }
         })
         return JSON.stringify({
           ok: true,
           projects,
+          ...query.metadata,
           usage: '发项目任务: workbuddy_task_manage {action:"create", projectId:"<项目ID>", message:"<指令>（可 @ sub agent）"} —— 节点/工作区/指令自动继承，无需再传',
         }, null, 2)
       }
       if (action === 'get') {
         const p = store.getProject(String(args.projectId || ''))
-        if (!p || !canView(p)) return JSON.stringify({ ok: false, error: '项目不存在', status: 404 }, null, 2)
+        if (!p || !canView(p)) return JSON.stringify({ ok: false, code: 'NOT_FOUND', error: '项目不存在', status: 404 }, null, 2)
         const { apiKey, ...project } = p
         return JSON.stringify({ ok: true, project: session ? project : p }, null, 2)
       }
       if (action === 'upsert') {
         const body = asJson(args.project)
-        if (!body || typeof body !== 'object') return JSON.stringify({ ok: false, error: 'upsert 需要 project 参数（JSON）' }, null, 2)
+        if (!body || typeof body !== 'object') return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: 'upsert 需要 project 参数（JSON）' }, null, 2)
         const existing = body.id ? store.getProject(String(body.id)) : undefined
         const name = String(body.name ?? existing?.name ?? '').trim()
-        if (!name) return JSON.stringify({ ok: false, error: '缺少项目名称 name' }, null, 2)
-        if (existing && !canView(existing)) return JSON.stringify({ ok: false, error: '项目不存在', status: 404 })
-        if (existing && !canEdit(existing)) return JSON.stringify({ ok: false, error: '仅项目 owner 或平台管理员可编辑项目', status: 403 })
-        if (existing?.archivedAt) return JSON.stringify({ ok: false, error: '项目已归档（只读），请先恢复再编辑', status: 400 })
+        if (!name) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: '缺少项目名称 name' }, null, 2)
+        if (existing && !canView(existing)) return JSON.stringify({ ok: false, code: 'NOT_FOUND', error: '项目不存在', status: 404 })
+        if (existing && !canEdit(existing)) return JSON.stringify({ ok: false, code: 'PERMISSION_DENIED', error: '仅项目 owner 或平台管理员可编辑项目', status: 403 })
+        if (existing?.archivedAt) return JSON.stringify({ ok: false, code: 'INVALID_STATE', error: '项目已归档（只读），请先恢复再编辑', status: 400 })
         const refInput = body.dshRef ?? existing?.dshRef
         const dshRef = normalizeDshRef(refInput)
-        if ('error' in dshRef) return JSON.stringify({ ok: false, error: dshRef.error + '（形如 {kind:"mapping", mappingId:"<DSH 映射 ID>"}，映射 ID 用 workbuddy_resource_manage {action:"dsh"} 查询）' }, null, 2)
+        if ('error' in dshRef) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', field: 'dshRef', error: dshRef.error + '（形如 {kind:"mapping", mappingId:"<DSH 映射 ID>"}，映射 ID 用 workbuddy_resource_manage {action:"dsh"} 查询）' }, null, 2)
         const executionRef = body.defaultExecutionNodeRef == null ? undefined : normalizeDshRef(body.defaultExecutionNodeRef)
-        if (executionRef && 'error' in executionRef) return JSON.stringify({ ok: false, error: executionRef.error })
+        if (executionRef && 'error' in executionRef) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', field: 'project.defaultExecutionNodeRef', error: executionRef.error })
         // defaultAgentIds 为 canonical；旧字段 expertIds 兼容别名（store 层镜像）
         const defaultAgentIds = projectDefaultAgentIdsFromInput(body)
-        for (const eid of defaultAgentIds || []) {
-          if (!store.getAgent(eid)) return JSON.stringify({ ok: false, error: `默认协作成员不存在: ${eid}（用 workbuddy_agent_manage {action:"list"} 查询）` }, null, 2)
-        }
+        if (defaultAgentIds !== undefined && ctxOf(ctx).aiTokenOnly) return JSON.stringify({ ok: false, code: 'PERMISSION_DENIED', status: 403, error: '关联修改需要控制台登录身份' })
+        try { new ProjectAgents(store).validateAgents(defaultAgentIds || [], ctxOf(ctx)) }
+        catch (err: any) { return JSON.stringify({ ok: false, code: err.code, status: err.status, error: err.message }) }
         try {
           const saved = store.upsertProject({
             id: body.id ? String(body.id) : undefined,
@@ -1472,12 +1699,12 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
       }
       if (action === 'delete') {
         const p = store.getProject(String(args.projectId || ''))
-        if (!p || !canView(p)) return JSON.stringify({ ok: false, error: '项目不存在', status: 404 })
-        if (!canEdit(p)) return JSON.stringify({ ok: false, error: '仅项目 owner 或平台管理员可删除项目', status: 403 })
+        if (!p || !canView(p)) return JSON.stringify({ ok: false, code: 'NOT_FOUND', error: '项目不存在', status: 404 })
+        if (!canEdit(p)) return JSON.stringify({ ok: false, code: 'PERMISSION_DENIED', error: '仅项目 owner 或平台管理员可删除项目', status: 403 })
         store.deleteProject(p.id)
         return JSON.stringify({ ok: true, deleted: p.id }, null, 2)
       }
-      return JSON.stringify({ ok: false, error: `不支持的 action: ${action}` })
+      return JSON.stringify({ ok: false, code: 'INVALID_PARAM', field: 'action', error: `不支持的 action: ${action}` })
     },
   }
 
@@ -1505,7 +1732,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
     },
     async execute(args) {
       const registry = deps.expertRegistry
-      if (!registry) return JSON.stringify({ ok: false, error: '专家注册表未装配' })
+      if (!registry) return JSON.stringify({ ok: false, code: 'SERVICE_UNAVAILABLE', error: '专家注册表未装配' })
       const action = args.action || 'list'
       try {
         if (action === 'list') {
@@ -1533,13 +1760,14 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
         }
         if (action === 'get') {
           const id = String(args.expertId || '').trim()
-          if (!id) return JSON.stringify({ ok: false, error: '缺少 expertId' }, null, 2)
+          if (!id) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: '缺少 expertId' }, null, 2)
+          if (!await registry.get(id)) return JSON.stringify({ ok: false, code: 'NOT_FOUND', field: 'expertId', error: '专家不存在' })
           const profile = await registry.getProfile(id)
           return JSON.stringify({ ok: true, expert: profile }, null, 2)
         }
         if (action === 'search') {
           const q = String(args.query || '').trim().toLowerCase()
-          if (!q) return JSON.stringify({ ok: false, error: 'search 需要 query 参数' }, null, 2)
+          if (!q) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: 'search 需要 query 参数' }, null, 2)
           const all = [...(await registry.index()).divisions.flatMap((d) => d.experts)]
           const out: Array<Record<string, unknown>> = []
           for (const e of all) {
@@ -1558,7 +1786,7 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
           const body = asJson(args.expert)
           if (!body || typeof body !== 'object') return JSON.stringify({ ok: false, error: `${action} 需要 expert 参数（JSON）` }, null, 2)
           const id = String(body.id ?? '').trim()
-          if (!id) return JSON.stringify({ ok: false, error: '缺少专家 id（小写字母/数字中划线 slug，如 my-reviewer）' }, null, 2)
+          if (!id) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: '缺少专家 id（小写字母/数字中划线 slug，如 my-reviewer）' }, null, 2)
           const payload: Record<string, unknown> = { id }
           for (const k of ['name', 'description', 'icon', 'division', 'systemPrompt', 'executionPrompt', 'role']) {
             if (typeof body[k] === 'string') payload[k] = body[k]
@@ -1566,29 +1794,33 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
           if (Array.isArray(body.tags)) payload.tags = body.tags.map(String)
           if (action === 'create') {
             if (typeof body.systemPrompt !== 'string' || !body.systemPrompt.trim()) {
-              return JSON.stringify({ ok: false, error: 'create 需要 systemPrompt（职责与约束提示词）' }, null, 2)
+              return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: 'create 需要 systemPrompt（职责与约束提示词）' }, null, 2)
             }
+            if (await registry.get(id)) return JSON.stringify({ ok: false, code: 'CONFLICT', field: 'expert.id', error: '专家 ID 已存在' })
             const saved = await registry.createExpert(payload as any)
             return JSON.stringify({ ok: true, message: '专家已创建（source=user，可再 update/delete）', expert: saved }, null, 2)
           }
+          const existing = await registry.get(id)
+          if (!existing) return JSON.stringify({ ok: false, code: 'NOT_FOUND', field: 'expert.id', error: '专家不存在' })
+          if (!await registry.isEditable(id)) return JSON.stringify({ ok: false, code: 'PERMISSION_DENIED', error: '内置/名册专家只读' })
           const saved = await registry.updateExpert(id, payload as any)
           return JSON.stringify({ ok: true, message: '专家已更新', expert: saved }, null, 2)
         }
         if (action === 'delete') {
           const id = String(args.expertId || '').trim()
-          if (!id) return JSON.stringify({ ok: false, error: '缺少 expertId' }, null, 2)
+          if (!id) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: '缺少 expertId' }, null, 2)
           const ok = await registry.deleteExpert(id)
           if (!ok) {
             const exists = await registry.get(id)
             return JSON.stringify(
-              { ok: false, error: exists ? '内置/名册专家只读，不可删除；要调整请创建同领域用户专家替代。' : '专家不存在。' },
+              { ok: false, code: exists ? 'PERMISSION_DENIED' : 'NOT_FOUND', error: exists ? '内置/名册专家只读，不可删除；要调整请创建同领域用户专家替代。' : '专家不存在。' },
               null,
               2,
             )
           }
           return JSON.stringify({ ok: true, deleted: id }, null, 2)
         }
-        return JSON.stringify({ ok: false, error: `不支持的 action: ${action}` })
+        return JSON.stringify({ ok: false, code: 'INVALID_PARAM', field: 'action', error: `不支持的 action: ${action}` })
       } catch (err: any) {
         return JSON.stringify({ ok: false, error: err?.message || String(err) }, null, 2)
       }
@@ -1637,16 +1869,16 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
         }
         if (action === 'get') {
           const id = String(args.teamId || '').trim()
-          if (!id) return JSON.stringify({ ok: false, error: '缺少 teamId' }, null, 2)
+          if (!id) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: '缺少 teamId' }, null, 2)
           const t = store.getTeams().find((x) => x.id === id)
-          if (!t) return JSON.stringify({ ok: false, error: `团队不存在: ${id}` }, null, 2)
+          if (!t) return JSON.stringify({ ok: false, code: 'NOT_FOUND', field: 'teamId', error: `团队不存在: ${id}` }, null, 2)
           return JSON.stringify({ ok: true, team: t }, null, 2)
         }
         if (action === 'upsert') {
           const body = asJson(args.team)
-          if (!body || typeof body !== 'object') return JSON.stringify({ ok: false, error: 'upsert 需要 team 参数（JSON）' }, null, 2)
+          if (!body || typeof body !== 'object') return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: 'upsert 需要 team 参数（JSON）' }, null, 2)
           if (body.id && BUILTIN_TEAMS.some((t) => t.id === String(body.id))) {
-            return JSON.stringify({ ok: false, error: '内置专家团只读；要改请不带 id 新建一个自定义团（复制成员后修改）' }, null, 2)
+            return JSON.stringify({ ok: false, code: 'PERMISSION_DENIED', error: '内置专家团只读；要改请不带 id 新建一个自定义团（复制成员后修改）' }, null, 2)
           }
           const parsed = await parseTeamInput(body, {
             getAgent: (id) => store.getAgent(id),
@@ -1654,27 +1886,27 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
             teams: store.getTeams(),
             currentId: body.id ? String(body.id) : undefined,
           })
-          if (!parsed.ok) return JSON.stringify({ ok: false, error: parsed.error }, null, 2)
+          if (!parsed.ok) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', field: 'team', error: parsed.error }, null, 2)
           const saved = store.upsertTeam({ ...parsed.value, id: body.id || undefined })
           return JSON.stringify({ ok: true, team: saved, usage: '@团队名 发起全员编排' }, null, 2)
         }
         if (action === 'delete') {
           const id = String(args.teamId || '').trim()
-          if (!id) return JSON.stringify({ ok: false, error: '缺少 teamId' }, null, 2)
-          if (BUILTIN_TEAMS.some((t) => t.id === id)) return JSON.stringify({ ok: false, error: '内置专家团只读，不可删除' }, null, 2)
+          if (!id) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: '缺少 teamId' }, null, 2)
+          if (BUILTIN_TEAMS.some((t) => t.id === id)) return JSON.stringify({ ok: false, code: 'PERMISSION_DENIED', error: '内置专家团只读，不可删除' }, null, 2)
           const ok = store.deleteTeam(id)
-          return JSON.stringify(ok ? { ok: true, deleted: id } : { ok: false, error: '团队不存在' }, null, 2)
+          return JSON.stringify(ok ? { ok: true, deleted: id } : { ok: false, code: 'NOT_FOUND', error: '团队不存在' }, null, 2)
         }
         if (action === 'toggle') {
           const id = String(args.teamId || '').trim()
-          if (!id) return JSON.stringify({ ok: false, error: '缺少 teamId' }, null, 2)
+          if (!id) return JSON.stringify({ ok: false, code: 'INVALID_PARAM', error: '缺少 teamId' }, null, 2)
           const t = store.getTeams().find((x) => x.id === id)
-          if (!t) return JSON.stringify({ ok: false, error: `团队不存在: ${id}` }, null, 2)
-          if (t.builtin) return JSON.stringify({ ok: false, error: '内置专家团始终可用，不可停用' }, null, 2)
+          if (!t) return JSON.stringify({ ok: false, code: 'NOT_FOUND', field: 'teamId', error: `团队不存在: ${id}` }, null, 2)
+          if (t.builtin) return JSON.stringify({ ok: false, code: 'PERMISSION_DENIED', error: '内置专家团始终可用，不可停用' }, null, 2)
           const saved = store.upsertTeam({ ...t, enabled: t.enabled === false })
           return JSON.stringify({ ok: true, team: { id: saved.id, name: saved.name, enabled: saved.enabled !== false } }, null, 2)
         }
-        return JSON.stringify({ ok: false, error: `不支持的 action: ${action}` }, null, 2)
+        return JSON.stringify({ ok: false, code: 'INVALID_PARAM', field: 'action', error: `不支持的 action: ${action}` }, null, 2)
       } catch (err: any) {
         return JSON.stringify({ ok: false, error: err?.message || String(err) }, null, 2)
       }
@@ -1696,11 +1928,43 @@ export function createWorkBuddyToolDefs(deps: ToolOpsDeps): WorkBuddyToolDef[] {
     },
   })
 
-  const defs: WorkBuddyToolDef[] = [resourceManage, agentManage, taskManage, taskStatus, taskChat, taskEvaluate, taskAskAnswer, sshResourceManage, monitorRead, scheduleManage, plannerManage, fileManage, projectManage, expertManage, teamManage, backlogManage]
+  const defs: WorkBuddyToolDef[] = [resourceManage, agentManage, taskManage, taskStatus, taskChat, taskEvaluate, taskAskAnswer, sshResourceManage, groupManage, monitorRead, scheduleManage, plannerManage, fileManage, projectManage, expertManage, teamManage, backlogManage]
+  defs.push(createCapabilitiesTool(() => defs, deps.serverVersion))
   return defs.map((def) => ({
     ...def,
+    inputSchema: toolInputSchema(def.name, def.parameters),
+    outputSchema: TOOL_OUTPUT_SCHEMA,
+    annotations: toolAnnotations(def.name),
     execute: async (args: Record<string, any>, ctx?: ToolCallContext) => {
-      const out = await def.execute(args, ctx)
+      // 身份先于参数校验（契约 §3/裁定⑤）：声明 denyAiToken 的工具对 AI 令牌（无登录身份）的全部 action 一律拒绝
+      if (def.denyAiToken && ctxOf(ctx).aiTokenOnly) {
+        console.warn(`[安全审计] tool=${def.name} action=${(args && args.action) || ''} ai-token denied (ai-token-group-guard)`)
+        return JSON.stringify({ ok: false, code: 'AI_TOKEN_DENIED', status: 403, error: 'AI 令牌无权访问该能力（数据按控制台登录用户隔离，无共享桶；请在控制台登录后操作）', denied: 'ai-token-group-guard' })
+      }
+      const checked = validateToolArgs(def.name, args)
+      if (checked.errors.length) {
+        return JSON.stringify(normalizeToolResult({
+          ok: false, code: 'INVALID_PARAM',
+          error: checked.errors.map((e) => `${e.path}: ${e.message}`).join('；'),
+          errors: checked.errors,
+          ...(checked.warnings.length ? { paramWarnings: checked.warnings } : {}),
+        }, { tool: def.name, args: checked.args }))
+      }
+      const policy = toolActionPolicy(def.name, checked.args, ctxOf(ctx))
+      if (!policy.allowed) {
+        console.warn(`[安全审计] tool=${def.name} action=${policy.action} policy=${ctx?.readOnly ? 'read-only' : 'identity'} denied`)
+        return JSON.stringify(toolFailure('PERMISSION_DENIED', policy.reason || '无权执行此操作', { action: policy.action, risk: policy.risk, ...(checked.warnings.length ? { paramWarnings: checked.warnings } : {}) }))
+      }
+      let result: Record<string, any>
+      try {
+        result = JSON.parse(await def.execute(checked.args, ctx))
+      } catch (err: any) {
+        // Unhandled failures have an uncertain write outcome; do not expose raw exceptions/credentials.
+        result = toolFailure(typeof err?.code === 'string' ? err.code : 'EXECUTION_FAILED', '工具执行失败', { status: err?.status })
+      }
+      result = normalizeToolResult(result, { tool: def.name, args: checked.args })
+      if (checked.warnings.length) result.paramWarnings = [...(Array.isArray(result.paramWarnings) ? result.paramWarnings : []), ...checked.warnings]
+      const out = JSON.stringify(result)
       const pub = String(ctx?.requestBase || '').replace(/\/+$/, '')
       return pub && consoleUrl && out.includes(consoleUrl) ? String(out).split(consoleUrl).join(pub) : out
     },

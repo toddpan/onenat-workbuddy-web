@@ -194,6 +194,8 @@ export interface SubAgent {
   skills?: string[]
   tags?: string[]
   description?: string
+  /** Public display copy; independent of prompts, credentials and installed skills. */
+  display?: import('./agent-display.js').AgentDisplayConfig
   enabled: boolean
   createdAt: number
   updatedAt: number
@@ -291,6 +293,8 @@ export interface Project {
   instruction?: string
   /** 默认协作子智能体：任务创建时继承，不限制后续 @，也不自动全员派工。 */
   defaultAgentIds?: string[]
+  /** Legacy project-based BOT grants, frozen during migration. New associations grant no access. */
+  legacyAgentAccessIds?: string[]
   /** @deprecated defaultAgentIds 的兼容别名，引用 SubAgent.id，不是专家库 ID。 */
   expertIds: string[]
   /** 连接器：'ssh:<资源id>' | 'map:<mappingId>' | 'app:<appId>' */
@@ -337,6 +341,8 @@ export interface TaskSessionBinding {
   cwd?: string
   /** 主智能体最后一次对齐到会话的主调度模型（planner.model，空串=默认）；用于检测切换后重新对齐 */
   plannerModel?: string
+  /** 直聊会话的显式模型/预设配置，用于拒绝复用不匹配身份。 */
+  chatConfigKey?: string
   /** 最后一次经 PUT /sessions/:id/permission 原生下发成功的运行权限 preset；与期望不一致时重新下发 */
   permission?: string
   createdAt: number
@@ -450,6 +456,8 @@ export interface WorkTask {
   mode: TaskMode
   status: TaskStatus
   memberAgentIds: string[]
+  /** 显式一对一 BOT 硬绑定；旧成员账本绝不推断为绑定，创建后不可更换。 */
+  chatAgentId?: string
   /** 创建者（'tool' = AI 工具通道 / 'console' = 控制台人工）。工具通道显式指定的成员受保护，不被主智能体改写 */
   creator?: 'tool' | 'console'
   /**
@@ -497,6 +505,8 @@ export interface WorkTask {
   scheduleName?: string
   /** 所属项目：任务继承项目的节点/工作区/指令/专家/连接器/技能 */
   projectId?: string
+  /** 首次观察到正式项目归属时的历史展示快照；不参与授权或项目关联。 */
+  projectSnapshot?: { projectId: string; name: string; capturedAt: number }
   /** 创建时快照的执行节点；项目任务可显式覆盖默认节点，文件仍归属 project.dshRef */
   nodeRef?: DshRef
   /** 任务级模型（provider/model）：定时任务实例配置；主会话（__node__）优先于全局调度模型 */
@@ -508,7 +518,7 @@ export interface WorkTask {
   /** 任务级运行权限（如 danger-full-access / workspace-write / ask）：派发时注入提示词，优先于智能体实体默认 */
   permission?: string
   /** 执行中的排队消息（轮次结束自动补发；「立即发送」= steer 插话到运行中回合）；teamId = 排队消息携带的专家团意图 */
-  queue?: Array<{ text: string; at: number; turnId: string; teamId?: string }>
+  queue?: Array<{ text: string; at: number; turnId: string; teamId?: string; memberAgentIds?: string[] }>
   /** 任务级连接器覆盖（单独任务临时加挂） */
   connectorIds?: string[]
   /** 任务级技能覆盖（单独任务临时加挂） */
@@ -711,6 +721,10 @@ export interface StorageData {
   projects: Project[]
   teams: ExpertTeam[]
   settings: WorkBuddySettings
+  /** Server-owned activity revisions and per-user reading positions (task-91). */
+  taskActivities?: Array<{ taskId: string; signature: string; version: number }>
+  taskReadPositions?: Array<{ userId: string; taskId: string; version: number }>
+  activityClock?: number
 }
 
 // ---------- 专家团（合同式团队配置，移植 dsh-agency-agents ExpertTeam） ----------
@@ -801,3 +815,49 @@ export interface ExpertTeam {
 
 /** 领域主理人模板标识（general = 通用兜底） */
 export type TeamTemplateId = 'general' | 'product' | 'technical' | 'content' | 'data' | 'research'
+
+// ---------- 协作群（Group；契约 docs/groups-web-sync-plan-2026-11-11.md §1） ----------
+
+/**
+ * 协作群实体：字段名与 Android GroupRoom JSON 逐字一致（上游 onenat-workbuddy-android GroupRoom.kt）。
+ * 每用户隔离：按登录身份（session userId）scope，跨用户不可见、不可改；v1 无共享群。
+ */
+export interface GroupRoom {
+  id: string
+  /** 空 = 成员名拼接（渲染期语义） */
+  name: string
+  /** ≤2000 字（按码点计），超长 INVALID_PARAM */
+  notice: string
+  /** "" = 无管理员 */
+  adminAgentId: string
+  /** 默认 admin（新建群 = 管理员主持） */
+  mode: 'admin' | 'everyone'
+  /** 保序去重 */
+  memberAgentIds: string[]
+  /** 当前频道 = orchestrate taskId；"" = 无进行中频道 */
+  channelRef: string
+  /** 绑定项目 0..N，保序去重 */
+  projectIds: string[]
+  /** 必须 ∈ projectIds，否则服务端归一化为 ""（不报错，对齐 Android 宽松解析） */
+  activeProjectId: string
+  /** 首页分组名；分组删除/重命名时服务端级联维护，"" = 未分组 */
+  section: string
+  /** 登录用户名（服务端填充，客户端值被覆盖） */
+  createdBy: string
+  /** 默认 false */
+  archived: boolean
+  /** 默认 mention */
+  notifyLevel: 'all' | 'mention' | 'mute'
+  /** 默认 0；允许客户端本地覆盖上报 */
+  unreadCount: number
+  /** 默认 0；markRead 单调不回退 */
+  lastReadSeq: number
+  /** "" = 关（沿用各成员权限档）；非空 = 群内统一权限档 */
+  permissionOverride: string
+  /** 服务端维护（毫秒） */
+  createdAt: number
+  updatedAt: number
+}
+
+/** 首页分组内的群默认排序键（列表渲染顺序 = 存储索引序，不随更新抖动） */
+export type GroupRoomOrder = 'index'

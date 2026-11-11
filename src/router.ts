@@ -13,17 +13,30 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { TaskHistory, TaskHistoryError } from './task-history.js'
+import { TaskActivity } from './task-activity.js'
 import { Readable } from 'node:stream'
 import { randomUUID } from 'node:crypto'
 import type { OnenatDirectory } from './onenat.js'
 import { OnenatDirectory as Dir } from './onenat.js'
 import type { TaskEngine } from './engine.js'
+import { validateToolArgs } from './tool-contracts.js'
+
+/** Match tool/MCP routing validation without dropping REST-only task fields. */
+function taskRouteArgs(body: Record<string, any>, action: 'create' | 'send', taskId?: string) {
+  const route = Object.fromEntries(['chatAgentId', 'mode', 'memberAgentIds', 'teamId', 'nodeRef', 'projectId'].filter(key => body[key] !== undefined).map(key => [key, body[key]]))
+  const checked = validateToolArgs('workbuddy_task_manage', { ...route, action, ...(action === 'send' ? { taskId, message: body.message } : {}) })
+  if (checked.errors.length) throw Object.assign(new Error(checked.errors.map(e => `${e.path}: ${e.message}`).join('；')), { code: 'INVALID_PARAM' })
+  const { action: _action, message: _message, taskId: _taskId, ...args } = checked.args
+  return args
+}
 import type { AgentResolver } from './resolver.js'
 import type { PromptComposer } from './prompt-composer.js'
 import { interactionGuard } from './prompt-composer.js'
 import type { Orchestrator } from './orchestrator.js'
 import type { WorkStore } from './store.js'
 import { isNodeAbsolutePath, WORK_DIR_NOT_ABSOLUTE_MSG } from './store.js'
+import { agentDisplayProfile, mergeAgentDisplay } from './agent-display.js'
 import { normalizeWorkspacePath, validateWorkspacePath, ProjectWorkspaceConflictError } from './workspace.js'
 import { requireProjectFiles, requireNodeFiles, projectFilePath, workspaceChild, requireWorkspacePath, checkWorkspaceFsPath, writeProjectFile, WorkspaceFileError } from './workspace-files.js'
 import { DshClient, type RemoteModelEntry } from './remote-client.js'
@@ -55,6 +68,7 @@ import { applyBacklogQuery, parseBacklogQuery } from './backlog-query.js'
 import { applyProjectCollect, previewProjectCollect } from './backlog-collect.js'
 import { SshInputError, execOnSshResource, maskSshResource, normalizeSshResource, testSshResource } from './ssh-resources.js'
 import type { SshResourceStore } from './ssh-store.js'
+import { GroupStore, GroupStoreError, normalizeGroupRoom } from './groups.js'
 import type { ScheduleRunner } from './scheduler.js'
 import { normalizeRule, nextRun, ruleText } from './scheduler.js'
 import { SCHEDULE_TEMPLATES } from './schedule-templates.js'
@@ -77,6 +91,7 @@ import {
   canManageSchedule,
   canManageTask,
   canUseResource,
+  canUseAgent,
   canViewAgent,
   canViewResource,
   canViewSchedule,
@@ -86,6 +101,9 @@ import {
   type PermContext,
 } from './perm.js'
 import type { MonitorService } from './monitor.js'
+import { ProjectAgents } from './project-agents.js'
+import { queryProjects, compactProject } from './project-query.js'
+import { queryMonitorOverview } from './monitor-query.js'
 import { SkillPluginLibrary, buildSkillInstallPrompt, buildPluginInstallPrompt, buildPluginExportPrompt, buildPluginListExportPrompt, buildProjectImportPrompt, extractExportedPaths } from './library.js'
 import type { LibKind } from './library.js'
 import { requestPublicBase } from './mcp-server.js'
@@ -112,6 +130,7 @@ interface MemberTodos {
 
 export class WorkBuddyRouter {
   private client = new DshClient()
+  private historyIndex?: TaskHistory
   private version = formatDateVersion(readPackageVersion())
   /** GET /api/resources 微缓存：折叠多标签页秒级轮询风暴（节点状态 1.5s 粒度足够） */
   private resourcesCache: { at: number; body: string } | undefined
@@ -134,6 +153,7 @@ export class WorkBuddyRouter {
     private mail?: MailService,
     private auditLog?: AuditLog,
     private limiter?: RateLimiter,
+    private groupsStore?: GroupStore,
   ) {
     // 用户自建专家层：数据落 <dataDir>/user-experts.json，与只读资产层合并为统一视图
     this.registry.attachUserStore(new UserExpertStore(store.dataDir))
@@ -142,6 +162,12 @@ export class WorkBuddyRouter {
   /** 统一专家注册表（供 MCP Server 等外部挂载点复用同一份数据与缓存）。 */
   public get expertRegistry(): ExpertRegistry {
     return this.registry
+  }
+
+  /** 协作群存储（断言注入：server.ts 单例装配（裁定 A）或测试注入；懒建兜底已拆除——双实例会互相覆盖丢数据） */
+  private get groupStore(): GroupStore {
+    if (!this.groupsStore) throw new Error('GroupStore 未装配：server.ts 必须注入单例实例（裁定 A）')
+    return this.groupsStore
   }
 
   /** Request-local identity: concurrent parsing/remote calls must never overwrite another user's permissions. */
@@ -569,9 +595,7 @@ export class WorkBuddyRouter {
     if (executionRef && 'error' in executionRef) throw new Error(executionRef.error)
     // 显式传入（含 []）即生效并写 canonical；未传时保留既有值。expertIds 传入时视为同一字段的旧写法。
     const defaultAgentIds = projectDefaultAgentIdsFromInput(body)
-    for (const eid of defaultAgentIds || []) {
-      if (!this.store.getAgent(eid)) throw new Error(`默认协作成员不存在: ${eid}`)
-    }
+    new ProjectAgents(this.store).validateAgents(defaultAgentIds || [], { session: this.session })
     return this.store.upsertProject({
       id: body?.id ? String(body.id) : undefined,
       name,
@@ -595,6 +619,7 @@ export class WorkBuddyRouter {
       id: t.id,
       title: t.title,
       mode: t.mode,
+      chatAgentId: t.chatAgentId,
       status: t.status,
       projectId: t.projectId || undefined,
       // §11：前端按钮门控依据（canManageTaskUi 与服务端同口径）
@@ -1265,7 +1290,23 @@ export class WorkBuddyRouter {
       } else if (scope === 'all') {
         if (!this.isPlatformAdmin()) { this.sendJson(res, 403, { ok: false, error: '仅平台管理员可查看全部项目' }); return true }
       }
-      this.sendJson(res, 200, { ok: true, data: list.map((proj) => this.projectSummary(proj)) })
+      try {
+        const q = url.searchParams
+        const options = Object.fromEntries(['name', 'workspace', 'keyword', 'limit', 'offset', 'compact'].filter(k => q.has(k)).map(k => [k, q.get(k)]))
+        // Existing console consumers expect the complete array without query options.
+        if (!Object.keys(options).length) {
+          this.sendJson(res, 200, { ok: true, data: list.map(proj => this.projectSummary(proj)) })
+        } else {
+          const query = queryProjects(list, options)
+          const tasks = this.store.getTasks().filter(t => !this.session || canViewTask(this.session, t, this.permContext()))
+          const data = query.rows.map(proj => query.compact
+            ? compactProject(proj, tasks.filter(t => t.projectId === proj.id).length)
+            : this.projectSummary(proj))
+          this.sendJson(res, 200, { ok: true, data, ...query.metadata })
+        }
+      } catch (err: any) {
+        this.sendJson(res, err.status || 400, { ok: false, error: err.message, code: 'INVALID_PARAMS' })
+      }
       return true
     }
     if (p === '/api/projects' && method === 'POST') {
@@ -1425,6 +1466,27 @@ export class WorkBuddyRouter {
       }
       this.pendingProjectImports.delete(token)
       this.sendJson(res, 200, { ok: true, data: { projectId: project.id, name: project.name, workspace: project.workspace, node: pending.nodeRef, nodeLabel: pending.nodeLabel, updated: Boolean(existing), dropped } })
+      return true
+    }
+    // Both orientations share one service and the same project-owned relationship list.
+    const projectBots = /^\/api\/projects\/([^/]+)\/agents(?:\/([^/]+))?$/.exec(p)
+    const botProjects = /^\/api\/agents\/([^/]+)\/projects(?:\/([^/]+))?$/.exec(p)
+    if (projectBots || botProjects) {
+      const relations = new ProjectAgents(this.store)
+      const actor = { session: this.session }
+      try {
+        const projectId = decodeURIComponent(projectBots?.[1] || botProjects?.[2] || '')
+        const agentId = decodeURIComponent(botProjects?.[1] || projectBots?.[2] || '')
+        if (method === 'GET' && !(projectBots?.[2] || botProjects?.[2])) {
+          this.sendJson(res, 200, { ok: true, data: projectBots ? relations.forProject(projectId, actor) : relations.forAgent(agentId, actor) })
+        } else if ((method === 'PUT' || method === 'DELETE') && projectId && agentId) {
+          const data = relations.change(projectId, agentId, method === 'PUT', actor)
+          this.audit(method === 'PUT' ? 'project.bot.link' : 'project.bot.unlink', 'project', projectId, agentId)
+          this.sendJson(res, 200, { ok: true, data })
+        } else this.sendJson(res, 405, { ok: false, error: '使用 GET 查询或 PUT/DELETE 修改单条关联' })
+      } catch (err: any) {
+        this.sendJson(res, err.status || 400, { ok: false, code: err.code, error: err.message })
+      }
       return true
     }
     const projMatch = /^\/api\/projects\/([^/]+)$/.exec(p)
@@ -2025,10 +2087,16 @@ export class WorkBuddyRouter {
     if (this.monitor && p === '/api/monitor/overview' && method === 'GET') {
       if (!this.isAdminOrServiceChannel()) { this.denyNotAdmin(res, '查看监控大屏'); return true }
       try {
-        const data = await this.monitor.getOverview()
+        const overview = await this.monitor.getOverview()
+        const q = new URL(req.url || '/', 'http://localhost').searchParams
+        const options = Object.fromEntries(['projectId', 'section', 'compact', 'limit'].filter(k => q.has(k)).map(k => [k, q.get(k)]))
+        const data = queryMonitorOverview(overview, options, {
+          projects: this.store.getProjects().filter(p => !this.session || this.canSeeProject(p)),
+          tasks: this.store.getTasks().filter(t => !this.session || canViewTask(this.session, t, this.permContext())),
+        })
         this.sendJson(res, 200, { ok: true, data })
       } catch (err: any) {
-        this.sendJson(res, 500, { ok: false, error: err?.message || String(err) })
+        this.sendJson(res, err.status || 500, { ok: false, error: err?.message || String(err) })
       }
       return true
     }
@@ -2674,6 +2742,25 @@ export class WorkBuddyRouter {
       return this.instantiateExpertFromRequest(req, res, String(body?.id ?? body?.expertId ?? '').trim(), body)
     }
     // ---------- 子智能体 ----------
+    // Display-only DTOs use an allowlist for every viewer, including administrators.
+    if (p === '/api/agents/profiles' && method === 'GET') {
+      const ctx = this.permContext()
+      const profiles = this.store.getAgents()
+        .filter((a) => canViewAgent(this.session, a, ctx))
+        .map(agentDisplayProfile)
+      this.sendJson(res, 200, { ok: true, data: profiles })
+      return true
+    }
+    const agentProfileMatch = /^\/api\/agents\/([^/]+)\/profile$/.exec(p)
+    if (agentProfileMatch && method === 'GET') {
+      const agent = this.store.getAgent(decodeURIComponent(agentProfileMatch[1]))
+      if (!agent || !canViewAgent(this.session, agent, this.permContext())) {
+        this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
+        return true
+      }
+      this.sendJson(res, 200, { ok: true, data: agentDisplayProfile(agent) })
+      return true
+    }
     if (p === '/api/agents' && method === 'GET') {
       // 权限（§10.4）：非归属人看到的是脱敏视图（无 apiKey / 提示词），不可见条目直接隐藏
       const ctx = this.permContext()
@@ -2757,6 +2844,10 @@ export class WorkBuddyRouter {
         this.sendJson(res, 403, { ok: false, error: '无权修改该子智能体（仅归属人或管理员可改）' })
         return true
       }
+      if ((!fallback || Object.prototype.hasOwnProperty.call(body, 'name')) && (typeof body.name !== 'string' || !body.name.trim())) {
+        this.sendJson(res, 400, { ok: false, code: 'INVALID_PARAM', field: 'name', error: 'name 必须是非空字符串' })
+        return true
+      }
       // 归属人：更新沿用原归属；复用同名条目时保留原归属；真正新建 = 当前用户
       const dshRef = normalizeDshRef(body.dshRef ?? fallback?.dshRef)
       if ('error' in dshRef) {
@@ -2773,6 +2864,12 @@ export class WorkBuddyRouter {
           this.sendJson(res, 403, { ok: false, error: '同名子智能体已存在且归属他人，请改名或联系管理员' })
           return true
         }
+      }
+      try {
+        mergeAgentDisplay(body.display, (fallback || reuseTarget)?.display)
+      } catch (err: any) {
+        this.sendJson(res, 400, { ok: false, error: err.message })
+        return true
       }
       // 归属：新建 = 当前用户；更新既有（存量无归属）保持「无归属」原状，
       // 不得因管理员编辑一次就把共享存量资产静默变成其个人私有资产。
@@ -3027,7 +3124,9 @@ export class WorkBuddyRouter {
         this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
         return true
       }
+      const observedAt = performance.now()
       const { target, ping } = await this.resolver.resolveWithPing(agent)
+      this.monitor?.observeAgentHealth(agent, { online: ping?.ok === true, error: ping?.error, baseUrl: target?.baseUrl }, observedAt)
       this.sendJson(res, 200, {
         ok: true,
         data: {
@@ -3055,13 +3154,13 @@ export class WorkBuddyRouter {
     // 任务节点模型目录（聊天输入框模型切换弹层用）：按任务/项目绑定节点解析
     const taskModelsMatch = /^\/api\/tasks\/([^/]+)\/models$/.exec(p)
     if (taskModelsMatch && method === 'GET') {
-      const task = this.store.getTask(decodeURIComponent(taskModelsMatch[1]))
+      const task = this.taskForView(decodeURIComponent(taskModelsMatch[1]))
       if (!task) {
         this.sendJson(res, 404, { ok: false, error: 'Task not found' })
         return true
       }
       // __node__（节点主会话）无 store 记录 → resolveExecTarget 按任务/项目节点解析（公开方法）
-      const target = await this.engine.resolveExecTarget(task, '__node__').catch(() => undefined)
+      const target = await this.engine.resolveExecTarget(task, task.chatAgentId || '__node__').catch(() => undefined)
       if (!target?.online || !target?.baseUrl) {
         this.sendJson(res, 200, { ok: false, error: (target as any)?.error || '任务节点不可达', data: { models: [] } })
         return true
@@ -3872,7 +3971,36 @@ export class WorkBuddyRouter {
       return true
     }
 
+    // ---------- 活动态与按用户阅读位置 ----------
+    const readActivity = p.match(/^\/api\/tasks\/([^/]+)\/read$/)
+    if (p === '/api/activity' && method === 'GET' || readActivity && method === 'POST') {
+      try {
+        const activity = new TaskActivity(this.store, id => this.engine.isRunning(id))
+        const data = readActivity
+          ? activity.read(decodeURIComponent(readActivity[1]), await this.parseBody(req), this.session)
+          : activity.list(new URL(req.url || '/', 'http://localhost').searchParams, this.session)
+        res.setHeader('Cache-Control', 'no-store')
+        this.sendJson(res, 200, { ok: true, data })
+      } catch (err) {
+        if (!(err instanceof TaskHistoryError)) throw err
+        this.sendJson(res, err.status, { ok: false, code: err.code, error: err.message })
+      }
+      return true
+    }
+
     // ---------- 任务会话 ----------
+    if (p === '/api/tasks/history' && method === 'GET') {
+      try {
+        this.historyIndex ||= new TaskHistory(this.store)
+        const data = this.historyIndex.list(new URL(req.url || '/', 'http://localhost').searchParams, this.session)
+        res.setHeader('Cache-Control', 'no-store')
+        this.sendJson(res, 200, { ok: true, data })
+      } catch (err) {
+        if (!(err instanceof TaskHistoryError)) throw err
+        this.sendJson(res, err.status, { ok: false, code: err.code, error: err.message })
+      }
+      return true
+    }
     if (p === '/api/tasks' && method === 'GET') {
       // 可选 ?projectId= 过滤（项目工作台只看本项目任务）
       const urlTasks = new URL(req.url || '/', 'http://localhost')
@@ -3898,8 +4026,17 @@ export class WorkBuddyRouter {
       // 历史实现曾在此填「全部可用子智能体」，导致无 @ 新建的任务变成全员编排，附件随之上传扇出到所有节点。
       try {
         // §11：归属=当前会话用户（服务端权威，忽略 body 注入）；AI 工具通道无会话 → 缺省宽容模式
+        const routeArgs = taskRouteArgs(body, 'create')
+        if (routeArgs.chatAgentId) {
+          const agent = this.store.getAgent(String(routeArgs.chatAgentId))
+          if (!agent || !canUseAgent(this.session, agent, this.permContext())) {
+            this.sendJson(res, 404, { ok: false, code: 'AGENT_NOT_FOUND', error: 'BOT 不存在或无权使用' })
+            return true
+          }
+        }
         const task = await this.engine.createTask({
           ...body,
+          ...routeArgs,
           ownerUserId: this.session?.userId,
           creator: body.creator || 'tool',
         })
@@ -3978,8 +4115,11 @@ export class WorkBuddyRouter {
         }
         const body = await this.parseBody(req)
         try {
-          if (Array.isArray(body.memberAgentIds)) {
-            this.engine.updateMembers(taskId, body.memberAgentIds)
+          const route = taskRouteArgs({ ...body, message: 'validate task update' }, 'send', taskId)
+          if (route.teamId !== undefined) throw Object.assign(new Error('任务更新不支持修改 teamId；请创建新任务'), { code: 'INVALID_PARAM' })
+          this.engine.validateChatBinding(route, undefined, m.task)
+          if (route.memberAgentIds !== undefined) {
+            this.engine.updateMembers(taskId, route.memberAgentIds)
           }
           if (typeof body.title === 'string') {
             this.store.mutateTask(taskId, (t) => {
@@ -3988,7 +4128,7 @@ export class WorkBuddyRouter {
           }
           this.sendJson(res, 200, { ok: true, data: this.store.getTask(taskId) })
         } catch (err: any) {
-          this.sendJson(res, 400, { ok: false, error: err?.message })
+          this.sendJson(res, 400, { ok: false, code: err?.code || 'INVALID_PARAM', error: err?.message })
         }
         return true
       }
@@ -4002,10 +4142,13 @@ export class WorkBuddyRouter {
         return true
       }
       const body = await this.parseBody(req)
-      // teamId = composer 专家团选择器显式指定的本轮团队意图（@团队名 提及在引擎内解析）
-      const teamId = String(body?.teamId || '').trim()
-      const out = await this.engine.sendUserMessage(taskId, String(body.message || ''), teamId ? { teamId } : undefined)
-      this.sendJson(res, out.ok ? 202 : 400, out)
+      try {
+        const opts = taskRouteArgs(body, 'send', taskId)
+        const out = await this.engine.sendUserMessage(taskId, String(body.message || ''), opts)
+        this.sendJson(res, out.ok ? 202 : 400, out)
+      } catch (err: any) {
+        this.sendJson(res, 400, { ok: false, code: err?.code || 'INVALID_PARAM', error: err?.message || String(err) })
+      }
       return true
     }
     // 跨节点续接（P4-1）：新任务带最近对话原文草稿（不调用 LLM），双向链接原任务
@@ -4148,7 +4291,11 @@ export class WorkBuddyRouter {
         return true
       }
       // 未指定 agentId 时：优先任务的主会话（__node__），否则当前主智能体（与聊天窗模型切换语义一致）
-      const agentId = String(body?.agentId || '') || (task.sessions?.['__node__']?.remoteSessionId ? '__node__' : this.planner.pickMainAgent()?.id || '')
+      if (task.chatAgentId && body?.agentId !== undefined && body.agentId !== task.chatAgentId) {
+        this.sendJson(res, 400, { ok: false, code: 'INVALID_PARAM', error: 'agentId 与任务直聊绑定冲突' })
+        return true
+      }
+      const agentId = task.chatAgentId || String(body?.agentId || '') || (task.sessions?.['__node__']?.remoteSessionId ? '__node__' : this.planner.pickMainAgent()?.id || '')
       const binding = task.sessions?.[agentId]
       if (!agentId || !binding?.remoteSessionId) {
         this.sendJson(res, 400, { ok: false, error: '该成员在任务中没有远端会话绑定', code: 'NO_SESSION' })
@@ -4212,6 +4359,16 @@ export class WorkBuddyRouter {
         this.sendJson(res, 502, { ok: false, error: r.error || '更新会话模型失败' })
         return true
       }
+      if (task.chatAgentId) this.store.mutateTask(taskId, t => {
+        if (provider && model) t.model = `${provider}/${model}`
+        const effort = typeof body?.reasoningEffort === 'string' ? body.reasoningEffort : defaultModel?.reasoningEffort
+        if (effort) t.reasoningEffort = effort
+        else if (body?.reasoningEffort !== undefined || provider && model) delete t.reasoningEffort
+        if (typeof body?.agentPreset === 'string') {
+          if (body.agentPreset) t.agentPreset = body.agentPreset
+          else delete t.agentPreset
+        }
+      })
       this.sendJson(res, 200, {
         ok: true,
         data: { selected: r.selected, presetApplied: r.preset ? r.preset.applied : undefined, defaultModel },
@@ -4230,6 +4387,10 @@ export class WorkBuddyRouter {
         this.sendJson(res, 404, { ok: false, error: 'Task not found' })
         return true
       }
+      if (task.chatAgentId && body?.agentId !== undefined && body.agentId !== task.chatAgentId) {
+        this.sendJson(res, 400, { ok: false, code: 'INVALID_PARAM', error: 'agentId 与任务直聊绑定冲突' })
+        return true
+      }
       const preset = String(body?.preset || '').trim()
       this.store.mutateTask(taskId, (t): WorkTask => {
         if (preset) t.agentPreset = preset
@@ -4237,7 +4398,7 @@ export class WorkBuddyRouter {
         return t
       })
       // 尽力即时生效：主会话（__node__）优先，否则主智能体（与 session-model 语义一致）
-      const agentId = task.sessions?.['__node__']?.remoteSessionId ? '__node__' : this.planner.pickMainAgent()?.id || ''
+      const agentId = task.chatAgentId || (task.sessions?.['__node__']?.remoteSessionId ? '__node__' : this.planner.pickMainAgent()?.id || '')
       const binding = agentId ? task.sessions?.[agentId] : undefined
       if (!binding?.remoteSessionId) {
         this.sendJson(res, 200, { ok: true, data: { applied: false, reason: 'no-session', saved: true } })
@@ -4264,7 +4425,7 @@ export class WorkBuddyRouter {
         this.sendJson(res, 404, { ok: false, error: 'Task not found' })
         return true
       }
-      const agentId = task.sessions?.['__node__']?.remoteSessionId ? '__node__' : this.planner.pickMainAgent()?.id || ''
+      const agentId = task.chatAgentId || (task.sessions?.['__node__']?.remoteSessionId ? '__node__' : this.planner.pickMainAgent()?.id || '')
       const binding = agentId ? task.sessions?.[agentId] : undefined
       if (!binding?.remoteSessionId) {
         this.sendJson(res, 200, {
@@ -4301,7 +4462,7 @@ export class WorkBuddyRouter {
         this.sendJson(res, 404, { ok: false, error: 'Task not found' })
         return true
       }
-      const target = await this.engine.resolveExecTarget(task, '__node__').catch(() => undefined)
+      const target = await this.engine.resolveExecTarget(task, task.chatAgentId || '__node__').catch(() => undefined)
       if (!target?.online || !target?.baseUrl) {
         this.sendJson(res, 200, { ok: false, error: (target as any)?.error || '任务节点不可达', data: { presets: [] } })
         return true
@@ -4877,6 +5038,163 @@ export class WorkBuddyRouter {
         if (!this.engine.isRunning(taskId)) t.status = summary.status
       })
       this.sendJson(res, 200, { ok: true, data: this.store.getTask(taskId) })
+      return true
+    }
+
+    // ---------- 协作群（契约 docs/groups-web-sync-plan-2026-11-11.md §2；每用户 scope 隔离，v1 无共享群） ----------
+    // 身份只取 session.userId（review P13：调用方身份绝不可来自请求体）；无登录身份一律 401，不落共享桶（review P5）
+    const groupUser = (): string | undefined => {
+      const uid = this.session?.userId
+      if (!uid) this.sendJson(res, 401, { ok: false, code: 'UNAUTHORIZED', error: '群功能需要登录身份' })
+      return uid
+    }
+    // 存储错误码 → HTTP：SECTION_CONFLICT→409；INVALID_PARAM→400；STORE_*/意外异常→500 不得压 400（W1-6/契约 §2 写口严格口径）
+    const groupFail = (err: unknown): void => {
+      const e = err as any
+      const code = e instanceof GroupStoreError ? e.code : 'INTERNAL_ERROR'
+      const status = code === 'SECTION_CONFLICT' ? 409 : code === 'INVALID_PARAM' ? 400 : 500
+      this.sendJson(res, status, { ok: false, code, error: e?.message || String(err) })
+    }
+    if (p === '/api/groups' && method === 'GET') {
+      const uid = groupUser()
+      if (!uid) return true
+      this.sendJson(res, 200, { ok: true, data: this.groupStore.list(uid) })
+      return true
+    }
+    if (p === '/api/groups' && method === 'POST') {
+      const uid = groupUser()
+      if (!uid) return true
+      const body = await this.parseBody(req)
+      try {
+        // POST = 整实体 create/upsert（缺 id 服务端生成）；同 id 覆盖时保 createdAt/createdBy（服务端权威，review P10）
+        const bodyId = typeof body?.id === 'string' ? body.id.trim() : ''
+        const existing = bodyId ? this.groupStore.get(uid, bodyId) : undefined
+        const id = existing?.id ?? bodyId ?? ''
+        const room = normalizeGroupRoom(body, undefined, {
+          id: id || randomUUID(),
+          now: Date.now(),
+          createdAt: existing?.createdAt,
+          createdBy: existing?.createdBy ?? (this.session?.username || uid),
+          prevLastReadSeq: existing?.lastReadSeq,
+        })
+        this.sendJson(res, 200, { ok: true, data: this.groupStore.upsert(uid, room) })
+      } catch (err) {
+        groupFail(err)
+      }
+      return true
+    }
+    const groupMatch = /^\/api\/groups\/([^/]+)$/.exec(p)
+    if (groupMatch) {
+      const uid = groupUser()
+      if (!uid) return true
+      const roomId = decodeURIComponent(groupMatch[1])
+      const existing = this.groupStore.get(uid, roomId)
+      if (method === 'GET') {
+        if (!existing) { this.sendJson(res, 404, { ok: false, code: 'NOT_FOUND', error: '群不存在' }); return true }
+        this.sendJson(res, 200, { ok: true, data: existing })
+        return true
+      }
+      if (method === 'PUT') {
+        // PUT = 部分字段更新：mergeBase=existing 后走 upsert 幂等语义；不存在 → 404（lead 裁定②）
+        if (!existing) { this.sendJson(res, 404, { ok: false, code: 'NOT_FOUND', error: '群不存在' }); return true }
+        const body = await this.parseBody(req)
+        try {
+          const room = normalizeGroupRoom(body, existing, {
+            id: existing.id,
+            now: Date.now(),
+            createdAt: existing.createdAt,
+            createdBy: existing.createdBy,
+            prevLastReadSeq: existing.lastReadSeq,
+          })
+          this.sendJson(res, 200, { ok: true, data: this.groupStore.upsert(uid, room) })
+        } catch (err) {
+          groupFail(err)
+        }
+        return true
+      }
+      if (method === 'DELETE') {
+        // 不存在静默幂等（200 deleted:false）；级联清 rounds 孤儿键（契约 §1）
+        const deleted = this.groupStore.delete(uid, roomId)
+        if (deleted) this.audit('group.delete', 'group', roomId, existing?.name)
+        this.sendJson(res, 200, { ok: true, data: { deleted } })
+        return true
+      }
+    }
+    if (p === '/api/group-sections' && method === 'GET') {
+      const uid = groupUser()
+      if (!uid) return true
+      this.sendJson(res, 200, { ok: true, data: this.groupStore.sections(uid) })
+      return true
+    }
+    if (p === '/api/group-sections' && method === 'POST') {
+      const uid = groupUser()
+      if (!uid) return true
+      const body = await this.parseBody(req)
+      try {
+        this.sendJson(res, 200, { ok: true, data: this.groupStore.addSection(uid, body?.name) })
+      } catch (err) {
+        groupFail(err)
+      }
+      return true
+    }
+    const groupSectionMatch = /^\/api\/group-sections\/([^/]+)$/.exec(p)
+    if (groupSectionMatch) {
+      const uid = groupUser()
+      if (!uid) return true
+      const name = decodeURIComponent(groupSectionMatch[1])
+      if (method === 'PUT') {
+        const body = await this.parseBody(req)
+        try {
+          const r = this.groupStore.renameSection(uid, name, body?.to)
+          this.sendJson(res, 200, { ok: true, data: r })
+        } catch (err) {
+          groupFail(err)
+        }
+        return true
+      }
+      if (method === 'DELETE') {
+        // 空白名 400（lead 裁定③）；不存在有效名静默幂等；级联 rooms.section 置 ""
+        try {
+          this.sendJson(res, 200, { ok: true, data: this.groupStore.removeSection(uid, name) })
+        } catch (err) {
+          groupFail(err)
+        }
+        return true
+      }
+    }
+    const groupRoundsMatch = /^\/api\/groups\/([^/]+)\/rounds$/.exec(p)
+    if (groupRoundsMatch) {
+      const uid = groupUser()
+      if (!uid) return true
+      const roomId = decodeURIComponent(groupRoundsMatch[1])
+      if (method === 'GET') {
+        if (!this.groupStore.get(uid, roomId)) { this.sendJson(res, 404, { ok: false, code: 'NOT_FOUND', error: '群不存在' }); return true }
+        this.sendJson(res, 200, { ok: true, data: this.groupStore.rounds(uid, roomId) })
+        return true
+      }
+      if (method === 'POST') {
+        if (!this.groupStore.get(uid, roomId)) { this.sendJson(res, 404, { ok: false, code: 'NOT_FOUND', error: '群不存在' }); return true }
+        const body = await this.parseBody(req)
+        const taskId = typeof body?.taskId === 'string' ? body.taskId.trim() : ''
+        if (!taskId) { this.sendJson(res, 400, { ok: false, code: 'INVALID_PARAM', error: 'taskId 必须是非空字符串' }); return true }
+        this.sendJson(res, 200, { ok: true, data: this.groupStore.addRound(uid, roomId, taskId) })
+        return true
+      }
+    }
+    const groupReadMatch = /^\/api\/groups\/([^/]+)\/read$/.exec(p)
+    if (groupReadMatch && method === 'POST') {
+      const uid = groupUser()
+      if (!uid) return true
+      const roomId = decodeURIComponent(groupReadMatch[1])
+      if (!this.groupStore.get(uid, roomId)) { this.sendJson(res, 404, { ok: false, code: 'NOT_FOUND', error: '群不存在' }); return true }
+      const body = await this.parseBody(req)
+      const seq = body?.lastReadSeq
+      if (typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq < 0) {
+        this.sendJson(res, 400, { ok: false, code: 'INVALID_PARAM', error: 'lastReadSeq 必须是非负整数' })
+        return true
+      }
+      // markRead 存储层同步读-改-写，单调不回退（契约 §1；review P8）
+      this.sendJson(res, 200, { ok: true, data: this.groupStore.markRead(uid, roomId, seq) })
       return true
     }
 

@@ -3,7 +3,7 @@
  *
  * 版本号采用日期发布风格：YYYY.M.D（如 2026.9.15）。
  * 单一事实来源为 package.json 的 version 字段：
- *   - 读取: readPackageVersion()（就近向上找 package.json，兼容 dist/ 与 lib/ 两种部署位置）
+ *   - 读取: readPackageVersion()（构建产物优先使用构建时注入值；源码执行时就近向上找 package.json）
  *   - 展示: formatDateVersion() 归一化为 YYYY.M.D（无月份时视为 1 月）
  *   - 升级: npm run version:bump [-- y.m.d]（写回 package.json）
  */
@@ -18,8 +18,12 @@ export interface DateVersionParts {
   day: number
 }
 
-/** 向上查找并解析 package.json 的 version 字段（找不到返回 '0.0.0'） */
+/** Replaced by the standalone build with package.json's version; travels with copied dist. */
+const BUILD_VERSION: string = '__WORKBUDDY_BUILD_VERSION__'
+
+/** Built artifacts report their build version; source execution falls back to package.json. */
 export function readPackageVersion(): string {
+  if (BUILD_VERSION !== '__WORKBUDDY_' + 'BUILD_VERSION__') return BUILD_VERSION
   const here = dirname(fileURLToPath(import.meta.url))
   for (let d = here; ; ) {
     const candidate = join(d, 'package.json')

@@ -26,6 +26,7 @@ import type { SshResourceStore } from './ssh-store.js'
 import type { Orchestrator } from './orchestrator.js'
 import { DshClient } from './remote-client.js'
 import type { PlanSubtask, ResolvedEndpoint, ScheduledTask, SubAgent, TaskEvent, WorkTask } from './types.js'
+import { dshRefKey } from './workspace.js'
 import { sumUsageSince } from './token-stats.js'
 
 // ---------------------------------------------------------------- 数据形状
@@ -81,11 +82,13 @@ export interface AgentResourceView {
 }
 
 export interface AgentMonitor {
+  nodeId: string
   id: string
   name: string
   model?: string
   enabled: boolean
   online: boolean
+  healthObserved?: boolean
   error?: string
   busy: boolean
   runningCount: number
@@ -241,7 +244,7 @@ export class MonitorService {
   private stopped = false
 
   /** 子智能体健康（健康巡检写入，overview 直接读取；HTTP 轮询不触发巡检） */
-  private health = new Map<string, { online: boolean; error?: string; baseUrl?: string; at: number }>()
+  private health = new Map<string, { online: boolean; error?: string; baseUrl?: string; at: number; refKey?: string }>()
   /** 资源入口最近一次观测（端口漂移检测） */
   private seenEndpoints = new Map<string, { baseUrl: string; name: string; online: boolean }>()
   /** 任务状态迁移追踪（engine 事件 → 生命周期事件） */
@@ -390,7 +393,7 @@ export class MonitorService {
   private record(e: MonitorEvent): void {
     this.ring.unshift(e)
     if (this.ring.length > 500) this.ring.length = 500
-    this.overviewCache = null
+    if (e.kind !== 'agent_online' && e.kind !== 'agent_offline') this.overviewCache = null
     this.appendEventFile(e)
   }
 
@@ -409,12 +412,23 @@ export class MonitorService {
 
   // ---------- 健康巡检 ----------
 
+  public observeAgentHealth(agent: SubAgent, observation: { online: boolean; error?: string; baseUrl?: string }, startedAt = performance.now()): void {
+    // A slower sweep must not overwrite a newer explicit probe or a rebound BOT.
+    const current = this.store.getAgent(agent.id)
+    if (!current || current.enabled === false || dshRefKey(current.dshRef) !== dshRefKey(agent.dshRef)) return
+    if ((this.health.get(agent.id)?.at ?? -1) > startedAt) return
+    this.health.set(agent.id, { ...observation, at: startedAt, refKey: dshRefKey(agent.dshRef) })
+    // peekOverview is a no-I/O projection; keep the structural snapshot and overlay
+    // the latest observations there, including while buildOverview is in flight.
+  }
+
   private async healthSweep(): Promise<void> {
     if (this.stopped) return
     try {
       const agents = this.store.getAgents()
       for (const agent of agents) {
         if (!agent.enabled) { this.health.delete(agent.id); continue }
+        const startedAt = performance.now()
         const target = await this.resolver.resolve(agent).catch(() => undefined)
         const prev = this.health.get(agent.id)
         const cur = {
@@ -423,7 +437,7 @@ export class MonitorService {
           baseUrl: target?.baseUrl || undefined,
           at: Date.now(),
         }
-        this.health.set(agent.id, cur)
+        this.observeAgentHealth(agent, cur, startedAt)
         if (prev && prev.online && !cur.online) {
           this.record({ at: Date.now(), kind: 'agent_offline', level: 'error', agentId: agent.id, msg: `子智能体「${agent.name}」离线${cur.error ? '：' + cur.error : ''}` })
         } else if (prev && !prev.online && cur.online) {
@@ -544,13 +558,38 @@ export class MonitorService {
 
   // ---------- 聚合总览 ----------
 
+  /** No IO, no cache rebuild: dispatch preview must remain strictly read-only. */
+  public peekOverview(): MonitorOverview | undefined {
+    const snapshot = this.overviewCache?.value
+    if (!snapshot) return undefined
+    const agents = this.store.getAgents().map(agent => {
+      const old = snapshot.agents.find(a => a.id === agent.id)
+      const observation = this.health.get(agent.id)
+      const h = observation?.refKey === dshRefKey(agent.dshRef) ? observation : undefined
+      return {
+        ...old, id: agent.id, name: agent.name, nodeId: dshRefKey(agent.dshRef) || 'unknown',
+        enabled: agent.enabled !== false, online: agent.enabled !== false && Boolean(h?.online),
+        healthObserved: Boolean(h), error: agent.enabled === false ? '已停用' : h?.error,
+        busy: old?.busy ?? false, runningCount: old?.runningCount ?? 0, taskCount: old?.taskCount ?? 0,
+        resources: old?.resources ?? [],
+      }
+    })
+    return { ...snapshot, agents, events: this.ring.slice(0, snapshot.events.length || 50), kpi: { ...snapshot.kpi, agentsTotal: agents.length, agentsOnline: agents.filter(a => a.online).length, agentsDisabled: agents.filter(a => !a.enabled).length } }
+  }
+
   public async getOverview(force = false): Promise<MonitorOverview> {
-    if (!force && this.overviewCache && Date.now() - this.overviewCache.at < OVERVIEW_CACHE_MS) return this.overviewCache.value
+    const currentAgents = this.store.getAgents()
+    const cachedAgents = this.overviewCache?.value.agents
+    // Health-only overlays must not expose newly added agents with placeholder resources
+    // to the full overview API. Rebuild structural views before serving that API.
+    const structureMatches = cachedAgents?.length === currentAgents.length && currentAgents.every(agent =>
+      cachedAgents?.some(cached => cached.id === agent.id && cached.nodeId === (dshRefKey(agent.dshRef) || 'unknown')))
+    if (!force && structureMatches && this.overviewCache && Date.now() - this.overviewCache.at < OVERVIEW_CACHE_MS) return this.peekOverview()!
     if (this.overviewInflight) return this.overviewInflight
     this.overviewInflight = this.buildOverview().finally(() => { this.overviewInflight = null })
     const value = await this.overviewInflight
     this.overviewCache = { at: Date.now(), value }
-    return value
+    return this.peekOverview()!
   }
 
   public getRecentEvents(limit: number): MonitorEvent[] {
@@ -676,10 +715,12 @@ export class MonitorService {
         : act[0]
       return {
         id: a.id,
+        nodeId: dshRefKey(a.dshRef) || 'unknown',
         name: a.name,
         model: [a.provider, a.model].filter(Boolean).join('/') || undefined,
         enabled: a.enabled !== false,
         online: a.enabled !== false && Boolean(h?.online),
+        healthObserved: Boolean(h),
         error: a.enabled !== false ? h?.error : '已停用',
         busy: myRunning.length > 0,
         runningCount: myRunning.length,

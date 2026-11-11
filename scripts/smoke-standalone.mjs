@@ -443,7 +443,7 @@ async function main() {
   // ---------- 6. 工具 HTTP 通道 ----------
   const toolList = await req('GET', `${PREFIX}/api/tools`)
   const toolNames = (toolList.json?.tools || []).map((t) => t.name)
-  check('工具清单暴露 16 个工具（含 team_manage / backlog_manage）', toolList.status === 200 && toolNames.length === 16 && toolNames.includes('workbuddy_project_manage') && toolNames.includes('workbuddy_task_ask_answer') && toolNames.includes('workbuddy_expert_manage') && toolNames.includes('workbuddy_team_manage') && toolNames.includes('workbuddy_backlog_manage'), toolNames.join(','))
+  check('工具清单包含核心工具（含 team_manage / backlog_manage）', toolList.status === 200 && toolNames.length >= 16 && toolNames.includes('workbuddy_project_manage') && toolNames.includes('workbuddy_task_ask_answer') && toolNames.includes('workbuddy_expert_manage') && toolNames.includes('workbuddy_team_manage') && toolNames.includes('workbuddy_backlog_manage'), toolNames.join(','))
   check('工具清单含参数 schema', (toolList.json?.tools || []).every((t) => t.parameters && typeof t.parameters === 'object'))
 
   const toolListCall = await req('POST', `${PREFIX}/api/tools/workbuddy_resource_manage`, { action: 'list' })
@@ -547,6 +547,8 @@ async function main() {
   const withToken = await fetch(`http://127.0.0.1:${PORT2}${PREFIX}/api/tools`, { headers: { Authorization: 'Bearer secret-token' } }).then((r) => r.status)
   check('工具通道无令牌被拒（401）', noToken === 401, `status=${noToken}`)
   check('工具通道携带令牌放行（200）', withToken === 200, `status=${withToken}`)
+  const historyService = await fetch(`http://127.0.0.1:${PORT2}${PREFIX}/api/tasks/history`, { headers: { Authorization: 'Bearer secret-token' } })
+  check('BOT 历史索引拒绝无用户绑定服务令牌（403）', historyService.status === 403, `status=${historyService.status}`)
   const tLogin = await fetch(`http://127.0.0.1:${PORT2}${PREFIX}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
