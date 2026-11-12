@@ -62,9 +62,17 @@ function nodeAliases(ref: DshRef, directory: OnenatDirectory): Set<string> {
 export function requireWorkspacePath(session: PermSession | undefined, project: Project, projects: Project[], directory: OnenatDirectory, target: string, write: boolean, recursive = false): void {
   if (!session || isPlatformAdmin(session)) return
   const keys = nodeAliases(project.dshRef, directory)
+  const root = normalizeWorkspacePath(project.workspace)
   for (const other of projects) {
     if (other.id === project.id || !other.workspace || ![...nodeAliases(other.dshRef, directory)].some(k => keys.has(k))) continue
     const otherRoot = normalizeWorkspacePath(other.workspace)!
+    // 祖先工作区豁免：所有调用点的 target 都已由 projectFilePath 约束在本项目根内。
+    // 当其他项目根是真祖先（严格包含本项目根，如某项目工作区配成用户主目录/上层开发目录）时，
+    // 重叠区完全落在本项目根内——读写自己的项目文件不会触碰祖先项目根之外的任何文件，
+    // 不能因无权编辑祖先项目而拒绝（否则祖先项目的所有子孙项目附件上传/文件管理全部误伤 403）。
+    // 真包含判定双向排除同根目录：祖先(other ⊋ project)才豁免；同根/被包含(other ⊆ project)仍按下方校验，
+    // 嵌套在本项目内的其他项目文件照旧受保护。
+    if (root && workspaceContains(otherRoot, root) && !workspaceContains(root, otherRoot)) continue
     if (!workspaceContains(otherRoot, target) && !(recursive && workspaceContains(target, otherRoot))) continue
     if (!canAccessProject(session, other, write ? 'edit' : 'view') || (write && other.archivedAt)) throw new WorkspaceFileError(403, 'WORKSPACE_PATH_DENIED', '该路径不在当前授权范围内')
   }
