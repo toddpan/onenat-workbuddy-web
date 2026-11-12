@@ -2320,11 +2320,40 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 @keyframes topo-spin { to { transform: rotate(360deg); } }
 .agent-card .live-state { font-size: 11px; font-weight: 600; }
 .agent-card .activity { font-size: 11.5px; color: var(--tx2); margin: 4px 0 0 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 存在感副行：正在干什么 + 在几个群/项目里（点开直达） */
+.agent-where { display: flex; align-items: center; gap: 6px; margin: 7px 0 2px; flex-wrap: wrap; }
+.agent-where .aw-task { border: 1px solid rgba(77,107,254,.35); background: var(--pri-light); color: var(--pri); border-radius: 999px; font-size: 11px; padding: 3px 10px; cursor: pointer; max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-where .aw-task:hover { border-color: var(--pri); }
+.agent-where .aw-idle { font-size: 11px; color: var(--tx3); }
+.agent-where .aw-pill { border: 1px solid var(--line); background: var(--bg3); color: var(--tx2); border-radius: 999px; font-size: 11px; padding: 3px 9px; cursor: pointer; flex: none; }
+.agent-where .aw-pill:hover { border-color: var(--pri); color: var(--pri); }
+.agent-card .ag-pick { margin-right: 2px; flex: none; }
 .proj-card { border: 1px solid var(--line); border-radius: var(--rad); background: var(--bg2); padding: 14px 16px; cursor: pointer; transition: border-color .15s, transform .15s; }
 .proj-card:hover { border-color: var(--pri); transform: translateY(-1px); }
 .proj-card .pj-name { font-weight: 700; font-size: 15px; margin-bottom: 4px; }
 .proj-card .pj-meta { font-size: 11.5px; color: var(--tx3); line-height: 1.6; }
 .proj-card .pj-ins { font-size: 11.5px; color: var(--tx2); margin: 6px 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* 项目卡：节点 chip / 待办进度条 / 成员头像组 / 归档态 */
+.proj-card .pj-node-chip { margin-left: 8px; font-size: 10.5px; font-weight: 500; color: var(--tx3); background: var(--bg3); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; vertical-align: 1px; }
+.proj-card .pj-ws { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+.proj-card .pj-prog { display: flex; height: 5px; border-radius: 3px; background: var(--line2); overflow: hidden; margin: 9px 0 4px; }
+.proj-card .pj-prog i { display: block; height: 100%; transition: width .3s ease; }
+.proj-card .pj-prog .pjp-done { background: var(--ok); }
+.proj-card .pj-prog .pjp-blocked { background: var(--err); }
+.proj-card .pj-prog-lbl { font-size: 11px; color: var(--tx3); }
+.proj-card .pj-people { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.proj-card .pj-avs { display: inline-flex; align-items: center; }
+.proj-card .pj-av { width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; color: #fff; border: 2px solid var(--bg2); margin-left: -5px; flex: none; }
+.proj-card .pj-av:first-child { margin-left: 0; }
+.proj-card .pj-av-more, .proj-card .pj-av-none { background: var(--bg3); color: var(--tx3); font-weight: 600; }
+.proj-card .pj-task-n { margin-left: auto; font-size: 11px; color: var(--tx3); flex: none; }
+.proj-card .pj-ops { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+.proj-card.archived { filter: grayscale(.55); opacity: .82; }
+.proj-card.archived:hover { filter: grayscale(0); opacity: 1; }
+.pj-archive-zone { margin-top: 18px; border-top: 1px dashed var(--line2); padding-top: 10px; }
+.pj-archive-head { background: none; border: none; padding: 4px 2px 10px; font-size: 12.5px; color: var(--tx3); cursor: pointer; font-weight: 600; }
+.pj-archive-head:hover { color: var(--tx); }
+.proj-grid.collapsed { display: none; }
 .pj-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
 .pj-form-row { display: flex; gap: 10px; margin-bottom: 10px; }
 .pj-form-row .field { flex: 1; margin: 0; }
@@ -2431,6 +2460,18 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .bl-card .bl-title:hover { color: var(--pri); }
 .bl-card .meta { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 5px; align-items: center; color: var(--tx3); font-size: 11px; }
 .bl-card .ops { display: flex; gap: 6px; margin-top: 7px; }
+/* 待办卡片：负责人行（谁接的活）+ 改派入口 */
+.bl-who-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.bl-who { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--tx2); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bl-who i { width: 15px; height: 15px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700; color: #fff; font-style: normal; flex: none; }
+.bl-who-none { color: var(--tx3); font-style: italic; }
+.bl-who-task { font-size: 11px; color: var(--tx3); }
+.bl-assign { opacity: 0; transition: opacity .12s ease; }
+.bl-card:hover .bl-assign { opacity: 1; }
+.bl-head-row { display: flex; align-items: center; gap: 4px; }
+.bl-assign-list { display: flex; flex-direction: column; gap: 2px; max-height: 52vh; overflow-y: auto; }
+.bl-assign-row { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 7px; cursor: pointer; font-size: 13px; }
+.bl-assign-row:hover { background: var(--bg3); }
 .bl-tag { display: inline-block; padding: 1px 7px; border-radius: 8px; border: 1px solid var(--line); font-size: 10.5px; color: var(--tx2); }
 .bl-badge { cursor: pointer; }
 .bl-empty { color: var(--tx3); font-size: 12px; padding: 10px; }
@@ -2462,6 +2503,84 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .bl-st-ready { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); background: color-mix(in srgb, var(--ok) 8%, transparent); }
 .bl-st-blocked { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, transparent); background: color-mix(in srgb, var(--err) 8%, transparent); }
 .bl-link { color: var(--pri); cursor: pointer; }
+
+/* ---------- 协作群：常驻双栏（左栏群列表永不消失） ---------- */
+.groups-shell { flex: 1; display: flex; min-height: 0; gap: 0; }
+.groups-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+#group-list-panel { width: 312px; flex: none; border-right: 1px solid var(--line); overflow: hidden; }
+#group-chat-panel { flex: 1; border-left: 0; }
+.gpane-head { display: flex; align-items: center; gap: 8px; padding: 14px 14px 10px; flex: none; }
+.gpane-head h2 { font-size: 15px; white-space: nowrap; }
+.gpane-search { display: flex; align-items: center; gap: 8px; padding: 0 12px 8px; flex: none; }
+.gpane-search .topo-search { flex: 1; min-width: 0; }
+.gpane-list { flex: 1; overflow-y: auto; padding: 0 8px 16px; }
+.btn.mini { padding: 4px 9px; font-size: 12px; line-height: 1.5; flex: none; }
+.gmsgs { flex: 1; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.gcomposer { display: flex; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--dsw-alias-border-l2); flex: none; align-items: center; }
+/* 成员活动条：一眼看到谁在跑 / 谁在等 / 谁挂了 */
+.group-presence { display: flex; gap: 6px; align-items: center; padding: 6px 14px 2px; flex-wrap: wrap; flex: none; }
+.group-presence:empty { display: none; }
+.gp-pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--tx2); background: var(--bg3); border: 1px solid var(--line); border-radius: 999px; padding: 3px 9px 3px 7px; cursor: pointer; white-space: nowrap; transition: border-color .15s ease, background .15s ease; }
+.gp-pill:hover { border-color: var(--pri); background: var(--pri-light); }
+.gp-pill .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--tx3); }
+.gp-pill.st-running .dot { background: var(--pri); animation: pulse 1.2s infinite; }
+.gp-pill.st-ask .dot { background: var(--warn); animation: pulse 1.2s infinite; }
+.gp-pill.st-done .dot { background: var(--ok); }
+.gp-pill.st-fail .dot { background: var(--err); }
+/* 双栏在窄屏退回单栏：进群时隐藏列表，返回键「‹」回到列表 */
+/* 群消息区空态 */
+.g-empty { margin: auto; text-align: center; color: var(--tx3); padding: 28px 16px 40px; }
+.g-empty-ic { font-size: 30px; line-height: 1; margin-bottom: 10px; opacity: .8; }
+.g-empty-t { font-size: 14px; font-weight: 600; color: var(--tx2); margin-bottom: 4px; }
+.g-empty-s { font-size: 12px; max-width: 320px; margin: 0 auto; line-height: 1.6; }
+/* 群内计划条：一条可展开的进度带 */
+.gplan { border: 1px solid var(--line); border-radius: var(--rad-sm); background: var(--bg2); padding: 8px 10px; margin-bottom: 2px; flex: none; }
+.gplan.live { border-color: rgba(77,107,254,.35); background: var(--pri-light); }
+.gplan-bar { display: block; height: 3px; border-radius: 2px; background: var(--line2); overflow: hidden; margin-bottom: 6px; }
+.gplan-bar i { display: block; height: 100%; background: var(--ok); border-radius: 2px; transition: width .35s ease; }
+.gplan-toggle { font-size: 11.5px; color: var(--tx2); cursor: pointer; user-select: none; font-weight: 600; letter-spacing: .01em; }
+.gplan-toggle:hover { color: var(--pri); }
+.gplan-body { margin-top: 6px; display: flex; flex-direction: column; gap: 1px; }
+.gplan-row { display: flex; align-items: center; gap: 7px; padding: 3px 2px; font-size: 11.5px; color: var(--tx2); border-radius: 5px; }
+.gplan-row:hover { background: var(--bg3); }
+.gplan-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.gplan-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gplan-a { color: var(--tx3); font-size: 10.5px; flex: none; max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gp-pill.st-pending .dot { background: var(--tx3); }
+.gp-pill.st-off { opacity: .55; }
+/* 本轮产出文件墙：各节点成员写入的文件在群里直接可见 */
+.gfiles { border: 1px solid var(--line); border-radius: var(--rad-sm); background: var(--bg2); padding: 8px 10px; flex: none; }
+.gfiles-h { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; color: var(--tx2); margin-bottom: 6px; }
+.gfiles-cnt { background: var(--bg3); border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; font-size: 10.5px; color: var(--tx3); }
+.gfiles-hint { font-size: 10.5px; color: var(--tx3); font-weight: 400; }
+.gfiles-body { display: flex; flex-direction: column; gap: 1px; }
+.gfile { display: flex; align-items: center; gap: 7px; padding: 3px 2px; font-size: 11.5px; border-radius: 5px; cursor: pointer; }
+.gfile:hover { background: var(--bg3); }
+.gfile-ic { flex: none; font-size: 11px; opacity: .8; }
+.gfile-n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tx2); font-family: var(--mono); }
+.gfile-who { flex: none; font-size: 10.5px; font-weight: 600; max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gmsgs.gdrag-on { outline: 2px dashed var(--pri); outline-offset: -6px; border-radius: 8px; background: var(--pri-light); }
+/* 群行头像：未读/进行中时用主色，一眼分辨活跃群 */
+.grow-av { width: 28px; height: 28px; border-radius: 9px; flex: none; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; background: var(--bg3); color: var(--tx2); border: 1px solid var(--line); }
+.task-item.is-open .grow-av { border-color: rgba(77,107,254,.35); }
+
+/* ---------- 导航未读角标（不进群也能看到有新消息） ---------- */
+nav button { position: relative; }
+.nav-badge { position: absolute; top: 1px; right: 2px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 999px; background: var(--err); color: #fff; font-size: 9.5px; font-weight: 700; line-height: 15px; text-align: center; box-shadow: 0 0 0 2px var(--bg); pointer-events: none; }
+
+/* 双栏在窄屏退回单栏：进群时隐藏列表，返回键「‹」回到列表 */
+@media (max-width: 900px) {
+  .groups-shell { position: relative; }
+  #group-list-panel { width: 100%; border-right: 0; }
+  #group-chat-panel { display: none; position: absolute; inset: 0; background: var(--bg); z-index: 2; }
+  .groups-shell.chat-open #group-list-panel { display: none; }
+  .groups-shell.chat-open #group-chat-panel { display: flex; }
+  /* 移动端热区 */
+  .gp-pill { min-height: 32px; padding: 5px 11px; font-size: 12px; }
+  .gcomposer .btn { min-height: 38px; }
+  #group-list-panel .gpane-head, #group-chat-panel .gpane-head { flex-wrap: nowrap; }
+}
+
 /* 分组头右侧操作区「进入工作台 · 看板」：与 .mini-btn 同款，禁止压缩/换行（X5 旧内核 flex 收缩会把文案挤断） */
 .bl-group-h .bl-enter-btn, .bl-group-h .bl-board-btn { flex: none; white-space: nowrap; }
 @media (max-width: 768px) {
@@ -2491,7 +2610,7 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
       <button data-v="work" class="on"><span class="ic">💬</span><span class="lb">工作台</span></button>
       <button data-v="projects"><span class="ic">📦</span><span class="lb">项目</span></button>
       <button data-v="backlog"><span class="ic">✅</span><span class="lb">待办</span></button>
-      <button data-v="groups"><span class="ic">👥</span><span class="lb">群</span></button>
+      <button data-v="groups"><span class="ic">👥</span><span class="lb">群</span><span class="nav-badge" id="nav-group-badge" style="display:none"></span></button>
       <button data-v="monitor"><span class="ic">📊</span><span class="lb">监控大屏</span></button>
       <button data-v="agents"><span class="ic">🤖</span><span class="lb">子智能体</span></button>
       <span class="nav-sep" aria-hidden="true"></span>
@@ -2729,40 +2848,43 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
       </div>
     </div>
     <div class="view" id="view-groups">
-      <div class="panel" id="group-list-panel">
-        <div class="panel-head">
-          <h2>👥 协作群</h2>
-          <span class="sub">群 = 成员 + 频道（orchestrate 任务）+ 首页分组。群元数据平台承载，群聊复用任务通道；发送即自动开启/续接讨论轮。</span>
-          <span class="hspacer"></span>
-          <button class="btn pri" id="btn-group-new">＋ 发起群聊</button>
-        </div>
-        <div class="topo-toolbar">
-          <input id="group-q" class="topo-search" placeholder="搜索群名 / 成员 / 分组">
-          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--tx3);white-space:nowrap"><input type="checkbox" id="group-archived-toggle"> 显示已归档</label>
-        </div>
-        <div id="group-list"><div class="mon-empty">加载中…</div></div>
-      </div>
-      <div class="panel" id="group-chat-panel" style="display:none">
-        <div class="panel-head">
-          <button class="btn" id="group-chat-back">‹ 返回列表</button>
-          <div style="min-width:0">
-            <div id="group-chat-title" style="font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
-            <div id="group-chat-sub" class="sub"></div>
+      <div class="groups-shell" id="groups-shell">
+        <div class="groups-pane" id="group-list-panel">
+          <div class="gpane-head">
+            <h2>👥 协作群</h2>
+            <span class="hspacer"></span>
+            <button class="btn pri" id="btn-group-new" title="发起群聊">＋ 建群</button>
           </div>
-          <span class="hspacer"></span>
-          <button class="btn" id="group-chat-mention" title="插入成员点名">@</button>
-          <button class="btn" id="group-chat-history">‹ 历史轮次 ›</button>
-          <button class="btn" id="group-chat-end">⏹ 结束本轮</button>
-          <button class="btn" id="group-chat-settings">⚙ 群设置</button>
+          <div class="gpane-search">
+            <input id="group-q" class="topo-search" placeholder="搜索群名 / 成员 / 分组">
+            <label title="显示已归档"><input type="checkbox" id="group-archived-toggle"></label>
+          </div>
+          <div id="group-list" class="gpane-list"><div class="mon-empty">加载中…</div></div>
         </div>
-        <div id="group-chat-banner"></div>
-        <div id="group-chat-msgs" style="max-height:54vh;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:8px"></div>
-        <div id="group-chat-err" style="display:none;color:var(--err);font-size:12px;padding:4px 14px"></div>
-        <div style="display:flex;gap:8px;padding:8px 12px;border-top:1px solid var(--dsw-alias-border-l2)">
-          <input id="group-chat-input" style="flex:1" placeholder="发消息…（@成员名 点名；频道空闲时发送即开启新一轮）">
-          <button class="btn pri" id="group-chat-send">发送</button>
+        <div class="groups-pane" id="group-chat-panel">
+          <div class="gpane-head">
+            <button class="btn mini" id="group-chat-back" title="返回群列表">‹</button>
+            <div style="min-width:0;flex:1">
+              <div id="group-chat-title" style="font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
+              <div id="group-chat-sub" class="sub"></div>
+            </div>
+            <button class="btn mini" id="group-chat-mention" title="插入成员点名">@</button>
+            <button class="btn mini" id="group-chat-history" title="历史轮次">🕘</button>
+            <button class="btn mini" id="group-chat-end" title="结束本轮">⏹</button>
+            <button class="btn mini" id="group-chat-settings" title="群设置">⚙</button>
+          </div>
+          <div id="group-presence" class="group-presence"></div>
+          <div id="group-chat-banner"></div>
+          <div id="group-chat-msgs" class="gmsgs"></div>
+          <div id="group-chat-err" style="display:none;color:var(--err);font-size:12px;padding:4px 14px"></div>
+          <div class="gcomposer">
+            <button class="btn mini" id="group-attach" title="上传文件到本轮共享工作区">📎</button>
+            <input type="file" id="group-file-input" multiple style="display:none">
+            <input id="group-chat-input" style="flex:1" placeholder="发消息…（@成员名 点名；频道空闲时发送即开启新一轮）">
+            <button class="btn pri" id="group-chat-send">发送</button>
+          </div>
+          <div id="group-chat-footnote" class="hint" style="padding:2px 14px 8px;margin:0"></div>
         </div>
-        <div id="group-chat-footnote" class="hint" style="padding:2px 14px 8px;margin:0"></div>
       </div>
     </div>
     <div class="view" id="view-projects">
@@ -2775,7 +2897,8 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
           <button class="btn pri" id="btn-proj-new">＋ 新建项目</button>
         </div>
         <div class="topo-toolbar">
-          <input id="proj-q" class="topo-search" placeholder="搜索项目名 / 工作区路径">
+          <input id="proj-q" class="topo-search" placeholder="搜索项目名 / 工作区 / 指令 / 技能">
+          <div class="topo-chips" id="proj-scope"></div>
           <div class="topo-chips" id="proj-chips"></div>
         </div>
         <div id="proj-groups"><div class="mon-empty">加载中…</div></div>
@@ -2937,6 +3060,13 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
         <div class="topo-chips" id="agent-chips"></div>
       </div>
       <div id="agent-list"></div>
+      <div id="agent-batch" class="agent-batch" style="display:none">
+        <span id="agent-batch-n">已选 0</span>
+        <span class="hspacer"></span>
+        <button class="btn mini" id="agb-group">👥 拉成群</button>
+        <button class="btn mini" id="agb-project">＋ 加入项目</button>
+        <button class="btn mini" id="agb-clear">清空</button>
+      </div>
     </div></div>
     <div class="view" id="view-schedules"><div class="panel">
       <div class="panel-head"><h2>定时任务</h2><span class="sub">按规则定时把固定任务文本派发给一个或多个子智能体 · Host 侧调度（关闭页面不影响触发，错过的触发点不补跑）</span><span class="hspacer"></span><button class="btn pri" id="btn-new-schedule">＋ 新建定时任务</button></div>
@@ -3159,6 +3289,10 @@ const state = {
   agentQuery: '',
   projEnvFilter: null,  // 项目页节点筛选
   projQuery: '',
+  projScope: 'all',     // 项目页作用域：all | owned | joined
+  projOverview: {},     // projectId -> { open, done, ready, blocked, total }（来自 /backlog/overview）
+  projOverviewAt: 0,
+  projArchOpen: false,  // 已归档分区是否展开
   topoCollapsed: {},    // envKey -> 分组是否折叠
 };
 
@@ -4803,6 +4937,24 @@ function stopAgentLive() { if (agentLiveTimer) { clearInterval(agentLiveTimer); 
 async function loadProjects() {
   const r = await api('/projects');
   state.projects = r.ok ? (r.data || []) : [];
+  void loadProjectOverview();
+}
+// 项目级进度：复用跨项目待办聚合（服务端已按项目做失败隔离），一次带回 open/done/ready/blocked。
+// 30s TTL 内不重复请求；失败保持上一次快照，卡片降级为只显示任务数。
+async function loadProjectOverview() {
+  if (state.projOverviewAt && Date.now() - state.projOverviewAt < 30000) return;
+  try {
+    const r = await api('/backlog/overview');
+    if (!r.ok || !Array.isArray(r.data)) return;
+    const next = {};
+    r.data.forEach(function (row) {
+      if (!row || !row.projectId) return;
+      next[row.projectId] = { open: row.open || 0, done: row.done || 0, ready: row.ready || 0, blocked: row.blocked || 0, total: row.total || 0 };
+    });
+    state.projOverview = next;
+    state.projOverviewAt = Date.now();
+    if (currentView === 'projects') renderProjects();
+  } catch (e) { /* 概览是增强信息，失败静默 */ }
 }
 
 function renderProjects() {
@@ -4820,12 +4972,18 @@ function renderProjects() {
     qEl._wired = true;
     qEl.value = state.projQuery;
     qEl.addEventListener('input', function () { state.projQuery = this.value.trim().toLowerCase(); renderProjects(); });
+    // 搜索防抖：240ms 后重渲染，避免长列表每次击键整页重建
+    qEl.addEventListener('input', function () {
+      clearTimeout(qEl._t);
+      qEl._t = setTimeout(function () { renderProjects(); }, 240);
+    });
   }
   if (!state.projects.length) {
     $('proj-chips').innerHTML = '';
     groupsEl.innerHTML = '<div class="mon-empty">还没有项目 —— 点右上角「＋ 新建项目」创建。项目保存文件归属节点、工作区、指令、连接器和技能；每次任务可独立选择执行节点。</div>';
     return;
   }
+  if (!state.projOverviewAt) void loadProjectOverview();
   const envs = topoBuildEnvs(p => topoEntityEnvKey(p.dshRef, p.nodeTitle), state.projects);
   $('proj-chips').innerHTML = topoChipsHtml(envs, state.projects.length, state.projEnvFilter, 'pjchip');
   $('proj-chips').querySelectorAll('.topo-chip').forEach(chip => {
@@ -4834,17 +4992,31 @@ function renderProjects() {
   const matched = state.projects.filter(p => {
     if (state.projEnvFilter && topoEntityEnvKey(p.dshRef, p.nodeTitle) !== state.projEnvFilter) return false;
     if (state.projQuery) {
-      const hay = (p.name || '') + ' ' + (p.workspace || '');
+      const hay = (p.name || '') + ' ' + (p.workspace || '') + ' ' + (p.instruction || '') + ' ' + (p.skillNames || []).join(' ');
       if (!hay.toLowerCase().includes(state.projQuery)) return false;
     }
     return true;
   });
-  const shown = envs.map(e => ({ env: e, list: matched.filter(p => topoEntityEnvKey(p.dshRef, p.nodeTitle) === e.key) })).filter(g => g.list.length);
-  if (!matched.length) {
-    groupsEl.innerHTML = '<div class="mon-empty">没有匹配的项目</div>';
+  // 归档项目单独收进底部折叠区：活跃列表保持干净，历史仍可查（不再和活跃项目同视觉混排）
+  const live = matched.filter(p => !p.archivedAt);
+  const archived = matched.filter(p => !!p.archivedAt);
+  const scopeChips = [['all', '全部'], ['owned', '我创建的'], ['joined', '我加入的']].map(function (x) {
+    return '<button class="topo-chip pj-scope' + (state.projScope === x[0] ? ' on' : '') + '" data-scope="' + x[0] + '">' + x[1] + '<span class="cnt">' + projectScopeCount(x[0]) + '</span></button>';
+  }).join('');
+  const scopeEl = document.getElementById('proj-scope');
+  if (scopeEl) {
+    scopeEl.innerHTML = scopeChips;
+    scopeEl.querySelectorAll('.pj-scope').forEach(function (b) {
+      b.addEventListener('click', function () { state.projScope = b.dataset.scope; renderProjects(); });
+    });
+  }
+  const scopedLive = live.filter(projectInScope);
+  const shown = envs.map(e => ({ env: e, list: scopedLive.filter(p => topoEntityEnvKey(p.dshRef, p.nodeTitle) === e.key) })).filter(g => g.list.length);
+  if (!scopedLive.length && !archived.length) {
+    groupsEl.innerHTML = '<div class="mon-empty">没有匹配的项目' + (state.projScope !== 'all' ? '（当前作用域：' + ({ owned: '我创建的', joined: '我加入的' }[state.projScope] || '') + '）' : '') + '</div>';
     return;
   }
-  groupsEl.innerHTML = shown.map(g => {
+  var html = shown.map(g => {
     const tasksInGroup = g.list.reduce((acc, p) => acc + state.tasks.filter(t => t.projectId === p.id).length, 0);
     const collapsed = !!state.topoCollapsed[g.env.key];
     return '<div class="topo-group">' +
@@ -4853,38 +5025,107 @@ function renderProjects() {
       g.list.map(projectCardHtml).join('') +
       '</div></div></div>';
   }).join('');
+  if (archived.length) {
+    html += '<div class="pj-archive-zone">' +
+      '<button class="pj-archive-head" data-pjarch="1">' + (state.projArchOpen ? '▾' : '▸') + ' 📦 已归档（' + archived.length + '）</button>' +
+      '<div class="proj-grid' + (state.projArchOpen ? '' : ' collapsed') + '" data-pjarchbody="1">' +
+      (state.projArchOpen ? archived.map(projectCardHtml).join('') : '') + '</div></div>';
+  }
+  groupsEl.innerHTML = html;
   groupsEl.querySelectorAll('.proj-card').forEach(card => wireProjectCard(card));
+  var archHead = groupsEl.querySelector('[data-pjarch]');
+  if (archHead) archHead.addEventListener('click', function () { state.projArchOpen = !state.projArchOpen; renderProjects(); });
   topoWireGroups(groupsEl, renderProjects);
+}
+// 作用域判定：owner/projectMembers 兼容缺失字段（老项目没有 owner 时视为「我创建的」，避免全部隐形）
+function myUserId() { return (state.me && (state.me.id || state.me.userId)) || ''; }
+// 头像底色：按 id 做稳定哈希，同一成员在任何界面都是同一色（不随机，避免刷新变色）
+var AV_COLORS = ['#4d6bfe', '#6f7bf7', '#2ba471', '#d48806', '#e5484d', '#0f766e', '#7c5cff', '#c2410c', '#0284c7', '#9333ea'];
+function agentAvColor(id) {
+  var s = String(id || '');
+  var h = 0;
+  for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return AV_COLORS[Math.abs(h) % AV_COLORS.length];
+}
+function projectInScope(p) {
+  if (state.projScope === 'all') return true;
+  var uid = myUserId();
+  var members = p.projectMembers || [];
+  var mine = members.some(function (m) { return m && (m.userId === uid); });
+  var owned = !p.owner || p.owner === uid;
+  if (state.projScope === 'owned') return owned && (!members.length || mine);
+  return mine;
+}
+function projectScopeCount(scope) {
+  var prev = state.projScope;
+  state.projScope = scope;
+  var n = state.projects.filter(function (p) { return !p.archivedAt && projectInScope(p); }).length;
+  state.projScope = prev;
+  return n;
 }
 function projectCardHtml(p) {
   const taskCount = state.tasks.filter(t => t.projectId === p.id).length;
+  const ov = state.projOverview[p.id] || null;
+  const members = (p.expertIds || []).map(id => state.agents.find(x => x.id === id)).filter(Boolean);
+  const memberAvatars = members.slice(0, 5).map(a =>
+    '<span class="pj-av" title="' + esc(a.name) + '" style="background:' + agentAvColor(a.id) + '">' + esc(a.name.slice(0, 1)) + '</span>'
+  ).join('') + (members.length > 5 ? '<span class="pj-av pj-av-more">+' + (members.length - 5) + '</span>' : '');
+  // 待办进度条：done 绿 / blocked 红 / open 灰，hover 出精确数字
+  let progress = '';
+  if (ov && ov.total) {
+    const dPct = (ov.done / ov.total) * 100, bPct = (ov.blocked / ov.total) * 100;
+    progress = '<div class="pj-prog" title="待办 ' + ov.total + ' 项 · 完成 ' + ov.done + ' · 未完成 ' + ov.open + (ov.blocked ? ' · 阻塞 ' + ov.blocked : '') + (ov.ready ? ' · 就绪 ' + ov.ready : '') + '">' +
+      '<i class="pjp-done" style="width:' + dPct + '%"></i><i class="pjp-blocked" style="width:' + bPct + '%"></i>' +
+      '</div><div class="pj-prog-lbl">待办 ' + ov.done + '/' + ov.total + (ov.blocked ? ' · <span style="color:var(--err)">阻塞 ' + ov.blocked + '</span>' : '') + (ov.ready ? ' · <span style="color:var(--ok)">就绪 ' + ov.ready + '</span>' : '') + '</div>';
+  }
+  const groupCount = (groupState.rooms || []).filter(r => (r.projectIds || []).indexOf(p.id) >= 0).length;
   const chips = [
-    p.expertIds.length ? '默认成员 ' + p.expertIds.map(id => { const a = state.agents.find(x => x.id === id); return a ? a.name : id; }).join('、') : '未设默认成员（可自由 @）',
     p.skillNames.length ? p.skillNames.length + ' 技能' : '',
     p.connectorIds.length ? p.connectorIds.length + ' 连接器' : '',
+    groupCount ? '在 ' + groupCount + ' 个群' : '',
   ].filter(Boolean).join(' ｜ ');
-  return '<div class="proj-card" data-proj="' + esc(p.id) + '">' +
-    '<div class="pj-name">' + esc(p.name) + '</div>' +
+  return '<div class="proj-card' + (p.archivedAt ? ' archived' : '') + '" data-proj="' + esc(p.id) + '" title="点击打开项目中心">' +
+    '<div class="pj-name">' + (p.archivedAt ? '📦 ' : '') + esc(p.name) + '<span class="pj-node-chip" title="文件归属节点">' + esc(nodeRefLabel(p.dshRef)) + '</span></div>' +
     '<div class="pj-activity">' + activityCountsHtml(activityGroupCounts('projects', p.id), 'project', p.id) + '<div class="activity-freshness">' + esc(activityFreshness()) + '</div></div>' +
-    '<div class="pj-meta">' + (p.workspace ? '📁 ' + esc(p.workspace) + ' · ' : '') + '📋 ' + taskCount + ' 个任务</div>' +
-    '<div class="pj-meta">文件归属：' + esc(nodeRefLabel(p.dshRef)) + ' · 默认执行：' + esc(nodeRefLabel(projectExecutionRef(p))) + ' · ' + (sameNodeRef(p.dshRef, projectExecutionRef(p)) ? '同节点直接访问' : '跨节点远程访问') + '</div>' +
-    (p.importedFrom ? '<div class="pj-chips" style="margin-top:6px"><span class="tag" title="自 ' + esc(p.importedFrom.sourceNode + p.importedFrom.sourcePath) + ' 导入 · 导入任务 ' + esc(p.importedFrom.taskId) + '">☁ 云端导入 · 来自 ' + esc(p.importedFrom.sourceNode) + '</span></div>' : '') +
+    progress +
+    '<div class="pj-people"><span class="pj-avs">' + (memberAvatars || '<span class="pj-av pj-av-none" title="未设默认成员">?</span>') + '</span>' +
+      '<span class="pj-task-n">📋 ' + taskCount + ' 任务</span></div>' +
+    (p.workspace ? '<div class="pj-meta pj-ws" title="' + esc(p.workspace) + '">📁 ' + esc(p.workspace) + '</div>' : '') +
+    (p.importedFrom ? '<div class="pj-chips"><span class="tag" title="自 ' + esc(p.importedFrom.sourceNode + p.importedFrom.sourcePath) + ' 导入 · 导入任务 ' + esc(p.importedFrom.taskId) + '">☁ 云端导入 · ' + esc(p.importedFrom.sourceNode) + '</span></div>' : '') +
     (p.instructionPreview ? '<div class="pj-ins">' + esc(p.instructionPreview) + '</div>' : '') +
-    '<div class="pj-chips"><span class="tag">' + chips + '</span></div>' +
-    '<div class="ops" style="display:flex;gap:8px;margin-top:10px">' +
-    '<button class="mini-btn pj-enter">🚀 进入工作台</button>' +
-    '<button class="mini-btn pj-edit">⚙ 编辑</button>' +
-    '<button class="mini-btn pj-copy">📋 复制</button>' +
-    '<button class="mini-btn pj-del">🗑 删除</button></div>' +
+    (chips ? '<div class="pj-chips"><span class="tag">' + chips + '</span></div>' : '') +
+    '<div class="ops pj-ops">' +
+    '<button class="mini-btn pj-enter" title="切到工作台并展开该项目">🚀 工作台</button>' +
+    '<button class="mini-btn pj-files" title="浏览项目工作区文件">📁 文件</button>' +
+    '<button class="mini-btn pj-backlog" title="打开该项目待办">✅ 待办</button>' +
+    '<button class="mini-btn pj-edit" title="项目配置">⚙</button>' +
+    '<button class="mini-btn pj-copy" title="复制配置新建">📋</button>' +
+    '<button class="mini-btn pj-del" title="删除项目">🗑</button></div>' +
     '</div>';
 }
 function wireProjectCard(card) {
   const pid = card.dataset.proj;
-  card.querySelector('.pj-enter').addEventListener('click', function () {
+  // 整卡可点：CSS 早就写了 cursor:pointer，现在让它名副其实。「进入工作台」仍然是整卡的默认语义。
+  card.addEventListener('click', function (e) {
+    if (e.target.closest('button')) return;
+    enterProjectWorkspace(pid);
+  });
+  card.querySelector('.pj-enter').addEventListener('click', function (e) {
+    e.stopPropagation();
     // P3-1：项目不再是模式 —— 切到工作台、展开该项目分组、在组内新建草稿
     enterProjectWorkspace(pid);
   });
-  card.querySelector('.pj-edit').addEventListener('click', function () { openProjectDrawer(pid); });
+  var filesBtn = card.querySelector('.pj-files');
+  if (filesBtn) filesBtn.addEventListener('click', function (e) { e.stopPropagation(); void openProjectFiles(pid); });
+  var blBtn = card.querySelector('.pj-backlog');
+  if (blBtn) blBtn.addEventListener('click', function (e) {
+    e.stopPropagation();
+    // 待办聚合页按项目分组；这里直接把筛选落到该项目再切页，省掉用户自己找分组
+    if (typeof blState !== 'undefined' && blState.filters) { blState.filters.projectId = pid; }
+    switchView('backlog');
+    if (typeof blLoad === 'function') void blLoad();
+  });
+  card.querySelector('.pj-edit').addEventListener('click', function (e) { e.stopPropagation(); openProjectDrawer(pid); });
   card.querySelector('.pj-copy').addEventListener('click', function () {
     // 复制：preset 通道进「新建」抽屉；只复制配置（节点/工作区/指令/专家/连接器/技能），任务历史不带走
     const src = state.projects.find(x => x.id === pid);
@@ -12855,7 +13096,60 @@ function renderAgents() {
     // 单张卡片绑定失败不影响其余卡片（否则整列表按钮失效）
     try { wireAgentCard(card); } catch (err) { console.error('[web-ui] 子智能体卡片绑定失败', card.dataset.agent, err); }
   });
+  wireAgentBatch(el);
   topoWireGroups(el, renderAgents);
+}
+// 批量组队：勾选若干子智能体后底部浮出操作条（拉成群 / 加入项目）
+function agentPicked() {
+  return Array.prototype.slice.call(document.querySelectorAll('#agent-list .ag-pick:checked')).map(function (c) { return c.dataset.agpick; });
+}
+function agentBatchRefresh() {
+  var bar = document.getElementById('agent-batch');
+  if (!bar) return;
+  var n = agentPicked().length;
+  bar.style.display = n ? '' : 'none';
+  var nEl = document.getElementById('agent-batch-n');
+  if (nEl) nEl.textContent = '已选 ' + n + ' 个';
+}
+function wireAgentBatch(el) {
+  el.querySelectorAll('.ag-pick').forEach(function (c) {
+    c.addEventListener('click', function (e) { e.stopPropagation(); agentBatchRefresh(); });
+  });
+  var bar = document.getElementById('agent-batch');
+  if (bar && !bar._wired) {
+    bar._wired = true;
+    document.getElementById('agb-clear').addEventListener('click', function () {
+      document.querySelectorAll('#agent-list .ag-pick').forEach(function (c) { c.checked = false; });
+      agentBatchRefresh();
+    });
+    document.getElementById('agb-group').addEventListener('click', function () {
+      var ids = agentPicked();
+      if (ids.length < 2) { toast('至少选 2 个成员才能建群', true); return; }
+      openGroupWizard(ids);
+    });
+    document.getElementById('agb-project').addEventListener('click', function () {
+      var ids = agentPicked();
+      var projs = (state.projects || []).filter(function (p) { return !p.archivedAt; });
+      if (!ids.length) return;
+      if (!projs.length) { toast('还没有项目，先创建一个', true); return; }
+      openModal('把 ' + ids.length + ' 个子智能体加入项目',
+        '<div class="field"><label>目标项目</label><select id="agb-proj-sel" style="width:100%">' +
+        projs.map(function (p) { return '<option value="' + esc(p.id) + '">' + esc(p.name) + '</option>'; }).join('') +
+        '</select></div><div class="hint" style="margin-top:6px">加入后成为项目默认成员，项目内新建任务自动带上它们。</div>',
+        [{ label: '取消', act: closeModal }, { label: '加入', cls: 'pri', act: async function () {
+          var pid = document.getElementById('agb-proj-sel').value;
+          var proj = state.projects.find(function (p) { return p.id === pid; });
+          if (!proj) return;
+          var merged = (proj.expertIds || []).slice();
+          ids.forEach(function (id) { if (merged.indexOf(id) < 0) merged.push(id); });
+          var r = await api('/projects/' + encodeURIComponent(pid), { method: 'PUT', body: JSON.stringify({ expertIds: merged }) });
+          if (!r.ok) { toast(r.error || '加入失败', true); return; }
+          closeModal(); toast('✓ 已加入项目「' + proj.name + '」');
+          await loadProjects(); renderProjects(); renderAgents();
+        } }]);
+    });
+  }
+  agentBatchRefresh();
 }
 function agentCardHtml(a) {
   const lv = state.agentLive[a.id];
@@ -12864,8 +13158,10 @@ function agentCardHtml(a) {
   const resDesc = (a.resources || []).map(r => r.alias || r.ref.mappingId || r.ref.appId).join('、') || '无';
   const skillNames = (a.skills || []).filter(Boolean);
   const managed = canManageAgentUi(a);
+  const where = agentWhereHtml(a);
   return '<div class="card agent-card" data-agent="' + esc(a.id) + '">' +
-    '<div class="row1"><span class="live-dot ' + st.cls + '" style="' + (st.cls ? '' : 'background:' + st.color) + '"></span>' +
+    '<div class="row1"><input type="checkbox" class="ag-pick" data-agpick="' + esc(a.id) + '" title="选中后可批量组队" style="width:auto">' +
+    '<span class="live-dot ' + st.cls + '" style="' + (st.cls ? '' : 'background:' + st.color) + '"></span>' +
     '<h3>' + esc(a.name) + '</h3>' +
     '<span class="live-state" style="color:' + st.color + '">' + st.text + '</span>' +
     (a.role ? '<span class="tag" title="专家角色">🧑‍🔬 ' + esc(a.role) + '</span>' : '') +
@@ -12875,6 +13171,7 @@ function agentCardHtml(a) {
     (a.model ? '<span class="tag">' + esc(a.model) + '</span>' : '') +
     (a.workDir ? '<span class="tag" title="远端工作目录">📁 ' + esc(a.workDir) + '</span>' : '') +
     (skillNames.length ? '<span class="tag" title="绑定技能（派发时手势加载）">🎯 ' + skillNames.length + ' 技能</span>' : '') + '</div>' +
+    where +
     '<div class="bot-activity">' + activityCountsHtml(activityGroupCounts('agents', a.id), 'agent', a.id) + '<div class="activity-freshness">' + esc(activityFreshness()) + '</div></div>' +
     (lv && lv.busy && lv.currentActivity ? '<div class="activity" title="' + esc(lv.currentActivity) + '">⏳ ' + esc(lv.currentActivity) + '</div>' : '') +
     (lv && lv.online === false && lv.error ? '<div class="activity" style="color:var(--err)" title="' + esc(lv.error) + '">✗ ' + esc(lv.error) + '</div>' : '') +
@@ -12890,6 +13187,23 @@ function agentCardHtml(a) {
     (managed ? '<button class="btn danger" data-op="del">删除</button>' : '') +
     '</div>' +
     '</div>';
+}
+// 「现在在哪干活」：正在跑的任务可点直达；所在群/项目给出可点计数，回答「它跟谁在协作」
+function agentWhereHtml(a) {
+  var running = null;
+  (state.tasks || []).forEach(function (t) {
+    if (running) return;
+    if (t.running && (t.memberAgentIds || []).indexOf(a.id) >= 0) running = t;
+  });
+  var groups = (groupState.rooms || []).filter(function (r) { return (r.memberAgentIds || []).indexOf(a.id) >= 0 && !r.archived; });
+  var projs = (state.projects || []).filter(function (p) { return (p.expertIds || []).indexOf(a.id) >= 0 && !p.archivedAt; });
+  var left = running
+    ? '<button class="aw-task" data-awtask="' + esc(running.id) + '" title="' + esc(running.title || running.id) + '">⏳ 正在：' + esc((running.title || running.id).slice(0, 26)) + '</button>'
+    : '<span class="aw-idle">' + (a.enabled === false ? '已停用' : '空闲') + '</span>';
+  var right = '';
+  if (groups.length) right += '<button class="aw-pill" data-awgroup="1">在 ' + groups.length + ' 个群</button>';
+  if (projs.length) right += '<button class="aw-pill" data-awproj="1">在 ' + projs.length + ' 个项目</button>';
+  return '<div class="agent-where">' + left + '<span class="hspacer"></span>' + right + '</div>';
 }
 
 /**
@@ -12969,6 +13283,26 @@ function wireAgentCard(card) {
   on('del', async () => {
     if (!confirm('删除子智能体「' + a.name + '」？')) return;
     await api('/agents/' + a.id, { method: 'DELETE' }); await loadAgents(); renderAgents(); toast('已删除');
+  });
+  // 存在感副行：正在跑的任务 / 所在群 / 所在项目
+  var wt = card.querySelector('[data-awtask]');
+  if (wt) wt.addEventListener('click', function (e) { e.stopPropagation(); switchView('work'); void openTask(wt.dataset.awtask); });
+  var wg = card.querySelector('[data-awgroup]');
+  if (wg) wg.addEventListener('click', function (e) {
+    e.stopPropagation();
+    var groups = (groupState.rooms || []).filter(function (r) { return (r.memberAgentIds || []).indexOf(a.id) >= 0 && !r.archived; });
+    if (!groups.length) return;
+    switchView('groups');
+    openGroupChat(groups[0].id);
+    toast('共 ' + groups.length + ' 个群 · 已打开「' + groupDisplayName(groups[0]) + '」');
+  });
+  var wp = card.querySelector('[data-awproj]');
+  if (wp) wp.addEventListener('click', function (e) {
+    e.stopPropagation();
+    var projs = (state.projects || []).filter(function (p) { return (p.expertIds || []).indexOf(a.id) >= 0 && !p.archivedAt; });
+    if (!projs.length) return;
+    switchView('projects');
+    toast('共 ' + projs.length + ' 个项目：' + projs.slice(0, 3).map(function (p) { return p.name; }).join('、') + (projs.length > 3 ? ' 等' : ''));
   });
 }
 function describeDshRef(a) {
@@ -17327,14 +17661,57 @@ function blCardHtml(it, statuses, drag) {
   const labels = (it.labels || []).map(function (l) { return '<span class="bl-tag">' + esc(l) + '</span>'; }).join('');
   const deps = (it.dependencies || []).length ? '<span class="bl-tag" title="依赖: ' + esc(it.dependencies.join('、')) + '">⛓ ' + it.dependencies.length + '</span>' : '';
   const done = !blIsOpenStatus(it.status);
+  const assignees = (it.assignees || []).map(function (name) {
+    const a = (state.agents || []).find(function (x) { return x.name === name || x.id === name; });
+    return '<span class="bl-who" title="负责人：' + esc(name) + '"><i style="background:' + agentAvColor((a && a.id) || name) + '">' + esc(String(name).slice(0, 1)) + '</i>' + esc(name) + '</span>';
+  }).join('');
+  const whoRow = '<div class="bl-who-row">' +
+    (assignees || '<span class="bl-who bl-who-none">未指派</span>') +
+    '<button class="mini-btn bl-assign" data-assign="' + esc(it.itemId) + '" title="改派负责人">↔ 改派</button>' +
+    (it.tasks && it.tasks.length ? '<span class="bl-who-task" title="已派发的任务">📋 ' + it.tasks.length + '</span>' : '') +
+    '</div>';
   return '<div class="bl-card" data-item="' + esc(it.itemId) + '"' + (drag ? ' draggable="true"' : '') + '>' +
-    '<input type="checkbox" class="bl-pick" data-pick="' + esc(it.itemId) + '" style="width:auto">' +
-    ' <span class="bl-title" data-detail="' + esc(it.itemId) + '">' + esc(it.itemId) + ' ' + esc(it.title || '') + '</span>' +
+    '<label class="bl-head-row"><input type="checkbox" class="bl-pick" data-pick="' + esc(it.itemId) + '" style="width:auto">' +
+    ' <span class="bl-title" data-detail="' + esc(it.itemId) + '">' + esc(it.itemId) + ' ' + esc(it.title || '') + '</span></label>' +
     '<div class="meta"><span class="bl-tag">' + esc(it.status || '—') + '</span>' + blItemMetaHtml(it) + labels + deps + blReadyBadgeHtml(it) + ac + blBadgeOf(it.tasks) + '</div>' +
+    whoRow +
     '<div class="ops"><button class="mini-btn bl-dispatch" data-dispatch="' + esc(it.itemId) + '">▶ 派发</button>' +
     '<button class="mini-btn bl-edit" data-edit="' + esc(it.itemId) + '">✎ 编辑</button>' +
     '<button class="mini-btn bl-del" data-del="' + esc(it.itemId) + '">🗑</button></div>' +
     '</div>';
+}
+// 改派：弹出项目成员（子智能体）单选，写回 assignee 数组；空选择 = 取消指派
+function blOpenAssign(projectId, itemId) {
+  const it = blBoardItem(itemId);
+  if (!it) { toast('未找到该待办', true); return; }
+  const proj = (state.projects || []).find(function (p) { return p.id === projectId; });
+  const candidates = (proj && proj.expertIds && proj.expertIds.length)
+    ? proj.expertIds.map(function (id) { return state.agents.find(function (a) { return a.id === id; }); }).filter(Boolean)
+    : (state.agents || []).filter(function (a) { return a.enabled !== false; });
+  if (!candidates.length) { toast('没有可指派的子智能体', true); return; }
+  const cur = (it.assignees || []).slice();
+  const rows = candidates.map(function (a) {
+    var on = cur.indexOf(a.name) >= 0 || cur.indexOf(a.id) >= 0;
+    return '<label class="bl-assign-row"><input type="radio" name="bl-assignee" value="' + esc(a.name) + '"' + (on ? ' checked' : '') + '>' +
+      '<span class="pj-av" style="background:' + agentAvColor(a.id) + ';margin:0">' + esc(a.name.slice(0, 1)) + '</span>' + esc(a.name) + '</label>';
+  }).join('');
+  const m = openModal('改派 · ' + (it.itemId || ''), '<div class="bl-assign-list">' +
+    '<label class="bl-assign-row"><input type="radio" name="bl-assignee" value=""' + (cur.length ? '' : ' checked') + '> 不指派</label>' + rows + '</div>',
+    [
+      { label: '取消', act: closeModal },
+      { label: '保存', cls: 'pri', act: async function () {
+        const sel = document.querySelector('#modal-body input[name="bl-assignee"]:checked');
+        const val = sel ? sel.value : '';
+        const r = await api('/projects/' + encodeURIComponent(projectId) + '/backlog/items/' + encodeURIComponent(itemId), {
+          method: 'PUT', body: JSON.stringify({ assignees: val ? [val] : [] })
+        });
+        if (!r.ok) { toast(r.error || '改派失败', true); return; }
+        closeModal(); toast(val ? '✓ 已改派给 ' + val : '✓ 已取消指派');
+        if (blState.board && blState.board.projectId === projectId) void blLoadBoard({ silent: true });
+        else void blLoad(true);
+      } },
+    ]);
+  return m;
 }
 
 function blBoardHtml() {
@@ -17349,6 +17726,7 @@ function blBoardHtml() {
     '<span class="hspacer"></span>' +
     '<button class="mini-btn" id="bl-collect" ' + (d && d.archived ? 'disabled' : '') + ' title="扫描本项目执行过的未完成任务 + 工作区代码/文档里的 TODO/未勾选项，生成待办候选">🔍 扫描未完成</button>' +
     '<button class="mini-btn" id="bl-batch" disabled>派发选中 (0)</button>' +
+    '<button class="mini-btn" id="bl-grp" disabled title="把选中的待办合成本轮频道消息投进群，触发一轮编排协作">👥 派到群 (0)</button>' +
     '<button class="mini-btn pri" id="bl-new" ' + (d && d.archived ? 'disabled' : '') + '>＋ 新建待办</button>' +
     '</div>';
   if (!d) return head + qbar + '<div class="bl-empty">' + (b.loading ? '加载中…' : '看板加载失败，点「刷新」重试') + '</div>';
@@ -17447,11 +17825,11 @@ function blBindDrag(root) {
 
 /** 重渲染后同步批量派发按钮的文案/禁用态（内联 HTML 固定渲染的是「派发选中 (N)」，N 为渲染时勾选数） */
 function blSyncBatchBtn() {
-  const b = document.getElementById('bl-batch');
-  if (!b) return;
   const n = blPickedCount();
-  b.disabled = !n;
-  b.textContent = '派发选中 (' + n + ')';
+  const b = document.getElementById('bl-batch');
+  if (b) { b.disabled = !n; b.textContent = '派发选中 (' + n + ')'; }
+  const g = document.getElementById('bl-grp');
+  if (g) { g.disabled = !n; g.textContent = '👥 派到群 (' + n + ')'; }
 }
 
 function blRender() {
@@ -17550,6 +17928,8 @@ function blRender() {
   if (nw) nw.addEventListener('click', function () { blOpenEditor(null); });
   const batch = document.getElementById('bl-batch');
   if (batch) batch.addEventListener('click', blBatchDispatch);
+  const grpBtn = document.getElementById('bl-grp');
+  if (grpBtn) grpBtn.addEventListener('click', blDispatchToGroup);
   const collectBtn = document.getElementById('bl-collect');
   if (collectBtn) collectBtn.addEventListener('click', blCollect);
   root.querySelectorAll('[data-detail]').forEach(function (el) {
@@ -17564,6 +17944,14 @@ function blRender() {
   });
   root.querySelectorAll('[data-edit]').forEach(function (el) {
     el.addEventListener('click', function () { blOpenEditor(el.dataset.edit); });
+  });
+  root.querySelectorAll('[data-assign]').forEach(function (el) {
+    el.addEventListener('click', function (e) {
+      e.stopPropagation();
+      const pid = blState.board ? blState.board.projectId : (el.closest('[data-grp]') ? el.closest('[data-grp]').dataset.grp : null);
+      if (!pid) { toast('未找到所属项目', true); return; }
+      blOpenAssign(pid, el.dataset.assign);
+    });
   });
   root.querySelectorAll('[data-del]').forEach(function (el) {
     el.addEventListener('click', async function () {
@@ -17592,8 +17980,7 @@ function blRender() {
   root.querySelectorAll('.bl-pick').forEach(function (el) {
     el.addEventListener('change', function () {
       if (el.checked) blState.picked[el.dataset.pick] = 1; else delete blState.picked[el.dataset.pick];
-      const b = document.getElementById('bl-batch');
-      if (b) { b.disabled = !blPickedCount(); b.textContent = '派发选中 (' + blPickedCount() + ')'; }
+      blSyncBatchBtn();
     });
   });
   // 搜索框防抖请求会重渲染整块（innerHTML 替换会丢焦点/光标）：把焦点还给搜索框并定位到末尾，
@@ -17681,6 +18068,87 @@ async function blDispatch(pid, itemId, force) {
   toast('派发失败: ' + (r.error || ''), true);
 }
 
+/**
+ * 待办 → 群：把选中的条目合成本轮频道消息投进群，触发一轮编排协作。
+ * 与「逐条派发」的区别：不产生 N 个孤立任务，而是让群成员在一轮讨论里一起消化这批待办。
+ * - 群未绑定本项目时，先 PUT 绑定再投递（否则频道任务不带 projectId，成员拿不到项目工作区）
+ * - 频道进行中则追加为本轮补充上下文，不打断正在跑的成员
+ */
+async function blDispatchToGroup() {
+  const b = blState.board;
+  if (!b) return;
+  const ids = [...document.querySelectorAll('#bl-root .bl-pick:checked')].map(function (el) { return el.dataset.pick; });
+  if (!ids.length) return;
+  const items = ids.map(function (id) { return blBoardItem(id); }).filter(Boolean);
+  if (!items.length) { toast('没有可投递的待办', true); return; }
+  if (!groupState.rooms.length) await loadGroups();
+  const rooms = groupState.rooms.filter(function (r) { return !r.archived; });
+  if (!rooms.length) { toast('还没有协作群 —— 先在「群」页建一个', true); return; }
+  const rows = rooms.map(function (r) {
+    const bound = (r.projectIds || []).indexOf(b.projectId) >= 0;
+    const names = r.memberAgentIds.map(function (id) { const a = state.agents.find(function (x) { return x.id === id; }); return a ? a.name : id; }).join('、');
+    const name = typeof groupDisplayName === 'function' ? groupDisplayName(r) : r.name;
+    return '<label class="bl-assign-row" style="align-items:flex-start">' +
+      '<input type="radio" name="bl-grp" value="' + esc(r.id) + '"' + (bound ? ' checked' : '') + ' style="margin-top:3px">' +
+      '<span style="flex:1;min-width:0"><span style="font-weight:600">' + esc(name) + '</span>' +
+      (bound ? ' <span class="bl-tag" style="color:var(--ok);border-color:rgba(43,164,113,.4)">已绑定本项目</span>' : ' <span class="bl-tag">将自动绑定</span>') +
+      '<div class="sub" style="margin:1px 0 0">' + esc(names || '无成员') + (r.channelRef ? ' · 本轮进行中' : ' · 频道空闲') + '</div></span></label>';
+  }).join('');
+  openModal('👥 把这 ' + items.length + ' 条待办投进群',
+    '<div class="hint" style="margin-bottom:8px">群成员会在同一轮讨论里一起处理这批待办；频道已开则作为补充上下文追加。</div>' +
+    '<div class="bl-assign-list">' + rows + '</div>' +
+    '<div class="hint" style="margin-top:8px">项目：' + esc(b.name) + ' · 条目：' + items.length + ' 条</div>',
+    [{ label: '取消', act: closeModal }, {
+      label: '投进群', cls: 'pri', act: async function () {
+        const sel = document.querySelector('#modal-body input[name="bl-grp"]:checked');
+        if (!sel) { toast('请先选一个群', true); return; }
+        const roomId = sel.value;
+        const room = groupState.rooms.find(function (r) { return r.id === roomId; });
+        if (!room) return;
+        closeModal();
+        const lines = items.map(function (it) {
+          return '- ' + (it.itemId || '') + ' ' + (it.title || '') + (it.status ? '（' + it.status + '）' : '');
+        }).join('\\n');
+        const msg = '【待办投递·' + b.name + '】以下 ' + items.length + ' 条待办请协作处理，完成后回写状态：\\n' + lines;
+        try {
+          // ① 确保绑定本项目（未绑定时频道任务不会带 projectId → 成员拿不到项目工作区文件）
+          if ((room.projectIds || []).indexOf(b.projectId) < 0) {
+            const nextIds = (room.projectIds || []).concat([b.projectId]);
+            const put = await api('/groups/' + encodeURIComponent(roomId), { method: 'PUT', body: JSON.stringify({ projectIds: nextIds, activeProjectId: b.projectId }) });
+            if (!put.ok) throw new Error(put.error || '绑定项目失败');
+            room.projectIds = nextIds; room.activeProjectId = b.projectId;
+          } else if (room.activeProjectId !== b.projectId) {
+            const put = await api('/groups/' + encodeURIComponent(roomId), { method: 'PUT', body: JSON.stringify({ activeProjectId: b.projectId }) });
+            if (put.ok && put.data) { room.activeProjectId = put.data.activeProjectId || b.projectId; }
+          }
+          // ② 频道空闲则开新一轮，否则直接追加到进行中的本轮
+          var cid = room.channelRef || '';
+          if (!cid) {
+            const cr = await api('/tasks', { method: 'POST', body: JSON.stringify({
+              mode: 'orchestrate', memberAgentIds: room.memberAgentIds.slice(), message: msg,
+              title: (typeof groupDisplayName === 'function' ? groupDisplayName(room) : room.name) + '（待办投递）', projectId: b.projectId,
+            }) });
+            if (!cr.ok) throw new Error(cr.error || '新一轮创建失败');
+            const newId = cr.data && cr.data.id;
+            if (!newId) throw new Error('平台未返回任务 ID');
+            const put = await api('/groups/' + encodeURIComponent(roomId), { method: 'PUT', body: JSON.stringify({ channelRef: newId }) });
+            if (!put.ok) throw new Error(put.error || '频道绑定失败');
+            room.channelRef = newId; cid = newId;
+          } else {
+            const sr = await api('/tasks/' + encodeURIComponent(cid) + '/messages', { method: 'POST', body: JSON.stringify({ message: msg }) });
+            if (!sr.ok) throw new Error(sr.error || '投递失败');
+          }
+          // ③ 收敛勾选态并跳到群里看
+          ids.forEach(function (id) { delete blState.picked[id]; });
+          toast('✓ 已投进「' + (typeof groupDisplayName === 'function' ? groupDisplayName(room) : room.name) + '」 · ' + items.length + ' 条，成员开始协作');
+          switchView('groups');
+          openGroupChat(roomId);
+        } catch (e) {
+          toast('投递失败：' + ((e && e.message) || '未知错误'), true);
+        }
+      },
+    }]);
+}
 async function blBatchDispatch() {
   const b = blState.board; if (!b) return;
   const ids = [...document.querySelectorAll('#bl-root .bl-pick:checked')].map(function (el) { return el.dataset.pick; });
@@ -17964,7 +18432,7 @@ if (blRefreshBtn && !blRefreshBtn._wired) {
 }
 
 // ---------- 协作群（契约 docs/groups-web-sync-plan-2026-11-11.md §4；对照 Android GroupChat/CreateGroupWizard/GroupSettings；空转折叠词表照抄 GroupRoom.kt isIdleRelayText） ----------
-var groupState = { rooms: [], sections: [], loaded: false, q: '', showArchived: false, openRoomId: null, historyId: null, historyTask: null, rounds: [], chatTask: null, sending: false, creatingRound: false, busy: false, err: '', errKey: '', errAt: 0, pollTimer: null, collapsed: {} };
+var groupState = { rooms: [], sections: [], loaded: false, q: '', showArchived: false, openRoomId: null, historyId: null, historyTask: null, rounds: [], chatTask: null, sending: false, creatingRound: false, busy: false, err: '', errKey: '', errAt: 0, pollTimer: null, collapsed: {}, liveEs: null, liveTaskId: '', refreshTimer: null, liveDegraded: false };
 // 频道轮终态集（照抄 GroupChat.kt ROUND_TERMINAL_STATES；经 effectiveStatus 归一后判定）
 var GROUP_ROUND_TERMINAL = { completed: 1, success: 1, done: 1, failed: 1, cancelled: 1, canceled: 1, partial_success: 1 };
 // §4.9 空转折叠词表（逐字照抄 GroupRoom.kt IDLE_ACK_WORDS / IDLE_STATUS_WORDS）
@@ -18038,7 +18506,17 @@ async function loadGroups() {
   if (r.ok && Array.isArray(r.data)) groupState.rooms = r.data;
   if (s.ok && Array.isArray(s.data)) groupState.sections = s.data;
   groupState.loaded = true;
+  updateGroupNavBadge();
   if (currentView === 'groups') renderGroupsView();
+}
+// 群总未读汇总到导航角标：不进群也能看到「有人@我/群里有新消息」
+function updateGroupNavBadge() {
+  var el = document.getElementById('nav-group-badge');
+  if (!el) return;
+  var total = 0;
+  (groupState.rooms || []).forEach(function (r) { if (!r.archived && r.notifyLevel !== 'mute' && r.id !== groupState.openRoomId) total += groupUnread(r); });
+  if (total > 0) { el.textContent = total > 99 ? '99+' : String(total); el.style.display = ''; el.title = total + ' 条群未读'; }
+  else { el.style.display = 'none'; el.textContent = ''; }
 }
 function groupUnread(room) {
   var t = room.channelRef ? state.tasks.find(function (x) { return x.id === room.channelRef; }) : null;
@@ -18055,21 +18533,48 @@ function renderGroupsView() {
   wire('group-chat-settings', function () { openGroupSettings(groupState.openRoomId); });
   wire('group-chat-mention', openGroupMention);
   wire('group-chat-send', groupSend);
+  // 群内上传：直接落到本轮频道的任务工作区（成员子会话 cwd 指向同一目录，天然互读）
+  wire('group-attach', function () {
+    var room = groupRoom();
+    if (!room) return;
+    if (!room.channelRef) { toast('先发一条消息开启本轮，再上传文件', true); return; }
+    var fi = document.getElementById('group-file-input');
+    if (fi) fi.click();
+  });
+  var gfi = document.getElementById('group-file-input');
+  if (gfi && !gfi._gwired) {
+    gfi._gwired = true;
+    gfi.addEventListener('change', function () {
+      var files = Array.prototype.slice.call(gfi.files || []);
+      gfi.value = '';
+      if (files.length) void groupUploadFiles(files);
+    });
+  }
+  // 拖拽落文件到消息区即上传
+  var mEl = document.getElementById('group-chat-msgs');
+  if (mEl && !mEl._gdrag) {
+    mEl._gdrag = true;
+    mEl.addEventListener('dragover', function (e) { e.preventDefault(); mEl.classList.add('gdrag-on'); });
+    mEl.addEventListener('dragleave', function () { mEl.classList.remove('gdrag-on'); });
+    mEl.addEventListener('drop', function (e) {
+      e.preventDefault(); mEl.classList.remove('gdrag-on');
+      var files = Array.prototype.slice.call((e.dataTransfer && e.dataTransfer.files) || []);
+      if (files.length) void groupUploadFiles(files);
+    });
+  }
   var qEl = document.getElementById('group-q');
   if (qEl && !qEl._gwired) { qEl._gwired = true; qEl.addEventListener('input', function () { groupState.q = this.value.trim().toLowerCase(); renderGroupsList(); }); }
   var arch = document.getElementById('group-archived-toggle');
   if (arch && !arch._gwired) { arch._gwired = true; arch.checked = groupState.showArchived; arch.addEventListener('change', function () { groupState.showArchived = this.checked; renderGroupsList(); }); }
   var inputEl = document.getElementById('group-chat-input');
   if (inputEl && !inputEl._gwired) { inputEl._gwired = true; inputEl.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); groupSend(); } }); }
-  if (groupState.openRoomId) {
-    document.getElementById('group-list-panel').style.display = 'none';
-    document.getElementById('group-chat-panel').style.display = '';
-    renderGroupChatHead(); renderGroupChatMsgs();
-  } else {
-    document.getElementById('group-list-panel').style.display = '';
-    document.getElementById('group-chat-panel').style.display = 'none';
-    renderGroupsList();
-  }
+  // 常驻双栏：左栏群列表永远在，右栏随选中切换。窄屏靠 .chat-open 退化成单栏（见 CSS @media 900px）
+  var shell = document.getElementById('groups-shell');
+  if (shell) shell.classList.toggle('chat-open', !!groupState.openRoomId);
+  renderGroupsList();
+  renderGroupChatHead(); renderGroupChatMsgs();
+  updateGroupNavBadge();
+  if (groupState.openRoomId) startGroupLive();
 }
 function renderGroupsList() {
   var el = document.getElementById('group-list');
@@ -18103,27 +18608,95 @@ function renderGroupsList() {
 function groupRowHtml(r) {
   var unread = groupUnread(r);
   var names = r.memberAgentIds.map(function (id) { var a = state.agents.find(function (x) { return x.id === id; }); return a ? a.name : id; });
-  var badge = unread > 0 ? '<span style="background:var(--err);color:var(--dsw-static-neutral-50);border-radius:9px;padding:1px 7px;font-size:11px;flex:none">' + (unread > 99 ? '99+' : unread) + '</span>' : '';
-  var tags = (r.archived ? '<span class="tag">📦 已归档</span> ' : '') + (!r.channelRef ? '<span class="tag">空闲</span> ' : '') + '<span class="tag">' + (r.mode === 'everyone' ? '所有人' : '管理员主持') + '</span>';
-  return '<div class="task-item" data-group="' + esc(r.id) + '" style="display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer">' +
+  var badge = unread > 0 ? '<span style="background:var(--err);color:var(--dsw-static-neutral-50);border-radius:9px;padding:1px 7px;font-size:11px;flex:none;font-weight:600">' + (unread > 99 ? '99+' : unread) + '</span>' : '';
+  var t = r.channelRef ? state.tasks.find(function (x) { return x.id === r.channelRef; }) : null;
+  var active = !!(t && !GROUP_ROUND_TERMINAL[groupEffectiveStatus(t)]);
+  var tags = (r.archived ? '<span class="tag">📦 已归档</span> ' : '') + (!r.channelRef ? '<span class="tag">空闲</span> ' : (active ? '<span class="tag" style="color:var(--pri);border-color:rgba(77,107,254,.4)">进行中</span> ' : '<span class="tag">本轮结束</span> ')) + '<span class="tag">' + (r.mode === 'everyone' ? '所有人' : '管理员主持') + '</span>';
+  var last = groupLastLine(r, t);
+  var isOpen = r.id === groupState.openRoomId;
+  return '<div class="task-item' + (isOpen ? ' is-open' : '') + '" data-group="' + esc(r.id) + '" style="display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer' + (isOpen ? ';background:var(--pri-light);box-shadow:inset 2px 0 0 var(--pri)' : '') + '">' +
+    '<span class="grow-av" style="' + (active ? 'background:var(--pri);color:#fff' : '') + '">' + esc((groupDisplayName(r) || '群').slice(0, 1)) + '</span>' +
     '<div style="flex:1;min-width:0"><div style="font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(groupDisplayName(r)) + ' <span style="font-weight:400">' + tags + '</span></div>' +
-    '<div style="font-size:11px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px">' + esc(names.join('、') || '未选成员') + ' · 提醒 ' + ({ all: '全部提醒', mention: '仅@我', mute: '静默' }[r.notifyLevel] || r.notifyLevel) + (r.permissionOverride ? ' · 权限覆写 ' + esc(r.permissionOverride) : '') + '</div></div>' +
+    '<div style="font-size:11px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px">' + (last ? esc(last) : esc(names.join('、') || '未选成员')) + '</div></div>' +
     badge +
     '<button class="mini-btn" data-gset="' + esc(r.id) + '" title="群设置">⚙</button>' +
     '</div>';
+}
+// 群行第二行：优先显示「最后发言人：摘要」，让列表本身就能扫到最新进展
+function groupLastLine(r, t) {
+  if (!t) return '';
+  var turns = t.turns || [];
+  for (var i = turns.length - 1; i >= 0; i--) {
+    var x = turns[i];
+    if (!x || x.role === 'user' || !x.text) continue;
+    var who = x.agentName || '';
+    var body = String(x.text).replace(/\s+/g, ' ').trim();
+    if (body.length > 46) body = body.slice(0, 46) + '…';
+    return (who ? who + '：' : '') + body;
+  }
+  return '';
 }
 function openGroupChat(roomId) {
   groupState.openRoomId = roomId;
   groupState.historyId = null; groupState.historyTask = null; groupState.chatTask = null;
   groupClearErr();
-  document.getElementById('group-list-panel').style.display = 'none';
-  document.getElementById('group-chat-panel').style.display = '';
+  var shell = document.getElementById('groups-shell');
+  if (shell) shell.classList.add('chat-open');
+  renderGroupsList();
   loadGroupRounds();
   refreshGroupChat();
-  stopGroupPoll();
-  groupState.pollTimer = setInterval(function () { if (currentView === 'groups' && groupState.openRoomId) refreshGroupChat(); }, 3000);
+  startGroupLive();
 }
-function closeGroupChat() { groupState.openRoomId = null; stopGroupPoll(); renderGroupsView(); }
+// 频道实时同步：独立轻量 SSE（只作为「该刷新了」的触发器，渲染仍走 refreshGroupChat，
+// 避免复用工作台 connectStream 而接管工作台 DOM）；EventSource 不可用或断连时降级 3 秒轮询。
+function startGroupLive() {
+  stopGroupPoll();
+  var room = groupRoom();
+  if (!room) return;
+  var tid = groupState.historyId || room.channelRef;
+  if (!tid) { groupState.liveDegraded = false; return; }
+  groupState.liveTaskId = tid;
+  var degraded = function () {
+    groupState.liveDegraded = true;
+    if (!groupState.pollTimer) groupState.pollTimer = setInterval(function () { if (currentView === 'groups' && groupState.openRoomId) refreshGroupChat(); }, 3000);
+    renderGroupChatHead();
+  };
+  try {
+    if (typeof EventSource === 'undefined') { degraded(); return; }
+    stopGroupStream();
+    var es = new EventSource(API + '/tasks/' + tid + '/stream');
+    groupState.liveEs = es;
+    var bump = function () { scheduleGroupRefresh(); };
+    ['turn_start', 'turn_end', 'turn_delta', 'plan_update', 'subtask_status', 'task_update'].forEach(function (name) {
+      es.addEventListener(name, bump);
+    });
+    es.addEventListener('open', function () {
+      groupState.liveDegraded = false;
+      if (groupState.pollTimer) { clearInterval(groupState.pollTimer); groupState.pollTimer = null; }
+      renderGroupChatHead();
+    });
+    es.addEventListener('error', function () { degraded(); });
+  } catch (e) { degraded(); }
+}
+// 事件风暴合并：300ms 内多次事件只回源一次，避免每个 delta 都整页重渲染
+function scheduleGroupRefresh() {
+  if (groupState.refreshTimer) return;
+  groupState.refreshTimer = setTimeout(function () {
+    groupState.refreshTimer = null;
+    if (currentView === 'groups' && groupState.openRoomId) refreshGroupChat();
+  }, 300);
+}
+function stopGroupStream() {
+  if (groupState.refreshTimer) { clearTimeout(groupState.refreshTimer); groupState.refreshTimer = null; }
+  if (groupState.liveEs) { try { groupState.liveEs.close(); } catch (e) {} groupState.liveEs = null; }
+}
+function closeGroupChat() {
+  groupState.openRoomId = null; stopGroupPoll(); stopGroupStream();
+  groupState.liveTaskId = ''; groupState.liveDegraded = false;
+  var shell = document.getElementById('groups-shell');
+  if (shell) shell.classList.remove('chat-open');
+  renderGroupsView();
+}
 function stopGroupPoll() { if (groupState.pollTimer) { clearInterval(groupState.pollTimer); groupState.pollTimer = null; } }
 function loadGroupRounds() {
   var room = groupRoom(); if (!room) return;
@@ -18198,11 +18771,15 @@ function renderGroupChatHead() {
 function renderGroupChatMsgs() {
   var room = groupRoom(); var el = document.getElementById('group-chat-msgs');
   if (!room || !el) return;
+  // 重渲染前记住是否贴底：只有本来就在底部时才自动滚到底，避免打断往上翻历史的用户
+  var nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   var t = groupState.historyId ? groupState.historyTask : groupState.chatTask;
   var parts = [];
   if (!t) {
-    parts.push('<div style="color:var(--tx3);font-size:13px">' + (room.channelRef ? '正在加载频道…' : '本轮尚未建立：发送第一条消息即开启新一轮讨论。') + '</div>');
+    parts.push('<div class="g-empty">' + (room.channelRef ? '正在加载频道…' : '<div class="g-empty-ic">💬</div><div class="g-empty-t">本轮尚未开始</div><div class="g-empty-s">发送第一条消息即可开启新一轮讨论，成员会被自动编排分工。</div>') + '</div>');
   } else {
+    parts.push(groupPlanHtml(t));
+    parts.push(groupFilesHtml(t));
     var logs = (t.taskLogs || []).filter(function (line) { return String(line).indexOf('[error]') >= 0 || String(line).indexOf('[warn]') >= 0; }).slice(0, 3);
     logs.forEach(function (line) { parts.push('<div style="font-size:11px;color:var(--warn);padding:1px 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(line) + '">🛠 ' + esc(line) + '</div>'); });
     var memberNames = room.memberAgentIds.map(function (id) { var a = state.agents.find(function (x) { return x.id === id; }); return a ? a.name : id; });
@@ -18236,7 +18813,156 @@ function renderGroupChatMsgs() {
       if (sum) sum.textContent = sum.textContent.replace(' ▸', open ? ' ▸' : ' ▾');
     });
   });
-  el.scrollTop = el.scrollHeight;
+  var pl = el.querySelector('.gplan-toggle');
+  if (pl) pl.addEventListener('click', function () {
+    var body = el.querySelector('.gplan-body');
+    if (!body) return;
+    var open = body.style.display !== 'none';
+    body.style.display = open ? 'none' : '';
+    pl.textContent = (open ? '▸ ' : '▾ ') + pl.dataset.label;
+  });
+  // 文件墙：点文件名打开所在项目工作区；有项目归属时直达该文件
+  var gfo = el.querySelector('.gfiles-open');
+  if (gfo) gfo.addEventListener('click', function () {
+    var rm = groupRoom();
+    if (!rm) return;
+    var pid = rm.activeProjectId || (rm.projectIds || [])[0];
+    if (!pid) { toast('该群未绑定项目，成员产出文件在本轮任务工作区', true); return; }
+    void openProjectFiles(pid);
+  });
+  el.querySelectorAll('.gfile').forEach(function (row) {
+    row.addEventListener('click', function () {
+      var rm = groupRoom();
+      var pid = rm && (rm.activeProjectId || (rm.projectIds || [])[0]);
+      if (pid) void openProjectFiles(pid);
+      else toast(String(row.title || ''), false);
+    });
+  });
+  if (nearBottom) el.scrollTop = el.scrollHeight;
+  renderGroupPresence();
+}
+// 群内计划条：把本轮 DAG 分工压成一条可展开的进度带（不抢消息流的视觉重心）
+function groupPlanHtml(t) {
+  var plan = t && t.plan;
+  var subs = (plan && plan.subtasks) || [];
+  if (!subs.length) return '';
+  var done = 0, running = 0, failed = 0, pending = 0;
+  subs.forEach(function (s) {
+    if (s.status === 'completed') done++;
+    else if (s.status === 'running') running++;
+    else if (s.status === 'failed') failed++;
+    else pending++;
+  });
+  var pct = Math.round((done / subs.length) * 100);
+  var live = running > 0 || pending > 0;
+  var bar = '<span class="gplan-bar"><i style="width:' + pct + '%"></i></span>';
+  var head = '<div class="gplan-toggle" data-label="本轮分工 ' + done + '/' + subs.length + (failed ? ' · 失败 ' + failed : '') + (live && running ? ' · 进行中 ' + running : '') + '">' +
+    (live ? '▾ ' : '▸ ') + '本轮分工 ' + done + '/' + subs.length + (failed ? ' · <span style="color:var(--err)">失败 ' + failed + '</span>' : '') + (live && running ? ' · 进行中 ' + running : '') + '</div>';
+  var rows = subs.map(function (s) {
+    var mine = (state.agents.find(function (a) { return a.id === s.agentId; }) || {}).name || s.agentId || '';
+    var dot = s.status === 'completed' ? 'var(--ok)' : s.status === 'running' ? 'var(--pri)' : s.status === 'failed' ? 'var(--err)' : 'var(--tx3)';
+    return '<div class="gplan-row"><span class="gplan-dot" style="background:' + dot + (s.status === 'running' ? ';animation:pulse 1.2s infinite' : '') + '"></span><span class="gplan-t">' + esc(s.title || s.id) + '</span><span class="gplan-a">' + esc(mine) + '</span></div>';
+  }).join('');
+  return '<div class="gplan' + (live ? ' live' : '') + '">' + bar + head +
+    '<div class="gplan-body" style="display:' + (live ? '' : 'none') + '">' + rows + '</div></div>';
+}
+// 成员活动条：谁在跑、谁在等、谁挂了 —— 点一下把 @成员名 插进输入框
+function renderGroupPresence() {
+  var el = document.getElementById('group-presence');
+  var room = groupRoom();
+  if (!el || !room) return;
+  var t = groupState.historyId ? groupState.historyTask : groupState.chatTask;
+  var subs = (t && t.plan && t.plan.subtasks) || [];
+  var parts = room.memberAgentIds.map(function (id) {
+    var a = state.agents.find(function (x) { return x.id === id; });
+    var name = a ? a.name : id;
+    var mine = subs.filter(function (s) { return s.agentId === id || s.agentId === ('expert-' + id); });
+    var st = '';
+    if (mine.some(function (s) { return s.status === 'running'; })) st = 'running';
+    else if (mine.some(function (s) { return s.status === 'failed'; })) st = 'fail';
+    else if (mine.length && mine.every(function (s) { return s.status === 'completed'; })) st = 'done';
+    else if (mine.some(function (s) { return s.status === 'pending'; })) st = 'pending';
+    else if (a && a.enabled === false) st = 'off';
+    var lv = (state.agentLive || {})[id];
+    if (!st && lv && lv.busy) st = 'running';
+    var label = st === 'running' ? '执行中' : st === 'fail' ? '失败' : st === 'done' ? '本轮完成' : st === 'pending' ? '排队' : st === 'off' ? '已停用' : '';
+    var isAdmin = room.adminAgentId === id;
+    return '<button class="gp-pill' + (st ? ' st-' + st : '') + '" data-gpat="' + esc(id) + '" title="' + esc(name + (label ? ' · ' + label : '')) + (isAdmin ? ' · 管理员' : '') + '">' +
+      '<span class="dot"></span>' + esc(name) + (isAdmin ? ' 👑' : '') + (label ? ' <span style="color:var(--tx3)">' + label + '</span>' : '') + '</button>';
+  });
+  el.innerHTML = parts.join('');
+  el.querySelectorAll('[data-gpat]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var a = state.agents.find(function (x) { return x.id === btn.dataset.gpat; });
+      var name = a ? a.name : btn.dataset.gpat;
+      var input = document.getElementById('group-chat-input');
+      if (!input) return;
+      var pre = input.value && !/\s$/.test(input.value) ? input.value + ' ' : (input.value || '');
+      input.value = pre + '@' + name + ' ';
+      input.focus();
+    });
+  });
+}
+// 群内上传：走本轮频道任务的附件通道（服务端写到该任务工作区）。
+// 频道任务的成员子会话 cwd 指向同一目录 —— 上传即「全组可见」，下一轮发言自动带进上下文。
+async function groupUploadFiles(files) {
+  var room = groupRoom();
+  if (!room || !room.channelRef) { toast('先发一条消息开启本轮，再上传文件', true); return; }
+  if (room.archived) { toast('群已归档：只读，不能上传', true); return; }
+  var tid = room.channelRef;
+  var names = [];
+  for (var i = 0; i < files.length; i++) {
+    var f = files[i];
+    try {
+      var fd = new FormData();
+      fd.append('files', f, f.name);
+      var res = await fetch(API + '/tasks/' + tid + '/attachments', { method: 'POST', body: fd });
+      var json = await res.json().catch(function () { return {}; });
+      if (!res.ok || !json.ok) throw new Error((json && json.error) || ('HTTP ' + res.status));
+      var saved = ((json.data && json.data.results) || []).reduce(function (acc, x) { return acc.concat(x.files || []); }, [])[0];
+      names.push(saved && saved.path ? saved.path : f.name);
+    } catch (e) {
+      toast('✗ ' + f.name + ' 上传失败：' + ((e && e.message) || '未知'), true);
+    }
+  }
+  if (names.length) {
+    toast('✓ 已上传 ' + names.length + ' 个文件到本轮工作区 · 成员可读写');
+    refreshGroupChat();
+  }
+}
+// 本轮产出文件墙：聚合各子任务登记的产出 + 会话附件，按路径去重，标出「谁写的」。
+// 这是「各节点文件在协作中互见」的 UI 落点——不再需要退出群去任务中心翻。
+function groupFilesHtml(t) {
+  var subs = (t && t.plan && t.plan.subtasks) || [];
+  var rows = [];
+  var seen = {};
+  subs.forEach(function (s) {
+    (s.files || []).forEach(function (f) {
+      if (!f || !f.path || seen[f.path]) return;
+      seen[f.path] = 1;
+      var who = (state.agents.find(function (a) { return a.id === f.agentId; }) || {}).name || f.agentId || '';
+      rows.push({ path: f.path, who: who, at: f.at, node: f.nodeKey || '' });
+    });
+  });
+  ((t && t.attachments) || []).forEach(function (a) {
+    if (!a || !a.path || seen[a.path]) return;
+    seen[a.path] = 1;
+    rows.push({ path: a.path, who: a.agentName || '附件', at: a.uploadedAt, node: '' });
+  });
+  if (!rows.length) return '';
+  rows = rows.slice(0, 20);
+  var items = rows.map(function (r) {
+    var name = String(r.path).split('/').pop() || r.path;
+    return '<div class="gfile" title="' + esc(r.path) + '">' +
+      '<span class="gfile-ic">📄</span>' +
+      '<span class="gfile-n">' + esc(name) + '</span>' +
+      (r.who ? '<span class="gfile-who" style="color:' + agentAvColor(r.who) + '">' + esc(r.who) + '</span>' : '') +
+      '</div>';
+  }).join('');
+  return '<div class="gfiles"><div class="gfiles-h">📁 本轮产出 <span class="gfiles-cnt">' + rows.length + '</span>' +
+    '<span class="hspacer"></span><span class="gfiles-hint">成员写入的文件 · 全组可读</span>' +
+    '<button class="mini-btn gfiles-open" title="在项目工作区中打开">↗</button></div>' +
+    '<div class="gfiles-body">' + items + '</div></div>';
 }
 async function groupSend() {
   var inputEl = document.getElementById('group-chat-input');
@@ -18525,8 +19251,9 @@ function openGroupDeleteConfirm(room) {
 }
 // ---------- 建群向导（对照 Android CreateGroupWizard 3 步：①选成员 ②模式+公告+管理员 ③绑定项目+当前项目+分组） ----------
 var groupWizard = null;
-function openGroupWizard() {
-  groupWizard = { step: 1, members: [], mode: 'admin', notice: '', admin: '', projectIds: [], activeProjectId: '', section: '', sectionNew: '', q: '' };
+function openGroupWizard(memberIds) {
+  var pre = Array.isArray(memberIds) ? memberIds.filter(Boolean) : [];
+  groupWizard = { step: pre.length >= 2 ? 2 : 1, members: pre, mode: 'admin', notice: '', admin: pre[0] || '', projectIds: [], activeProjectId: '', section: '', sectionNew: '', q: '' };
   renderGroupWizard();
 }
 function renderGroupWizard() {

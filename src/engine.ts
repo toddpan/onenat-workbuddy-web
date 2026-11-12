@@ -3117,6 +3117,16 @@ export class TaskEngine {
           content: result.content.length >= prev.length ? result.content : prev,
           reasoning: result.reasoning || s.result?.reasoning,
         }
+        // 产出文件登记：同轮其它成员（含无依赖边的并行兄弟）据此发现并取回文件。
+        // nodeKey 取执行时节点身份（sessions 记录），不是当前绑定——绑定可能在执行后漂移。
+        try {
+          const nodeKey = task.sessions[agent.id]?.nodeRefKey || ''
+          const paths = extractUpstreamFilePaths(s.result.content || '', 16)
+          if (paths.length) {
+            const at = Date.now()
+            s.files = paths.map((p) => ({ path: p, nodeKey, subtaskId: sub.id, agentId: agent.id, at }))
+          }
+        } catch { /* 登记失败不影响子任务结果 */ }
       } else if (!result.ok && result.content) {
         // 流式已产出部分内容但最终失败：保留部分产出并标记失败
         s.status = 'failed'
@@ -3267,20 +3277,29 @@ export class TaskEngine {
    * 密钥与 URL 成对交付。节点不可达 / 无路径候选时返回空串（不注入空段）。
    */
   private async buildUpstreamFilesSection(task: WorkTask, sub: PlanSubtask): Promise<string> {
-    const deps = (sub.dependsOn || [])
-      .map((id) => task.plan?.subtasks?.find((s) => s.id === id))
-      .filter((d): d is PlanSubtask => Boolean(d?.result?.content))
+    // 可见范围 = 依赖上游 ∪ 同轮已完成的兄弟子任务（无依赖边的并行成员也该看见彼此刚写的文件）。
+    // 登记来源优先用 subtask.files（完成时登记的权威索引），文本正则只作兜底。
+    const planSubs = task.plan?.subtasks || []
+    const depIds = new Set(sub.dependsOn || [])
+    const deps = planSubs
+      .filter((d) => d.id !== sub.id && (depIds.has(d.id) || d.status === 'completed'))
+      .filter((d): d is PlanSubtask => Boolean(d?.result?.content || (d.files && d.files.length)))
     if (!deps.length) return ''
     const lines: string[] = []
     const seen = new Set<string>()
     const targetCache = new Map<string, Awaited<ReturnType<TaskEngine['resolveExecTarget']>>>()
     for (const dep of deps) {
-      const paths = extractUpstreamFilePaths(dep.result?.content || '')
+      // 优先用完成时登记的 files（带产出节点身份）；没有登记才回落到结果文本正则（旧任务/未登记路径）
+      const registered = dep.files || []
+      const paths = registered.length
+        ? registered.map((f) => f.path)
+        : extractUpstreamFilePaths(dep.result?.content || '')
       if (!paths.length) continue
       // Files belong to the session that produced them, not the agent's current binding
       // (which may have changed or fallen back to another node after execution).
       const binding = task.sessions[dep.agentId]
-      const key = binding?.nodeRefKey
+      // 登记项自带 nodeKey 时以它为准——它记录的是「写入那一刻」的节点
+      const key = (registered[0] && registered[0].nodeKey) || binding?.nodeRefKey
       let ref: DshRef | undefined
       if (binding?.resolvedMappingId) ref = { kind: 'mapping', mappingId: binding.resolvedMappingId }
       else if (key?.startsWith('mapping:')) ref = { kind: 'mapping', mappingId: key.slice(8) }

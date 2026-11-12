@@ -404,6 +404,26 @@ export interface PlanSubtask {
   logs: SubtaskLogEntry[]
   startedAt?: number
   completedAt?: number
+  /**
+   * 本子任务产出的文件索引（完成时从结果文本登记）：
+   * 任务级协作的事实源 —— 同轮其它子任务（含无依赖边的并行兄弟）据此发现、下载、覆盖写。
+   * 只有路径 + 产出节点身份，不含文件内容。
+   */
+  files?: PlanSubtaskFile[]
+}
+
+/** 子任务产出文件登记项（跨节点协作寻址单元） */
+export interface PlanSubtaskFile {
+  /** 绝对路径（产出节点上的路径） */
+  path: string
+  /** 产出时所在节点（dshRefKey 归一键，如 mapping:xxx / direct:https://…） */
+  nodeKey: string
+  /** 写入者子任务 id（同轮可反查标题与成员） */
+  subtaskId: string
+  /** 写入者成员 id */
+  agentId: string
+  /** 登记时间 */
+  at: number
 }
 
 export interface TaskPlan {
