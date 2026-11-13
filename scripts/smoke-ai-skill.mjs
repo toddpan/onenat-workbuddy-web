@@ -133,7 +133,7 @@ async function main() {
   check('种子令牌放行 monitor_read', okTok.status === 200 && okTok.json?.ok === true && okTok.json?.result?.kpi, `status=${okTok.status}`)
   const toolsList = await fetch(`${BASE2}${PREFIX}/api/tools`, { headers: { Authorization: 'Bearer seed-token-123' } }).then((r) => r.json())
   const toolNames = (toolsList.tools || []).map((t) => t.name)
-  check('工具清单 13 个（含 project_manage 与 task_ask_answer）', toolNames.length === 13 && toolNames.includes('workbuddy_project_manage') && toolNames.includes('workbuddy_task_ask_answer'), toolNames.join(','))
+  check('工具清单 16 个（含 project_manage / task_ask_answer / expert_manage / team_manage / backlog_manage）', toolNames.length === 16 && toolNames.includes('workbuddy_project_manage') && toolNames.includes('workbuddy_task_ask_answer') && toolNames.includes('workbuddy_expert_manage') && toolNames.includes('workbuddy_team_manage') && toolNames.includes('workbuddy_backlog_manage'), toolNames.join(','))
   check('新工具齐全', ['workbuddy_monitor_read', 'workbuddy_schedule_manage', 'workbuddy_planner_manage', 'workbuddy_file_manage'].every((n) => toolNames.includes(n)))
   // project_manage 全链路：upsert → list → create 带projectId → delete
   const projUpsert = await tool(BASE2, 'seed-token-123', 'workbuddy_project_manage', { action: 'upsert', project: { name: '冒烟测试项目', dshRef: { kind: 'mapping', mappingId: 'mock-dsh-live' } } })
@@ -164,6 +164,21 @@ async function main() {
   check('旧令牌立即失效（401）', oldTok.status === 401, `status=${oldTok.status}`)
   const newTok = await tool(BASE2, newToken, 'workbuddy_monitor_read', {})
   check('新令牌立即生效（无需重启）', newTok.status === 200, `status=${newTok.status}`)
+
+  // ---------- 3.1 AI 安装提示词：服务端统一来源（正文与令牌同源，Web/安卓共用） ----------
+  const aiInstallRes = await fetch(`${BASE2}${PREFIX}/api/ai/install-prompt`, { headers: { Cookie: cookie } })
+  const aiInstall = await aiInstallRes.json().catch(() => ({}))
+  const aiInstallData = aiInstall?.data || {}
+  check('安装提示词接口回读服务端权威令牌（token/hasToken/base）',
+    aiInstallRes.status === 200 && aiInstall.ok === true && aiInstallData.token === newToken && aiInstallData.hasToken === true && aiInstallData.base === `${BASE2}${PREFIX}`,
+    `status=${aiInstallRes.status} base=${aiInstallData.base} hasToken=${aiInstallData.hasToken}`)
+  check('安装提示词内嵌新令牌与 mcpServers 条目（url=<base>/mcp）',
+    String(aiInstallData.installPrompt || '').includes(`--token ${newToken}`)
+      && String(aiInstallData.installPrompt || '').includes(`"url": "${BASE2}${PREFIX}/mcp"`)
+      && String(aiInstallData.installPrompt || '').includes(`"Authorization": "Bearer ${newToken}"`),
+    `len=${String(aiInstallData.installPrompt || '').length}`)
+  const aiPromptViaToken = await fetch(`${BASE2}${PREFIX}/api/ai/install-prompt`, { headers: { Authorization: `Bearer ${newToken}` } }).then((r) => r.status)
+  check('AI 令牌访问安装提示词接口拒绝（403，仅控制台会话）', aiPromptViaToken === 403, `status=${aiPromptViaToken}`)
 
   // ---------- 4. 新工具功能 ----------
   const T = (name, args) => tool(BASE2, newToken, name, args)

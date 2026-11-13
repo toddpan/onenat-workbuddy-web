@@ -1,0 +1,1 @@
+healthz: n=60 ok200=60 err=0 avg=79ms max=851ms

@@ -1,0 +1,4225 @@
+/**
+ * onenat-workbuddy-web - 任务引擎（多轮聊天 + 编排调度 + SSE 事件枢纽）
+ *
+ * chat 模式: 单成员直通 —— 复用该成员的长持远端会话（D3），SSE 流式回填聊天窗口
+ * orchestrate 模式: LLM Planner 拆解（D4）→ DAG 调度并发/串行派发 → 汇总（§6.3）
+ * 所有派发前实时解析 DSH 入口（D1 端口漂移免疫）；远端无 SSE 时自动降级同步+轮询（D5）
+ */
+
+import { randomUUID } from 'node:crypto'
+import type { IncomingMessage } from 'node:http'
+import { mkdir, writeFile, appendFile, stat, readFile, readdir, rm, rename } from 'node:fs/promises'
+import { join, posix, win32 } from 'node:path'
+import type { PromptResult, DshTarget } from './remote-client.js'
+import { DshClient } from './remote-client.js'
+import { sameDshRef, dshRefKey } from './workspace.js'
+import { buildWorkspaceAccessSection, installWorkspaceAccessCli, workspaceShellQuote, WORKSPACE_ACCESS_CLI_NAME } from './workspace-access.js'
+import type { AgentResolver } from './resolver.js'
+import type { PromptComposer } from './prompt-composer.js'
+import { Orchestrator, buildCompletionRequirement, buildTaskContract, buildUpstreamDigests, buildUpstreamSection, extractUpstreamFilePaths, sanitizeEngineInstruction, type PlanDraft } from './orchestrator.js'
+import type { OnenatDirectory } from './onenat.js'
+import type { WorkStore } from './store.js'
+import type { SubtaskLogEntry, AgentResourceBinding, DshRef, ExtractedFileMention, ExtractedMentions, ExpertTeam, PlanSubtask, Project, ResolvedDshTarget, SubAgent, TaskEvent, TaskPlanScope, TaskTurn, TurnToolCall, WorkTask } from './types.js'
+import { teamMemberKey, makeExpertAgentId, expertIdFromAgentId, projectDefaultAgentIds, MAIN_AGENT_LABEL, NODE_AGENT_ID } from './types.js'
+import { appendExecutionRecord, encodeFrontmatter, findItem, readItem, resolveDoneStatus, writeItem } from './backlog.js'
+import type { SshResourceStore } from './ssh-store.js'
+import { expertPersona, type ExpertRegistry, type ExpertProfile } from './expert-registry.js'
+import { teamMemberContract } from './expert-teams.js'
+
+/** 未配置任务级/智能体级运行权限时的默认值：全部权限（沙箱不限 + 无审批） */
+const DEFAULT_PERMISSION = 'danger-full-access'
+
+/** 任务标题 = 用户首条消息的前 30 字（空白折叠）；空消息回落占位符。不再用 LLM 提炼标题。 */
+function titleFromMessage(message: string | undefined): string {
+  const raw = (message || '').replace(/\s+/g, ' ').trim()
+  return raw ? raw.slice(0, 30) : '新任务'
+}
+
+export interface CreateTaskInput {
+  title?: string
+  /** 成员智能体；nodeRef 直发主会话任务时可省略（engine 内部以 __node__ 虚拟执行者直连节点） */
+  memberAgentIds?: string[]
+  mode?: 'chat' | 'orchestrate'
+  message?: string
+  /** 由定时任务派生时记录来源（任务列表/监控屏的 ⏰ 类型标识随任务持久化） */
+  scheduleId?: string
+  scheduleName?: string
+  /** 创建者：'tool' = AI 工具通道（显式指定的成员受保护）/ 'console' = 控制台人工 */
+  creator?: 'tool' | 'console'
+  /** 所属项目：继承项目节点/工作区/指令/专家/连接器/技能 */
+  projectId?: string
+  /** 执行节点；项目任务可覆盖默认值，创建时快照 */
+  nodeRef?: DshRef
+  /** 任务级连接器（'ssh:<id>' | 'map:<mappingId>' | 'app:<appId>'） */
+  connectorIds?: string[]
+  /** 任务级技能（/名 手势） */
+  skillNames?: string[]
+  /** 任务级工作目录（绝对路径）：定时任务实例配置；主会话 cwd 优先于项目 workspace */
+  workDir?: string
+  /** 任务级模型（provider/model）：定时任务实例配置；主会话（__node__）优先于全局调度模型 */
+  model?: string
+  /** 任务级推理强度：建会话时随 createPayload 透传（与 task.reasoningEffort 同落点） */
+  reasoningEffort?: string
+  /** 任务级模式预设：建会话时优先于智能体实体默认（agentPreset） */
+  agentPreset?: string
+  /** 专家团任务：按团队合同展开成员并注入规划/派工/汇总（memberAgentIds 未显式给定时以团队名册为准） */
+  teamId?: string
+  /** backlog 派发来源（B4）：由项目 backlog 待办派发时随任务持久化，终态钩子据此回写 */
+  backlogRef?: WorkTask['backlogRef']
+  /**
+   * 归属用户（§11）：控制台会话创建时由服务端写入（fork 归 fork 人）；
+   * AI 工具通道/存量路径缺省（宽容模式：全员可见，管理仅 admin）。客户端传入不采信。
+   */
+  ownerUserId?: string
+}
+
+/** 取 prompt 尾部片段：降级轮询时供远端 history 定位本次回合的起点 user 消息（注入消息不含用户文本，天然排除） */
+function turnFragment(prompt: string): string {
+  return prompt.length > 400 ? prompt.slice(-400) : prompt
+}
+
+/**
+ * 远端 cwd 校验的路径等价判定。
+ * 远端 Node 返回的 cwd 是 realpath：macOS 上 `/tmp/xx` 会被解析成 `/private/tmp/xx`
+ * （`/var` 同理）。旧实现按字符串严格比较 → 每轮都误报「cwd 与配置不一致」，
+ * 用户会误以为工作目录没生效。这里按系统符号链接别名与尾斜杠归一后比较。
+ */
+function pathEquivalent(a?: string, b?: string): boolean {
+  const norm = (p?: string): string => String(p || '').replace(/\/+/g, '/').replace(/\/+$/, '')
+  const na = norm(a)
+  const nb = norm(b)
+  if (!na || !nb) return na === nb
+  if (na === nb) return true
+  const aliases = (p: string): string[] => {
+    const out = [p]
+    if (p.startsWith('/private/')) out.push(p.slice('/private'.length))
+    else if (/^\/(tmp|var|etc|home)(\/|$)/.test(p)) out.push('/private' + p)
+    return out
+  }
+  const aa = aliases(na)
+  const bb = aliases(nb)
+  return aa.some((x) => bb.includes(x))
+}
+
+/**
+ * 写入/编辑类工具调用的目标路径（「本轮变更」数据源）。
+ * 只认写类工具（命名口径与前端 toolMeta 的「编辑文件」一致）；str_replace_editor 的 view/只读命令不算。
+ * 参数可能是 JSON 字符串或对象；apply_patch 从补丁头（*** Add/Update/Delete File、+++ b/）解析。
+ */
+export function extractToolPaths(name: unknown, args: unknown): string[] | undefined {
+  const n = String(name || '').toLowerCase()
+  if (!/^(write|edit|apply|str_replace|multiedit|notebook)/.test(n) && !/_write$|_edit$/.test(n)) return undefined
+  let o: any = args
+  if (typeof o === 'string') {
+    try { o = JSON.parse(o) } catch { o = { patch: o } }
+  }
+  if (!o || typeof o !== 'object') return undefined
+  if (typeof o.command === 'string' && /^(view|read|list)$/i.test(o.command)) return undefined
+  const out: string[] = []
+  const add = (v: unknown) => {
+    const s = typeof v === 'string' ? v.trim() : ''
+    if (s && s.length <= 1024 && !s.includes('\n') && !out.includes(s)) out.push(s)
+  }
+  for (const k of ['path', 'file_path', 'filePath', 'notebook_path', 'file', 'filename']) add(o[k])
+  if (Array.isArray(o.edits)) for (const e of o.edits) if (e && typeof e === 'object') add(e.file_path ?? e.path)
+  for (const k of ['patch', 'input', 'diff']) {
+    if (typeof o[k] !== 'string') continue
+    for (const line of o[k].split('\n')) {
+      const m = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/.exec(line) || /^\*\*\* Move to: (.+)$/.exec(line) || /^\+\+\+ (?:b\/)?(.+)$/.exec(line)
+      if (m && m[1].trim() !== '/dev/null') add(m[1])
+    }
+  }
+  return out.length ? out.slice(0, 50) : undefined
+}
+
+/**
+ * @ 提及的起始边界判定：只有「独立 @」才算提及候选。
+ *
+ * 背景（线上事故）：消息「把仓库跟 git clone ssh://zuji.pan@10.2.12.43:29418/... 绑定」里的 @
+ * 是 git SSH URL 的 user@host 分隔符，曾被 extractMentions 当成提及解析成伪文件引用
+ * （@host/path 落到兜底文件分支、挂到 agents[0] 头上），进而把普通直通消息升级成编排。
+ * 同类还有邮箱（user@example.com）、URL 路径（https://x.com/@org）、CLI 字面量（curl -F f=@file）。
+ *
+ * 规则：@ 前一个字符是 ASCII 字母数字，或属于邮箱/URL/路径/CLI 参数的连接符
+ * （. _ + - / = ~）时，判定为「嵌在 token 里」→ 不是提及；其余（文本开头、空白、
+ * 中日韩文字、全角标点、ASCII 句读括号等）均为合法提及起点，不影响
+ * 「帮我@brain 看看」「（@brain）」「@brain:logs/app.log」等既有用法。
+ */
+const AT_MENTION_EMBEDDED_PREV = /[A-Za-z0-9._+~/=-]/
+
+export function isAtMentionBoundary(text: string, at: number): boolean {
+  if (at <= 0) return true
+  return !AT_MENTION_EMBEDDED_PREV.test(text[at - 1])
+}
+
+/** 给控制面紧急操作（停止）加时限：ONENAT 抖动时不能让"停止"按钮等十几秒才返回 */
+function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((resolve) => {
+      const t = setTimeout(() => resolve(fallback), ms)
+      if (typeof (t as any).unref === 'function') (t as any).unref()
+    }),
+  ])
+}
+
+/** 节点不可达类错误（用于把 "fetch failed" 翻译成可操作提示，而不是原样丢给用户） */
+function isUnreachableError(msg: string | undefined): boolean {
+  return /fetch failed|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH|ENOTFOUND|ETIMEDOUT|timed? ?out|socket hang up|EPIPE/i.test(String(msg || ''))
+}
+
+/** 远端会话已不存在（natpass 端口漂移串端口/远端重启清理/串到别节点引擎）——可重建会话重发 */
+function isSessionLostError(msg: string | undefined): boolean {
+  return /session\s*'?\s*[\w:-]+\s*'?\s+not found/i.test(String(msg || ''))
+}
+
+export class TaskEngine {
+  private client = new DshClient()
+  private sshStore: SshResourceStore | undefined
+  private activeJobs = new Map<string, AbortController>()
+  /** 用户主动停止的任务：processUserMessage 收尾时跳过队列补发（停止=停住，排队消息保留待用户处置） */
+  private skipQueueFlush = new Set<string>()
+  private hub = new Map<string, Set<(e: TaskEvent) => void>>()
+  /**
+   * 资源提示词块缓存：键 = taskId:agentId:agent.updatedAt（改绑定/技能即自动失效），
+   * 值 = 块内容 + 合成时间；TTL 5 分钟兜底远端侧变更（技能文件更新等）。
+   * 仅用于避免重复合成；直通路径命中后不重发块（靠远端会话历史延续）。
+   */
+  private blockCache = new Map<string, { block: string; at: number }>()
+  private static readonly BLOCK_CACHE_TTL = 5 * 60_000
+
+  /** interaction 进键：同一任务内聊天直发（attended）与编排子任务（unattended）的交互守卫不同，不能共用缓存块 */
+  private blockCacheKey(taskId: string, agent: { id: string; updatedAt?: number }, interaction: 'attended' | 'unattended' = 'unattended'): string {
+    return `${taskId}:${agent.id}:${agent.updatedAt || 0}:${interaction}`
+  }
+
+  private blockCacheFresh(taskId: string, agent: { id: string; updatedAt?: number }, interaction: 'attended' | 'unattended' = 'unattended'): { block: string } | null {
+    const e = this.blockCache.get(this.blockCacheKey(taskId, agent, interaction))
+    if (!e || Date.now() - e.at >= TaskEngine.BLOCK_CACHE_TTL) return null
+    return { block: e.block }
+  }
+
+  constructor(
+    private store: WorkStore,
+    private directory: OnenatDirectory,
+    private resolver: AgentResolver,
+    private composer: PromptComposer,
+    private planner: Orchestrator,
+    sshStore?: SshResourceStore,
+    /** 专家库注册表（专家团专家成员的 persona 来源）；构造后也可经 attachExperts 注入 */
+    private experts?: ExpertRegistry,
+    /** 可注入的远端客户端（单测用；缺省自建） */
+    client?: DshClient,
+  ) {
+    this.sshStore = sshStore
+    if (client) this.client = client
+  }
+
+  /** 延迟注入专家库注册表（server.ts 中 router 持有同一实例，构造顺序晚于引擎） */
+  public attachExperts(registry: ExpertRegistry): void {
+    this.experts = registry
+  }
+
+  /** 从用户消息中提取 @子智能体、@资源、@专家团 与 @专家库角色（支持 @智能体:文件路径、@[智能体:文件路径] 及独立 @文件路径） */
+  public async extractMentions(text: string): Promise<ExtractedMentions> {
+    const mentionedAgentIds: string[] = []
+    const mentionedResourceBindings: AgentResourceBinding[] = []
+    const mentionedFiles: ExtractedFileMention[] = []
+    let mentionedTeamId: string | undefined
+    const mentionedExpertIds: string[] = []
+    let mentionedExpertAmbiguous: string | undefined
+    let mentionedProjectId: string | undefined
+    const agents = this.store.getAgents()
+    const endpoints = this.directory.listEndpoints()
+
+    // 1. 构建候选词典（按名称长度降序排列，优先匹配最长包含空格的完整实体名，如 "SSH Server"）
+    interface DictEntry {
+      type: 'agent' | 'resource' | 'team' | 'expert' | 'project'
+      name: string
+      data: any
+    }
+    const dict: DictEntry[] = []
+
+    for (const a of agents) {
+      if (a.name) dict.push({ type: 'agent', name: a.name, data: a })
+      if (a.id) dict.push({ type: 'agent', name: a.id, data: a })
+    }
+
+    // 专家团（含内置种子团）也可被 @：命中后本轮消息按该团队合同发起编排
+    for (const t of this.store.getTeams()) {
+      if (t.enabled !== false && t.name) dict.push({ type: 'team', name: t.name, data: t })
+    }
+
+    // 项目也可被 @：@项目名 → 对该项目发起任务（未绑定项目的任务自动绑定，节点/工作区/项目指令/技能全继承）
+    for (const pr of this.store.getProjects()) {
+      if (pr.name) dict.push({ type: 'project', name: pr.name, data: pr })
+    }
+
+    // 专家库角色可被 @：单个 → 定向直派（动态实例化在任务节点），多个 → 并行编排。
+    // 词典含中英文名；同名多专家收进同一词条，未带 #id 命中时拒绝召唤（@名称#id 可精确直派；
+    // 子智能体/团队同名时按词典顺序优先命中）。
+    if (this.experts) {
+      const expertList = await this.experts.search('').catch(() => [])
+      const byName = new Map<string, { name: string; experts: any[] }>()
+      for (const e of expertList) {
+        for (const nm of [e.name, e.nameEn]) {
+          const key = String(nm || '').trim().toLowerCase()
+          if (!key) continue
+          const hit = byName.get(key)
+          // 同一专家的 name 与 nameEn 常相同（内置团队角色 nameEn 直接复用中文名）：
+          // 按专家 id 去重，避免把单个专家误判成「同名多角色」而拒绝召唤
+          if (hit) {
+            if (!hit.experts.some((x) => x.id === e.id)) hit.experts.push(e)
+          }
+          else byName.set(key, { name: String(nm).trim(), experts: [e] })
+        }
+      }
+      for (const { name, experts } of byName.values()) {
+        dict.push({ type: 'expert', name, data: experts.length === 1 ? experts[0] : experts })
+      }
+    }
+
+    for (const ep of endpoints) {
+      if (ep.appName) dict.push({ type: 'resource', name: ep.appName, data: ep })
+      if (ep.note && ep.note !== ep.appName) dict.push({ type: 'resource', name: ep.note, data: ep })
+      if (ep.mappingId) dict.push({ type: 'resource', name: ep.mappingId, data: ep })
+      // 支持带环境名的精确定向匹配（例："SSH Server (测试 B 环境)" 或 "SSH Server(测试 B 环境)"）
+      if (ep.appName && ep.tunnelName) {
+        dict.push({ type: 'resource', name: `${ep.appName} (${ep.tunnelName})`, data: ep })
+        dict.push({ type: 'resource', name: `${ep.appName}(${ep.tunnelName})`, data: ep })
+      }
+    }
+
+    dict.sort((a, b) => b.name.length - a.name.length)
+
+    // 2. 扫描文本中所有的 '@' 索引位置（嵌入 token 的 @ 除外：邮箱 / URL user@host / CLI @file 字面量，见 isAtMentionBoundary）
+    let i = 0
+    while (i < text.length) {
+      if (text[i] === '@' && isAtMentionBoundary(text, i)) {
+        const startPos = i
+        const rest = text.slice(i + 1)
+        let matched = false
+
+        // 优先检查方括号包裹，如 @[136-执行者:logs/app.log] 或 @[src/index.ts]
+        const bracketMatch = /^\[([^\]]+)\]/.exec(rest)
+        if (bracketMatch) {
+          const inner = bracketMatch[1].trim()
+          const colonIdx = inner.indexOf(':') !== -1 ? inner.indexOf(':') : inner.indexOf('：')
+          if (colonIdx !== -1) {
+            const prefix = inner.slice(0, colonIdx).trim()
+            const filePath = inner.slice(colonIdx + 1).trim()
+            const matchedAgent = agents.find(
+              (a) => a.name.toLowerCase() === prefix.toLowerCase() || a.id.toLowerCase() === prefix.toLowerCase(),
+            )
+            if (matchedAgent && filePath) {
+              const raw = text.slice(startPos, startPos + 1 + bracketMatch[0].length)
+              mentionedFiles.push({
+                raw,
+                agentId: matchedAgent.id,
+                agentName: matchedAgent.name,
+                path: filePath,
+                filename: filePath.split(/[\/\\]/).pop() || filePath,
+              })
+              if (!mentionedAgentIds.includes(matchedAgent.id)) {
+                mentionedAgentIds.push(matchedAgent.id)
+              }
+              i = startPos + 1 + bracketMatch[0].length
+              continue
+            }
+          } else if (inner.includes('/') || inner.includes('\\') || inner.includes('.')) {
+            // 方括号内纯路径 @[src/index.ts]
+            const raw = text.slice(startPos, startPos + 1 + bracketMatch[0].length)
+            const defaultAgent = agents[0]
+            if (defaultAgent) {
+              mentionedFiles.push({
+                raw,
+                workspaceOwned: true,
+                agentId: defaultAgent.id,
+                agentName: defaultAgent.name,
+                path: inner,
+                filename: inner.split(/[\/\\]/).pop() || inner,
+              })
+              if (!mentionedAgentIds.includes(defaultAgent.id)) {
+                mentionedAgentIds.push(defaultAgent.id)
+              }
+              i = startPos + 1 + bracketMatch[0].length
+              continue
+            }
+          }
+        }
+
+        // 优先在词典中查找最长前缀匹配（支持名称中含有空格、短横线、中文等）
+        for (const entry of dict) {
+          if (rest.startsWith(entry.name)) {
+            const afterName = rest.slice(entry.name.length)
+            // 检查紧随其后是否是冒号 : 或 ：，即 @智能体名:文件路径 形式
+            if (entry.type === 'agent' && (afterName.startsWith(':') || afterName.startsWith('：'))) {
+              const afterColon = afterName.slice(1)
+              const pathMatch = /^([^\s,，。!！?？;；]+)/.exec(afterColon)
+              if (pathMatch && pathMatch[1].trim()) {
+                const filePath = pathMatch[1].trim()
+                const raw = text.slice(startPos, startPos + 1 + entry.name.length + 1 + pathMatch[0].length)
+                const a = entry.data
+                mentionedFiles.push({
+                  raw,
+                  agentId: a.id,
+                  agentName: a.name,
+                  path: filePath,
+                  filename: filePath.split(/[\/\\]/).pop() || filePath,
+                })
+                if (!mentionedAgentIds.includes(a.id)) {
+                  mentionedAgentIds.push(a.id)
+                }
+                matched = true
+                i = startPos + raw.length
+                break
+              }
+            }
+
+            matched = true
+            i += 1 + entry.name.length // 跳过当前 @ 和名称
+
+            if (entry.type === 'agent') {
+              const a = entry.data
+              if (!mentionedAgentIds.includes(a.id)) {
+                mentionedAgentIds.push(a.id)
+              }
+            } else if (entry.type === 'team') {
+              const tm = entry.data as { id: string }
+              if (!mentionedTeamId) mentionedTeamId = tm.id
+            } else if (entry.type === 'project') {
+              const pr = entry.data as { id: string }
+              if (!mentionedProjectId) mentionedProjectId = pr.id
+            } else if (entry.type === 'expert') {
+              const e = entry.data
+              // @名称#id：客户端选人时携带唯一 id（专家库 roster/builtin/user 三来源存在同名），
+              // 命中词条内任一专家 id 即精确直派，不再触发同名歧义拒绝；id 不匹配时回退原语义。
+              const pool: any[] = Array.isArray(e) ? e : [e]
+              const hash = /^#([^\s@,，。!！?？;；]+)/.exec(afterName)
+              const exact = hash ? pool.find((x) => String(x?.id) === hash[1]) : undefined
+              if (exact) {
+                if (!mentionedExpertIds.includes(exact.id)) {
+                  mentionedExpertIds.push(exact.id)
+                }
+                i += hash![0].length // 额外消费「#id」
+              } else if (Array.isArray(e)) {
+                // 同名多专家且未带有效 #id：拒绝召唤，避免召唤到错误角色
+                mentionedExpertAmbiguous = entry.name
+              } else if (!mentionedExpertIds.includes(e.id)) {
+                mentionedExpertIds.push(e.id)
+              }
+            } else if (entry.type === 'resource') {
+              const ep = entry.data
+              const refKey = ep.mappingId || ep.appId
+              // 若有多个同名但不同 mappingId 的资源，查找未注入的同名映射
+              const allSameNameEps = endpoints.filter((r) => r.appName === entry.name || r.note === entry.name)
+              const unusedEp = allSameNameEps.find(
+                (r) =>
+                  !mentionedResourceBindings.some(
+                    (b) => (b.ref.kind === 'mapping' ? b.ref.mappingId : b.ref.appId) === (r.mappingId || r.appId),
+                  ),
+              ) || ep
+
+              const targetMappingId = unusedEp.mappingId
+              const binding: AgentResourceBinding = {
+                ref: targetMappingId
+                  ? { kind: 'mapping', mappingId: targetMappingId }
+                  : { kind: 'app', appId: unusedEp.appId! },
+                alias: unusedEp.appName || unusedEp.note || entry.name,
+                credentialMode: unusedEp.kind === 'ssh' ? 'inline' : 'self-fetch',
+                skillMode: 'all',
+                note: `用户当轮 @${entry.name} 动态指定使用`,
+              }
+              const bKey = binding.ref.kind === 'mapping' ? binding.ref.mappingId : binding.ref.appId
+              if (!mentionedResourceBindings.some((b) => (b.ref.kind === 'mapping' ? b.ref.mappingId : b.ref.appId) === bKey)) {
+                mentionedResourceBindings.push(binding)
+              }
+            }
+            break
+          }
+        }
+
+        if (!matched) {
+          // 兜底：若未在已知字典精确匹配，尝试提取紧随的连续非标点单词
+          const fallbackMatch = /^([^\s@,，。!！?？;；]+)/.exec(rest)
+          if (fallbackMatch) {
+            const rawTag = fallbackMatch[1].trim()
+            const colonIdx = rawTag.indexOf(':') !== -1 ? rawTag.indexOf(':') : rawTag.indexOf('：')
+            if (colonIdx !== -1) {
+              const prefix = rawTag.slice(0, colonIdx).trim()
+              const filePath = rawTag.slice(colonIdx + 1).trim()
+              const matchedAgent = agents.find(
+                (a) => a.name.toLowerCase() === prefix.toLowerCase() || a.id.toLowerCase() === prefix.toLowerCase(),
+              )
+              if (matchedAgent && filePath) {
+                const raw = text.slice(startPos, startPos + 1 + fallbackMatch[0].length)
+                mentionedFiles.push({
+                  raw,
+                  agentId: matchedAgent.id,
+                  agentName: matchedAgent.name,
+                  path: filePath,
+                  filename: filePath.split(/[\/\\]/).pop() || filePath,
+                })
+                if (!mentionedAgentIds.includes(matchedAgent.id)) {
+                  mentionedAgentIds.push(matchedAgent.id)
+                }
+                i = startPos + 1 + fallbackMatch[1].length
+                continue
+              }
+            } else if ((rawTag.startsWith('/') || rawTag.startsWith('./') || rawTag.includes('.')) && (rawTag.includes('/') || rawTag.includes('\\'))) {
+              // 独立文件路径 @src/index.ts 或 @/tmp/a.log
+              const defaultAgent = agents[0]
+              if (defaultAgent) {
+                const raw = text.slice(startPos, startPos + 1 + fallbackMatch[0].length)
+                mentionedFiles.push({
+                  raw,
+                  workspaceOwned: true,
+                  agentId: defaultAgent.id,
+                  agentName: defaultAgent.name,
+                  path: rawTag,
+                  filename: rawTag.split(/[\/\\]/).pop() || rawTag,
+                })
+                if (!mentionedAgentIds.includes(defaultAgent.id)) {
+                  mentionedAgentIds.push(defaultAgent.id)
+                }
+                i = startPos + 1 + fallbackMatch[1].length
+                continue
+              }
+            }
+
+            i += 1 + fallbackMatch[1].length
+
+            const matchedAgent = agents.find(
+              (a) => a.name.toLowerCase() === rawTag.toLowerCase() || a.id.toLowerCase() === rawTag.toLowerCase(),
+            )
+            if (matchedAgent && !mentionedAgentIds.includes(matchedAgent.id)) {
+              mentionedAgentIds.push(matchedAgent.id)
+            } else {
+              const matchedEp = endpoints.find(
+                (r) =>
+                  (r.appName && r.appName.toLowerCase() === rawTag.toLowerCase()) ||
+                  (r.note && r.note.toLowerCase() === rawTag.toLowerCase()) ||
+                  r.mappingId === rawTag,
+              )
+              if (matchedEp) {
+                const binding: AgentResourceBinding = {
+                  ref: matchedEp.mappingId
+                    ? { kind: 'mapping', mappingId: matchedEp.mappingId }
+                    : { kind: 'app', appId: matchedEp.appId! },
+                  alias: matchedEp.appName || matchedEp.note || rawTag,
+                  credentialMode: matchedEp.kind === 'ssh' ? 'inline' : 'self-fetch',
+                  skillMode: 'all',
+                  note: `用户当轮 @${rawTag} 动态指定使用`,
+                }
+                const bKey = binding.ref.kind === 'mapping' ? binding.ref.mappingId : binding.ref.appId
+                if (!mentionedResourceBindings.some((b) => (b.ref.kind === 'mapping' ? b.ref.mappingId : b.ref.appId) === bKey)) {
+                  mentionedResourceBindings.push(binding)
+                }
+              }
+            }
+          } else {
+            i++
+          }
+        }
+      } else {
+        i++
+      }
+    }
+
+    return {
+      mentionedAgentIds,
+      mentionedResourceBindings,
+      mentionedFiles: mentionedFiles.length > 0 ? mentionedFiles : undefined,
+      ...(mentionedTeamId ? { mentionedTeamId } : {}),
+      ...(mentionedExpertIds.length ? { mentionedExpertIds } : {}),
+      ...(mentionedExpertAmbiguous ? { mentionedExpertAmbiguous } : {}),
+      ...(mentionedProjectId ? { mentionedProjectId } : {}),
+      cleanText: text,
+    }
+  }
+
+  // ---------- 事件枢纽 ----------
+
+  public subscribe(taskId: string, fn: (e: TaskEvent) => void): () => void {
+    let set = this.hub.get(taskId)
+    if (!set) {
+      set = new Set()
+      this.hub.set(taskId, set)
+    }
+    set.add(fn)
+    return () => {
+      set!.delete(fn)
+      if (set!.size === 0) this.hub.delete(taskId)
+    }
+  }
+
+  private globalTaps = new Set<(taskId: string, e: TaskEvent) => void>()
+
+  /** 全局事件旁路（监控采集用）：无论该任务是否有 SSE 订阅者，所有事件都会流经这里 */
+  public onTap(fn: (taskId: string, e: TaskEvent) => void): () => void {
+    this.globalTaps.add(fn)
+    return () => {
+      this.globalTaps.delete(fn)
+    }
+  }
+
+  private emit(taskId: string, event: TaskEvent): void {
+    for (const fn of this.globalTaps) {
+      try {
+        fn(taskId, event)
+      } catch {
+        /* 单个旁路订阅者异常不影响其他 */
+      }
+    }
+    const set = this.hub.get(taskId)
+    if (!set) return
+    for (const fn of set) {
+      try {
+        fn(event)
+      } catch {
+        /* 单个订阅者异常不影响其他 */
+      }
+    }
+  }
+
+  public isRunning(taskId: string): boolean {
+    return this.activeJobs.has(taskId)
+  }
+
+  // ---------- 任务生命周期 ----------
+
+  /**
+   * 默认成员：调用方未显式指定成员时，任务只归属「主智能体」（Planner 配置的主调度，未配置时自动挑选）。
+   *
+   * 与消息路径 processUserMessage 的「未 @ 任何子智能体 → 主智能体应答」判定同源。
+   * 明确不要退化成「全部子智能体」：那会把一句普通提问扩散成全员编排，
+   * 并让一次附件上传把同一个文件扇出到所有节点（每个成员都会被建远端会话）。
+   */
+  public defaultMemberAgentIds(): string[] {
+    const main = this.planner.pickMainAgent()
+    return main ? [main.id] : []
+  }
+
+  /**
+   * 启动自愈：服务重启会丢失全部执行上下文（activeJobs/SSE），但 running 状态已持久化——
+   * 不处理的话这些任务永远卡在「运行中」成为僵尸。启动时统一标记失败并附系统说明。
+   * （远端 DSH 会话可能仍在跑，其产出以远端会话为准；后续消息可基于 task.nodeRef/项目重新发起）
+   */
+  public recoverInterruptedTasks(): number {
+    let n = 0
+    for (const t of this.store.getTasks()) {
+      if (t.status !== 'running') continue
+      this.store.mutateTask(t.id, (x) => {
+        x.status = 'failed'
+        for (const turn of x.turns) {
+          if (turn.streaming) { turn.streaming = false; turn.endedAt = Date.now() }
+        }
+      })
+      this.appendSystemTurn(t.id, '⚠️ 服务重启导致本轮执行中断，任务已标记为失败；远端可能仍产生过部分结果，如需请重发消息')
+      n++
+    }
+    if (n > 0) console.log(`[onenat-workbuddy] 启动自愈：${n} 个因重启中断的任务已标记为失败`)
+    return n
+  }
+
+  public async createTask(input: CreateTaskInput): Promise<WorkTask> {
+    // 成员账本语义：显式传入（含显式空数组）= 用户意图优先；未传入时按来源继承（团队名册 > 项目默认协作成员），
+    // 不再依赖前端把项目 expertIds 塞进请求体（控制台/REST/MCP 入口保持同一继承行为）
+    const project = input.projectId ? this.store.getProject(input.projectId) : undefined
+    if (input.projectId && !project) throw new Error(`项目不存在: ${input.projectId}`)
+    const nodeRef = input.nodeRef || project?.defaultExecutionNodeRef || project?.dshRef
+    const explicit = Array.isArray(input.memberAgentIds) ? input.memberAgentIds.filter((id) => Boolean(id)) : undefined
+    // 专家团任务：团队名册是成员账本的默认来源（显式传入的 memberAgentIds 优先，teamId 仅作合同标记保留）
+    const team = input.teamId ? this.store.getTeam(input.teamId) : undefined
+    if (input.teamId && !team) throw new Error(`专家团不存在: ${input.teamId}`)
+    if (team && team.enabled === false) throw new Error(`专家团「${team.name}」已停用，请先在子智能体页启用`)
+    let memberAgentIds = explicit?.length ? [...new Set(explicit)] : []
+    let expertMembers: WorkTask['expertMembers'] = undefined
+    if (team && !explicit?.length) {
+      // 团队名册展开：agentId 成员校验存在，expertId 成员登记为动态成员（编排时实例化在任务节点）
+      const expanded = await this.expandTeamRoster(team)
+      const missingAgents = team.members
+        .filter((m) => m.agentId)
+        .map((m) => ({ m, agent: this.store.getAgent(m.agentId!) }))
+        .filter((x) => !x.agent || x.agent.enabled === false)
+      if (missingAgents.length) {
+        throw new Error(`专家团「${team.name}」成员不可用: ${missingAgents.map((x) => x.agent?.name || x.m.agentId).join('、')}（不存在或已停用）`)
+      }
+      const missingExperts = team.members.filter((m) => m.expertId && !expanded.expertMembers.some((e) => e.expertId === m.expertId))
+      if (missingExperts.length) {
+        throw new Error(`专家团「${team.name}」专家成员不可用: ${missingExperts.map((m) => m.expertId).join('、')}（专家库中不存在）`)
+      }
+      memberAgentIds = expanded.agentIds
+      expertMembers = expanded.expertMembers.length ? expanded.expertMembers : undefined
+    }
+    let inheritedDefaults = false
+    if (!team && explicit === undefined && !memberAgentIds.length && input.projectId) {
+      // 项目默认协作成员（defaultAgentIds）：仅继承，不限制后续 @；全部停用时不强制（任务仍可在节点直发）。
+      // 显式空数组（memberAgentIds: []）保留「明确不要成员」的意图，不触发继承。
+      const defaults = this.projectDefaultMemberIds(this.store.getProject(input.projectId))
+      if (defaults.length) {
+        memberAgentIds = defaults
+        inheritedDefaults = true
+      }
+    }
+    // 新模型：成员账本 = 参与过的 sub agent（@ 时自动追加），不再预填「主智能体」；
+    // 无 @ 的主会话直接在任务节点上执行（processUserMessage → runChatTurn 节点直发）
+    const totalMembers = memberAgentIds.length + (expertMembers?.length || 0)
+    const mode: WorkTask['mode'] = input.mode || (totalMembers > 1 ? 'orchestrate' : 'chat')
+    const task: WorkTask = {
+      id: `task-${randomUUID().slice(0, 8)}`,
+      title: input.title?.trim() || titleFromMessage(input.message),
+      mode,
+      status: 'draft',
+      memberAgentIds,
+      creator: explicit?.length ? (input.creator || 'tool') : 'console',
+      turns: [],
+      sessions: {},
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      ...(input.scheduleId ? { scheduleId: input.scheduleId } : {}),
+      ...(input.scheduleName ? { scheduleName: input.scheduleName } : {}),
+      ...(input.ownerUserId ? { ownerUserId: input.ownerUserId } : {}),
+      ...(input.projectId ? { projectId: input.projectId } : {}),
+      // 快照创建时的执行节点，项目默认值变化不会迁移既有任务。
+      ...(nodeRef ? { nodeRef: { ...nodeRef } } : {}),
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
+      ...(input.agentPreset ? { agentPreset: input.agentPreset } : {}),
+      ...(input.connectorIds?.length ? { connectorIds: input.connectorIds } : {}),
+      ...(input.skillNames?.length ? { skillNames: input.skillNames } : {}),
+      ...(input.workDir ? { workDir: input.workDir } : {}),
+      ...(team ? { teamId: team.id } : {}),
+      ...(expertMembers?.length ? { expertMembers } : {}),
+      ...(input.backlogRef ? { backlogRef: input.backlogRef } : {}),
+    }
+    this.store.upsertTask(task)
+    if (inheritedDefaults) this.taskLog(task.id, 'info', `已继承项目默认协作成员（${memberAgentIds.length} 名）：编排与 @ 均可按需使用，不被限死为唯一执行者`)
+    if (input.message?.trim()) {
+      // 团队任务的首页消息由发送者携带团队意图（opts.teamId）——首轮按团队合同编排；
+      // 用户后续显式 @ 成员时按轮级参与者聚焦，显式 @ 团队才恢复团队语义。
+      await this.sendUserMessage(task.id, input.message.trim(), team ? { teamId: team.id } : undefined)
+    }
+    return this.store.getTask(task.id)!
+  }
+
+  public updateMembers(taskId: string, memberAgentIds: string[]): WorkTask | undefined {
+    const ids = Array.isArray(memberAgentIds) ? [...new Set(memberAgentIds.filter((id) => Boolean(id)))] : []
+    if (!ids.length) throw new Error('members 需要至少一个非空成员子智能体 ID（memberAgentIds / CLI --agents <id,id>）')
+    return this.store.mutateTask(taskId, (task) => {
+      if (this.activeJobs.has(taskId)) throw new Error('任务执行中，暂不能变更成员')
+      task.memberAgentIds = ids
+      task.mode = task.memberAgentIds.length > 1 ? 'orchestrate' : task.mode
+      return task
+    })
+  }
+
+  // ---------- backlog 终态回写（B4，docs/design-backlog-integration.md §6.3） ----------
+
+  /** 任务终态出口的 fire-and-forget 钩子：有 backlogRef 且已产出 summary 才回写；失败标记任务供 UI 重试。
+   *  chatFallback=true 时（主会话直发完成、无编排汇总）以合成汇总回写 —— 完成本身即完成信号。 */
+  private backlogWritebackFire(taskId: string, opts?: { chatFallback?: boolean }): void {
+    const task = this.store.getTask(taskId)
+    if (!task?.backlogRef) return
+    if (!task.summary && !(opts?.chatFallback && task.status === 'completed')) return
+    // chat 兜底仅在首轮完成时回写：后续追问轮不重复追加「派发执行」记录（防噪声；状态已是 Done）
+    if (opts?.chatFallback && !task.summary && task.turns.filter((t) => t.role === 'user').length > 1) return
+    this.runBacklogWriteback(task).catch((err: unknown) => {
+      try {
+        this.recordWritebackFailure(taskId, err)
+      } catch {
+        // 标记失败不影响任务终态事件
+      }
+    })
+  }
+
+  // ---------- backlog 回写失败自动重试（TASK-2 后台补偿器） ----------
+
+  /** 自动重试退避序列：第 1/2/3 次失败后分别等 1min / 5min / 15min 再试，共 3 次自动重试机会 */
+  static readonly BACKLOG_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000] as const
+  static readonly BACKLOG_RETRY_MAX = 3
+  /** 补偿器扫描间隔（毫秒）：到点任务在下一个 tick 被拾起，不必为每个退避点单独设定时器 */
+  private static readonly RETRY_SWEEP_INTERVAL_MS = 20_000
+
+  private retrySweepTimer: ReturnType<typeof setInterval> | null = null
+  /** 进行中的自动重试（防同任务并发重复回写） */
+  private retryInFlight = new Set<string>()
+
+  /** 注入审计日志（server.ts 构造顺序晚于引擎，经 setter 注入；缺省不写审计） */
+  public attachAuditLog(auditLog: { record: (e: { actorId: string; action: string; targetType: string; targetId: string; detail?: string }) => void }): void {
+    this.auditLog = auditLog
+  }
+  private auditLog?: { record: (e: { actorId: string; action: string; targetType: string; targetId: string; detail?: string }) => void }
+
+  /** 回写失败统一入口（终态钩子/自动重试/人工重试共用）：打失败标记并推进退避计数 */
+  public recordWritebackFailure(taskId: string, err: unknown): void {
+    const now = Date.now()
+    this.store.mutateTask(taskId, (t) => {
+      t.backlogWritebackFailed = { at: now, error: String((err as Error)?.message || err).slice(0, 300) }
+      const prev = t.backlogWritebackRetry
+      const count = (prev?.count || 0) + 1
+      const delays = TaskEngine.BACKLOG_RETRY_DELAYS_MS
+      // 退避取值：第 n 次失败后等 delays[min(n-1, 末位)]（超出序列后钉在最大间隔，计数封顶由 sweep 把关）
+      const delay = delays[Math.min(Math.max(count, 1), delays.length) - 1]
+      t.backlogWritebackRetry = { count, nextAt: now + delay }
+    })
+  }
+
+  /**
+   * 补偿器单次扫描：拾起「失败标记 + 已终态 + 已产出 summary + 退避到点 + 未达上限」的任务，
+   * 复用 runBacklogWriteback 实时解析回写（勿缓存端口）。返回本次实际发起的重试数（测试/监控用）。
+   */
+  public async runBacklogWritebackRetrySweep(now: number = Date.now()): Promise<number> {
+    const terminal = new Set(['completed', 'failed', 'cancelled'])
+    const due = this.store.getTasks().filter((t) =>
+      t.backlogRef
+      && t.backlogWritebackFailed
+      && t.summary
+      && terminal.has(t.status)
+      && !this.retryInFlight.has(t.id)
+      && (t.backlogWritebackRetry?.count || 0) < TaskEngine.BACKLOG_RETRY_MAX
+      && (t.backlogWritebackRetry?.nextAt || t.backlogWritebackFailed.at) <= now,
+    )
+    let fired = 0
+    for (const task of due) {
+      if (this.retryInFlight.has(task.id)) continue
+      this.retryInFlight.add(task.id)
+      fired++
+      void this.runBacklogWriteback(task)
+        .catch((err: unknown) => {
+          try {
+            this.recordWritebackFailure(task.id, err)
+          } catch { /* 标记失败不影响扫描循环 */ }
+        })
+        .finally(() => {
+          this.retryInFlight.delete(task.id)
+        })
+    }
+    return fired
+  }
+
+  /** 启动补偿器定时器（server.ts 生命周期内调用；unref 不阻塞退出） */
+  public startBacklogWritebackRetrySweeper(): void {
+    if (this.retrySweepTimer) return
+    this.retrySweepTimer = setInterval(() => {
+      void this.runBacklogWritebackRetrySweep().catch(() => {}) // 定时器内吞掉一切异常，禁止未捕获退出
+    }, TaskEngine.RETRY_SWEEP_INTERVAL_MS)
+    ;(this.retrySweepTimer as any).unref?.()
+  }
+
+  public stopBacklogWritebackRetrySweeper(): void {
+    if (this.retrySweepTimer) { clearInterval(this.retrySweepTimer); this.retrySweepTimer = null }
+  }
+
+  /**
+   * 执行一次 backlog 回写：按 summary.status 迁移待办状态（§4.2）并文末追加执行记录。
+   * success → done；partial_success → 保持现状；failed → 回 default（open）。
+   * 无编排汇总的主会话任务按 completed 合成成功汇总（§6.3：完成即信号，记录中注明）。
+   * 回写权威在服务端 —— agent 是否自觉维护不影响闭环正确性。
+   */
+  public async runBacklogWriteback(task: WorkTask): Promise<void> {
+    const ref = task.backlogRef
+    if (!ref) throw new Error('任务无 backlog 来源')
+    const summary =
+      task.summary ||
+      (task.status === 'completed'
+        ? {
+            status: 'success' as const,
+            overview: '主会话直发完成（无编排汇总）',
+            subtaskSummaries: [],
+            finalConclusion: [...task.turns].reverse().find((t) => t.role === 'agent')?.text?.slice(0, 500) || '',
+            completedAt: Date.now(),
+          }
+        : undefined)
+    if (!summary) throw new Error('任务尚无汇总')
+    const proj = this.store.getProject(ref.projectId)
+    if (!proj?.workspace) throw new Error('项目不存在或未配置工作目录')
+    const target = await this.resolver.resolveRef(proj.dshRef, proj.apiKey, 'backlog-writeback')
+    if (!target.online || !target.baseUrl) throw new Error(target.error || '节点不可达，无法回写')
+    const found = await findItem(this.client, target, proj.workspace, ref.itemId)
+    if (!found) throw new Error(`待办 ${ref.itemId} 不存在（可能已被删除或改名）`)
+    const raw = await readItem(this.client, target, proj.workspace, found.item.fileName)
+    const doneStatus = resolveDoneStatus(found.list.config.statuses)
+    const success = summary.status === 'success'
+    const failed = summary.status === 'failed'
+    const nextStatus = success ? doneStatus : failed ? found.list.config.defaultStatus : found.item.status
+    const outcome = success ? '成功' : failed ? '失败' : '部分成功（覆盖度未全回传）'
+    const time = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+    const lines = [`任务 ${task.id} · 结果=${outcome}`, summary.finalConclusion || summary.overview || '（无汇总文本）']
+    if (task.backlogWritebackFailed) lines.push('（本次为重试回写）')
+    const next = appendExecutionRecord(encodeFrontmatter(raw, { status: nextStatus }), { time, title: `派发执行（${outcome}）`, lines })
+    await writeItem(this.client, target, proj.workspace, found.item.fileName, () => next, { base: raw })
+    if (task.backlogWritebackFailed) {
+      const retried = task.backlogWritebackRetry?.count || 0
+      this.store.mutateTask(task.id, (t) => {
+        delete t.backlogWritebackFailed
+        delete t.backlogWritebackRetry
+      })
+      // 重试闭环审计：自动补偿器或人工重试成功落账，便于追溯「回写未确认」的清零路径
+      if (retried > 0) {
+        try {
+          this.auditLog?.record({ actorId: 'system', action: 'backlog.writeback-retry', targetType: 'task', targetId: task.id, detail: `重试第 ${retried} 次后回写成功（item=${ref.itemId}）` })
+        } catch { /* 审计失败不阻断闭环 */ }
+      }
+    }
+  }
+
+  /**
+   * 跨节点续接（P4-1）：在新节点/项目上开新任务，携带最近对话原文草稿（不调用 LLM）。
+   * 新任务记录 forkedFrom，原任务追加 forks[]（双向链接），并插入一条 system 轮提示。
+   */
+  public async forkTask(taskId: string, opts: { nodeRef?: DshRef; projectId?: string | null; ownerUserId?: string } = {}): Promise<{ task: WorkTask; draft: string }> {
+    const origin = this.store.getTask(taskId)
+    if (!origin) throw new Error(`任务不存在: ${taskId}`)
+    const projectId = opts.projectId === null ? undefined : opts.projectId || origin.projectId || undefined
+    // 同项目默认续接继承原有效执行节点；旧任务没有 nodeRef 时仍固定原文件节点。
+    const nodeRef = opts.nodeRef || (projectId === origin.projectId ? this.taskExec(origin).dshRef : undefined)
+    const draft = this.forkDraftOf(origin)
+    const created = await this.createTask({
+      title: `↪ ${origin.title}`,
+      projectId: projectId || undefined,
+      nodeRef,
+      memberAgentIds: origin.memberAgentIds?.length ? [...origin.memberAgentIds] : undefined,
+      // §11：fork 出的新任务归属 fork 人（view 级动作，非归属继承）
+      ...(opts.ownerUserId ? { ownerUserId: opts.ownerUserId } : {}),
+    })
+    const now = Date.now()
+    this.store.mutateTask(created.id, (t) => {
+      t.forkedFrom = { taskId: origin.id, at: now }
+      return t
+    })
+    const nodeLabel = projectId
+      ? (this.store.getProject(projectId)?.name || projectId)
+      : (nodeRef?.kind === 'direct' ? String(nodeRef.apiBaseUrl) : String((nodeRef as { mappingId?: string })?.mappingId || '原节点'))
+    this.store.mutateTask(origin.id, (t) => {
+      t.forks = [...(t.forks || []), { taskId: created.id, at: now }]
+      t.turns = [...(t.turns || []), {
+        id: `turn-${randomUUID().slice(0, 8)}`,
+        seq: (t.turns || []).length + 1,
+        role: 'system',
+        text: `已在 🖥 ${nodeLabel} 继续 → ${created.id}`,
+        at: now,
+      }]
+      return t
+    })
+    return { task: this.store.getTask(created.id)!, draft }
+  }
+  /** 续接草稿：最近 N（默认 6）轮已完成对话原文，总长上限 8000 字，超长截断前面的部分 */
+  private forkDraftOf(task: WorkTask): string {
+    const done = (task.turns || []).filter((t) => (t.role === 'user' || t.role === 'agent') && (t.text || '').trim() && !t.streaming)
+    const recent = done.slice(-6)
+    const body = recent.map((t) => {
+      const who = t.role === 'user' ? '【用户】' : `【智能体${t.agentName ? ' ' + t.agentName : ''}】`
+      return who + String(t.text || '').trim()
+    }).join('\n\n')
+    const header = `以下是在 ${this.forkOriginNodeLabel(task)} 上进行的任务《${task.title}》的最近对话：`
+    const CAP = 8000
+    let b = body
+    if ((header + b).length > CAP) b = '…（更早内容已截断）\n' + b.slice(Math.max(0, b.length - CAP))
+    return header + (b ? '\n\n' + b : '')
+  }
+  private forkOriginNodeLabel(task: WorkTask): string {
+    const proj = task.projectId ? this.store.getProject(task.projectId) : undefined
+    const ref = task.nodeRef || proj?.dshRef
+    if (ref?.kind === 'direct') return String(ref.apiBaseUrl)
+    if (ref?.kind === 'mapping') return String(ref.mappingId)
+    return '原节点'
+  }
+  public async deleteTask(taskId: string): Promise<boolean> {
+    await this.cancelTask(taskId, '任务已删除')
+    for (const k of [...this.blockCache.keys()]) {
+      if (k.startsWith(taskId + ':')) this.blockCache.delete(k)
+    }
+    return this.store.deleteTask(taskId)
+  }
+
+  /**
+   * 批量删除已归档任务（归档管理页）：逐个对仍在运行的（手动归档的运行中会话）先取消并清 blockCache，
+   * 最后一次性落盘删除（避免逐任务 save 的整包写盘放大）。
+   */
+  public async bulkDeleteArchived(match: (t: WorkTask) => boolean): Promise<number> {
+    const victims = this.store.getTasks().filter((t) => t.archivedAt && match(t))
+    for (const t of victims) {
+      if (this.isRunning(t.id)) await this.cancelTask(t.id, '任务已删除')
+      for (const k of [...this.blockCache.keys()]) {
+        if (k.startsWith(t.id + ':')) this.blockCache.delete(k)
+      }
+    }
+    return this.store.bulkDeleteArchived(victims.map((t) => t.id))
+  }
+
+  public async cancelTask(taskId: string, reason = '用户中止'): Promise<{ ok: boolean; warnings: string[] }> {
+    // 远端中断可能失败（节点不可达/会话已消失/旧版无 cancel）：本地状态照常收敛，
+    // 但把未确认项回传给调用方 —— 用户需要知道「本地已停、远端可能还在跑」。
+    const warnings: string[] = []
+    const ctrl = this.activeJobs.get(taskId)
+    if (ctrl) {
+      ctrl.abort()
+      this.activeJobs.delete(taskId)
+      this.skipQueueFlush.add(taskId)
+    }
+
+    // 中止仍在运行的远端子任务会话
+    const task = this.store.getTask(taskId)
+    if (task) {
+      for (const sub of task.plan?.subtasks || []) {
+        if (sub.status === 'running') {
+          this.store.mutateSubtask(taskId, sub.id, (s) => {
+            s.status = 'failed'
+            s.error = reason
+            s.completedAt = Date.now()
+          })
+          const binding = task.sessions[sub.agentId]
+          const agent = await this.resolveMemberAgent(task, sub.agentId)
+          if (binding && agent) {
+            const target = await withTimeout(this.resolveExecTarget(task, sub.agentId).catch(() => undefined), 4000, undefined)
+            if (!target?.online || !target.baseUrl) {
+              warnings.push(`${agent.name}：节点不可达，未发送远端中断`)
+            } else {
+              const cr = await withTimeout(
+                this.client.cancelSession(target, binding.remoteSessionId).catch((e: any) => ({ ok: false, error: e?.message || String(e) })),
+                6000,
+                { ok: false, error: '远端取消超时，未确认' },
+              )
+              if (!cr.ok) warnings.push(`${agent.name}：${cr.error || '远端取消失败'}`)
+            }
+          }
+          this.emit(taskId, { type: 'subtask_status', subtask: this.store.getTask(taskId)?.plan?.subtasks.find((s) => s.id === sub.id)! })
+        }
+      }
+      // chat 直通会话同样向远端发送中断（仅断本地 SSE 远端会继续跑完）
+      const taskAll = this.store.getTask(taskId)
+      for (const aid of Object.keys(taskAll?.sessions || {})) {
+        const binding = taskAll!.sessions[aid]
+        if (!binding) continue
+        // 会话可能建在项目节点上，按项目/任务指定节点优先解析；
+        // 节点主会话（__node__）无智能体记录，用会话绑定 baseUrl + 任务凭证直发中断
+        const ag = this.store.getAgent(aid)
+        const label = ag?.name || (aid === NODE_AGENT_ID ? '主会话' : aid)
+        // 停止是控制面紧急操作：优先用会话绑定的节点地址直发（不触发 ONENAT 资源刷新，
+        // 抖动时也不会卡 12s）；凭证先看显式 key，再从映射凭证缓存取（TTL 内零网络往返）。
+        let tg: (DshTarget & { online: boolean }) | undefined
+        const exec = this.taskExec(taskAll!)
+        if (binding.baseUrl) {
+          let apiKey = exec.apiKey
+          if (!apiKey && exec.dshRef?.kind === 'mapping') {
+            const cred = await withTimeout(
+              this.directory.fetchMappingCredentials(exec.dshRef.mappingId).catch(() => undefined),
+              3000,
+              undefined,
+            )
+            if (cred?.ok) apiKey = cred.apiKey || cred.token
+          }
+          tg = { baseUrl: binding.baseUrl, apiKey, online: true }
+        }
+        if (!tg) {
+          tg = await withTimeout(this.resolveExecTarget(taskAll!, aid).catch(() => undefined), 4000, undefined)
+        }
+        if (!tg || !binding.remoteSessionId) {
+          if (!tg) warnings.push(`${label}：节点不可达，未发送远端中断`)
+        } else {
+          const cr = await withTimeout(
+            this.client.cancelSession(tg, binding.remoteSessionId).catch((e: any) => ({ ok: false, error: e?.message || String(e) })),
+            6000,
+            { ok: false, error: '远端取消超时，未确认' },
+          )
+          if (!cr.ok) warnings.push(`${label}：${cr.error || '远端取消失败'}`)
+        }
+        // 远端 cancel 实测解不开 ask_user_question 挂起批次（批次仍登记、run 仍悬停）——
+        // 停止时同步解挂：提交中止答复让挂起的 run 收尾，会话恢复可用（否则下一条消息
+        // 经 followup 排队在挂起 run 后面永不被处理，表现为「停了还是卡」）。
+        if (tg && binding.remoteSessionId) {
+          // 远端已不可达时，挂起提问探测/答复也要有时限（否则"停止"会被二次网络等待拖住）
+          const pq = await withTimeout(
+            this.client.listPendingQuestions(tg, binding.remoteSessionId).catch(() => undefined),
+            4000,
+            undefined,
+          )
+          if (pq?.ok && (pq.count || 0) > 0) {
+            const answers = (pq.batches || [])
+              .flatMap((b) => b.questions || [])
+              .filter((q) => q?.id)
+              .map((q) => ({ id: String(q.id), selected: [] as string[], custom: '［用户已中止］停止当前执行：立即收尾，简要总结已完成的进展，不要继续新的动作。' }))
+            if (answers.length) {
+              const ar = await withTimeout(
+                this.client.answerQuestion(tg, binding.remoteSessionId, answers).catch(() => ({ ok: false } as const)),
+                6000,
+                { ok: false } as const,
+              )
+              if (ar.ok) this.taskLog(taskId, 'info', '挂起提问已随停止自动答复，远端会话解除挂起')
+            }
+          }
+        }
+      }
+
+      // 若任务当前状态是 running，置为 cancelled 并通知前端
+      if (task.status === 'running') {
+        this.store.mutateTask(taskId, (t) => {
+          t.status = 'cancelled'
+          // 将最后一个正在流式的 turn 结束
+          for (const turn of t.turns) {
+            if (turn.streaming) {
+              turn.streaming = false
+              turn.endedAt = Date.now()
+            }
+            if (turn.tools) {
+              for (const tool of turn.tools) {
+                if (tool.status === 'running') {
+                  tool.status = 'error'
+                  tool.result = reason
+                }
+              }
+            }
+          }
+        })
+        this.appendSystemTurn(taskId, `⏹ 已停止 — ${reason}`)
+        this.emit(taskId, { type: 'task_status', status: 'cancelled' })
+        const fresh = this.store.getTask(taskId)!
+        this.emit(taskId, { type: 'task_end', task: fresh })
+      }
+      if (warnings.length) this.taskLog(taskId, 'warn', `停止时远端未确认中断：${warnings.join('；')}`)
+    }
+    return { ok: true, warnings }
+  }
+
+  public async retrySubtask(taskId: string, subtaskId: string): Promise<{ ok: boolean; error?: string }> {
+    const task = this.store.getTask(taskId)
+    if (!task) return { ok: false, error: '任务不存在' }
+    if (this.activeJobs.has(taskId)) return { ok: false, error: '任务正在执行中' }
+    const sub = task.plan?.subtasks.find((s) => s.id === subtaskId)
+    if (!sub) return { ok: false, error: '子任务不存在' }
+
+    const ctrl = new AbortController()
+    this.activeJobs.set(taskId, ctrl)
+    this.store.mutateSubtask(taskId, subtaskId, (s) => {
+      s.status = 'pending'
+      s.error = undefined
+      s.result = undefined
+    })
+    try {
+      const agent = await this.resolveMemberAgent(task, sub.agentId)
+      if (!agent) {
+        this.store.mutateSubtask(taskId, subtaskId, (s) => {
+          s.status = 'failed'
+          s.error = '成员不存在（子智能体已删除或专家档案缺失）'
+        })
+        return { ok: false, error: '成员不存在' }
+      }
+      const target = await this.resolveExecTarget(task, sub.agentId)
+      if (!target) {
+        this.store.mutateSubtask(taskId, subtaskId, (s) => {
+          s.status = 'failed'
+          s.error = '节点解析失败'
+        })
+        return { ok: false, error: '节点解析失败' }
+      }
+      await this.runSubtask(task, this.store.getTask(taskId)!.plan!.subtasks.find((s) => s.id === subtaskId)!, agent, target, [], [], ctrl.signal)
+      // 重算汇总：沿用原计划 scope 的目标文本/团队合同与成员口径（此前不传 team 导致团队核对要点和覆盖度丢失）
+      const fresh = this.store.getTask(taskId)!
+      const scope = fresh.plan?.scope
+      const team = scope?.team || (task.teamId ? this.store.getTeam(task.teamId) : undefined)
+      const memberTargets = new Map<string, DshTarget>()
+      for (const id of scope?.memberIds || task.memberAgentIds) {
+        const t = await this.resolveExecTarget(fresh, id)
+        if (t) memberTargets.set(id, t)
+      }
+      const summary = await this.planner.summarize(
+        fresh.plan?.objective || fresh.turns[0]?.text || fresh.title,
+        fresh.plan?.subtasks || [],
+        memberTargets,
+        undefined,
+        team ? { team, nameOf: (key: string) => this.memberNameOf(fresh, key) } : undefined,
+      )
+      this.store.mutateTask(taskId, (t) => {
+        t.summary = summary
+        t.status = summary.status
+      })
+      this.backlogWritebackFire(taskId)
+      this.emit(taskId, { type: 'task_end', task: this.store.getTask(taskId)! })
+      return { ok: true }
+    } finally {
+      this.activeJobs.delete(taskId)
+    }
+  }
+
+  // ---------- 多轮消息入口 ----------
+
+  public async sendUserMessage(taskId: string, text: string, opts?: { teamId?: string; reuseTurnId?: string }): Promise<{ ok: boolean; turn?: TaskTurn; queued?: boolean; error?: string }> {
+    const task = this.store.getTask(taskId)
+    if (!task) return { ok: false, error: '任务不存在' }
+    if (!text.trim()) return { ok: false, error: '消息为空' }
+    const clean = text.trim()
+    // 提及解析提前：团队首句桥接（teamFirstTurn）必须让位显式 @ —— 团队草稿首句带
+    // @成员/@专家/@项目 时按用户意图聚焦，不吃掉成团队合同轮（评审确认的语义冲突）。
+    const mentions = await this.extractMentions(clean)
+    const hasExplicitMention = mentions.mentionedAgentIds.length > 0
+      || (mentions.mentionedExpertIds?.length || 0) > 0
+      || Boolean(mentions.mentionedTeamId)
+      || Boolean(mentions.mentionedProjectId)
+    // 团队任务的「第一条用户消息」= 创建团队任务（POST {teamId} 无消息 → 草稿 + teamId）输入的首句：
+    // 仅当首句无任何显式提及（也无选择器 teamId）时才桥接为团队合同轮，否则新语义会把
+    // 无 @ 首句路由到主会话直发、团队合同失效。
+    const teamFirstTurn = Boolean(task.teamId) && !opts?.teamId && !hasExplicitMention && !task.turns.some((t) => t.role === 'user')
+    if (teamFirstTurn) opts = { ...(opts || {}), teamId: task.teamId }
+    // 执行中 → 排队：登记为 queued 轮次，本轮结束后自动补发（queue/send 可立即插话）
+    if (this.activeJobs.has(taskId)) {
+      const turn: TaskTurn = { id: `turn-${randomUUID().slice(0, 8)}`, seq: 0, role: 'user', text: text.trim(), at: Date.now(), queued: true }
+      this.store.appendTurn(taskId, turn)
+      this.store.mutateTask(taskId, (t) => {
+        t.queue = t.queue || []
+        t.queue.push({ text: clean, at: Date.now(), turnId: turn.id, ...(opts?.teamId ? { teamId: opts.teamId } : {}) })
+      })
+      // 推送排队轮：多标签页/重连后也能立刻看到「⏳ 已排队」气泡（旧实现只落库不广播，
+      // 发送方也不渲染 → 消息像丢了，刷新后又与补发轮重复出现）
+      this.emit(taskId, { type: 'turn_start', turn })
+      return { ok: true, queued: true, turn }
+    }
+
+    // 队列补发：复用原排队轮（同一 turn.id），避免「排队一条 + 补发再 append 一条」出现重复用户消息
+    const reused = opts?.reuseTurnId ? this.store.getTask(taskId)?.turns.find((t) => t.id === opts.reuseTurnId) : undefined
+    let turn: TaskTurn
+    if (reused) {
+      turn = { ...reused, text: clean, queued: false }
+      delete (turn as any).queued
+      this.store.mutateTask(taskId, (t) => {
+        const x = t.turns.find((y) => y.id === turn.id)
+        if (x) { delete x.queued; x.text = clean }
+      })
+      this.emit(taskId, { type: 'turn_start', turn })
+    } else {
+      turn = { id: `turn-${randomUUID().slice(0, 8)}`, seq: 0, role: 'user', text: clean, at: Date.now() }
+      this.store.appendTurn(taskId, turn)
+      this.emit(taskId, { type: 'turn_start', turn })
+    }
+    this.store.mutateTask(taskId, (t) => {
+      t.status = 'running'
+    })
+    this.emit(taskId, { type: 'turn_start', turn })
+
+    // 若提及了当前任务之外的新智能体，自动纳入任务成员
+    if (mentions.mentionedAgentIds.length > 0) {
+      this.store.mutateTask(taskId, (t) => {
+        let changed = false
+        for (const aid of mentions.mentionedAgentIds) {
+          if (!t.memberAgentIds.includes(aid)) {
+            t.memberAgentIds.push(aid)
+            changed = true
+          }
+        }
+        // 仅当明确 @ 了 ≥2 个不同智能体时才视为多智能体协同，升级为编排模式；
+        // 恰 @ 1 个智能体保持原模式（直通/单人），避免「@某一智能体」被群成员数放大成跨多智能体流水线
+        if (changed && t.memberAgentIds.length > 1 && mentions.mentionedAgentIds.length >= 2) {
+          t.mode = 'orchestrate'
+        }
+      })
+    }
+
+    // @专家库角色：登记为任务动态成员（expert-<id> 伪 id，不落子智能体实体）
+    const mentionedExpertIds = mentions.mentionedExpertIds || []
+    if (mentionedExpertIds.length) {
+      const added: NonNullable<WorkTask['expertMembers']> = []
+      for (const eid of mentionedExpertIds) {
+        // 旧前缀（expert-）与新前缀（__expert__:）都在账本里算已登记；同一专家真实智能体 id 优先（resolveMemberAgent 实体优先语义）
+        const pseudo = this.expertMemberPseudo(task, eid)
+        if (task.expertMembers?.some((m) => m.id === pseudo)) continue
+        const ex = await this.experts?.get(eid).catch(() => undefined)
+        if (!ex) {
+          this.appendSystemTurn(taskId, `⚠️ 专家「${eid}」不在专家库中，已忽略`)
+          continue
+        }
+        added.push({ id: pseudo, name: ex.name, expertId: eid })
+      }
+      if (added.length) {
+        this.store.mutateTask(taskId, (t) => {
+          const merged = new Map([...(t.expertMembers || []).map((m) => [m.id, m] as const), ...added.map((m) => [m.id, m] as const)])
+          t.expertMembers = [...merged.values()]
+        })
+        this.taskLog(taskId, 'info', `@专家 ${added.map((m) => m.name).join('、')} 已加入任务（动态成员）`)
+      }
+      // @ 实体总数 ≥2（智能体 + 专家）与 @ 多个专家同样视为编排意图
+      if (mentions.mentionedAgentIds.length + mentionedExpertIds.length >= 2) {
+        this.store.mutateTask(taskId, (t) => { t.mode = 'orchestrate' })
+      }
+    }
+
+    // @项目：对项目发起任务 —— 任务尚未绑定项目时自动绑定，节点/工作目录/项目指令/技能全部自动继承
+    // （与 create 带 projectId 同语义，后续无 @ 消息也在项目节点直发）；已绑定其他项目则提示并忽略，不支持中途切换
+    if (mentions.mentionedProjectId) {
+      const mentioned = this.store.getProject(mentions.mentionedProjectId)
+      if (!mentioned) {
+        this.appendSystemTurn(taskId, `⚠️ 项目「${mentions.mentionedProjectId}」不存在，已忽略该 @ 项目提及`)
+      } else if (task.projectId === mentioned.id) {
+        // 已是本项目：noop
+      } else if (task.projectId) {
+        const current = this.store.getProject(task.projectId)
+        this.appendSystemTurn(taskId, `⚠️ 任务已绑定项目「${current?.name || task.projectId}」，@项目「${mentioned.name}」已忽略（任务不支持中途切换项目）`)
+      } else {
+        this.store.mutateTask(taskId, (t) => {
+          t.projectId = mentioned.id
+          // 显式任务节点优先；首次绑定也快照项目默认值，后续改默认节点不迁移会话。
+          t.nodeRef ||= { ...(mentioned.defaultExecutionNodeRef || mentioned.dshRef) }
+          // 首次 @ 绑定项目与 create 带 projectId 同语义：默认协作成员一并继承（已停用成员跳过；有团队绑定时以团队名册为准不动）
+          if (!t.teamId) {
+            const def = this.projectDefaultMemberIds(mentioned)
+              .filter((id) => !t.memberAgentIds.includes(id))
+            if (def.length) t.memberAgentIds = [...t.memberAgentIds, ...def]
+          }
+        })
+        this.taskLog(taskId, 'info', `@项目「${mentioned.name}」：任务已绑定该项目，节点、工作目录、项目指令与技能自动继承`)
+        this.appendSystemTurn(taskId, `📁 已绑定项目「${mentioned.name}」——本轮起任务在该项目上下文执行（节点、工作目录、项目指令自动继承）`)
+      }
+    }
+
+    const ctrl = new AbortController()
+    this.activeJobs.set(taskId, ctrl)
+
+    // 异步执行，立即返回用户轮次（流式经 SSE 推送）
+    void this.processUserMessage(taskId, text.trim(), mentions, ctrl.signal, opts)
+      .catch((err) => {
+        this.appendSystemTurn(taskId, `⚠️ 引擎异常: ${err?.message || err}`)
+      })
+      .finally(() => {
+        this.activeJobs.delete(taskId)
+        // 用户停止（cancelTask 置标记）：排队消息保留在队列里，不自动补发——
+        // 否则停止瞬间队首消息立刻开新回合，「停止」停不住；下次任意发送触发的回合结束后照常 FIFO 继续
+        if (this.skipQueueFlush.delete(taskId)) return
+        void this.flushMessageQueue(taskId)
+      })
+    return { ok: true, turn }
+  }
+
+  /** 轮次收尾：补发排队消息（FIFO，逐条）；轮次排队标记随之清除 */
+  private async flushMessageQueue(taskId: string) {
+    await new Promise((r) => setTimeout(r, 800)) // 等状态落定
+    const task = this.store.getTask(taskId)
+    const next = task?.queue?.[0]
+    if (!next) return
+    this.store.mutateTask(taskId, (t) => {
+      t.queue = (t.queue || []).filter((q) => q.turnId !== next.turnId)
+      const turn = t.turns.find((x) => x.id === next.turnId)
+      if (turn) delete turn.queued
+    })
+    await this.sendUserMessage(taskId, next.text, { ...(next.teamId ? { teamId: next.teamId } : {}), reuseTurnId: next.turnId }).catch(() => undefined)
+  }
+
+  /**
+   * 「立即发送」：steer 插话 —— 把文本注入正在运行的远端回合（不新开轮次）。
+   * 目标会话：优先节点主会话（__node__），其次最近路由的成员会话，再次任意绑定会话。
+   */
+  public async steerTaskMessage(taskId: string, text: string): Promise<{ ok: boolean; error?: string }> {
+    const task = this.store.getTask(taskId)
+    if (!task) return { ok: false, error: '任务不存在' }
+    const entries = Object.entries(task.sessions || {}).filter(([, b]) => b.remoteSessionId)
+    if (!entries.length) return { ok: false, error: '任务尚无远端会话，无法插话' }
+    const pick =
+      entries.find(([k]) => k === '__node__') ||
+      entries.find(([k]) => k === task.lastRoute?.agentId) ||
+      entries[0]
+    const [agentId, binding] = pick
+    const agent = this.store.getAgent(agentId)
+    const target = agent ? await this.resolver.resolve(agent) : await this.resolveExecTarget(task, agentId)
+    if (!target || !target.online || !target.baseUrl) return { ok: false, error: '节点不可达' }
+    const r = await this.client.steerSession(target, binding.remoteSessionId!, text)
+    if (!r.ok) return { ok: false, error: r.error }
+    this.taskLog(taskId, 'info', `已插话到运行中回合（${agent?.name || agentId}）`)
+    return { ok: true }
+  }
+
+  /** 队列「立即发送」：按 turnId 取出排队消息 → 运行中则插话，否则立即派发 */
+  public async sendQueuedNow(taskId: string, turnId: string): Promise<{ ok: boolean; error?: string }> {
+    const task = this.store.getTask(taskId)
+    const entry = task?.queue?.find((q) => q.turnId === turnId)
+    if (!entry) return { ok: false, error: '排队消息不存在或已发送' }
+    this.store.mutateTask(taskId, (t) => {
+      t.queue = (t.queue || []).filter((q) => q.turnId !== turnId)
+      const turn = t.turns.find((x) => x.id === turnId)
+      if (turn) delete turn.queued
+    })
+    if (this.activeJobs.has(taskId)) return await this.steerTaskMessage(taskId, entry.text)
+    // 复用排队轮 id：避免「立即发送」后再 append 一条同文本用户轮（刷新/切会话出现重复气泡）
+    return await this.sendUserMessage(taskId, entry.text, { ...(entry.teamId ? { teamId: entry.teamId } : {}), reuseTurnId: turnId })
+  }
+
+  /** 队列「编辑」：更新排队条目与对应排队轮次的文本（仍保持 queued 标记与 FIFO 位置） */
+  public updateQueuedMessage(taskId: string, turnId: string, text: string): { ok: boolean; error?: string } {
+    const task = this.store.getTask(taskId)
+    const entry = task?.queue?.find((q) => q.turnId === turnId)
+    if (!entry) return { ok: false, error: '排队消息不存在或已发送' }
+    const clean = String(text || '').trim()
+    if (!clean) return { ok: false, error: '消息不能为空' }
+    this.store.mutateTask(taskId, (t) => {
+      const q = (t.queue || []).find((x) => x.turnId === turnId)
+      if (q) q.text = clean
+      const turn = t.turns.find((x) => x.id === turnId)
+      if (turn) turn.text = clean
+    })
+    return { ok: true }
+  }
+
+  /** 队列「删除」：移出队列并删除该排队轮次（气泡随之消失） */
+  public deleteQueuedMessage(taskId: string, turnId: string): { ok: boolean; error?: string } {
+    const task = this.store.getTask(taskId)
+    const entry = task?.queue?.find((q) => q.turnId === turnId)
+    if (!entry) return { ok: false, error: '排队消息不存在或已发送' }
+    this.store.mutateTask(taskId, (t) => {
+      t.queue = (t.queue || []).filter((q) => q.turnId !== turnId)
+      t.turns = t.turns.filter((x) => x.id !== turnId)
+    })
+    return { ok: true }
+  }
+
+  private appendSystemTurn(taskId: string, text: string): TaskTurn {
+    const turn: TaskTurn = { id: `turn-${randomUUID().slice(0, 8)}`, seq: 0, role: 'system', text, at: Date.now() }
+    this.store.appendTurn(taskId, turn)
+    this.emit(taskId, { type: 'turn_start', turn })
+    this.emit(taskId, { type: 'turn_end', turn })
+    return turn
+  }
+
+  /** 任务级持久日志（规划器/成员/会话事件），同时推 SSE */
+  private taskLog(taskId: string, level: SubtaskLogEntry['level'], msg: string): void {
+    this.store.mutateTask(taskId, (t) => {
+      if (!t.taskLogs) t.taskLogs = []
+      t.taskLogs.push({ ts: Date.now(), level, msg })
+    })
+    this.emit(taskId, { type: 'log', level, msg })
+  }
+
+  /** 供路由写入任务日志（对话配置变更等） */
+  public logTask(taskId: string, level: SubtaskLogEntry['level'], msg: string): void {
+    this.taskLog(taskId, level, msg)
+  }
+
+  private async processUserMessage(taskId: string, text: string, mentions: ExtractedMentions, signal: AbortSignal, opts?: { teamId?: string }): Promise<void> {
+    let task = this.store.getTask(taskId)
+    if (!task) return
+
+    // @ 歧义拒绝后必须阻断本轮（在一切路由之前）：若继续走默认分支，消息会按「无 @」
+    // 静默降级为主会话直发，用户看到的是无关的节点执行结果，完全看不出是 @ 写法问题
+    //（线上实测踩坑：@同名专家 → 拒绝提示 → 主会话直发失败）。
+    if (mentions.mentionedExpertAmbiguous) {
+      this.appendSystemTurn(taskId, `⚠️ @「${mentions.mentionedExpertAmbiguous}」命中专家库多个同名角色，本轮已停止派发；请改用 @名称#id 指定具体专家，或从输入框 @ 弹层选择后重新发送`)
+      this.store.mutateTask(taskId, (t) => { t.status = 'failed' })
+      this.emit(taskId, { type: 'task_status', status: 'failed' })
+      return
+    }
+
+    // 消息级专家团意图（composer 选择器显式传入 / @团队名 提及）：
+    // 命中后把团队固化为任务语义（teamId/mode/成员账本），本轮起按团队合同编排；
+    // v2026.10.23 起团队合同只由本轮显式意图驱动（团队接管轮重置成员账本为当前团队名册）。
+    const messageTeamId = opts?.teamId || mentions.mentionedTeamId
+    if (messageTeamId) {
+      const team = this.store.getTeam(messageTeamId)
+      if (!team || team.enabled === false) {
+        this.appendSystemTurn(taskId, `⚠️ 专家团「${team?.name || messageTeamId}」不存在或已停用，本轮按普通路由执行`)
+      } else if (team.id !== task.teamId) {
+        const expanded = await this.expandTeamRoster(team, taskId)
+        this.store.mutateTask(taskId, (t) => {
+          t.teamId = team.id
+          t.mode = 'orchestrate'
+          // 团队意图 = 整体接管编排：成员账本重置为当前团队名册（旧团队/散点成员不残留到新一轮上下文）
+          t.memberAgentIds = [...expanded.agentIds]
+          const merged = new Map([...(t.expertMembers || []).map((m) => [m.id, m] as const), ...expanded.expertMembers.map((m) => [m.id, m] as const)])
+          t.expertMembers = [...merged.values()]
+        })
+        task = this.store.getTask(taskId)
+        this.taskLog(taskId, 'info', `专家团「${team.name}」已接管本轮编排（${expanded.agentIds.length} 名子智能体成员 + ${expanded.expertMembers.length} 名专家库成员）`)
+      }
+    }
+    if (!task) return
+
+    // 标题仍是占位（工单创建时无消息）→ 直接取首条用户消息前缀作标题。
+    // 放在路由判定前：不依赖远端可达；也彻底不再向远端会话下发标题提炼提示词
+    // （旧路径的内部指令问答会残留在会话历史顶部、污染任务上下文）。
+    if (this.needsAutoTitle(task)) {
+      const autoTitle = titleFromMessage(text)
+      if (autoTitle !== '新任务') {
+        this.store.mutateTask(taskId, (t) => {
+          t.title = autoTitle
+        })
+        this.emit(taskId, { type: 'task_status', status: this.store.getTask(taskId)?.status || 'running' })
+      }
+    }
+
+    // 智能调度模式判定：
+    // 1. 如果用户明确 @ 了子智能体，按提及的智能体定向派发（如果多个则编排，单人则直通）；
+    // 2. 如果用户完全没有 @ 任何子智能体（纯提问/咨询/诊断，如“分析为什么连接不上”）：
+    //    由【主智能体（Planner / 本地主调度）】直接进行分析与应答（直通 chat 模式），避免强行将诊断性问题拆解分发给故障节点；
+    //    注意：主智能体身份每条消息实时解析（planner.pickTarget → settings.planner.agentId），
+    //    因此对话过程中切换主智能体后，下一条消息即路由到切换后的智能体（任何任务模式一致）。
+    // 3. 主智能体不可用时才回退到任务既有成员。
+
+    const hasExplicitAgentMention = mentions.mentionedAgentIds.length > 0
+    const mentionedExpertIds = mentions.mentionedExpertIds || []
+    // 本轮是否明确 @ 了“恰好一个”智能体 —— 用户只想把这件事交给那一个智能体，
+    // 不应被任务已有的多成员/编排模式放大成跨多智能体流水线
+    const singleExplicitMention = mentions.mentionedAgentIds.length === 1
+    // 专家团合同（团队名册 + 分工）只由本轮显式团队意图触发：@团队提及 / 消息选择器 teamId
+    // （createTask({teamId}) 的首页消息经 opts 透传消除「创建后第一句丢失合同」的断层）。
+    // 已固化团队的任务在无 @ 的后续轮退回主会话（结果追问，不自动重跑全团）；
+    // 用户显式 @ 成员的轮同样按「轮级参与者」聚焦组织，不再摊回旧团队合同。
+    const teamOrchestrate = Boolean(messageTeamId)
+
+    if (!hasExplicitAgentMention && !mentionedExpertIds.length && !teamOrchestrate) {
+      // 新模型：无 @ = 主会话直发任务节点。项目任务=项目配置节点；非项目任务=创建时所选节点。
+      // 主会话不绑定任何 sub agent 身份（远端默认形态 + 项目指令），sub agent 通过 @ 在该节点上调用。
+      // （@专家库角色 视为显式定向意图，跳过本分支进入下方的直派/编排路由）
+      const exec0 = this.taskExec(task)
+      if (exec0.dshRef) {
+        const nodeTarget = await this.resolver.resolveRef(exec0.dshRef, exec0.apiKey, NODE_AGENT_ID)
+        if (!nodeTarget.online || !nodeTarget.baseUrl) {
+          this.appendSystemTurn(taskId, `⚠️ 任务节点不可达: ${nodeTarget.error || '解析失败'}`)
+          this.store.mutateTask(taskId, (t) => { t.status = 'failed' })
+          this.emit(taskId, { type: 'task_status', status: 'failed' })
+          return
+        }
+        // 预检：ONENAT 的 online 只代表隧道在线，目标 DSH 进程仍可能挂了/端口漂移。
+        // 不预检就建会话，用户只会看到 "fetch failed"（且部分节点还要多等 10s 超时）。
+        const probe = await this.client.ping(nodeTarget, { timeoutMs: 4000 })
+        if (!probe.ok) {
+          const why = isUnreachableError(probe.error) ? '连接失败' : (probe.error || '探活失败')
+          this.appendSystemTurn(
+            taskId,
+            `⚠️ 任务节点不可达（${nodeTarget.baseUrl}）：${why}\n` +
+            `请在右上角「节点」切换到可用节点后新建会话，或检查 ONENAT 上该映射的隧道/端口是否在线`,
+          )
+          this.taskLog(taskId, 'warn', `任务节点探活失败: ${nodeTarget.baseUrl} · ${why}`)
+          this.store.mutateTask(taskId, (t) => { t.status = 'failed' })
+          this.emit(taskId, { type: 'task_status', status: 'failed' })
+          this.emit(taskId, { type: 'task_end', task: this.store.getTask(taskId)! })
+          return
+        }
+        const nodeAgent = this.makeNodeAgent(exec0)
+        this.store.mutateTask(taskId, (t) => {
+          t.lastRoute = { kind: 'chat', agentId: NODE_AGENT_ID, agentName: nodeAgent.name, source: 'node' }
+        })
+        await this.runChatTurn(taskId, text, mentions, new Map<string, DshTarget>([[NODE_AGENT_ID, nodeTarget]]), signal, NODE_AGENT_ID, nodeAgent)
+        const fresh = this.store.getTask(taskId)!
+        this.emit(taskId, { type: 'task_end', task: fresh })
+        return
+      }
+      // 兜底：任务未绑定节点（存量任务/未选择节点）→ 默认智能体身份在其自身节点执行（UI 已无主智能体入口）
+      const plannerTarget = await this.planner.pickTarget()
+      if (!('error' in plannerTarget) && plannerTarget.agent) {
+        const pAgent = plannerTarget.agent
+        if (task.memberAgentIds.length <= 1 && !task.memberAgentIds.includes(pAgent.id)) {
+          this.store.mutateTask(taskId, (t) => { t.memberAgentIds = [pAgent.id] })
+        }
+        const targetsMap = new Map<string, DshTarget>([[pAgent.id, plannerTarget.target]])
+        this.store.mutateTask(taskId, (t) => {
+          t.lastRoute = { kind: 'chat', agentId: pAgent.id, agentName: pAgent.name, source: 'main' }
+        })
+        await this.runChatTurn(taskId, text, mentions, targetsMap, signal, pAgent.id)
+        const fresh = this.store.getTask(taskId)!
+        this.emit(taskId, { type: 'task_end', task: fresh })
+        return
+      }
+      // 默认智能体不可用 → 落到下方任务既有成员解析（仅存量任务会出现）
+    }
+
+    const { targets, issues } = await this.resolver.resolveMembers(task.memberAgentIds)
+    for (const issue of issues) {
+      this.taskLog(taskId, 'warn', `成员「${issue.name}」不可用: ${issue.error}`)
+    }
+
+    // 编排成员在自己绑定的节点上执行（sub agent=远程执行单元）；
+    // 自身节点不可达时回退任务节点（项目节点/任务所选节点）
+    const execO = this.taskExec(task)
+    for (const [aid, t] of targets) {
+      if (t?.online && t.baseUrl || !execO.dshRef) continue
+      const nt = await this.resolver.resolveRef(execO.dshRef, execO.apiKey, aid).catch(() => undefined)
+      if (nt?.online && nt.baseUrl) targets.set(aid, Object.assign(nt, { executionDshRef: execO.dshRef }))
+    }
+
+    // 专家团专家成员（含消息 @专家 登记的动态成员）：实例化在任务节点，
+    // 任务未绑定节点时回退主调度节点（resolveExpertNodeTarget）
+    const expertMembersAll = task.expertMembers || []
+    if (expertMembersAll.length) {
+      const expertNode = await this.resolveExpertNodeTarget(task, taskId)
+      for (const em of expertMembersAll) {
+        if (targets.has(em.id)) continue
+        const expertAgent = await this.resolveMemberAgent(task, em.id)
+        if (!expertAgent) {
+          this.taskLog(taskId, 'warn', `专家成员「${em.name}」档案不可用（专家资产缺失？），本轮跳过`)
+          continue
+        }
+        if (expertNode?.online && expertNode.baseUrl) targets.set(expertAgent.id, expertNode)
+        else this.taskLog(taskId, 'warn', `专家成员「${em.name}」执行节点不可达，本轮无法执行`)
+      }
+    }
+
+    // @ 了恰好一个智能体/专家库角色：不再整段直派（旧行为会把读表/查询/成稿等非其职责的步骤
+    // 全部塞给被 @ 成员在其节点执行，主智能体当旁观者——线上单 @ 委派病理的另一面）。
+    // 统一走主调度规划分工：被 @ 成员只承担职责内子任务（如飞书消息只做消息推送），
+    // 其余子任务由主智能体在任务发起节点自己执行，跨成员依赖经 dependsOn 注入上游产出。
+    const singleAgentMention = !messageTeamId && singleExplicitMention && hasExplicitAgentMention && !mentionedExpertIds.length
+    const singleExpertMention = !messageTeamId && !hasExplicitAgentMention && mentionedExpertIds.length === 1
+    if (singleAgentMention || singleExpertMention) {
+      // 专家成员优先复用账本登记的伪 id（存量 expert-<id> 保持原 id，使会话/子任务键不断裂）
+      const onlyId = singleAgentMention ? mentions.mentionedAgentIds[0]
+        : this.expertMemberPseudo(task, mentionedExpertIds[0])
+      const onlyAgent = await this.resolveMemberAgent(task, onlyId)
+      if (!onlyAgent) {
+        this.appendSystemTurn(taskId, `⚠️ 被 @ 的成员「${onlyId}」不存在或档案缺失`)
+        this.store.mutateTask(taskId, (t) => { t.status = 'failed' })
+        this.emit(taskId, { type: 'task_status', status: 'failed' })
+        const fresh = this.store.getTask(taskId)!
+        this.emit(taskId, { type: 'task_end', task: fresh })
+        return
+      }
+      // 本轮单 @ 定向分工：路由记录与模式升级后进编排规划（花名册聚焦主智能体 + 被 @ 成员）
+      this.store.mutateTask(taskId, (t) => {
+        t.mode = 'orchestrate'
+        t.lastRoute = { kind: 'orchestrate' }
+      })
+      await this.runOrchestrateTurn(taskId, text, mentions, targets, signal, { teamTurn: false })
+      const fresh = this.store.getTask(taskId)!
+      this.emit(taskId, { type: 'task_end', task: fresh })
+      return
+    }
+
+    if (targets.size === 0) {
+      this.appendSystemTurn(taskId, `⚠️ 没有可用的子智能体成员：\n${issues.map((i) => `- ${i.name}: ${i.error}`).join('\n') || '成员列表为空'}`)
+      this.store.mutateTask(taskId, (t) => {
+        t.status = 'failed'
+      })
+      this.emit(taskId, { type: 'task_status', status: 'failed' })
+      return
+    }
+
+    if (!teamOrchestrate && (task.mode === 'chat' || targets.size === 1 || (!hasExplicitAgentMention && !mentionedExpertIds.length && targets.size > 1))) {
+      // 单智能体、直通模式或普通对话：走直通对话
+      const targetAgentId = [...targets.keys()][0]
+      this.store.mutateTask(taskId, (t) => {
+        t.lastRoute = { kind: 'chat', agentId: targetAgentId, agentName: this.store.getAgent(targetAgentId)?.name || targetAgentId }
+      })
+      await this.runChatTurn(taskId, text, mentions, targets, signal)
+    } else {
+      // ≥2 个智能体被明确 @ 或任务本就设定为多智能体编排：走流程编排
+      this.store.mutateTask(taskId, (t) => {
+        t.lastRoute = { kind: 'orchestrate' }
+      })
+      await this.runOrchestrateTurn(taskId, text, mentions, targets, signal, { teamTurn: teamOrchestrate })
+    }
+    const fresh = this.store.getTask(taskId)!
+    this.emit(taskId, { type: 'task_end', task: fresh })
+  }
+
+  /**
+   * 根据发往的目标智能体（targetAgent），动态转换消息/指令中的 @文件 引用：
+   * 1. 若文件属于当前目标智能体本机 -> 转换为本机本地文件路径（相对或绝对路径）；
+   * 2. 若文件属于其他远程智能体 -> 转换为可直接通过 HTTP 下载的真实 URL，并生成 [跨节点文件引用] 指引段落（含 curl 下载指令）。
+   */
+  public async transformFileMentionsForAgent(
+    text: string,
+    mentions: ExtractedMentions | undefined,
+    targetAgent: SubAgent,
+    task?: WorkTask,
+  ): Promise<{ text: string; extraSections: string[] }> {
+    const extraSections: string[] = []
+    // 项目主会话无需 @ 也注入归属工作区指引，需在 files 早退之前。
+    const mentionedAgentCount = mentions?.mentionedAgentIds?.length || 0
+    if (task && (task.projectId || mentionedAgentCount > 0)) {
+      const exec0 = this.taskWorkspaceExec(task)
+      // 工作区来源与节点必须【配对】：工作区在哪台机器，URL 就指向哪台节点的文件服务
+      const nodeSess = task.sessions?.['__node__']
+      const member0 = task.memberAgentIds[0] ? this.store.getAgent(task.memberAgentIds[0]) : undefined
+      const member0Binding = task.memberAgentIds[0] ? task.sessions?.[task.memberAgentIds[0]] : undefined
+      let ws = ''
+      let base = ''
+      let nodeApiKey: string | undefined = exec0.apiKey
+      let fileRef = exec0.dshRef
+      if (exec0.workspace) {
+        ws = exec0.workspace
+        const t = exec0.dshRef ? await this.resolver.resolveRef(exec0.dshRef, exec0.apiKey, '__node__').catch(() => undefined) : undefined
+        if (t?.online && t.baseUrl) { base = t.baseUrl; nodeApiKey = t.apiKey } else if (!task.projectId && nodeSess?.baseUrl) base = nodeSess.baseUrl
+      } else if (!task.projectId && nodeSess?.cwd) {
+        ws = nodeSess.cwd
+        const t = exec0.dshRef ? await this.resolver.resolveRef(exec0.dshRef, exec0.apiKey, '__node__').catch(() => undefined) : undefined
+        if (t?.online && t.baseUrl) { base = t.baseUrl; nodeApiKey = t.apiKey } else if (nodeSess.baseUrl) base = nodeSess.baseUrl
+      } else if (!task.projectId && member0Binding?.cwd) {
+        ws = member0Binding.cwd
+        const m = member0 ? await this.resolver.resolve(member0).catch(() => undefined) : undefined
+        fileRef = member0?.dshRef
+        if (m?.baseUrl) { base = m.baseUrl; nodeApiKey = m.apiKey } else if (member0Binding.baseUrl) base = member0Binding.baseUrl
+      } else if (!task.projectId && member0?.workDir) {
+        ws = member0.workDir
+        const m = await this.resolver.resolve(member0).catch(() => undefined)
+        fileRef = member0.dshRef
+        if (m?.baseUrl) { base = m.baseUrl; nodeApiKey = m.apiKey }
+      }
+      const binding = task.sessions[targetAgent.id]
+      const boundMapping = binding?.nodeRefKey?.startsWith('mapping:') ? binding.nodeRefKey.slice('mapping:'.length) : undefined
+      const receivingRef = boundMapping ? { kind: 'mapping' as const, mappingId: boundMapping } : targetAgent.id === NODE_AGENT_ID ? this.taskExec(task).dshRef : targetAgent.dshRef
+      if (ws && sameDshRef(exec0.dshRef, receivingRef)) {
+        extraSections.push(`[项目工作区]\n工作区 ${JSON.stringify(ws)} 位于当前执行节点，可直接在该目录读取、修改并运行授权命令。`)
+      } else if (ws && base) {
+        let cliPath = binding?.workspaceAccessCliPath
+        // Existing long-lived sessions may still contain v1 (--base-only). Reinstall
+        // under a versioned name once; never silently reuse the obsolete helper.
+        if (cliPath && !cliPath.endsWith('/' + WORKSPACE_ACCESS_CLI_NAME)) cliPath = undefined
+        if (!cliPath && binding?.remoteSessionId) {
+          const target = await this.resolveExecTarget(task, targetAgent.id).catch(() => undefined)
+          if (target?.online) {
+            cliPath = await installWorkspaceAccessCli(this.client, target, binding.remoteSessionId)
+            if (cliPath) this.store.mutateTask(task.id, (t) => { t.sessions[targetAgent.id].workspaceAccessCliPath = cliPath })
+          }
+        }
+        // App IDs may be shared by unrelated nodes. Pin the mapping already chosen
+        // for this turn so the helper cannot switch the physical file owner.
+        const mappedApp = fileRef?.kind === 'app' ? this.directory.resolveApp(fileRef.appId)?.mappingId : undefined
+        const accessRef = mappedApp ? { kind: 'mapping' as const, mappingId: mappedApp } : fileRef
+        extraSections.push(buildWorkspaceAccessSection({ workspace: ws, baseUrl: base, apiKey: nodeApiKey, cliPath, nodeRef: accessRef, onenatBaseUrl: this.directory.endpoint, onenatApiKey: this.directory.key }))
+      } else if (ws && task.projectId) {
+        extraSections.push(`[项目工作区跨机访问]\n文件归属节点当前不可达，工作区 ${JSON.stringify(ws)} 无法读取或修改；不要在当前执行节点创建同路径目录或假定文件存在。`)
+      }
+    }
+
+    const files = mentions?.mentionedFiles || []
+    if (!files.length) return { text, extraSections }
+
+    let resultText = text
+    const localFiles: ExtractedFileMention[] = []
+    const remoteFiles: Array<{ mention: ExtractedFileMention; downloadUrl: string; authHeader?: string }> = []
+
+    for (const file of files) {
+      const workspace = task ? this.taskWorkspaceExec(task) : undefined
+      const fileIsProjectOwned = Boolean(task?.projectId && (file.agentId === NODE_AGENT_ID || file.workspaceOwned))
+      const receivingRef = task && targetAgent.id === NODE_AGENT_ID ? this.taskExec(task).dshRef : targetAgent.dshRef
+      const local = fileIsProjectOwned ? sameDshRef(workspace?.dshRef, receivingRef) : file.agentId === targetAgent.id
+      if (local) {
+        // 本地文件：替换 @agent:path 为本地 path
+        localFiles.push(file)
+        resultText = resultText.split(file.raw).join(file.path)
+      } else {
+        // 跨节点远程文件：生成下载 URL
+        const ownerAgent = this.store.getAgent(file.agentId)
+        let downloadUrl = ''
+        let authHeader: string | undefined = undefined
+
+        if (ownerAgent || fileIsProjectOwned) {
+          const ownerTarget = fileIsProjectOwned && workspace?.dshRef
+            ? await this.resolver.resolveRef(workspace.dshRef, workspace.apiKey, 'workspace-file').catch(() => undefined)
+            : ownerAgent ? await this.resolveExecTarget(task, ownerAgent.id).catch(() => undefined) : undefined
+          if (ownerTarget?.online && ownerTarget.baseUrl) {
+            const base = ownerTarget.baseUrl.replace(/\/+$/, '')
+            downloadUrl = `${base}/fs/download?path=${encodeURIComponent(fileIsProjectOwned && workspace?.workspace ? (/^[a-z]:[\\/]/i.test(workspace.workspace) ? win32 : posix).resolve(workspace.workspace, file.path) : file.path)}`
+            if (ownerTarget.apiKey) {
+              authHeader = `-H "Authorization: Bearer ${ownerTarget.apiKey}"`
+            }
+          }
+        }
+
+        if (!downloadUrl) {
+          // 降级使用工作区代理下载路径
+          downloadUrl = `/api/agents/fs/download?agent=${encodeURIComponent(file.agentId)}&path=${encodeURIComponent(file.path)}`
+        }
+
+        remoteFiles.push({ mention: file, downloadUrl, authHeader })
+        resultText = resultText.split(file.raw).join(`[文件: ${file.filename}](${downloadUrl})`)
+      }
+    }
+
+
+    if (localFiles.length > 0) {
+      const lines = localFiles.map(
+        (f) => `- 文件「${f.filename}」: 路径为 \`${f.path}\`（位于当前智能体本机工作区，可直接使用文件读取/执行工具）`,
+      )
+      extraSections.push(`[本地文件清单]:\n${lines.join('\n')}`)
+    }
+
+    if (remoteFiles.length > 0) {
+      const lines = remoteFiles.map((rf) => {
+        const cmd = `curl -s ${rf.authHeader ? rf.authHeader + ' ' : ''}"${rf.downloadUrl}" -o "${rf.mention.filename}"`
+        return (
+          `- 文件「${rf.mention.filename}」（位于远程智能体「${rf.mention.agentName}」的主机上）:\n` +
+          `  下载地址: ${rf.downloadUrl}\n` +
+          `  获取指令: ${cmd}\n` +
+          `  说明: 该文件位于远程智能体「${rf.mention.agentName}」电脑上，请使用上述指令下载到本地工作区后再行分析。`
+        )
+      })
+      extraSections.push(`[跨节点远程文件清单（需要下载）]:\n${lines.join('\n')}`)
+    }
+
+    return { text: resultText, extraSections }
+  }
+
+  // ---------- chat 直通 ----------
+  // NOTE: workspace-access injection appended below (see injectWorkspaceAccess)
+
+  private async runChatTurn(
+    taskId: string,
+    text: string,
+    mentions: ExtractedMentions,
+    targets: Map<string, DshTarget>,
+    signal: AbortSignal,
+    overrideAgentId?: string,
+    agentOverride?: SubAgent,
+  ): Promise<void> {
+    const task = this.store.getTask(taskId)!
+    // 若显式 @ 了某个可用智能体，优先使用被 @ 的智能体；或使用指定的 overrideAgentId；
+    // agentOverride = 节点主会话的「无身份」执行者（不来自 store）
+    const preferredId = agentOverride?.id || overrideAgentId || mentions.mentionedAgentIds.find((id) => targets.has(id))
+    const agentId = preferredId || task.memberAgentIds.find((id) => targets.has(id)) || [...targets.keys()][0]
+    const agent = agentOverride || this.store.getAgent(agentId)!
+    const exec = this.taskExec(task)
+    // 执行节点由调用方解析（@ sub agent=自身绑定节点；主会话=任务节点），此处不再覆盖
+    let target = targets.get(agentId)!
+
+    const session = await this.ensureSession(taskId, agent, target)
+    // 凭证刷新/节点重映射后的 target 要传导给后续 prompt/SSE 请求
+    if (session.target) target = session.target
+    if (!session.ok) {
+      this.appendSystemTurn(taskId, `⚠️ 创建远程会话失败（${agent.name}）: ${session.error}`)
+      this.store.mutateTask(taskId, (t) => {
+        t.status = 'failed'
+      })
+      this.emit(taskId, { type: 'task_status', status: 'failed' })
+      return
+    }
+
+    // ask_user_question 挂起预检：远端 run 被提问挂起时悬停在工具内部 —— 向其发新 prompt
+    // 只会经 followup 排队在挂起 run 之后永不被处理（表现为回合静默到 SSE 超时再对账半小时）。
+    // 此时用户的自由文本消息就是答复：走 /answers 桥解锁挂起的 run 并追踪续跑，而不是发新 prompt。
+    if (session.remoteSessionId) {
+      const handled = await this.answerPendingAndResume(taskId, text, agent, target, session.remoteSessionId, signal).catch(() => false)
+      if (handled) return
+    }
+
+    const turn: TaskTurn = {
+      id: `turn-${randomUUID().slice(0, 8)}`,
+      seq: 0,
+      role: 'agent',
+      agentId: agent.id,
+      agentName: agent.name,
+      text: '',
+      streaming: true,
+      at: Date.now(),
+    }
+    this.store.appendTurn(taskId, turn)
+    this.emit(taskId, { type: 'turn_start', turn })
+
+    const transformed = await this.transformFileMentionsForAgent(text, mentions, agent, task)
+    // 运行权限：已在 ensureSession 经 PUT /sessions/:id/permission 原生生效；仅旧版节点才降级写进提示词
+    const permLine = this.permissionPromptLine(this.store.getTask(taskId) || task, agent)
+    // 项目指令 + 专家人格（角色声明/职责约束/执行指导，见 expert-templates）+ 项目 SSH 连接器：注入本轮提示词最前（项目上下文）
+    // 主会话（__node__）是远端节点本体，不是团队成员：不注入成员人格（否则会被要求"不做转派"而禁用自身的子智能体/团队能力）。
+    // 其余智能体在聊天直发路径是与用户直接对话（direct），不是被主调度派工的成员。
+    const persona = agent.id === NODE_AGENT_ID ? '' : expertPersona(agent, 'direct')
+    // 值守模式：定时任务派生的会话无人值守；成员/子智能体会话一律无人值守 ——
+    // ask_user_question 会让远程 DSH 会话停下来等待人工答复，且子智能体深层的提问
+    // 无法透传回 WorkBuddy UI（交互卡只渲染在直发轮次），导致整条链路挂死。
+    // 只有节点主会话（用户无 @ 直发）才是与用户面对面的有人值守对话，允许提问确认。
+    const isNodeMain = agent.id === NODE_AGENT_ID && !task.scheduleId
+    const interaction: 'attended' | 'unattended' = isNodeMain ? 'attended' : 'unattended'
+    const sysPrefix = [exec.instruction, persona, permLine].filter(Boolean).join('\n\n')
+    const sshSection = exec.sshConnectors.length
+      ? '[项目 SSH 连接器]（已可用 onenat_ssh 工具直接操作，连接信息如下）:\n' + exec.sshConnectors.map((c) => '- ' + c.name + ' → ' + c.host + ':' + c.port).join('\n')
+      : ''
+    // 编排结束后的无 @ 追问回主会话（结果追问/追问补漏）：上一次编排的汇总与覆盖度随轮注入，
+    // 避免追问"报告在哪/为什么这样"时主会话毫无上下文。仅注入有 plan+summary 的编排任务。
+    const followupSection = agent.id === NODE_AGENT_ID && !task.scheduleId && task.plan && task.summary?.finalConclusion
+      ? '[上一轮编排汇总]（本轮追问时可参考；已完成的子任务不要重复执行）:\n结论: ' + task.summary.finalConclusion.slice(0, 2000) +
+        (task.summary.coverage ? `\n成员覆盖度: ${task.summary.coverage.status}（${task.summary.coverage.completed}/${task.summary.coverage.total}）` : '')
+      : ''
+    let fullPrompt = transformed.text
+    const hasDynamicResources = mentions.mentionedResourceBindings.length > 0 || (mentions.mentionedFiles && mentions.mentionedFiles.length > 0)
+    const cachedBlock = hasDynamicResources ? null : this.blockCacheFresh(taskId, agent, interaction)
+
+    if (!cachedBlock) {
+      const composed = await this.composer.compose(agent, {
+        resolvedAt: Date.now(),
+        extraResources: [...exec.extraBindings, ...mentions.mentionedResourceBindings],
+        extraSkills: exec.skills,
+        interaction,
+      })
+      const block = composed.block
+      const extraFileSection = transformed.extraSections.join('\n\n')
+      const allPrefixes = [block, extraFileSection].filter(Boolean).join('\n\n')
+      const withCtx = [sysPrefix, sshSection, followupSection, allPrefixes].filter(Boolean).join('\n\n')
+      if (withCtx) {
+        if (!hasDynamicResources) this.blockCache.set(this.blockCacheKey(taskId, agent, interaction), { block, at: Date.now() })
+        fullPrompt = `${withCtx}\n\n[当前用户消息]:\n${transformed.text}`
+      } else if (!hasDynamicResources) {
+        this.blockCache.set(this.blockCacheKey(taskId, agent, interaction), { block: '', at: Date.now() })
+      }
+      for (const w of composed.warnings) this.emit(taskId, { type: 'log', level: 'warn', msg: w })
+    } else {
+      const extraFileSection = transformed.extraSections.join('\n\n')
+      const allPrefixes = [cachedBlock.block, extraFileSection].filter(Boolean).join('\n\n')
+      const withCtx = [sysPrefix, sshSection, followupSection, allPrefixes].filter(Boolean).join('\n\n')
+      if (withCtx) {
+        fullPrompt = `${withCtx}\n\n[当前用户消息]:\n${transformed.text}`
+      }
+    }
+
+    // 工具调用过程追踪（对齐 DSH ui-chat turn-process）
+    const toolStarts = new Map<string, number>()
+    // 单调递增流式序号：客户端按此顺序交错渲染 reasoning/tool/text 块（对齐 DSH assistant-block 序列）
+    let streamSeq = 0
+    // ask_user_question 挂起监视：tool_call 后轮询远端挂起批次（S1/S3）。
+    // streamCtrl 只断流（区别于任务级 signal）；attended 命中 → 快速终结回合等待答复，不再走 10min 静默 + 30min 对账黑洞。
+    const streamCtrl = new AbortController()
+    signal.addEventListener('abort', () => streamCtrl.abort(), { once: true })
+    const askWatch = { fired: false, mode: 'bridge' as 'bridge' | 'unbridged' }
+    const pushAskToolUpdate = () => {
+      const tt = this.store.getTask(taskId)?.turns.find((x) => x.id === turn.id)
+      const t = [...(tt?.tools || [])].reverse().find((x) => x.name === 'ask_user_question' || x.name === 'ask-user-question')
+      if (t) emitTool({ ...t })
+    }
+    const summarize = (v: any, cap: number): string | undefined => {
+      if (v === undefined || v === null) return undefined
+      let s = typeof v === 'string' ? v : (() => { try { return JSON.stringify(v) } catch { return String(v) } })()
+      s = s.trim()
+      if (!s) return undefined
+      return s.length > cap ? s.slice(0, cap) + '…' : s
+    }
+    const emitTool = (tool: TurnToolCall) => {
+      this.emit(taskId, { type: 'turn_tool', turnId: turn.id, tool, seq: streamSeq++ })
+    }
+
+    // 派发处理器抽为变量：空结果自愈时复用同一组回调重发
+    const streamHandlers: Parameters<DshClient['streamPrompt']>[3] = {
+      onDelta: (delta) => {
+        // 内存即时可见 + 磁盘尾随合并：每个 delta 全量写盘会同步阻塞事件循环数毫秒，
+        // 长回合累计数秒（详见 WorkStore.scheduleSave），进而拖垮 SSE 收发
+        if (!this.store.appendTurnText(taskId, turn.id, delta)) {
+          this.store.mutateTask(taskId, (t) => {
+            const tt = t.turns.find((x) => x.id === turn.id)
+            if (tt) tt.text += delta
+          })
+        }
+        this.emit(taskId, { type: 'turn_delta', turnId: turn.id, delta, seq: streamSeq++ })
+      },
+      onReasoning: (delta) => {
+        this.emit(taskId, { type: 'turn_reasoning', turnId: turn.id, delta, seq: streamSeq++ })
+      },
+      onToolCall: (info) => {
+        const id = String(info.id || `tool-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`)
+        toolStarts.set(id, Date.now())
+        const isAskTool = info.name === 'ask_user_question' || info.name === 'ask-user-question'
+        // ask_user_question 的 args 必须完整：截断的 JSON 会让前端交互卡解析失败，用户无法答复
+        const tool: TurnToolCall = { id, name: String(info.name || 'unknown'), args: summarize(info.arguments, isAskTool ? 65_536 : 400), status: 'running', at: Date.now() }
+        const paths = extractToolPaths(info.name, info.arguments)
+        if (paths) tool.paths = paths
+        this.store.updateTurn(taskId, turn.id, (tt) => {
+          tt.tools = tt.tools || []
+          tt.tools.push(tool)
+        })
+        emitTool(tool)
+        this.taskLog(taskId, 'tool', `工具调用: ${tool.name}${tool.args ? ' · ' + tool.args.slice(0, 120) : ''}`)
+        // ask 提问挂起监视：命中批次时 attended 快速终结等待答复 / unattended 自动保守答复解锁
+        if (isAskTool && !askWatch.fired && session.remoteSessionId) {
+          void this.watchPendingAsk(taskId, agent, target, session.remoteSessionId, turn.id, interaction, streamCtrl, askWatch, pushAskToolUpdate)
+      }
+      },
+      onToolResult: (info) => {
+        const id = String(info.id || '')
+        this.store.updateTurn(taskId, turn.id, (tt) => {
+          tt.tools = tt.tools || []
+          // 优先按 callId 配对；退化取最后一个执行中的调用（远端 result 事件可能无 name）
+          let t = id ? tt.tools.find((x) => x.id === id) : undefined
+          if (!t) t = [...tt.tools].reverse().find((x) => x.status === 'running')
+          if (!t) return
+          const isAskResult = t.name === 'ask_user_question' || t.name === 'ask-user-question'
+          t.result = summarize(info.result, isAskResult ? 65_536 : 2000)
+          t.status = info.isError ? 'error' : 'done'
+          const startedAt = toolStarts.get(t.id)
+          if (startedAt) t.ms = Date.now() - startedAt
+          emitTool(t)
+        })
+      },
+      onUsage: (usage) => {
+        if (usage && typeof usage === 'object') {
+          this.store.updateTurn(taskId, turn.id, (tt) => { tt.usage = { ...usage } })
+          this.emit(taskId, { type: 'turn_usage', turnId: turn.id, usage, seq: streamSeq++ })
+        }
+      },
+    }
+
+    // 多步回合（本回合出现过工具调用）才复核流式尾部是否丢字：单步短回答无需额外历史请求
+    const shouldVerifyTail = () =>
+      ((this.store.getTask(taskId)?.turns.find((x) => x.id === turn.id)?.tools || []).length) > 0
+
+    let result = await this.dispatchWithFallback(target, session.remoteSessionId!, fullPrompt, streamHandlers, streamCtrl.signal, { verifyTail: shouldVerifyTail })
+    // 会话在远端丢失（natpass 端口漂移串端口/远端重启清理）：重建会话并原样重发一次，
+    // 不再把 "Session not found" 裸报给用户（ensureSession 内部 getSession 失败即自动重建）
+    if (!signal.aborted && isSessionLostError(result.error)) {
+      this.taskLog(taskId, 'warn', `远端会话不存在（${agent.name}）: ${String(result.error).slice(0, 140)} — 重建会话重发`)
+      const rebuilt = await this.ensureSession(taskId, agent, target)
+      if (rebuilt.target) target = rebuilt.target
+      if (rebuilt.ok && rebuilt.remoteSessionId) {
+        session.remoteSessionId = rebuilt.remoteSessionId
+        result = await this.dispatchWithFallback(target, rebuilt.remoteSessionId, fullPrompt, streamHandlers, streamCtrl.signal, { verifyTail: shouldVerifyTail })
+      }
+    }
+    // 空结果自愈：远端收到指令但零内容零工具（LLM 上游瞬时异常/流丢失）——
+    // 自动重发一次；有工具调用的回合绝不重发（避免发飞书等副作用重复执行）；
+    // ask 挂起终结的回合也绝不重发（重发只会经 followup 排队在挂起 run 后面，制造孤儿消息）
+    if (!askWatch.fired) {
+      const turnNow = this.store.getTask(taskId)!.turns.find((x) => x.id === turn.id)
+      // 只对「真零产出」重发：无工具 && 无任何流事件 && 派发结果也没有文本。
+      // （只看 streamSeq 会在单 delta 短回复上误判 —— pi 类节点流只有一条 delta 且不发 turn_end，
+      //   对账内容已带回，重发会把同一指令打两遍、正文在历史对账时拼成双份）
+      if (!signal.aborted && !(turnNow?.tools || []).length && !(streamSeq > 1) && !(result.content && result.content.trim())) {
+        this.taskLog(taskId, 'warn', `${agent.name} 本轮无任何内容产出（远端流为空），自动重发一次`)
+        result = await this.dispatchWithFallback(target, session.remoteSessionId!, fullPrompt, streamHandlers, streamCtrl.signal, { verifyTail: shouldVerifyTail })
+      }
+    }
+
+    // ask 挂起终结（桥可见）：远端在等用户答复 —— 回合立即收尾（ask 工具保持 running 供答复卡/桥使用），
+    // 任务状态落 completed + pendingAsk 标记；用户回复将由 answerPendingAndResume 路由到答复桥。
+    if (askWatch.fired && !signal.aborted && askWatch.mode === 'bridge') {
+      this.finalizeWaitingAskTurn(taskId, turn.id, agent)
+      this.store.mutateTask(taskId, (t) => { t.status = 'completed' })
+      this.emit(taskId, { type: 'task_status', status: 'completed' })
+      return
+    }
+    // ask 挂起终结（桥不可见）：批次未登记进 /questions（被浏览器应答器持走/归属失败/节点过旧），
+    // 答复桥无法触达 —— 表面化问题内容并中止远端悬停回合（cancelSession 实测可解此形态），
+    // 用户下一条消息作为新指令在已空闲的会话上直接执行。
+    if (askWatch.fired && !signal.aborted && askWatch.mode === 'unbridged') {
+      await this.finalizeUnbridgedAskTurn(taskId, turn.id, agent, target, session.remoteSessionId!)
+      this.store.mutateTask(taskId, (t) => { t.status = 'completed' })
+      this.emit(taskId, { type: 'task_status', status: 'completed' })
+      return
+    }
+
+    this.store.updateTurn(taskId, turn.id, (tt) => {
+      tt.streaming = false
+      // 回合收尾时刻：token 消耗归属日按它算（跨日回合归完成日，见 token-stats.ts）
+      tt.endedAt = Date.now()
+      // 收尾回填：轮询整轮重建的结果覆盖流式累积；但若流式累积反而更长（对账退化只取到尾部），保留流式版本避免丢内容
+      if (result.ok && result.content) {
+        if (!tt.text || result.content.length >= tt.text.length) tt.text = result.content
+      } else if (!result.ok && !tt.text) tt.text = ''
+      if (result.reasoning) tt.reasoning = result.reasoning
+      if (result.usage && typeof result.usage === 'object') tt.usage = { ...result.usage }
+      // 工具对账：SSE 断流后 tool_result 无法到达，把卡在 running 的工具落为 error 并注明原因，避免永久转圈
+      for (const t of tt.tools || []) {
+        if (t.status === 'running') {
+          t.status = 'error'
+          if (!t.result) t.result = '⚠️ SSE 流中断，工具结果未能回传（远端回合已结束，结果未知）'
+        }
+      }
+    })
+    const finalTurn = this.store.getTask(taskId)!.turns.find((x) => x.id === turn.id)!
+    this.emit(taskId, { type: 'turn_end', turn: finalTurn })
+
+    if (signal.aborted) {
+      this.appendSystemTurn(taskId, `⏹ 已停止 — ${agent.name} 的本轮执行已中止`)
+      this.store.mutateTask(taskId, (t) => {
+        t.status = 'cancelled'
+      })
+      this.emit(taskId, { type: 'task_status', status: 'cancelled' })
+      return
+    }
+
+    if (!result.ok && !finalTurn.text) {
+      this.appendSystemTurn(taskId, result.error && result.error.includes('中止')
+        ? `⏹ 已停止 — ${agent.name} 的本轮生成被中止，可继续追问`
+        : `⚠️ 子智能体「${agent.name}」执行失败: ${result.error}`)
+    }
+    // 重发后仍零内容：显式失败并提示，绝不静默空完成（「没反应」的根源）
+    if (result.ok && !finalTurn.text && !(finalTurn.tools || []).length) {
+      this.appendSystemTurn(taskId, `⚠️ ${agent.name} 连续两轮未返回任何内容——节点 LLM 上游可能异常，请稍后重发，或用右上角切换器换个任务节点`)
+      this.store.mutateTask(taskId, (t) => { t.status = 'failed' })
+      this.emit(taskId, { type: 'task_status', status: 'failed' })
+      return
+    }
+    this.store.mutateTask(taskId, (t) => {
+      t.status = 'completed'
+    })
+    this.backlogWritebackFire(taskId, { chatFallback: true })
+    this.emit(taskId, { type: 'task_status', status: 'completed' })
+  }
+
+  // ---------- ask_user_question 挂起治理 ----------
+  // 远端 ask_user_question 会把 run 悬停在工具内部等待答复：会话状态恒 running、
+  // 后续 prompt 经 followup 排队永不被处理、远端 cancel 也解不开批次（线上实测）。
+  // 治理三板斧：派发中检测（watchPendingAsk）→ 自由文本答复桥（answerPendingAndResume）→ 停止时解挂（cancelTask）。
+
+  private static readonly ASK_WAIT_HINT = '🔔 远端助手有提问等待你答复 —— 直接在下方输入回复发送即可（自由文本将自动作为问题答复提交）；也可以点问题卡片里的选项作答'
+
+  private static readonly UNATTENDED_AUTO_ANSWER =
+    '（无人值守自动答复）无法等待人工输入：请按任务既定目标继续执行，参数取保守默认值，并在最终产出中显式列出本答复所做的假设。'
+
+  /**
+   * ask 挂起监视：ask_user_question 的 tool_call 后轮询远端挂起批次。
+   * - attended（节点主会话）：命中 → 记录 task.pendingAsk、断流快速终结回合（不再 10min 静默 + 30min 对账）；
+   * - unattended（成员/编排/定时）：命中 → 自动提交保守默认答复解锁执行链（流不中断，tool_result 照常回传）；
+   *   答复失败也要快速终结（挂起会话只会越等越死）。
+   */
+  private async watchPendingAsk(
+    taskId: string,
+    agent: SubAgent | { name: string; id: string },
+    target: DshTarget,
+    sessionId: string,
+    turnId: string,
+    interaction: 'attended' | 'unattended',
+    streamCtrl: AbortController,
+    askWatch: { fired: boolean; mode: 'bridge' | 'unbridged' },
+    onPush: () => void,
+  ): Promise<void> {
+    const windowMs = Number(process.env.WB_ASK_WATCH_WINDOW_MS || 60_000)
+    const deadline = Date.now() + windowMs
+    while (Date.now() < deadline) {
+      if (askWatch.fired || streamCtrl.signal.aborted) return
+      await new Promise((r) => setTimeout(r, 2_000))
+      if (askWatch.fired || streamCtrl.signal.aborted) return
+      const pq = await this.client.listPendingQuestions(target, sessionId).catch(() => undefined)
+      if (askWatch.fired || streamCtrl.signal.aborted) return
+      // 桥快路径：批次已登记（count>0）——attended 等待答复 / unattended 自动保守答复
+      if (pq?.ok && pq.supported && (pq.count || 0) > 0) {
+        const questions = (pq.batches || []).flatMap((b) => b.questions || [])
+        if (interaction === 'unattended') {
+          const answers = questions.filter((q) => q?.id).map((q) => ({ id: String(q.id), selected: [] as string[], custom: TaskEngine.UNATTENDED_AUTO_ANSWER }))
+          const r = answers.length
+            ? await this.client.answerQuestion(target, sessionId, answers).catch((e: any) => ({ ok: false, error: e?.message || '答复失败' }))
+            : { ok: false, error: '挂起问题缺少 id，无法桥接答复' }
+          if (r.ok) {
+            this.taskLog(taskId, 'warn', '无人值守会话出现挂起提问，已自动按保守默认答复解锁执行链')
+            return // 流继续：工具已 resolve，后续 tool_result/turn_end 照常
+          }
+          this.taskLog(taskId, 'error', `无人值守挂起提问自动答复失败: ${(r as any).error} —— 快速终结以免整链挂死`)
+        } else {
+          askWatch.fired = true
+          askWatch.mode = 'bridge'
+          this.store.mutateTask(taskId, (t) => {
+            t.pendingAsk = { agentId: agent.id, sessionId, batchId: pq.batches?.[0]?.batchId, questions, turnId, at: Date.now() }
+          })
+          this.store.updateTurn(taskId, turnId, (tt) => {
+            const t = [...(tt.tools || [])].reverse().find((x) => x.name === 'ask_user_question' || x.name === 'ask-user-question')
+            if (t && t.status === 'running') {
+              t.result = '⏳ 等待用户答复（回复即答复）'
+              t.awaiting = true
+            }
+          })
+          onPush()
+          streamCtrl.abort()
+          return
+        }
+      }
+      // ask 工具已结束（tool_result 到达 / 正常完成）→ 无需治理
+      if (!this.askToolStillRunning(taskId, turnId)) return
+    }
+    // 窗口结束 ask 工具仍 running：远端悬停在提问上，但批次不可桥接 ——
+    // 实测形态：批次被浏览器应答器持走 / waterfall 归属失败（/questions count=0）或节点过旧（无路由）。
+    // 此时答复桥触达不了，唯一可靠杠杆是 cancelSession 中止悬停回合（笔记本节点实测 running→idle）。
+    if (streamCtrl.signal.aborted || !this.askToolStillRunning(taskId, turnId)) return
+    askWatch.fired = true
+    askWatch.mode = 'unbridged'
+    streamCtrl.abort()
+  }
+
+  /** ask 工具是否仍处于 running（未收到 tool_result） */
+  private askToolStillRunning(taskId: string, turnId: string): boolean {
+    const t = this.store.getTask(taskId)?.turns.find((x) => x.id === turnId)
+    const ask = [...(t?.tools || [])].reverse().find((x) => x.name === 'ask_user_question' || x.name === 'ask-user-question')
+    return ask?.status === 'running'
+  }
+
+  /** 从 ask 工具 args 提取人类可读的问题摘要（供不可桥接悬停时的系统提示） */
+  private summarizeAskQuestions(taskId: string, turnId: string): string {
+    const t = this.store.getTask(taskId)?.turns.find((x) => x.id === turnId)
+    const ask = [...(t?.tools || [])].reverse().find((x) => x.name === 'ask_user_question' || x.name === 'ask-user-question')
+    try {
+      const parsed = JSON.parse(ask?.args || '{}')
+      const qs = Array.isArray(parsed?.questions) ? parsed.questions : []
+      const lines = qs.map((q: any) => {
+        const opts = Array.isArray(q.options) ? q.options.map((o: any) => o?.label).filter(Boolean).join('/') : ''
+        return `· ${q?.header ? q.header + '：' : ''}${q?.question || q?.id || ''}${opts ? `（选项：${opts}）` : ''}`
+      })
+      return lines.join('\n').slice(0, 600)
+    } catch {
+      return (ask?.args || '').slice(0, 400)
+    }
+  }
+
+  /**
+   * 不可桥接悬停的收尾：表面化问题内容 + 中止远端悬停回合（会话转 idle），
+   * 用户下一条消息作为新指令直接执行（会话已空闲，不再排队在悬停 run 后面）。
+   */
+  private async finalizeUnbridgedAskTurn(
+    taskId: string,
+    turnId: string,
+    agent: { name: string },
+    target: DshTarget,
+    sessionId: string,
+  ): Promise<void> {
+    const questionText = this.summarizeAskQuestions(taskId, turnId)
+    this.store.updateTurn(taskId, turnId, (tt) => {
+      tt.streaming = false
+      tt.endedAt = Date.now()
+      for (const t of tt.tools || []) {
+        if (t.status !== 'running') continue
+        t.status = 'error'
+        t.result = t.name === 'ask_user_question' || t.name === 'ask-user-question'
+          ? '⚠️ 提问未接入答复桥（远端批次不可见），悬停回合已中止——请直接回复你的选择作为新指令'
+          : '⚠️ 远端回合挂起等待用户答复，本工具结果未知'
+      }
+    })
+    const finalTurn = this.store.getTask(taskId)?.turns.find((x) => x.id === turnId)
+    if (finalTurn) this.emit(taskId, { type: 'turn_end', turn: finalTurn })
+    this.appendSystemTurn(taskId,
+      `🔔 远端助手发起过提问，但该提问未接入答复桥，已中止悬停回合（会话已就绪）。\n提问内容：\n${questionText}\n—— 请把你的选择/答案直接作为新消息发送，将作为新指令继续执行。`)
+    this.taskLog(taskId, 'warn', `ask 提问不可桥接（批次不可见），已中止 ${agent.name} 的悬停回合`)
+    await this.client.cancelSession(target, sessionId).catch(() => {})
+  }
+
+  /** 挂起等待的回合收尾：streaming=false；ask 工具保持 running（答复卡/答复桥依赖），其余 running 工具落 error */
+  private finalizeWaitingAskTurn(taskId: string, turnId: string, agent: { name: string }): void {
+    this.store.updateTurn(taskId, turnId, (tt) => {
+      tt.streaming = false
+      tt.endedAt = Date.now()
+      for (const t of tt.tools || []) {
+        if (t.status !== 'running') continue
+        if (t.name === 'ask_user_question' || t.name === 'ask-user-question') {
+          if (!t.result) t.result = '⏳ 等待用户答复（回复即答复）'
+          t.awaiting = true
+        } else {
+          t.status = 'error'
+          t.result = '⚠️ 远端回合挂起等待用户答复，本工具结果未知'
+        }
+      }
+    })
+    const finalTurn = this.store.getTask(taskId)?.turns.find((x) => x.id === turnId)
+    if (finalTurn) this.emit(taskId, { type: 'turn_end', turn: finalTurn })
+    this.appendSystemTurn(taskId, TaskEngine.ASK_WAIT_HINT)
+    this.taskLog(taskId, 'warn', `远端会话被 ask_user_question 挂起，回合已收尾等待答复（${agent.name}）`)
+  }
+
+  /**
+   * pendingAsk 对账：确认远端已无挂起批次（批次消失/会话结束/超时解挂）时，清理残留标记并收敛提问卡。
+   * 只有在「答复桥可用且明确返回 0 个挂起批次」时才清理；节点不可达/桥不支持时保留原状（可能是瞬态）。
+   * 返回 true = 本次完成了残留清理。
+   */
+  public async reapStalePendingAsk(taskId: string): Promise<boolean> {
+    const task = this.store.getTask(taskId)
+    const pq0 = task?.pendingAsk
+    if (!task || !pq0) return false
+    const agent = this.store.getAgent(pq0.agentId)
+    const target = agent
+      ? await this.resolver.resolve(agent).catch(() => undefined)
+      : await this.resolveExecTarget(task, pq0.agentId).catch(() => undefined)
+    if (!target || !target.online || !target.baseUrl) return false
+    const pq = await this.client.listPendingQuestions(target, pq0.sessionId).catch(() => undefined)
+    if (!pq || !pq.ok || !pq.supported || !(pq.count || 0)) {
+      // 桥不可用或 0 批次 → 用会话状态二次裁决，区分「真残留」与「瞬态/旧宿主」：
+      //   - questions 明确 ok+0 批次 → 真残留
+      //   - 会话已删除（HTTP 404）→ 批次必不存在 → 真残留
+      //   - 会话已终态（cancelled/completed/error…，挂起时会话恒为 running）→ 真残留
+      //   - 其余（网络抖动/旧宿主无路由且会话仍 running）→ 保守保留
+      const info = await this.client.getSessionInfo(target, pq0.sessionId).catch(() => undefined)
+      const zeroBatches = !!pq && pq.ok === true && pq.supported === true && !(pq.count || 0)
+      const sessionGone = !!info && !info.ok && /HTTP 404/.test(info.error || '')
+      const sessionEnded = !!info && info.ok === true && !!info.status && info.status !== 'running'
+      if (!zeroBatches && !sessionGone && !sessionEnded) return false
+    } else {
+      return false // 批次仍在 → 合法挂起，继续等答复
+    }
+    this.store.updateTurn(taskId, pq0.turnId, (tt) => {
+      const t = [...(tt.tools || [])].reverse().find((x) => (x.name === 'ask_user_question' || x.name === 'ask-user-question') && x.status === 'running')
+      if (t) {
+        t.status = 'done'
+        t.result = '⚠️ 提问已失效：远端挂起批次已消失（超时或会话结束）。如仍需继续，请把你的选择作为新消息直接发送。'
+        t.awaiting = false
+      }
+    })
+    // 推送轮次更新：让已打开的页面实时把提问卡刷新为「⚠️ 已失效」，而不是停留在旧的等待渲染
+    const settledTurn = this.store.getTask(taskId)?.turns.find((x) => x.id === pq0.turnId)
+    if (settledTurn) this.emit(taskId, { type: 'turn_end', turn: settledTurn })
+    this.store.mutateTask(taskId, (t) => { delete t.pendingAsk })
+    this.appendSystemTurn(taskId, '🔔 之前的提问已失效（远端批次消失），确认卡已关闭。请直接把你的选择作为新消息发送以继续任务。')
+    this.taskLog(taskId, 'warn', `pendingAsk 残留已对账清理（批次消失）：${taskId}`)
+    return true
+  }
+
+  /** 周期对账所有挂起任务的 pendingAsk（默认 5 分钟；WB_PENDINGASK_SWEEP_MS 可调，0=关闭）。 */
+  public startPendingAskSweeper(): void {
+    const ms = Number(process.env.WB_PENDINGASK_SWEEP_MS || 5 * 60_000)
+    if (!ms || ms <= 0) return
+    const timer = setInterval(() => {
+      void (async () => {
+        try {
+          const pending = this.store.getTasks().filter((t) => t.pendingAsk)
+          for (const t of pending) {
+            if (Date.now() - (t.pendingAsk?.at || 0) < 60_000) continue // 新挂起 1 分钟宽限，避免与正常流竞态
+            await this.reapStalePendingAsk(t.id).catch(() => {})
+          }
+          // 幽灵提问卡清扫：running 超 5 分钟却从未登记 awaiting（未接入答复通道，远端无对应批次）→ 关闭。
+          // 典型成因：模型在收到答复后续跑时原样重复发起 ask_user_question，该调用远端不会登记批次。
+          for (const t of this.store.getTasks()) {
+            for (const tn of t.turns || []) {
+              for (const tool of tn.tools || []) {
+                if ((tool.name === 'ask_user_question' || tool.name === 'ask-user-question') && tool.status === 'running' && tool.awaiting !== true && Date.now() - (tool.at || 0) > 5 * 60_000) {
+                  this.store.updateTurn(t.id, tn.id, (tt) => {
+                    const x = [...(tt.tools || [])].reverse().find((y) => y.id === tool.id && y.status === 'running')
+                    if (x) {
+                      x.status = 'error'
+                      x.result = '⚠️ 多余的提问调用已关闭：该提问未接入答复通道（远端无对应挂起批次），无需作答。'
+                      x.awaiting = false
+                    }
+                  })
+                  this.taskLog(t.id, 'warn', `幽灵提问卡已关闭（未登记 awaiting）: ${t.id} tool=${tool.id}`)
+                }
+              }
+            }
+          }
+        } catch {}
+      })()
+    }, ms)
+    ;(timer as any).unref?.()
+  }
+
+  /**
+   * 派发前的挂起预检 + 自由文本答复桥：会话有挂起提问时，用户消息按 custom 答复提交 /answers
+   * 解锁挂起的 run，然后追踪续跑（轮询状态 + 挂起重查 + history 对账），全程不发新 prompt。
+   * 返回 true = 已按答复桥处理（调用方直接 return）；false = 无挂起/桥不可用，走常规派发。
+   */
+  private async answerPendingAndResume(
+    taskId: string,
+    text: string,
+    agent: SubAgent | { name: string; id: string },
+    target: DshTarget,
+    sessionId: string,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    const pq = await this.client.listPendingQuestions(target, sessionId).catch(() => undefined)
+    if (!pq || !pq.ok || !pq.supported) return false
+    if (!(pq.count || 0)) {
+      // 批次已消失（远端自行解挂/超时/会话结束）→ 对账清理残留 pendingAsk，本条消息转常规派发
+      await this.reapStalePendingAsk(taskId).catch(() => {})
+      return false
+    }
+    const questions = (pq.batches || []).flatMap((b) => b.questions || [])
+    const answers = questions.filter((q) => q?.id).map((q) => ({ id: String(q.id), selected: [] as string[], custom: text }))
+    if (!answers.length) {
+      this.appendSystemTurn(taskId, '⚠️ 远端会话有挂起提问但问题缺少 id，无法桥接答复；请到 web 端问题卡片作答，或停止后重试')
+      return false
+    }
+    const r = await this.client.answerQuestion(target, sessionId, answers)
+    if (!r.ok) {
+      // 批次已消失（竞态：远端刚自行解挂/被取消）→ 回常规派发；真失败 → 明确告警后仍回常规派发（S6 兜底快速失败）
+      this.taskLog(taskId, 'warn', `答复桥提交失败（${r.error}），转常规派发`)
+      return false
+    }
+
+    // 已记录的挂起 ask 工具落 done（前端交互卡随任务刷新关闭）
+    const task0 = this.store.getTask(taskId)
+    if (task0?.pendingAsk) {
+      this.store.updateTurn(taskId, task0.pendingAsk.turnId, (tt) => {
+        const t = [...(tt.tools || [])].reverse().find((x) => (x.name === 'ask_user_question' || x.name === 'ask-user-question') && x.status === 'running')
+        if (t) {
+          t.status = 'done'
+          t.result = '✅ 已答复: ' + text.slice(0, 500)
+          t.awaiting = false
+        }
+      })
+      this.store.mutateTask(taskId, (t) => { delete t.pendingAsk })
+    }
+    this.appendSystemTurn(taskId, `📨 已把你的消息作为答复提交给挂起的提问（${answers.length} 题），远端回合恢复执行，正在追踪续跑…`)
+    this.taskLog(taskId, 'info', `答复已提交（${agent.name} · ${answers.length} 题），追踪续跑`)
+
+    await this.trackAskResume(taskId, agent, target, sessionId, { signal, promptFragment: text })
+    return true
+  }
+
+  /**
+   * 续跑追踪（自由文本答复桥 / 问题卡片答复共用）：远端挂起 run 恢复后的产出不再经过新 prompt ——
+   * 追踪回合轮询状态直至非 running（30min 上限），期间再次挂起（连环提问）按等待语义收尾；
+   * 结束后从远端 history 对账最终回复写入追踪回合。stop 可中止。
+   */
+  private async trackAskResume(
+    taskId: string,
+    agent: { name: string; id: string },
+    target: DshTarget,
+    sessionId: string,
+    opts?: { signal?: AbortSignal; promptFragment?: string },
+  ): Promise<void> {
+    const signal = opts?.signal
+    const promptFragment = opts?.promptFragment
+    const turn: TaskTurn = {
+      id: `turn-${randomUUID().slice(0, 8)}`,
+      seq: 0,
+      role: 'agent',
+      agentId: agent.id,
+      agentName: agent.name,
+      text: '',
+      streaming: true,
+      at: Date.now(),
+    }
+    this.store.appendTurn(taskId, turn)
+    this.emit(taskId, { type: 'turn_start', turn })
+
+    // 追踪上限与远端 prompt 超时同窗（30min）：真实无人/有人大任务恢复后可能继续跑工具数十分钟
+    const deadline = Date.now() + 30 * 60_000
+    let pendingAgain = false
+    let ran = false
+    while (Date.now() < deadline && !(signal?.aborted)) {
+      await new Promise((res) => setTimeout(res, 5_000))
+      if (signal?.aborted) break
+      const pq2 = await this.client.listPendingQuestions(target, sessionId).catch(() => undefined)
+      if (pq2?.ok && pq2.supported && (pq2.count || 0) > 0) {
+        pendingAgain = true
+        break
+      }
+      const st = await this.client.getSession(target, sessionId).catch(() => undefined)
+      if (!st?.ok) continue
+      if (st.status && st.status !== 'running') { ran = true; break }
+      ran = true
+    }
+
+    if (signal?.aborted) {
+      this.store.updateTurn(taskId, turn.id, (tt) => { tt.streaming = false; tt.endedAt = Date.now() })
+      const finalTurn = this.store.getTask(taskId)?.turns.find((x) => x.id === turn.id)
+      if (finalTurn) this.emit(taskId, { type: 'turn_end', turn: finalTurn })
+      this.appendSystemTurn(taskId, `⏹ 已停止 — ${agent.name} 的续跑追踪已中止（远端可能仍在执行）`)
+      this.store.mutateTask(taskId, (t) => { t.status = 'cancelled' })
+      this.emit(taskId, { type: 'task_status', status: 'cancelled' })
+      return
+    }
+
+    if (pendingAgain) {
+      const pq3 = await this.client.listPendingQuestions(target, sessionId).catch(() => undefined)
+      const questions = (pq3?.batches || []).flatMap((b) => b.questions || [])
+      // 连环提问物化为本地可作答卡：追踪回合原本没有 ask 工具记录，问题卡片无从渲染，
+      // 用户只能靠自由文本答复。把远端批次问题落成合成 ask 工具（awaiting=true），
+      // 让卡片通道与首次提问完全一致（提交时按 questions[].id 匹配远端批次）。
+      this.store.updateTurn(taskId, turn.id, (tt) => {
+        tt.tools = tt.tools || []
+        tt.tools.push({
+          id: 'ask-' + (pq3?.batches?.[0]?.batchId || randomUUID().slice(0, 8)),
+          name: 'ask_user_question',
+          args: JSON.stringify({ questions }),
+          status: 'running',
+          at: Date.now(),
+          awaiting: true,
+          result: '⏳ 等待用户答复（回复即答复）',
+        })
+      })
+      this.store.mutateTask(taskId, (t) => {
+        t.pendingAsk = { agentId: agent.id, sessionId, batchId: pq3?.batches?.[0]?.batchId, questions, turnId: turn.id, at: Date.now() }
+      })
+      this.finalizeWaitingAskTurn(taskId, turn.id, agent)
+      this.store.mutateTask(taskId, (t) => { t.status = 'completed' })
+      this.emit(taskId, { type: 'task_status', status: 'completed' })
+      return
+    }
+
+    // 对账整轮：挂起 run 恢复后的产出在其原回合内，从 history 取最后一条助手回复
+    // （卡片答复路径无 prompt 片段 → 不带 fragment，直接取最后一条助手回复）
+    const reconciled = await this.client.reconcileTurn(target, sessionId, promptFragment ? turnFragment(promptFragment) : undefined, { signal }).catch(() => undefined)
+    this.taskLog(taskId, reconciled?.ok ? 'info' : 'warn',
+      `续跑对账${reconciled?.ok ? `成功（${String(reconciled.content || '').length} 字）` : `未取到内容: ${reconciled?.error || '调用异常'}`}`)
+    this.store.updateTurn(taskId, turn.id, (tt) => {
+      tt.streaming = false
+      tt.endedAt = Date.now()
+      if (reconciled?.ok && reconciled.content) tt.text = reconciled.content
+      else if (!ran) tt.text = '（远端续跑仍在执行，本轮追踪已达 30 分钟上限 —— 稍后发任意消息即可查询进度并取回结果）'
+      else tt.text = tt.text || '（远端续跑已结束，未返回新内容）'
+      if (reconciled?.usage && typeof reconciled.usage === 'object') tt.usage = { ...reconciled.usage }
+    })
+    const finalTurn = this.store.getTask(taskId)?.turns.find((x) => x.id === turn.id)
+    if (finalTurn) this.emit(taskId, { type: 'turn_end', turn: finalTurn })
+    this.store.mutateTask(taskId, (t) => { t.status = 'completed' })
+    this.emit(taskId, { type: 'task_status', status: 'completed' })
+  }
+
+  /** 问题卡片答复（POST /tasks/:id/ask-answer）回传成功后的续跑追踪：与自由文本桥同一套追踪与对账，
+   *  否则远端续跑产出无人接收，任务「完成」却没有最终结果（线上 2026-10-23 用户实测缺陷）。 */
+  public trackAskResumeAfterCardAnswer(taskId: string, agentId: string, target: DshTarget, sessionId: string): void {
+    void (async () => {
+      try {
+        const agentRec = this.store.getAgent(agentId)
+        await this.trackAskResume(taskId, { id: agentId, name: agentRec?.name || agentId }, target, sessionId)
+      } catch (err) {
+        this.taskLog(taskId, 'warn', `卡片答复续跑追踪异常: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    })()
+  }
+
+  // ---------- orchestrate 编排 ----------
+
+  /**
+   * 编排轮：LLM 规划拆解 → DAG 调度派发 → 汇总。
+   * 成员子任务在各自身上绑定节点执行（专项产物在其节点）；主智能体自留子任务在任务发起节点执行；
+   * 最终产物（汇总）回任务发起节点。单 @ 消息同样走此路径（聚焦花名册 = 主智能体 + 被 @ 成员）。
+   * opts.teamTurn：本轮是否显式携带团队意图（@团队/选择器）——只有团队轮注入团队合同并按团队名册计覆盖度；
+   * 普通定向编排（单/多 @ 成员）按轮级聚焦成员计。
+   */
+  private async runOrchestrateTurn(
+    taskId: string,
+    text: string,
+    mentions: ExtractedMentions,
+    targets: Map<string, DshTarget>,
+    signal: AbortSignal,
+    opts?: { teamTurn?: boolean },
+  ): Promise<void> {
+    const task = this.store.getTask(taskId)!
+    const teamTurn = Boolean(opts?.teamTurn)
+
+    // 专家团任务：团队合同注入规划与派工（teamId 失效时按普通编排降级并记录）
+    const team = teamTurn && task.teamId ? this.store.getTeam(task.teamId) : undefined
+    if (teamTurn && task.teamId && !team) this.taskLog(taskId, 'warn', `专家团 ${task.teamId} 已不存在，本次按普通定向编排执行（不注入团队合同）`)
+
+    // 1. 花名册（资源摘要用轻量解析，不抓技能全文）：
+    //    子智能体成员 + 专家库动态成员（伪 id，persona 在派工时按档案展开）。
+    //    本轮显式 @ 了成员（子智能体或专家，单个或多个）时聚焦这些成员：用户意图 = 这轮就交给他们 + 调度方自己，
+    //    任务里其他历史成员（含旧团队成员）不卷入本轮分工；团队意图轮（@团队）用完整团队名册。
+    const agentById = new Map<string, SubAgent>()
+    for (const a of this.store.getAgents()) agentById.set(a.id, a)
+    for (const em of task.expertMembers || []) {
+      const expertAgent = await this.resolveMemberAgent(task, em.id)
+      if (expertAgent) agentById.set(expertAgent.id, expertAgent)
+      else this.taskLog(taskId, 'warn', `专家成员「${em.name}」档案不可用，已从规划花名册剔除`)
+    }
+    const mentionedAgentIds = mentions.mentionedAgentIds
+    const mentionedExpertIds = mentions.mentionedExpertIds || []
+    const focusIds = mentionedAgentIds.length || mentionedExpertIds.length
+      ? [
+          ...mentionedAgentIds,
+          ...mentionedExpertIds.map((eid) => this.expertMemberPseudo(task, eid)),
+        ]
+      : undefined
+    const allRosterKeys = [...task.memberAgentIds, ...(task.expertMembers || []).map((m) => m.id)]
+    const rosterKeys = focusIds ? allRosterKeys.filter((id) => focusIds.includes(id)) : allRosterKeys
+    const rosterMembers = rosterKeys
+      .map((id) => agentById.get(id))
+      .filter((a): a is SubAgent => Boolean(a) && targets.has(a!.id))
+      .map((agent) => ({
+        agent,
+        resourceSummary: (agent.resources || [])
+          .map((r) => r.alias || r.ref.kind + ':' + (r.ref.kind === 'mapping' ? r.ref.mappingId : r.ref.appId))
+          .join('、'),
+        // 节点标注：规划器据此做节点归属拆分（仅某节点可访问的资源/环境对应步骤必须分给该节点上的成员）
+        nodeLabel: this.nodeLabelOf(targets.get(agent.id)!),
+      }))
+    // 规划重点约束名单：本轮显式 @ 且本轮可路由的花名册成员（失效/不可达成员已被剔除，不进校验）
+    const priorityIds = focusIds ? rosterMembers.map((m) => m.agent.id) : []
+
+    // 主智能体（任务发起节点主会话）进花名册：非被 @ 成员职责的工作由它自己执行（单 @ 分工的另一半）。
+    // 团队接管轮（@团队）不加——团队合同里主调度（主理人）只拆解/核验/汇总，不执行子任务。
+    const execR = this.taskExec(task)
+    // 任务节点探活结果：undefined=未探测（团队轮未进花名册）/ true / false（不可达）。
+    // 供下方规划节点选择复用，避免对同一个挂掉的节点重复等 3-4s。
+    let mainNodeProbeOk: boolean | undefined
+    if (!teamTurn && execR.dshRef) {
+      const mainTarget = await this.resolver.resolveRef(execR.dshRef, execR.apiKey, NODE_AGENT_ID).catch(() => undefined)
+      if (mainTarget?.online && mainTarget.baseUrl) {
+        // ONENAT online ≠ DSH 进程活着：不探活就把主智能体放进花名册，规划器会把子任务派给它，
+        // 执行时才发现 "fetch failed"（本轮 1/3 子任务失败的根因）。
+        const probe = await this.client.ping(mainTarget, { timeoutMs: 3000 })
+        mainNodeProbeOk = probe.ok
+        if (probe.ok) {
+          targets.set(NODE_AGENT_ID, mainTarget)
+          rosterMembers.unshift({
+            agent: { ...this.makeNodeAgent(execR), name: MAIN_AGENT_LABEL },
+            resourceSummary: '任务发起节点主会话（远端默认形态，可用该节点的文件/脚本/网络等本机能力）',
+            nodeLabel: this.nodeLabelOf(mainTarget),
+          })
+        } else {
+          const why = isUnreachableError(probe.error) ? '连接失败' : (probe.error || '探活失败')
+          this.taskLog(taskId, 'warn', `任务节点探活失败（${mainTarget.baseUrl}）：${why} → 主智能体不参与本轮分工（退化为仅被 @ 成员执行）`)
+        }
+      } else {
+        this.taskLog(taskId, 'warn', '任务节点不可达，主智能体不参与本轮分工（退化为仅被 @ 成员执行）')
+      }
+    }
+
+    // 2. LLM 规划（失败兜底静态三段）。
+    // 规划消息采用真流式生命周期：turn_start → 思考流(turn_reasoning) 与阶段日志(turn_delta) 增量推送 → 收敛后 turn_end。
+    // 此前 appendSystemTurn 立即补发 turn_end，前端把规划消息标记为 settled，主调度的全部思考事件被丢弃，用户只能干等。
+    const planTurn: TaskTurn = {
+      id: `turn-${randomUUID().slice(0, 8)}`,
+      seq: 0,
+      role: 'system',
+      agentName: '🎯 主调度规划',
+      text: '🎯 主调度正在拆解主任务并规划子任务流水线…',
+      streaming: true,
+      at: Date.now(),
+    }
+    this.store.appendTurn(taskId, planTurn)
+    this.emit(taskId, { type: 'turn_start', turn: planTurn })
+
+    let draft: PlanDraft
+    let plannerSeq = 0
+    let plannerThinkBuf = ''
+    let planTextBuf = planTurn.text
+    const stageLines: string[] = []
+    let planSettled = false
+    const planT0 = Date.now()
+    // 阶段日志镜像进规划气泡（▸ 行，实时可读）；任务日志抽屉仍保留全量记录
+    const planStage = (msg: string): void => {
+      stageLines.push(msg)
+      const line = '\n▸ ' + msg
+      planTextBuf += line
+      this.store.updateTurn(taskId, planTurn.id, (tt) => { tt.text = planTextBuf })
+      this.emit(taskId, { type: 'turn_delta', turnId: planTurn.id, delta: line, seq: plannerSeq++ })
+    }
+    // 收敛规划消息：写入最终结论行 + 阶段日志流水 + 完整思考文本，补发 turn_end
+    const settlePlanTurn = (head: string): void => {
+      if (planSettled) return
+      planSettled = true
+      const finalText = head + (stageLines.length ? '\n\n' + stageLines.map((l) => '▸ ' + l).join('\n') : '')
+      this.store.updateTurn(taskId, planTurn.id, (tt) => {
+        tt.streaming = false
+        tt.endedAt = Date.now()
+        tt.text = finalText
+        tt.reasoning = plannerThinkBuf || undefined
+      })
+      const finalTurn = this.store.getTask(taskId)!.turns.find((x) => x.id === planTurn.id)
+      if (finalTurn) this.emit(taskId, { type: 'turn_end', turn: finalTurn })
+    }
+    const strategyLabel = (s: PlanDraft['strategy']): string =>
+      s === 'sequential' ? '顺序执行' : s === 'dag' ? 'DAG 依赖编排' : '并行协同'
+
+    let planned: Awaited<ReturnType<Orchestrator['planTask']>>
+    try {
+      // 规划在任务发起节点（主 DSH）执行 —— 节点模型下无需单独指定拆解器智能体；不可达时回退 pickTarget 链
+      const execForPlan = this.taskExec(task)
+      let planNodeTarget = execForPlan.dshRef
+        ? await this.resolver.resolveRef(execForPlan.dshRef, execForPlan.apiKey, 'planner').catch(() => undefined)
+        : undefined
+      // 探活预检：ONENAT online 只代表隧道在线，DSH 进程可能已挂/端口漂移。
+      // 不可达就别把它当规划节点（否则规划器只会得到 "fetch failed" 再回退静态拆解，
+      // 用户还会看到一条费解的降级告警）；改用可用成员节点规划，规划质量保住。
+      if (planNodeTarget?.online && planNodeTarget.baseUrl) {
+        if (mainNodeProbeOk === false) {
+          // 上面花名册阶段已探活失败并记录过原因，这里不再重复等待/打日志
+          planNodeTarget = undefined
+        } else if (mainNodeProbeOk === undefined) {
+          const probe = await this.client.ping(planNodeTarget, { timeoutMs: 4000 })
+          if (!probe.ok) {
+            const why = isUnreachableError(probe.error) ? '连接失败' : (probe.error || '探活失败')
+            this.taskLog(taskId, 'warn', `任务节点探活失败（${planNodeTarget.baseUrl}）：${why} → 主调度改用可用成员节点规划；如需在该节点执行请检查 ONENAT 映射或切换节点`)
+            planNodeTarget = undefined
+          }
+        }
+      }
+      // 只有目录归属与规划节点一致才对齐 cwd；异机项目不能补建同路径目录。
+      let plannerCwd: string | undefined
+      const wsForPlan = execForPlan.workspace
+      const workspaceRef = task.workDir ? execForPlan.dshRef : execForPlan.workspaceDshRef
+      if (wsForPlan && wsForPlan.startsWith('/') && sameDshRef(workspaceRef, execForPlan.dshRef) && planNodeTarget?.online && planNodeTarget.baseUrl) {
+        const dirOk = await this.ensureRemoteDir(planNodeTarget, wsForPlan).catch(() => false)
+        if (dirOk) plannerCwd = wsForPlan
+        else this.taskLog(taskId, 'warn', `任务工作目录 ${wsForPlan} 无法在规划节点创建，规划会话将使用节点默认目录`)
+      }
+      planned = await this.planner.planTask(text, rosterMembers, targets, {
+        priorityAgentIds: priorityIds,
+        taskNodeTarget: planNodeTarget && planNodeTarget.online && planNodeTarget.baseUrl ? planNodeTarget : undefined,
+        ...(plannerCwd ? { plannerCwd } : {}),
+        ...(team ? { team, nameOf: (key: string) => this.memberNameOf(task, key) } : {}),
+        onLog: (msg, level) => {
+          this.taskLog(taskId, level || 'info', `[主调度] ${msg}`)
+          planStage(msg)
+        },
+        onReasoning: (delta) => {
+          plannerThinkBuf += delta
+          this.store.updateTurn(taskId, planTurn.id, (tt) => { tt.reasoning = plannerThinkBuf })
+          this.emit(taskId, { type: 'turn_reasoning', turnId: planTurn.id, delta, seq: plannerSeq++ })
+        },
+      })
+    } catch (err: any) {
+      planned = { error: `规划器异常: ${err?.message || err}` }
+      this.taskLog(taskId, 'warn', `规划阶段异常: ${err?.message || err}`)
+    }
+    if ('plan' in planned) {
+      draft = planned.plan
+      const thinkNote = plannerThinkBuf ? ` · 主调度思考 ${plannerThinkBuf.length} 字` : ''
+      settlePlanTurn(`✅ 拆解完成 — ${strategyLabel(draft.strategy)} · ${draft.subtasks.length} 个子任务 · 耗时 ${((Date.now() - planT0) / 1000).toFixed(1)}s${thinkNote}`)
+      this.taskLog(taskId, 'info', `规划完成（${planned.plan.strategy}，${planned.plan.subtasks.length} 个子任务）`)
+      // 规划合同硬约束经纠正重试仍违规：告警明示（子任务已按实际分配执行，供人工检查成员分工）
+      for (const w of planned.warnings || []) this.taskLog(taskId, 'warn', `[主调度] ${w}`)
+    } else {
+      draft = Orchestrator.fallbackPlan(text, rosterMembers)
+      // 不可达类失败给可操作提示：用户看到 "fetch failed" 时不知道是节点挂了还是模型坏了
+      const unreachable = isUnreachableError(planned.error)
+      const hint = unreachable ? '；主调度节点连接失败，可在右上角切换节点后重发以恢复 LLM 拆解' : ''
+      settlePlanTurn(`⚠️ LLM 规划不可用（${planned.error}${hint}），已回退静态三段拆解`)
+      this.taskLog(taskId, 'warn', `规划器不可用（${planned.error}）${hint}，已回退静态三段拆解`)
+      if (planned.raw) {
+        this.taskLog(taskId, 'warn', `规划器原始输出（前 500 字）: ${planned.raw.slice(0, 500).replace(/\s+/g, ' ')}`)
+      }
+    }
+
+    // 单成员聚焦轮（delegate）合同执行：用户显式 @ 恰好一名成员时，只保留指派给该成员的
+    // 子任务 —— 调度方自留的「核验/汇总」跳与最终 summarize 职责重复（线上实测每轮多耗
+    // ~90s）。规划提示词已要求单成员轮恰好 1 个子任务；此处执行裁剪保证合同成立。
+    // 裁剪后没有任何该成员子任务时维持原计划（不凭空造任务）。
+    const isDelegateRound = !teamTurn && Array.isArray(focusIds) && focusIds.length === 1
+    if (isDelegateRound && draft.subtasks.length > 1) {
+      const focusId = focusIds![0]
+      const kept = draft.subtasks.filter((x) => x.agentId === focusId)
+      if (kept.length >= 1 && kept.length < draft.subtasks.length) {
+        const focusName = rosterMembers.find((m) => m.agent.id === focusId)?.agent.name || focusId
+        draft = { ...draft, subtasks: kept }
+        this.emit(taskId, { type: 'log', level: 'info', msg: `单成员聚焦轮：仅保留「${focusName}」的 ${kept.length} 个子任务（调度方核验/汇总由最终汇总统一承担）` })
+      }
+    }
+
+    // 3. title 依赖 → 子任务 id 依赖
+    const idByTitle = new Map<string, string>()
+    const subtasks: PlanSubtask[] = draft.subtasks.map((s) => {
+      const id = `sub-${randomUUID().slice(0, 8)}`
+      idByTitle.set(s.title, id)
+      return {
+        id,
+        title: s.title,
+        prompt: s.prompt,
+        agentId: s.agentId,
+        dependsOn: [],
+        ...(s.objective ? { objective: s.objective } : {}),
+        ...(s.acceptance?.length ? { acceptance: s.acceptance } : {}),
+        status: 'pending',
+        logs: [],
+      }
+    })
+    for (let i = 0; i < draft.subtasks.length; i++) {
+      const src = draft.subtasks[i]
+      subtasks[i].dependsOn = (src.dependsOn || [])
+        .map((t) => idByTitle.get(t))
+        .filter((x): x is string => Boolean(x))
+    }
+    // 成环检测（Kahn）: 有环则全部转 parallel
+    if (this.hasCycle(subtasks)) {
+      for (const s of subtasks) s.dependsOn = []
+      draft.strategy = 'parallel'
+      this.emit(taskId, { type: 'log', level: 'warn', msg: '规划依赖成环，已降级为并行执行' })
+    }
+
+    // 轮级参与范围：该计划生效时点的成员与团队合同快照（UI/覆盖度/重试汇总以 scope 为准，不再依赖 task.teamId 的历史值）。
+    // 团队合同快照按值拷贝：同任务后续换团队/改团队不回写历史轮的合同文本。
+    const turnScope: TaskPlanScope = team
+      ? { kind: 'team', memberIds: rosterKeys.filter((id) => id !== NODE_AGENT_ID), team: structuredClone(team) }
+      : { kind: 'members', memberIds: rosterKeys.filter((id) => id !== NODE_AGENT_ID) }
+
+    this.store.mutateTask(taskId, (t) => {
+      t.plan = { strategy: draft.strategy, plannerModel: (planned as any).plannerModel, createdAt: Date.now(), subtasks, objective: text, scope: turnScope }
+      for (const s of subtasks) t.turns[t.turns.length - 1]?.subtaskIds?.push(s.id)
+    })
+    // 把 subtaskIds 挂到本轮 user turn 上（上面的 push 因数组为空不生效，这里补挂）
+    this.store.mutateTask(taskId, (t) => {
+      const lastUser = [...t.turns].reverse().find((x) => x.role === 'user')
+      if (lastUser) lastUser.subtaskIds = subtasks.map((s) => s.id)
+    })
+    this.emit(taskId, { type: 'plan_update', plan: this.store.getTask(taskId)!.plan! })
+
+    // 4. DAG 调度 (透传动态 mentions 资源)
+    await this.executeDag(taskId, mentions, targets, signal)
+
+    // 5. 汇总 —— 最终产物归属发起节点：汇总在任务节点上执行（节点不可达时回退规划器节点）
+    this.appendSystemTurn(taskId, '📊 所有子任务已完成，主调度正在综合各方产出生成总结报告…')
+    const fresh = this.store.getTask(taskId)!
+    let summaryNodeTarget: DshTarget | undefined
+    const execS = this.taskExec(fresh)
+    if (execS.dshRef) {
+      const nt = await this.resolver.resolveRef(execS.dshRef, execS.apiKey, 'summary').catch(() => undefined)
+      if (nt?.online && nt.baseUrl) summaryNodeTarget = nt
+    }
+    // 覆盖度按本轮 scope：团队轮按团队名册（合同快照），普通编排按实际参与者（不含 task.teamId 的历史残留）
+    const summary = await this.planner.summarize(text, fresh.plan?.subtasks || [], targets, summaryNodeTarget, team ? { team: turnScope.team, nameOf: (key: string) => this.memberNameOf(fresh, key) } : undefined)
+    this.store.mutateTask(taskId, (t) => {
+      t.summary = summary
+      t.status = summary.status
+    })
+    this.backlogWritebackFire(taskId)
+    this.emit(taskId, { type: 'task_status', status: summary.status })
+    // 成员覆盖度并入汇总文本（移植 dsh-agency-agents coverage 语义：返回覆盖 ≠ 验收通过）
+    const cov = summary.coverage
+    const coverageText = cov && cov.total > 0
+      ? `\n\n📋 成员覆盖度: ${cov.status === 'complete' ? '全部覆盖' : cov.status === 'partial' ? '部分覆盖' : '无有效产出'}（${cov.completed}/${cov.total}）` +
+        (cov.missing.length ? `\n${cov.missing.map((m) => `- ${m.name}${m.duty ? `（${m.duty}）` : ''}: ${m.error || '未返回'}`).join('\n')}` : '')
+      : ''
+    const summaryTurn: TaskTurn = {
+      id: `turn-${randomUUID().slice(0, 8)}`,
+      seq: 0,
+      role: 'agent',
+      agentId: '__planner__',
+      agentName: '🎯 总调度汇总',
+      text: summary.finalConclusion + coverageText,
+      subtaskIds: subtasks.map((s) => s.id),
+      at: Date.now(),
+    }
+    this.store.appendTurn(taskId, summaryTurn)
+    this.emit(taskId, { type: 'turn_start', turn: summaryTurn })
+    this.emit(taskId, { type: 'turn_end', turn: summaryTurn })
+    this.store.save()
+  }
+
+  private hasCycle(subtasks: PlanSubtask[]): boolean {
+    const indeg = new Map<string, number>()
+    const adj = new Map<string, string[]>()
+    for (const s of subtasks) {
+      indeg.set(s.id, s.dependsOn.length)
+      for (const d of s.dependsOn) {
+        if (!adj.has(d)) adj.set(d, [])
+        adj.get(d)!.push(s.id)
+      }
+    }
+    const queue = subtasks.filter((s) => (indeg.get(s.id) || 0) === 0).map((s) => s.id)
+    let visited = 0
+    while (queue.length) {
+      const id = queue.shift()!
+      visited++
+      for (const next of adj.get(id) || []) {
+        const d = (indeg.get(next) || 0) - 1
+        indeg.set(next, d)
+        if (d === 0) queue.push(next)
+      }
+    }
+    return visited !== subtasks.length
+  }
+
+  /** 每节点并行回合预算（NodeCapacity）：同一节点同时执行的子任务回合上限。
+   *  专家团 = N 个纯人格成员全部实例化在任务节点，无预算时 N 个会话挤同一上游，
+   *  首 token 延迟成倍恶化（线上实测 3 并发把 253.8s 首增量的成员挤到 300s 停滞）。
+   *  WB_NODE_MAX_CONCURRENT_TURNS 可覆盖，默认 2。 */
+  private maxTurnsPerNode(): number {
+    const n = Number(process.env.WB_NODE_MAX_CONCURRENT_TURNS || 0)
+    return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 2
+  }
+
+  private async executeDag(
+    taskId: string,
+    mentions: ExtractedMentions,
+    targets: Map<string, DshTarget>,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const maxPerNode = this.maxTurnsPerNode()
+    for (;;) {
+      if (signal.aborted) return
+      const task = this.store.getTask(taskId)
+      const subs = task?.plan?.subtasks || []
+      const pending = subs.filter((s) => s.status === 'pending')
+      if (pending.length === 0) break
+      const ready = pending.filter((s) => s.dependsOn.every((d) => subs.find((x) => x.id === d)?.status === 'completed'))
+      if (ready.length === 0) {
+        // 没有可运行的：上游失败/跳过导致 —— 级联跳过全部剩余 pending
+        for (const s of pending) {
+          this.store.mutateSubtask(taskId, s.id, (x) => {
+            x.status = 'skipped'
+            x.error = '上游子任务未成功，已跳过'
+          })
+          this.emit(taskId, { type: 'subtask_status', subtask: this.store.getTask(taskId)!.plan!.subtasks.find((x) => x.id === s.id)! })
+        }
+        break
+      }
+      // 按目标节点预算分批派发：超预算的成员保持 pending，待本批完成后下轮循环再启动
+      // （计划卡如实呈现分段并行；预算按目标 baseUrl 划分，同一节点同批至多 maxPerNode 个回合）
+      const launched: Array<Promise<void>> = []
+      const inflight = new Map<string, number>()
+      for (const sub of ready) {
+        const key = targets.get(sub.agentId)?.baseUrl || '__unknown__'
+        const used = inflight.get(key) || 0
+        if (used >= maxPerNode) continue
+        inflight.set(key, used + 1)
+        launched.push(
+          this.launchSubtask(taskId, sub.id, mentions, targets, signal).finally(() => {
+            const left = (inflight.get(key) || 1) - 1
+            inflight.set(key, left)
+          }),
+        )
+      }
+      await Promise.all(launched)
+    }
+  }
+
+  private async launchSubtask(
+    taskId: string,
+    subtaskId: string,
+    mentions: ExtractedMentions,
+    targets: Map<string, DshTarget>,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const task = this.store.getTask(taskId)
+    const sub = task?.plan?.subtasks.find((s) => s.id === subtaskId)
+    if (!task || !sub) return
+    // 成员解析：子智能体实体优先，expert-<expertId> 伪 id 解析为任务级临时专家
+    const agent = await this.resolveMemberAgent(task, sub.agentId)
+    const target = targets.get(sub.agentId)
+    if (!agent || !target) {
+      this.store.mutateSubtask(taskId, subtaskId, (s) => {
+        s.status = 'failed'
+        s.error = !agent ? '子智能体不存在' : '节点解析失败'
+        s.completedAt = Date.now()
+      })
+      this.emit(taskId, { type: 'subtask_status', subtask: this.store.getTask(taskId)!.plan!.subtasks.find((x) => x.id === subtaskId)! })
+      return
+    }
+
+    // 上游产出摘要（预算截断 + 中和伪造段头，逻辑在 orchestrator.buildUpstreamDigests）
+    const upstream = buildUpstreamDigests(task.plan?.subtasks, sub.dependsOn)
+    await this.runSubtask(task, sub, agent, target, upstream, mentions.mentionedResourceBindings, signal, mentions)
+  }
+
+
+  /** 执行单个子任务（供 DAG 与单项重试共用） */
+  private async runSubtask(
+    task: WorkTask,
+    sub: PlanSubtask,
+    agent: SubAgent,
+    target: DshTarget,
+    upstream: string[],
+    extraResources: AgentResourceBinding[],
+    signal: AbortSignal,
+    mentions?: ExtractedMentions,
+  ): Promise<void> {
+    const taskId = task.id
+    const exec = this.taskExec(task)
+    this.store.mutateSubtask(taskId, sub.id, (s) => {
+      s.status = 'running'
+      s.startedAt = Date.now()
+    })
+    this.emit(taskId, { type: 'subtask_status', subtask: this.store.getTask(taskId)!.plan!.subtasks.find((x) => x.id === sub.id)! })
+    this.emit(taskId, { type: 'log', subtaskId: sub.id, level: 'info', msg: `开始在「${agent.name}」上执行（节点: ${this.nodeLabelOf(target)}）: ${sub.title}` })
+
+    const session = await this.ensureSession(taskId, agent, target, { cwd: exec.workspace, workspace: exec.workspace })
+    if (session.target) target = session.target
+    if (!session.ok) {
+      this.store.mutateSubtask(taskId, sub.id, (s) => {
+        s.status = 'failed'
+        s.error = `创建远程会话失败: ${session.error}`
+        s.completedAt = Date.now()
+      })
+      this.emit(taskId, { type: 'subtask_status', subtask: this.store.getTask(taskId)!.plan!.subtasks.find((x) => x.id === sub.id)! })
+      return
+    }
+    let activeSession = session
+    const subLog = (msg: string, level: SubtaskLogEntry['level'] = 'info'): void => {
+      this.store.mutateSubtask(taskId, sub.id, (s) => {
+        s.logs.push({ ts: Date.now(), level, msg })
+      })
+      this.emit(taskId, { type: 'log', subtaskId: sub.id, level, msg })
+    }
+    subLog(`远程会话${session.reused ? '复用' : '新建'} ${session.remoteSessionId} @ ${target.baseUrl}`)
+
+    const transformed = await this.transformFileMentionsForAgent(sub.prompt, mentions, agent, task)
+
+    const parts: string[] = []
+    // 远程会话创建接口不收 systemPrompt，聊天直发路径靠 sysPrefix 注入角色；编排/直派子任务在此对等注入，
+    // 否则执行者拿不到自己的角色定义，只能靠子任务指令自猜身份。
+    // 专家人格（expertPersona）：角色声明 + 职责约束（systemPrompt）+ 执行指导（executionPrompt）。
+    parts.push(`[执行者角色]（你的身份、职责与约束）:\n${expertPersona(agent)}`)
+    // 专家团合同段（移植 dsh-agency-agents executeTeam 成员提示词结构）：共同目标/约束/交付要求 +
+    // 全员职责边界 + 自己的分工与执行指示 + 五段回传格式；紧跟执行者角色，先于任务合同。
+    // 合同走本轮 plan.scope 的团队快照（成员合同不随同任务后续团队变更漂移）；无 scope 的存量计划回退 task.teamId。
+    const scopeTeam = task.plan?.scope ? (task.plan.scope.kind === 'team' ? task.plan.scope.team : undefined) : (task.teamId ? this.store.getTeam(task.teamId) : undefined)
+    const teamMember = scopeTeam?.members.find((m) => teamMemberKey(m) === agent.id)
+    if (scopeTeam && teamMember) {
+      parts.push(teamMemberContract(scopeTeam, teamMember, (key) => this.memberNameOf(task, key)))
+    }
+    // 项目指令（TaskContext 段）：与聊天直发 sysPrefix 同源。项目任务一旦走编排
+    //（@专家/@团队/@多成员），成员此前拿不到项目规范——工作目录有、指令无（评审确认的缺口）。
+    if (exec.instruction?.trim()) {
+      parts.push(`[项目指令]（本任务所属项目的工作规范，与本子任务一同遵守）:\n${exec.instruction.trim()}`)
+      // 可观测：线上验证靠任务日志确认注入（派发 prompt 本身不落库）
+      subLog(`已随子任务注入项目指令（${exec.instruction.trim().length} 字）`)
+    }
+    const hasDynamicResources = (extraResources && extraResources.length > 0) || (mentions?.mentionedFiles && mentions.mentionedFiles.length > 0)
+    const cachedBlock = hasDynamicResources ? null : this.blockCacheFresh(taskId, agent, 'unattended')
+
+    if (!cachedBlock) {
+      const composed = await this.composer.compose(agent, {
+        resolvedAt: Date.now(),
+        extraResources: [...exec.extraBindings, ...extraResources],
+        extraSkills: exec.skills,
+        interaction: 'unattended',
+      })
+      const block = composed.block
+      if (!hasDynamicResources) this.blockCache.set(this.blockCacheKey(taskId, agent, 'unattended'), { block, at: Date.now() })
+      if (block) parts.push(block)
+      for (const w of composed.warnings) this.emit(taskId, { type: 'log', subtaskId: sub.id, level: 'warn', msg: w })
+    } else if (cachedBlock.block) {
+      parts.push(cachedBlock.block)
+    }
+    if (transformed.extraSections.length > 0) {
+      parts.push(transformed.extraSections.join('\n\n'))
+    }
+    // 上游产出注入（防注入声明在 orchestrator.buildUpstreamSection）
+    const upstreamSection = buildUpstreamSection(upstream)
+    if (upstreamSection) parts.push(upstreamSection)
+    // 上游结果文件跨节点下载清单（传参闭环）：上游产出文本引用的结果文件 → 上游成员节点的下载 URL + 密钥。
+    // 跨节点协作的文件不做隐式共享：下游凭本清单经 HTTP 把上游文件取回本地再用（docs/design-cross-node-file-passing.md）
+    const upstreamFiles = await this.buildUpstreamFilesSection(task, sub)
+    if (upstreamFiles) {
+      parts.push(upstreamFiles)
+      subLog(`已随子任务注入上游结果文件下载清单（${(upstreamFiles.match(/curl/g) || []).length} 个文件 ← 上游成员节点）`)
+    }
+    // 任务合同（移植 dsh-agent-teams assignmentPrompt 契约结构）：目标 + 验收标准，执行者须逐条对照
+    const contract = buildTaskContract(sub)
+    if (contract) parts.push(contract)
+    // 运行权限：原生接口已生效则不注入；旧版节点降级为提示词声明
+    const permLine = this.permissionPromptLine(this.store.getTask(taskId) || task, agent)
+    if (permLine) parts.push(permLine)
+    // 规划器可能把用户素材原样抄进子任务指令：中和其中伪造的引擎段头与围栏（orchestrator.sanitizeEngineInstruction）
+    // 其他成员名册（子智能体+专家动态成员，排除被指派者）一并传入：剥离指令中对他们的 @提及并附编排声明，
+    // 防止执行者在本节点越权代办/自行联系其他成员
+    const otherMembers: Array<Pick<SubAgent, 'name' | 'id'>> = []
+    for (const mid of task.memberAgentIds) {
+      if (mid === agent.id) continue
+      const ma = this.store.getAgent(mid)
+      if (ma) otherMembers.push({ name: ma.name, id: ma.id })
+    }
+    for (const em of task.expertMembers || []) {
+      if (em.id === agent.id) continue
+      otherMembers.push({ name: em.name, id: em.id })
+    }
+    const instr = sanitizeEngineInstruction(transformed.text, agent, otherMembers)
+    parts.push(`[当前子任务指令]:\n${instr}`)
+    parts.push(buildCompletionRequirement(sub))
+    const fullPrompt = parts.join('\n\n')
+
+    let deltaCount = 0
+    const dispatchStartedAt = Date.now()
+    let firstDeltaLogged = false
+    // 派发处理器抽为工厂：模型回退重试时重置计数器后复用同一组回调
+    const makeHandlers = (): Parameters<DshClient['streamPrompt']>[3] => ({
+      onDelta: (delta) => {
+        if (!firstDeltaLogged) {
+          firstDeltaLogged = true
+          subLog(`收到首个增量（等待 ${((Date.now() - dispatchStartedAt) / 1000).toFixed(1)}s），开始流式接收`)
+        }
+        this.store.mutateSubtask(taskId, sub.id, (s) => {
+          s.result = { content: (s.result?.content || '') + delta }
+        })
+        // 崩溃恢复粒度：尾随合并落盘（3s 窗口）。此前每 25 delta 全量同步 save，
+        // 15MB 级 store 上单次 ~300ms 冻结事件循环，多成员并行流式时循环近乎满冻结
+        if (++deltaCount % 25 === 0) this.store.scheduleSave()
+      },
+      onLog: (msg, level) => {
+        subLog(msg, level || 'info')
+      },
+    })
+    let result = await this.dispatchWithFallback(target, activeSession.remoteSessionId!, fullPrompt, makeHandlers(), signal)
+    // 会话在远端丢失（natpass 端口漂移/远端清理）：重建会话并原样重发一次（同主会话轮路径）
+    if (!signal.aborted && isSessionLostError(result.error)) {
+      subLog(`远端会话不存在: ${String(result.error).slice(0, 140)} — 重建会话重发`, 'warn')
+      const rebuilt = await this.ensureSession(taskId, agent, target, { cwd: exec.workspace, workspace: exec.workspace })
+      if (rebuilt.target) target = rebuilt.target
+      if (rebuilt.ok && rebuilt.remoteSessionId) {
+        activeSession = rebuilt
+        result = await this.dispatchWithFallback(target, rebuilt.remoteSessionId, fullPrompt, makeHandlers(), signal)
+      }
+    }
+
+    // 模型回退自愈：sub agent 自带 provider/model 首轮零产出（含对账后 ok=true 但整轮无文本——
+    // 远端轮次 error 结束时对账也拿不到内容）→ 丢弃该会话，按调度模型重建重试一次。
+    // 路由语义不变，只换执行模型；有部分产出或已中止不重试。
+    let fellBackToDefault = false
+    const firstRoundEmpty = !(result.content && result.content.trim())
+    const plannerModel = String(task.model || this.store.getSettings().planner?.model || '').trim() || undefined
+    if (firstRoundEmpty && !signal.aborted && (agent.provider || agent.model)) {
+      const ownModel = `${agent.provider || '(默认)'}/${agent.model || '(默认)'}`
+      this.store.mutateTask(taskId, (t) => { delete t.sessions[agent.id] })
+      this.store.mutateSubtask(taskId, sub.id, (s) => { s.result = undefined })
+      const retried = await this.ensureSession(taskId, agent, target, { cwd: exec.workspace, workspace: exec.workspace, modelOverride: 'default' })
+      if (retried.target) target = retried.target
+      if (retried.ok && retried.remoteSessionId) {
+        activeSession = retried
+        deltaCount = 0
+        firstDeltaLogged = false
+        fellBackToDefault = true
+        subLog(`首轮无产出（${ownModel} 上游可能不可用），已按调度模型${plannerModel ? `「${plannerModel}」` : '（节点默认）'}回退重试`)
+        result = await this.dispatchWithFallback(target, retried.remoteSessionId, fullPrompt, makeHandlers(), signal)
+      }
+    }
+    const viaText = result.via === 'sse' ? 'SSE 流式' : result.via === 'sync' ? '同步调用' : result.via === 'poll' ? '轮询' : '未知通道'
+
+    this.store.mutateSubtask(taskId, sub.id, (s) => {
+      if (result.ok && result.content && result.content.trim()) {
+        s.status = 'completed'
+        // 防覆盖：轮询整轮重建应比流式累积更完整；若流式版本反而更长（对账退化），保留更长的一份避免丢内容
+        const prev = s.result?.content || ''
+        s.result = {
+          content: result.content.length >= prev.length ? result.content : prev,
+          reasoning: result.reasoning || s.result?.reasoning,
+        }
+      } else if (!result.ok && result.content) {
+        // 流式已产出部分内容但最终失败：保留部分产出并标记失败
+        s.status = 'failed'
+        s.result = { content: result.content }
+        s.error = result.error
+      } else {
+        s.status = 'failed'
+        const baseErr = result.error || (result.content ? '' : '远程节点返回空回答（Provider/Model 可能不可用）')
+        s.error = fellBackToDefault
+          ? `${baseErr}（${agent.provider || '(默认)'}/${agent.model || '(默认)'} 与节点默认模型均无产出）`
+          : baseErr
+      }
+      s.completedAt = Date.now()
+    })
+    this.emit(taskId, { type: 'subtask_status', subtask: this.store.getTask(taskId)!.plan!.subtasks.find((x) => x.id === sub.id)! })
+    const final = this.store.getTask(taskId)!.plan!.subtasks.find((x) => x.id === sub.id)!
+    const elapsed = ((Date.now() - dispatchStartedAt) / 1000).toFixed(1)
+    this.emit(taskId, {
+      type: 'log',
+      subtaskId: sub.id,
+      level: final.status === 'completed' ? 'info' : 'error',
+      msg: final.status === 'completed'
+        ? `子任务完成（${viaText}，用时 ${elapsed}s，${deltaCount} 个增量）：产出 ${final.result?.content?.length || 0} 字符`
+        : `子任务失败: ${final.error}`,
+    })
+    if (final.status === 'completed') subLog(`完成（${viaText}，用时 ${elapsed}s，${deltaCount} 个增量），产出 ${final.result?.content?.length || 0} 字符`)
+  }
+
+  // ---------- 会话与派发基建 ----------
+
+  private needsAutoTitle(task: WorkTask): boolean {
+    const userTurns = (task.turns || []).filter((t) => t.role === 'user')
+    if (userTurns.length !== 1) return false
+    // 仅占位标题需要回填；显式指定的短标题（含创建时截断的短消息）是用户可见的真实输入，不覆盖
+    return task.title.startsWith('新任务') || task.title.startsWith('未命名任务')
+  }
+
+  /** 工作区列表缓存：baseUrl → { at, workspaces }，60s（避免每次建会话都打一发 /workspaces） */
+  private wsCache = new Map<string, { at: number; workspaces: Array<{ id: string; path?: string }> }>()
+
+  /**
+   * 按智能体工作目录解析远端工作区 id：精确匹配 path，无匹配时在远端注册同路径工作区
+   * （POST /workspaces 按 path 幂等）并使用之。注意 workspaceId 与 cwd 互斥（远端 harness 校验），
+   * 因此工作区路径必须与 workDir 完全一致（cwd 由工作区隐含）。
+   * 远端不支持 /workspaces（过旧）或未配置 workDir 时返回 undefined —— 退回仅传 cwd 的旧行为。
+   */
+  private async resolveWorkspaceId(target: DshTarget, wantedCwd: string): Promise<string | undefined> {
+    const cached = this.wsCache.get(target.baseUrl)
+    let workspaces: Array<{ id: string; path?: string }>
+    if (cached && Date.now() - cached.at < 60_000) {
+      workspaces = cached.workspaces
+    } else {
+      const r = await this.client.listWorkspaces(target).catch(() => ({ ok: false as const, workspaces: undefined }))
+      workspaces = r.ok && r.workspaces ? r.workspaces : []
+      this.wsCache.set(target.baseUrl, { at: Date.now(), workspaces })
+    }
+    const norm = (v: string) => v.replace(/\/+$/, '')
+    const want = norm(wantedCwd)
+    for (const ws of workspaces) {
+      if (ws.path && norm(ws.path) === want) return ws.id
+    }
+    // 无匹配工作区 → 在远端注册（幂等），并同步进缓存，后续会话直接命中
+    const created = await this.client.ensureWorkspace(target, wantedCwd, wantedCwd.split('/').filter(Boolean).pop() || undefined).catch(() => ({ ok: false as const, id: undefined }))
+    if (created.ok && created.id) {
+      if (this.wsCache.has(target.baseUrl)) this.wsCache.get(target.baseUrl)!.workspaces.push({ id: created.id, path: wantedCwd })
+      return created.id
+    }
+    return undefined
+  }
+
+  /**
+   * 主智能体切换后的会话预热对齐（WEB 端「切换主智能体」时调用，fire-and-forget）：
+   * 为当前主智能体就地建/对齐远端会话 —— 工作区、工作目录、主调度模型全部随新主智能体走，
+   * 用户下一条消息发出时已在正确的工作区里。
+   */
+  public async prepareMainSession(taskId: string): Promise<void> {
+    const task = this.store.getTask(taskId)
+    if (!task || task.mode !== 'chat' || this.activeJobs.has(taskId)) return
+    const main = this.planner.pickMainAgent()
+    if (!main || !task.memberAgentIds.includes(main.id)) return
+    const target = await this.resolver.resolve(main).catch(() => undefined)
+    if (!target?.online) return
+    await this.ensureSession(taskId, main, target).catch(() => {})
+  }
+
+  /** 目标节点的可读标识（资源目录按 baseUrl 反查环境名；查不到回退 host:端口）——子任务启动日志用 */
+  private nodeLabelOf(target: DshTarget): string {
+    const base = String(target.baseUrl || '')
+    const ep = this.directory.listEndpoints().find((e) => e.baseUrl && base.startsWith(e.baseUrl))
+    if (ep) return [ep.tunnelName, ep.note].filter(Boolean).join(' · ') || ep.mappingId
+    try {
+      return new URL(base).host
+    } catch {
+      return base || '未知节点'
+    }
+  }
+
+  /**
+   * 任务执行上下文：项目任务继承项目节点/工作区/指令/连接器/技能；
+   * 单独任务可用 nodeRef/connectorIds/skillNames 覆盖；都没有则专家按遗留默认节点执行。
+   */
+  /**
+   * 解析 sub agent 的执行目标节点：sub agent = 绑定在某台 DSH 上的远程执行单元，
+   * @ 调用时回到「它自己绑定的节点」执行（workDir/资源/身份同源）；自身节点不可达时
+   * 回退任务节点（项目节点/任务所选节点）。节点主会话（__node__）无智能体记录，
+   * 只按任务节点解析。所有「建立会话 / 附件上传 / 中止会话 / 文件下载」路径都必须经由本方法。
+   */
+  public async resolveExecTarget(task: WorkTask | undefined, agentId: string): Promise<DshTarget & { online: boolean; error?: string; executionDshRef?: DshRef } | undefined> {
+    // sub agent：自身绑定节点优先（远程执行单元本义）
+    const agent = this.store.getAgent(agentId)
+    if (agent) {
+      const own = await this.resolver.resolve(agent).catch(() => undefined)
+      if (own?.online && own.baseUrl) return { ...own, executionDshRef: agent.dshRef }
+    }
+    // 节点主会话（__node__，无 store 记录）或自身节点不可达：按任务/项目节点解析
+    const exec = task ? this.taskExec(task) : undefined
+    if (exec?.dshRef) {
+      const nt = await this.resolver.resolveRef(exec.dshRef, exec.apiKey, agentId).catch(() => undefined)
+      if (nt?.online && nt.baseUrl) return { ...nt, executionDshRef: exec.dshRef }
+    }
+    return undefined
+  }
+
+  /**
+   * 上游结果文件 → 跨节点下载清单（传参闭环，docs/design-cross-node-file-passing.md）。
+   * 扫描上游子任务产出文本中引用的绝对路径文件，生成「上游成员节点下载 URL + 密钥 + curl 指令」：
+   * URL 指向上游成员【执行时所在节点】（非任务节点），基址经 resolver 实时解析（端口漂移免疫），
+   * 密钥与 URL 成对交付。节点不可达 / 无路径候选时返回空串（不注入空段）。
+   */
+  private async buildUpstreamFilesSection(task: WorkTask, sub: PlanSubtask): Promise<string> {
+    const deps = (sub.dependsOn || [])
+      .map((id) => task.plan?.subtasks?.find((s) => s.id === id))
+      .filter((d): d is PlanSubtask => Boolean(d?.result?.content))
+    if (!deps.length) return ''
+    const lines: string[] = []
+    const seen = new Set<string>()
+    const targetCache = new Map<string, Awaited<ReturnType<TaskEngine['resolveExecTarget']>>>()
+    for (const dep of deps) {
+      const paths = extractUpstreamFilePaths(dep.result?.content || '')
+      if (!paths.length) continue
+      // Files belong to the session that produced them, not the agent's current binding
+      // (which may have changed or fallen back to another node after execution).
+      const binding = task.sessions[dep.agentId]
+      const key = binding?.nodeRefKey
+      let ref: DshRef | undefined
+      if (key?.startsWith('mapping:')) ref = { kind: 'mapping', mappingId: key.slice(8) }
+      else if (key?.startsWith('app:')) ref = { kind: 'app', appId: key.slice(4) }
+      else if (key?.startsWith('direct:')) ref = { kind: 'direct', apiBaseUrl: key.slice(7) }
+      if (!ref) {
+        lines.push(`- 上游子任务《${dep.title}》引用了文件，但缺少执行节点身份记录；文件位置未验证，不能改用当前节点的同名路径。`)
+        continue
+      }
+      let target = targetCache.get(key!)
+      if (target === undefined) {
+        const agent = this.store.getAgent(dep.agentId)
+        const exec = this.taskExec(task)
+        const apiKey = sameDshRef(agent?.dshRef, ref) ? agent?.apiKey : sameDshRef(exec.dshRef, ref) ? exec.apiKey : undefined
+        target = await this.resolver.resolveRef(ref, apiKey, dep.agentId).catch(() => undefined)
+        targetCache.set(key!, target)
+      }
+      if (!target?.online || !target.baseUrl) {
+        lines.push(`- 上游子任务《${dep.title}》的文件归属节点不可达；不能从其他节点下载同名文件。`)
+        continue
+      }
+      const base = target.baseUrl.replace(/\/+$/, '')
+      const auth = target.apiKey ? ` -H ${workspaceShellQuote(`Authorization: Bearer ${target.apiKey}`)}` : ''
+      for (const p of paths) {
+        const fileKey = `${key}:${p}`
+        if (seen.has(fileKey)) continue
+        seen.add(fileKey)
+        const name = p.split('/').pop() || p
+        lines.push(
+          `- 「${name}」（上游子任务《${dep.title}》产出，位于上游执行节点）:\n` +
+          `  下载指令: curl${auth} ${workspaceShellQuote(`${base}/fs/download?path=${encodeURIComponent(p)}`)} -o ${workspaceShellQuote(name)}\n` +
+          `  说明: 该文件不在你的节点上，请先下载到本地工作区再读取（path 已 URL 编码）`,
+        )
+        if (lines.length >= 8) break
+      }
+      if (lines.length >= 8) break
+    }
+    if (!lines.length) return ''
+    return ['[上游结果文件（跨节点下载）]（上游产出中引用的结果文件不在你的节点上，按以下指令经 HTTP 取回后再使用）:', ...lines].join('\n')
+  }
+
+  /**
+   * 任务级运行权限变更后立即下发：遍历任务已绑定的全部远端会话，经原生接口切换。
+   * 未建会话的成员无需处理——下一次 ensureSession 建会话时自动按期望权限下发。
+   */
+  public async applyTaskPermission(taskId: string): Promise<Array<{ agentId: string; ok: boolean; preset?: string; error?: string }>> {
+    const task = this.store.getTask(taskId)
+    if (!task) return []
+    const out: Array<{ agentId: string; ok: boolean; preset?: string; error?: string }> = []
+    for (const [agentId, binding] of Object.entries(task.sessions || {})) {
+      if (!binding?.remoteSessionId) continue
+      const agent = this.store.getAgent(agentId) ?? (agentId === NODE_AGENT_ID ? this.makeNodeAgent(this.taskExec(task)) : undefined)
+      if (!agent) continue
+      const target = await this.resolveExecTarget(task, agentId)
+      if (!target) { out.push({ agentId, ok: false, error: '节点不可达' }); continue }
+      const want = this.desiredPermission(task, agent)
+      const r = await this.client.setSessionPermission(target, binding.remoteSessionId, want)
+      if (r.ok) {
+        this.store.mutateTask(taskId, (t) => {
+          const b = t.sessions[agentId]
+          if (b && b.remoteSessionId === binding.remoteSessionId) b.permission = want
+        })
+        this.taskLog(taskId, 'info', `运行权限已原生切换（${agent.name}）: ${r.preset || want}` + (r.sandbox ? ` · sandbox=${r.sandbox}` : ''))
+        out.push({ agentId, ok: true, preset: r.preset || want })
+      } else {
+        // 失败/不支持：清除已下发标记，下一轮派发走提示词降级兜底
+        this.store.mutateTask(taskId, (t) => { const b = t.sessions[agentId]; if (b) delete b.permission })
+        out.push({ agentId, ok: false, error: r.error })
+      }
+    }
+    return out
+  }
+
+  /** 主会话的「无身份」执行者：远端节点默认形态 + 项目指令，不注入任何 sub agent 提示词 */
+  private makeNodeAgent(exec: { dshRef?: DshRef }): SubAgent {
+    const ref = exec.dshRef
+    let nodeTitle = ''
+    if (ref?.kind === 'mapping') nodeTitle = this.directory.resolveMapping(ref.mappingId)?.tunnelName || ref.mappingId
+    else if (ref?.kind === 'app') nodeTitle = this.directory.resolveApp(ref.appId)?.appName || ref.appId
+    else if (ref?.kind === 'direct') nodeTitle = ref.apiBaseUrl
+    const now = Date.now()
+    return {
+      id: NODE_AGENT_ID,
+      name: nodeTitle ? `${nodeTitle} · 主会话` : '主会话',
+      role: '主智能体（任务发起节点主会话）：承担调度方自留的执行子任务，与各成员子任务经 dependsOn 协作',
+      dshRef: ref || { kind: 'direct', apiBaseUrl: '' },
+      resources: [],
+      skills: [],
+      enabled: true,
+      createdAt: now,
+      updatedAt: now,
+    }
+  }
+
+  // ---------- 专家团专家成员（动态实例化，移植 dsh-agency-agents spawnTeammate 语义） ----------
+
+  /**
+   * 任务级临时专家执行者：persona = 专家档案提示词，绑定任务发起节点（主 DSH），
+   * 不落子智能体实体（用完即散，对齐插件「成员不持久化」的边界）。
+   */
+  private makeExpertAgent(task: WorkTask, profile: ExpertProfile, pseudoId?: string): SubAgent {
+    const exec = this.taskExec(task)
+    return {
+      // 伪 id 与账本登记一致：存量 expert-<id> 账本解析出的成员保持其历史键
+      // （新前缀 __expert__: 消除与真实子智能体 id 的命名空间碰撞）
+      id: pseudoId || makeExpertAgentId(profile.id),
+      name: profile.name,
+      dshRef: exec.dshRef || { kind: 'direct', apiBaseUrl: '' },
+      role: profile.role?.trim() || profile.description,
+      systemPrompt: profile.systemPrompt,
+      executionPrompt: profile.executionPrompt,
+      description: profile.description,
+      resources: [],
+      skills: [],
+      enabled: true,
+      createdAt: 0,
+      updatedAt: 0,
+    }
+  }
+
+  /**
+   * 成员解析：子智能体实体优先（同 id 的真实实体不可被伪 id 遮蔽——伪 id 前缀仅是动态成员的
+   * 命名空间，不是持久化 id 的黑名单）；之后按 task.expertMembers 登记过滤，防止伪 id 被误解析。
+   * 兼容存量 expert-<id> 账本（经 expertIdFromAgentId 回推）。
+   */
+  private async resolveMemberAgent(task: WorkTask, id: string): Promise<SubAgent | undefined> {
+    // 任务节点主会话伪成员：主智能体自留子任务经编排派工路径执行（与无 @ 直通同身份）
+    if (id === NODE_AGENT_ID) return this.makeNodeAgent(this.taskExec(task))
+    const direct = this.store.getAgent(id)
+    if (direct) return direct
+    const expertId = expertIdFromAgentId(id)
+    if (!expertId) return undefined
+    if (!task.expertMembers?.some((m) => m.id === id)) return undefined
+    const profile = await this.experts?.getProfile(expertId).catch(() => undefined)
+    if (!profile) return undefined
+    return this.makeExpertAgent(task, profile, id)
+  }
+
+  /**
+   * 专家动态成员的执行节点：任务发起节点优先；
+   * 任务未绑定节点（团队卡「发任务」/普通会话 @专家）时回退规划器主智能体的节点——
+   * 纯专家场景没有自带节点的 agent 成员，无回退会因 targets 为空而失败。
+   */
+  private async resolveExpertNodeTarget(task: WorkTask, taskId?: string): Promise<ResolvedDshTarget | undefined> {
+    const exec = this.taskExec(task)
+    if (exec.dshRef) {
+      const nt = await this.resolver.resolveRef(exec.dshRef, exec.apiKey, '__expert__').catch(() => undefined)
+      if (nt?.online && nt.baseUrl) return nt
+    }
+    const fallback = await this.planner.pickTarget().catch(() => ({ error: '无可用节点' }) as { error: string })
+    if (!('error' in fallback) && fallback.target?.baseUrl) {
+      if (taskId) this.taskLog(taskId, 'info', `任务未绑定节点，专家成员回退到主调度节点（${fallback.source}）执行`)
+      return {
+        baseUrl: fallback.target.baseUrl,
+        ...(fallback.target.apiKey ? { apiKey: fallback.target.apiKey } : {}),
+        agentId: fallback.agent?.id || '__expert__',
+        resolvedAt: Date.now(),
+        online: true,
+      }
+    }
+    return undefined
+  }
+
+  /** 成员展示名（花名册/派工/汇总/前端兜底共用）：主智能体 → 子智能体名 → 专家动态成员名 → 键本身 */
+  private memberNameOf(task: WorkTask, key: string): string {
+    if (key === NODE_AGENT_ID) return MAIN_AGENT_LABEL
+    return this.store.getAgent(key)?.name || task.expertMembers?.find((m) => m.id === key)?.name || key
+  }
+
+  /**
+   * 同一专家在任务账本中已登记的伪 id：新登记优先 expertId 字段；
+   * 存量 expert-<id>（无 expertId 字段）经 expertIdFromAgentId 回推匹配，避免重复登记出双份成员。
+   */
+  private expertMemberPseudo(task: WorkTask, expertId: string): string {
+    const hit = (task.expertMembers || []).find((m) => m.expertId === expertId) || (task.expertMembers || []).find((m) => expertIdFromAgentId(m.id) === expertId)
+    return hit ? hit.id : makeExpertAgentId(expertId)
+  }
+
+  /** 项目默认协作成员中的「当前可用」子集（存在且未停用；不存在/停用不拖垮任务） */
+  private projectDefaultMemberIds(project: Project | undefined): string[] {
+    return projectDefaultAgentIds(project)
+      .map((id) => this.store.getAgent(id))
+      .filter((a): a is SubAgent => Boolean(a) && a!.enabled !== false)
+      .map((a) => a.id)
+  }
+
+  /**
+   * 团队名册展开：agentId 成员校验存在（缺失仅告警跳过），expertId 成员经专家库解析展示名。
+   * 供 createTask（团队任务）与消息级 @团队（固化团队语义）共用。
+   */
+  private async expandTeamRoster(team: ExpertTeam, taskId?: string): Promise<{ agentIds: string[]; expertMembers: NonNullable<WorkTask['expertMembers']>; issues: string[] }> {
+    const agentIds: string[] = []
+    const expertMembers: NonNullable<WorkTask['expertMembers']> = []
+    const issues: string[] = []
+    for (const m of team.members) {
+      if (m.agentId) {
+        const agent = this.store.getAgent(m.agentId)
+        if (!agent || agent.enabled === false) {
+          issues.push(`成员子智能体「${agent?.name || m.agentId}」不存在或已停用`)
+          continue
+        }
+        agentIds.push(m.agentId)
+      } else if (m.expertId) {
+        const expert = await this.experts?.get(m.expertId).catch(() => undefined)
+        if (!expert) {
+          issues.push(`专家库角色「${m.expertId}」不存在（专家资产缺失？）`)
+          continue
+        }
+        expertMembers.push({ id: teamMemberKey(m), name: expert.name, expertId: m.expertId })
+      }
+    }
+    if (taskId) {
+      for (const issue of issues) this.taskLog(taskId, 'warn', `专家团「${team.name}」${issue}`)
+    }
+    return { agentIds, expertMembers, issues }
+  }
+
+  /** 任务执行凭证（baseUrl + apiKey 等）；router 协作接口的绑定直连回退也使用 */
+  public taskExec(task: WorkTask): {
+    project?: Project
+    dshRef?: DshRef
+    apiKey?: string
+    workspace?: string
+    workspaceDshRef?: DshRef
+    workspaceApiKey?: string
+    instruction?: string
+    extraBindings: AgentResourceBinding[]
+    sshConnectors: Array<{ id: string; name: string; host: string; port: number }>
+    skills: string[]
+  } {
+    const project = task.projectId ? this.store.getProject(task.projectId) : undefined
+    // 缺 nodeRef 的历史项目任务仍使用原文件归属节点，不追随新增默认值。
+    const dshRef = task.nodeRef || project?.dshRef || undefined
+    const connectorIds = task.connectorIds?.length ? task.connectorIds : (project?.connectorIds || [])
+    const extraBindings: AgentResourceBinding[] = []
+    const sshConnectors: Array<{ id: string; name: string; host: string; port: number }> = []
+    for (const cid of connectorIds) {
+      if (cid.startsWith('ssh:')) {
+        const r = this.sshStore?.get(cid.slice(4))
+        if (r) sshConnectors.push({ id: r.id, name: r.name, host: r.host, port: r.port })
+      } else if (cid.startsWith('map:')) {
+        extraBindings.push({ ref: { kind: 'mapping', mappingId: cid.slice(4) }, credentialMode: 'self-fetch', skillMode: 'none' })
+      } else if (cid.startsWith('app:')) {
+        extraBindings.push({ ref: { kind: 'app', appId: cid.slice(4) }, credentialMode: 'self-fetch', skillMode: 'none' })
+      }
+    }
+    return {
+      project,
+      dshRef,
+      apiKey: sameDshRef(dshRef, project?.dshRef) ? project?.apiKey : undefined,
+      workspaceDshRef: project?.dshRef || task.nodeRef,
+      workspaceApiKey: project?.apiKey,
+      // 任务级工作目录（定时任务实例配置）显式指定时优先于项目 workspace
+      workspace: task.workDir || project?.workspace,
+      instruction: project?.instruction,
+      extraBindings,
+      sshConnectors,
+      skills: task.skillNames?.length ? task.skillNames : (project?.skillNames || []),
+    }
+  }
+
+  /** 文件与 backlog 通道使用归属节点，不能复用执行节点凭证。 */
+  public taskWorkspaceExec(task: WorkTask): { project?: Project; dshRef?: DshRef; apiKey?: string; workspace?: string } {
+    const exec = this.taskExec(task)
+    return { project: exec.project, dshRef: exec.workspaceDshRef, apiKey: exec.workspaceApiKey, workspace: exec.project?.workspace || exec.workspace }
+  }
+
+    /** 在目标节点逐级创建目录（mkdir -p 语义）；已存在的层级静默跳过；任一级失败返回 false */
+    private async ensureRemoteDir(target: DshTarget, absPath: string): Promise<boolean> {
+      if (!absPath.startsWith('/')) return false
+      const parts = absPath.split('/').filter(Boolean)
+      let cur = ''
+      for (const p of parts) {
+        const parent = cur || '/'
+        cur = cur + '/' + p
+        const r = await this.client.fsMkdir(target, parent, p).catch(() => ({ ok: false, error: 'mkdir 异常' }))
+        if (!r.ok && !/exist|已存在|EEXIST/i.test(r.error || '')) return false
+      }
+      return true
+    }
+
+    private async ensureSession(taskId: string, agent: SubAgent, target: DshTarget, opts?: { cwd?: string; workspace?: string; modelOverride?: 'default' }): Promise<{ ok: boolean; remoteSessionId?: string; reused?: boolean; error?: string; target?: DshTarget }> {
+    const task = this.store.getTask(taskId)!
+    const exec = this.taskExec(task)
+    // 任务/项目工作区只在「执行节点 = 任务节点」时适用（目录属于那台机器）；
+    // sub agent 回自身节点执行时，其 workDir 才是有效目录
+    const rawCwd = opts?.workspace ?? opts?.cwd ?? exec.workspace
+    const targetRef: DshRef = (target as any).executionDshRef || (agent.id === NODE_AGENT_ID && exec.dshRef ? exec.dshRef
+      : agent.dshRef.kind === 'app' ? agent.dshRef
+      : (target as any).mappingId ? { kind: 'mapping', mappingId: (target as any).mappingId }
+      : agent.dshRef)
+    const workspaceRef = task.workDir ? exec.dshRef : exec.workspaceDshRef
+    const execWorkspaceFits = !rawCwd || sameDshRef(workspaceRef, targetRef)
+    const sameNode = sameDshRef(targetRef, agent.dshRef)
+    // 主会话的 agent.workDir 来源也是项目；异机时不能把它当本地后备目录。
+    const wantedCwd = (execWorkspaceFits ? rawCwd : undefined) ?? (agent.id !== NODE_AGENT_ID && sameNode ? agent.workDir : undefined) ?? undefined
+    const nodeRefKey = dshRefKey(targetRef)
+    const existing = task.sessions[agent.id]
+    // 调度模型（模型按钮）只对节点主会话生效；@ 的 sub agent 用自身配置的 model/provider，
+    // 不被 planner.model 覆盖（否则 planner 恰好指向它时会用坏上游覆盖好配置——07:17 空回合根因）
+    const isMain = agent.id === NODE_AGENT_ID
+    const settings = this.store.getSettings()
+    // 任务级模型（定时任务实例配置）优先于全局调度模型（模型按钮）
+    const plannerModelSetting = String(task.model || settings.planner?.model || '').trim() || undefined
+
+    if (existing?.remoteSessionId && isMain && (existing.plannerModel || undefined) !== plannerModelSetting) {
+      // 主智能体的已绑定会话与「模型列表当前选中」不一致（切换过主智能体或模型）→ 就地对齐
+      const slash = plannerModelSetting ? plannerModelSetting.indexOf('/') : -1
+      const provider = plannerModelSetting && slash >= 0 ? plannerModelSetting.slice(0, slash).trim() || undefined : undefined
+      const modelId = plannerModelSetting && slash >= 0 ? plannerModelSetting.slice(slash + 1).trim() || undefined : plannerModelSetting
+      const aligned = await this.client.updateSessionModel(target, existing.remoteSessionId, { provider, model: modelId })
+      if (aligned.ok) {
+        this.store.mutateTask(taskId, (t) => {
+          const b = t.sessions[agent.id]
+          if (b) b.plannerModel = plannerModelSetting
+        })
+        this.taskLog(taskId, 'info', `主智能体会话模型已对齐（${agent.name}）: ${plannerModelSetting || '默认模型'}`)
+      } else {
+        this.taskLog(taskId, 'warn', `主智能体会话模型对齐失败（${agent.name}）: ${aligned.error}`)
+      }
+    }
+
+    if (existing?.remoteSessionId) {
+      // 执行节点变更（用户切换任务节点）→ 旧节点上的会话作废，重建
+      const nodeChanged = existing.nodeRefKey ? existing.nodeRefKey !== nodeRefKey
+        : !!existing.baseUrl && existing.baseUrl.replace(/\/+$/, '') !== target.baseUrl.replace(/\/+$/, '')
+      if (nodeChanged) {
+        this.taskLog(taskId, 'info', `执行节点变更（${agent.name}）: ${existing.baseUrl} → ${target.baseUrl}，重建远端会话`)
+      } else if ((existing.cwd || undefined) !== wantedCwd) {
+        // 工作目录已变更 → 旧会话作废，重建
+        this.taskLog(taskId, 'info', `工作目录变更（${agent.name}）: ${existing.cwd || '(默认)'} → ${wantedCwd || '(默认)'}，重建远端会话`)
+      } else {
+        const st = await this.client.getSession(target, existing.remoteSessionId)
+        if (st.ok) {
+          await this.syncSessionPermission(taskId, agent, target, existing.remoteSessionId)
+          this.store.mutateTask(taskId, (t) => { Object.assign(t.sessions[agent.id], { baseUrl: target.baseUrl, nodeRefKey }) })
+          return { ok: true, remoteSessionId: existing.remoteSessionId, reused: true, target }
+        }
+        // 远端会话已丢失（重启/清理），重建
+        this.taskLog(taskId, 'warn', `远端会话丢失（${agent.name}），正在重建: ${existing.remoteSessionId}`)
+      }
+    }
+
+    // 若为主智能体且配置了主调度模型，优先采用该模型作为远端会话创建参数
+    let targetProvider = agent.provider
+    let targetModel = agent.model
+    if (opts?.modelOverride === 'default') {
+      // 模型回退自愈（runSubtask）：agent 自带模型上游失败后重建会话。
+      // 回退目标 = 调度模型（任务级/全局 planner 选中值）——不是「不带模型」：节点默认模型
+      // 本身也可能就是坏的（实测某节点 defaultModel 指向不可用的模型）。调度模型也空时才用节点默认。
+      const pm = plannerModelSetting || ''
+      const slash = pm.indexOf('/')
+      targetProvider = slash >= 0 ? pm.slice(0, slash).trim() || undefined : undefined
+      targetModel = slash >= 0 ? pm.slice(slash + 1).trim() : (pm.trim() || undefined)
+    } else if (isMain && plannerModelSetting) {
+      const pm = plannerModelSetting
+      const slash = pm.indexOf('/')
+      if (slash >= 0) {
+        targetProvider = pm.slice(0, slash).trim() || undefined
+        targetModel = pm.slice(slash + 1).trim() || undefined
+      } else {
+        targetModel = pm
+      }
+    }
+
+    // 工作区对齐：workspaceId 与 cwd 互斥（远端 harness 校验「accepts workspaceId or cwd, not both」）。
+    // 解析出工作区时只传 workspaceId（工作区路径即工作目录）；远端无工作区体系时退回传 cwd。
+    const workspaceId = wantedCwd ? await this.resolveWorkspaceId(target, wantedCwd).catch(() => undefined) : undefined
+    const createPayload = {
+      // 模式预设优先级：任务级（聊天窗切换持久化）> 智能体实体 > 远端默认 cordis
+      agentPreset: task.agentPreset || agent.agentPreset,
+      provider: targetProvider,
+      model: targetModel,
+      reasoningEffort: task.reasoningEffort,
+      ...(workspaceId ? { workspaceId } : wantedCwd ? { cwd: wantedCwd } : {}),
+    }
+    let effTarget = target
+    let res = await this.client.createSession(effTarget, `[WorkBuddy] ${task.title}`, createPayload)
+    // 401/403 自愈：映射节点的凭证可能解析失败（ONENAT 抖动被静默吞掉）或已轮换 →
+    // 强制刷新该映射的实例凭证后重试一次，避免一次凭证抖动导致整轮「创建会话失败」
+    if (!res.ok && res.error && /401|403|unauthorized/i.test(res.error) && (effTarget as any).mappingId) {
+      const cred = await this.directory.fetchMappingCredentials((effTarget as any).mappingId, true).catch(() => undefined)
+      const refreshedKey = cred?.ok ? (cred.apiKey || cred.token || undefined) : undefined
+      if (refreshedKey) {
+        this.taskLog(taskId, 'info', `节点凭证鉴权失败（${(effTarget as any).mappingId}），已强制刷新凭证重试`)
+        effTarget = { ...effTarget, apiKey: refreshedKey }
+        res = await this.client.createSession(effTarget, `[WorkBuddy] ${task.title}`, createPayload)
+      }
+    }
+    // 自愈 2：工作目录在目标节点不存在（ENOENT mkdir）→ 先逐级创建（mkdir -p 语义，
+    // 项目 workspace / 智能体 workDir 绑定的目录由此保证存在），再按原目录重建会话；
+    // 创建失败才回退远端默认目录，并在任务日志注明
+    let cwdFellBack = false
+    if (!res.ok && res.error && /ensure project directory|ENOENT/i.test(res.error) && (workspaceId || wantedCwd)) {
+      if (wantedCwd && wantedCwd.startsWith('/')) {
+        const created = await this.ensureRemoteDir(effTarget, wantedCwd)
+        if (created) {
+          this.taskLog(taskId, 'info', `工作目录 ${wantedCwd} 在目标节点不存在，已自动创建，按原目录重建会话`)
+          res = await this.client.createSession(effTarget, `[WorkBuddy] ${task.title}`, createPayload)
+        }
+      }
+      if (!res.ok && res.error && /ensure project directory|ENOENT/i.test(res.error)) {
+        this.taskLog(taskId, 'warn', `工作目录 ${wantedCwd || '(workspace)'} 无法自动创建，已回退远端默认目录重建会话`)
+        cwdFellBack = true
+        const fallbackPayload = { agentPreset: task.agentPreset || agent.agentPreset, provider: targetProvider, model: targetModel, reasoningEffort: task.reasoningEffort }
+        res = await this.client.createSession(effTarget, `[WorkBuddy] ${task.title}`, fallbackPayload)
+      }
+    }
+    // 自愈 3：瞬时失败退避重试（ONENAT 隧道抖动/串端口——无 /root 的机器瞬移、远端重启窗口、5xx）
+    if (!res.ok && res.error && /ENOENT|ECONN|EPIPE|EHOST|fetch failed|terminated|HTTP 5\d\d|timed? ?out/i.test(res.error)) {
+      this.taskLog(taskId, 'info', `创建会话瞬时失败（${res.error.slice(0, 80)}），1.5s 后自动重试一次`)
+      await new Promise((r) => setTimeout(r, 1500))
+      res = await this.client.createSession(effTarget, `[WorkBuddy] ${task.title}`, createPayload)
+      // 若瞬时失败源于目录（重试带目录又 ENOENT），先尝试创建目录，失败再回退
+      if (!res.ok && res.error && /ensure project directory|ENOENT/i.test(res.error) && (workspaceId || wantedCwd) && !cwdFellBack) {
+        if (wantedCwd && wantedCwd.startsWith('/')) {
+          const created = await this.ensureRemoteDir(effTarget, wantedCwd)
+          if (created) {
+            this.taskLog(taskId, 'info', `工作目录 ${wantedCwd} 在目标节点不存在，已自动创建，按原目录重建会话`)
+            res = await this.client.createSession(effTarget, `[WorkBuddy] ${task.title}`, createPayload)
+          }
+        }
+        if (!res.ok && res.error && /ensure project directory|ENOENT/i.test(res.error)) {
+          cwdFellBack = true
+          const fallbackPayload = { agentPreset: task.agentPreset || agent.agentPreset, provider: targetProvider, model: targetModel, reasoningEffort: task.reasoningEffort }
+          res = await this.client.createSession(effTarget, `[WorkBuddy] ${task.title}`, fallbackPayload)
+        }
+      }
+    }
+    // 自愈 4：模型注册表错配 —— 调度模型/子智能体自带模型是 A 引擎的（如 DSH 的 zai-coding-cn/*），
+    // 所选节点却是 B 引擎（如 ZCode），两套 Provider Registry 互不相通 → 远端拒识。
+    // 回退 = 不带模型重建，让节点用它自己的默认选择（天然合法，且 ZCode 的 GLM-5.3 系列
+    // 要求模型选择对象自带 reasoningLevel，显式传模型会因缺等级被拒 —— 节点默认不存在此问题）。
+    // 会话记录仍按调度模型登记（plannerModel）：用户把模型按钮换成该节点合法值之前，
+    // 会话保持在回退模型上不被对齐逻辑反复切回。
+    if (!res.ok && res.error && /Provider Registry/i.test(res.error)) {
+      const mappingId = (effTarget as any).mappingId || ''
+      const probe = mappingId ? this.directory.engineInfoOf(mappingId) : undefined
+      const rejected = `${targetProvider || '(默认)'}/${targetModel || '(默认)'}`
+      const fbLabel = probe?.defaultModel || '(节点自选默认)'
+      this.taskLog(taskId, 'warn', `模型 ${rejected} 不在节点「${probe?.name || mappingId || '当前节点'}」的注册表，已回退节点默认模型 ${fbLabel} 重建会话；请把模型按钮切换为该节点可用的模型`)
+      const fbPayload = { agentPreset: createPayload.agentPreset, ...(workspaceId ? { workspaceId } : wantedCwd ? { cwd: wantedCwd } : {}) }
+      res = await this.client.createSession(effTarget, `[WorkBuddy] ${task.title}`, fbPayload)
+    }
+    if (workspaceId) {
+      this.taskLog(taskId, 'info', `会话已对齐工作区（${agent.name}）: workspace=${workspaceId} · 目录 ${wantedCwd}`)
+    }
+    if (!res.ok || !res.sessionId) {
+      const raw = res.error || '未知'
+      // 把底层错误翻译成可操作提示：401/403 是凭证问题，fetch failed 一类是节点/隧道不可达。
+      // 原样抛 "fetch failed" 用户无法判断该改什么（切节点？换凭证？重启 DSH？）。
+      const hint = /401|403|unauthorized/i.test(raw)
+        ? `（节点鉴权失败：请检查 ONENAT 上映射「${(effTarget as any).mappingId || effTarget.baseUrl}」的实例凭证配置）`
+        : isUnreachableError(raw)
+          ? `（节点不可达 ${effTarget.baseUrl}：请检查 ONENAT 上该映射的隧道/端口是否在线，或在右上角切换执行节点后重试）`
+          : ''
+      return { ok: false, error: raw + hint }
+    }
+    target = effTarget
+    this.store.mutateTask(taskId, (t) => {
+      t.sessions[agent.id] = { remoteSessionId: res.sessionId!, baseUrl: target.baseUrl, nodeRefKey, cwd: cwdFellBack ? undefined : (wantedCwd || undefined), plannerModel: isMain ? (plannerModelSetting || '') : undefined, createdAt: Date.now() }
+    })
+    this.taskLog(taskId, 'info', `远程会话已创建（${agent.name}${targetModel ? ' · 模型 ' + targetModel : ''}${wantedCwd ? ' · 工作目录 ' + wantedCwd : ''}）: ${res.sessionId} @ ${target.baseUrl}`)
+    // 校验远端 cwd 生效
+    if (wantedCwd) {
+      const info = await this.client.getSessionInfo(target, res.sessionId)
+      if (!info.ok || !info.cwd) {
+        this.taskLog(taskId, 'warn', `远端会话工作目录校验失败（${agent.name}）: 期望 ${wantedCwd}，实际 ${info.cwd || '(未返回)'} — 远端 dsh-web-service 可能过旧`)
+      } else if (!pathEquivalent(info.cwd, wantedCwd)) {
+        this.taskLog(taskId, 'warn', `远端会话 cwd 与配置不一致（${agent.name}）: 期望 ${wantedCwd}，实际 ${info.cwd}`)
+      }
+    }
+    await this.syncSessionPermission(taskId, agent, effTarget, res.sessionId)
+    return { ok: true, remoteSessionId: res.sessionId, reused: false, target: effTarget }
+  }
+
+  /** 期望运行权限：任务级 > 智能体实体 > 默认全部权限 */
+  private desiredPermission(task: WorkTask, agent: SubAgent): string {
+    return (task.permission || agent.permission || DEFAULT_PERMISSION).trim() || DEFAULT_PERMISSION
+  }
+
+  /** 节点是否不支持原生权限接口（旧版 dsh-web-service）；按 baseUrl 缓存，避免每轮重复探测 */
+  private permissionUnsupported = new Map<string, number>()
+
+  /**
+   * 运行权限原生下发：PUT /sessions/:id/permission（harness permissionPresets，真实切换沙箱+审批）。
+   * 已下发且与期望一致时跳过；节点不支持时记录并降级为提示词注入（见 permissionPromptLine）。
+   */
+  private async syncSessionPermission(taskId: string, agent: SubAgent, target: DshTarget, remoteSessionId: string): Promise<void> {
+    const task = this.store.getTask(taskId)
+    if (!task) return
+    const want = this.desiredPermission(task, agent)
+    const binding = task.sessions[agent.id]
+    if (binding?.remoteSessionId === remoteSessionId && binding.permission === want) return
+    const base = target.baseUrl.replace(/\/+$/, '')
+    const unsupportedAt = this.permissionUnsupported.get(base)
+    if (unsupportedAt && Date.now() - unsupportedAt < 10 * 60_000) return
+    const r = await this.client.setSessionPermission(target, remoteSessionId, want)
+    if (r.ok) {
+      this.permissionUnsupported.delete(base)
+      this.store.mutateTask(taskId, (t) => {
+        const b = t.sessions[agent.id]
+        if (b && b.remoteSessionId === remoteSessionId) b.permission = want
+      })
+      this.taskLog(taskId, 'info', `运行权限已原生生效（${agent.name}）: ${r.preset || want}` + (r.sandbox ? ` · sandbox=${r.sandbox}` : '') + (r.approval ? ` · approval=${r.approval}` : ''))
+    } else if (!r.supported) {
+      this.permissionUnsupported.set(base, Date.now())
+      this.taskLog(taskId, 'warn', `远端节点不支持原生运行权限接口（${agent.name}）：${r.error}；已降级为提示词声明，请升级该节点 dsh-web-service ≥ 0.3.1`)
+    } else {
+      this.taskLog(taskId, 'warn', `运行权限下发失败（${agent.name}）: ${r.error}`)
+    }
+  }
+
+  /**
+   * 仅在原生下发未生效时才把权限写进提示词（降级兜底）；原生已生效则不再注入上下文。
+   */
+  private permissionPromptLine(task: WorkTask, agent: SubAgent): string {
+    const want = this.desiredPermission(task, agent)
+    const b = task.sessions[agent.id]
+    if (b?.permission === want) return ''
+    return `[运行权限]: ${want}`
+  }
+
+  /**
+   * SSE 流式尾部复核（丢尾自愈）：流完整收尾时默认直接采用流式正文，但长回合（多步工具）的末段
+   * `assistant/message` 差量若在隧道抖动/网关截断中丢失，回合文本会永久停在半截（用户可见
+   * 「回答说到一半」，且因为 complete=true 不再走对账）。这里做一次**单次**历史对账：
+   * 只采纳「历史文本以流式文本为真前缀且更长」的结果 —— 那是纯尾部丢失，而不是另一回合的内容。
+   */
+  private async verifyStreamTail(
+    target: DshTarget,
+    sessionId: string,
+    prompt: string,
+    sse: PromptResult,
+    handlers: Parameters<DshClient['streamPrompt']>[3],
+    signal: AbortSignal,
+  ): Promise<PromptResult> {
+    const streamed = sse.content || ''
+    if (!streamed.trim()) return sse
+    // attempts=1：此刻回合已结束，历史要么已有全文要么读不到；不重试，避免给每轮加 12s 延迟
+    const rec = await this.client
+      .reconcileTurn(target, sessionId, turnFragment(prompt), { attempts: 1, intervalMs: 0, signal })
+      .catch(() => undefined)
+    const hist = rec?.ok ? String(rec.content || '') : ''
+    if (!hist || hist.length <= streamed.length) return sse
+    if (!hist.startsWith(streamed)) return sse
+    handlers.onLog?.(`流式正文疑似丢尾（${streamed.length} → ${hist.length} 字），已按会话历史补全`, 'warn')
+    return { ...rec!, content: hist, via: 'poll', complete: true, usage: sse.usage ?? rec!.usage }
+  }
+
+  /** SSE 流式优先；不支持降级同步；同步超时转轮询（D5） */
+  private async dispatchWithFallback(
+    target: DshTarget,
+    sessionId: string,
+    prompt: string,
+    handlers: Parameters<DshClient['streamPrompt']>[3],
+    signal: AbortSignal,
+    opts?: { verifyTail?: () => boolean },
+  ): Promise<PromptResult> {
+    const sse = await this.client.streamPrompt(target, sessionId, prompt, handlers, { signal })
+    // 完整收到 turn_end 且有文本：流式结果即整轮内容；多步回合再复核一次尾部是否丢字
+    if (sse.ok && sse.complete !== false && sse.content) {
+      return opts?.verifyTail?.() ? await this.verifyStreamTail(target, sessionId, prompt, sse, handlers, signal) : sse
+    }
+    // 流完整结束但零文本：远端只发了 usage/turn_end（部分 provider 不推 assistant/chunk text-delta，
+    // dsh-web-service 也不把 assistant/message 正文放进流）⇒ 回查 history 对账整轮文本
+    if (sse.ok && sse.complete !== false && !sse.content) {
+      handlers.onLog?.('流式通道无文本增量（远端未推 delta），改用会话历史对账整轮结果...', 'warn')
+      const reconciled = await this.client.reconcileTurn(target, sessionId, turnFragment(prompt), { signal })
+      return reconciled.ok ? reconciled : sse
+    }
+    if (sse.sseUnsupported) {
+      handlers.onLog?.('远端不支持 SSE 流式，降级同步等待...', 'warn')
+      const sync = await this.client.prompt(target, sessionId, prompt, { signal })
+      if (sync.ok) return sync
+      if (sync.timedOut) {
+        const polled = await this.client.waitForSessionResult(target, sessionId, {
+          signal,
+          onLog: handlers.onLog,
+          promptFragment: turnFragment(prompt),
+        })
+        return polled
+      }
+      return sync
+    }
+    // 远端显式 error 帧（Session not found / TURN_TIMEOUT / 上游错误）＝回合已终结，
+    // 对账长轮询拿不回内容 —— 快速失败交回调用方（not-found 由其重建会话重发）。
+    // 有部分产出时仍走对账（尽量捞回已生成内容）。
+    // 例外：远端「停滞看门狗」error（turn stalled / no session events）只是节点侧
+    // 收流，底层回合多半仍在跑（慢模型首 token 前零事件）——不判死，转入下面的
+    // 轮询对账等远端终态（Turn Job 语义：传输层观测 ≠ 执行层终态）。
+    const stallLike = /turn stalled|no session events/i.test(sse.error || '')
+    if (sse.remoteError && !sse.content && !stallLike) return sse
+    // SSE 断损兜底（D5）：断流时已产出部分内容、或流被提前收掉未收到 turn_end、
+    // 或提交后流异常终结 —— 远端回合多半仍在继续，轮询对账拿回完整整轮结果。
+    // 网络层错误（fetch failed / 连接被重置 / 静默看门狗断开等）同样兜底：远端回合往往还在跑，
+    // 只对齐 /SSE 流/ 前缀会漏掉「零内容 + 网络错误」的形态，导致回复彻底不同步到 UI。
+    const networkLike = /fetch failed|terminated|TimeoutError|aborted|socket|ECONN|EPIPE|EHOST|upstream|静默超时|网络/i
+    if (!signal.aborted && (sse.content || sse.complete === false || stallLike || /SSE 流|静默超时/.test(sse.error || '') || networkLike.test(sse.error || ''))) {
+      if (stallLike && !sse.content) {
+        handlers.onLog?.(`远端停滞收流（${String(sse.error).slice(0, 80)}），底层回合可能仍在执行，转轮询对账等待远端终态...`, 'warn')
+      }
+      // 挂起防御：远端被 ask_user_question 挂起时会话状态恒为 running，下面的轮询只会空转满额超时
+      // （实测表现 = 静默 10min + 对账 30min 的假 running）。先查一次挂起批次，命中立即快速失败。
+      const parked = await this.client.listPendingQuestions(target, sessionId).catch(() => undefined)
+      if (parked?.ok && (parked.count || 0) > 0) {
+        handlers.onLog?.('远端会话被提问挂起（pending ask），不转入长轮询 —— 等待答复桥解锁', 'warn')
+        return { ok: false, content: sse.content, reasoning: sse.reasoning, complete: false, error: '远端会话挂起等待提问答复', pendingAsk: true }
+      }
+      // 流以 done 帧正常收尾（远端不发 turn_end 的节点，如 pi-web-service）⇒ 回合确已结束，
+      // 立即回查历史重建整轮文本，不进 15s 间隔的长轮询（否则每轮固定多等一个轮询周期）
+      if (sse.streamDone && sse.content) {
+        const rec = await this.client.reconcileTurn(target, sessionId, turnFragment(prompt), { signal, attempts: 4 })
+        if (rec.ok && rec.content) return rec
+      }
+      handlers.onLog?.('SSE 流中断/提前结束，转轮询对账整轮结果...', 'warn')
+      const polled = await this.client.waitForSessionResult(target, sessionId, {
+        signal,
+        onLog: handlers.onLog,
+        promptFragment: turnFragment(prompt),
+      })
+      if (polled.ok && polled.content && polled.content.length > (sse.content?.length || 0)) return polled
+      return sse
+    }
+    if (signal.aborted) return { ok: false, error: '已中止' }
+    return sse
+  }
+
+  // ---------- 附件上传与文件下载 ----------
+
+  /**
+   * 附件上传的实际目标集合（与「本轮对话实际路由到的智能体」同源）：
+   *
+   * 1. 单成员任务 → 该成员；
+   * 2. 最近一轮是单目标路由（@一个子智能体 / 直通对话）→ 只给这一个，绝不扇出到本轮没参与的成员；
+   * 3. 编排路由且本轮计划已落盘 → 计划里真正参与执行的成员（这是唯一可能多目标的情况，且成员来自真实计划）；
+   * 4. 其余（新任务尚未发言 / 无路由记录 / 编排路由但计划缺失）→ 主智能体（defaultMemberAgentIds）。
+   *
+   * 第 4 条取代了历史实现里「按 task.memberAgentIds 全员扇出」的兜底：
+   * 老任务（无 @ 新建时被错误填成全部子智能体）在任何缺少明确路由证据的情况下都只投主智能体，
+   * 否则同一个文件会往每个成员节点各建一个远端会话、各写一份。
+   * 需要跨节点使用该文件时，消息里的 @文件 引用会按 transformFileMentionsForAgent 生成下载 URL。
+   */
+  /**
+   * App「AI 控制台」模型透传：服务端持节点凭证，App 只需登录会话。
+   * 目标节点 = 默认主智能体绑定节点（与任务派发同源）；tools 由 App 经 MCP tools/list 获取后透传。
+   */
+  public async consoleChat(input: {
+    messages: Array<Record<string, any>>
+    tools?: Array<Record<string, any>>
+    model?: string
+  }): Promise<{ ok: boolean; message?: Record<string, any>; node?: string; error?: string }> {
+    const messages = Array.isArray(input.messages) ? input.messages : []
+    if (!messages.length) return { ok: false, error: '缺少 messages' }
+    const mainId = this.defaultMemberAgentIds()[0]
+    const agent = mainId ? this.store.getAgent(mainId) : undefined
+    if (!agent) return { ok: false, error: '没有可用的主智能体（先在「子智能体」页创建）' }
+    const target = await this.resolver.resolve(agent)
+    if (!target || !target.online || !target.baseUrl) {
+      return { ok: false, error: (target as any)?.error || '主智能体节点当前不可达' }
+    }
+    const r = await this.client.chatWithTools(
+      target,
+      messages,
+      Array.isArray(input.tools) ? input.tools : [],
+      { model: input.model?.trim() || undefined, timeoutMs: 120_000 },
+    )
+    if (!r.ok) return { ok: false, error: r.error || '节点模型调用失败', node: target.baseUrl }
+    return { ok: true, message: r.message, node: target.baseUrl }
+  }
+
+  public attachmentTargetAgentIds(task: WorkTask): string[] {
+    // 专家团专家成员（expert-<expertId> 伪 id）同样接收附件投递（会话建在任务节点，工作区同源）
+    const members = [...(task.memberAgentIds || []).filter((id) => Boolean(id)), ...(task.expertMembers || []).map((m) => m.id)]
+    if (!members.length) {
+      // 新模型：任务只有节点主会话（无成员）→ 附件投到主会话所在节点
+      if (task.sessions?.[NODE_AGENT_ID]?.remoteSessionId) return [NODE_AGENT_ID]
+      return this.defaultMemberAgentIds()
+    }
+    if (members.length === 1) return members
+    const route = task.lastRoute
+    if (route && (route.kind === 'direct' || route.kind === 'chat') && route.agentId && members.includes(route.agentId)) {
+      return [route.agentId]
+    }
+    const planned = [...new Set(
+      (task.plan?.subtasks || [])
+        .map((s) => s.agentId)
+        .filter((id) => Boolean(id) && members.includes(id)),
+    )]
+    if (route?.kind === 'orchestrate' && planned.length) return planned
+    // 没有明确路由证据 → 只投主智能体（主智能体不是成员时退化为第一个成员），绝不整组扇出
+    const main = this.defaultMemberAgentIds()
+    if (main.length && members.includes(main[0])) return main
+    return [members[0]]
+  }
+
+  /**
+   * 上传附件到「本次实际目标智能体」的远端会话工作区（attachmentTargetAgentIds）。
+   * 缺会话的成员会先建会话（ensureSession）；某成员失败不影响其他成员。
+   */
+  public async uploadAttachments(
+    taskId: string,
+    files: Array<{ filename: string; data: Buffer; mimeType?: string }>,
+  ): Promise<{
+    ok: boolean
+    error?: string
+    results?: Array<{ agentId: string; agentName: string; ok: boolean; error?: string; files?: Array<{ name: string; path: string; size: number }> }>
+  }> {
+    const task = this.store.getTask(taskId)
+    if (!task) return { ok: false, error: '任务不存在' }
+    if (!files.length) return { ok: false, error: '没有文件' }
+    // 项目任务且配置了项目工作区：附件统一落到「项目节点 + 项目工作区」（走主会话通道），
+    // 不投成员自身节点（成员 workDir 在别的机器上，投过去 [附件] 路径与会话工作区对不上，读不到）
+    const exec = this.taskExec(task)
+    const projectWs = exec.workspace?.trim() || ''
+    const targetIds = exec.dshRef && projectWs ? [NODE_AGENT_ID] : this.attachmentTargetAgentIds(task)
+    const { targets } = await this.resolver.resolveMembers(targetIds)
+    // 成员并行分发（串行时多成员 × 隧道延迟叠加，客户端 100% 后长时间无响应）
+    const results: Array<{ agentId: string; agentName: string; ok: boolean; error?: string; files?: Array<{ name: string; path: string; size: number }> }> = await Promise.all(
+      targetIds.map(async (agentId) => {
+        // 节点直发任务（无成员）目标为伪成员 __node__：store 无记录，用节点伪实体兜底，
+        // 否则 getAgent 返回 undefined → 整个上传被误判「节点不可用」静默丢弃（附件只留下文件名占位）；
+        // 专家团专家成员（expert-<expertId>）经注册表动态实例化
+        const agent = await this.resolveMemberAgent(task, agentId)
+          ?? (agentId === NODE_AGENT_ID ? this.makeNodeAgent(this.taskExec(task)) : undefined)
+        // 项目任务：附件必须传到会话所在的项目节点（与 ensureSession 同源）
+        let target: DshTarget | undefined = (await this.resolveExecTarget(task, agentId)) || targets.get(agentId)
+        if (!agent || !target) return { agentId, agentName: agent?.name || agentId, ok: false, error: '节点不可用' }
+        const session = await this.ensureSession(taskId, agent, target)
+        if (!session.ok || !session.remoteSessionId) {
+          return { agentId, agentName: agent.name, ok: false, error: session.error || '会话创建失败' }
+        }
+        if (session.target) target = session.target
+        const up = await this.client.uploadFiles(target, session.remoteSessionId, files)
+        if (!up.ok) {
+          this.taskLog(taskId, 'error', `附件上传失败（${agent.name}）: ${up.error}`)
+          return { agentId, agentName: agent.name, ok: false, error: up.error }
+        }
+        const saved = up.files || []
+        this.taskLog(taskId, 'info', `附件已上传（${agent.name}）: ${saved.map((f) => f.path).join(', ')}`)
+        this.store.mutateTask(taskId, (t) => {
+          t.attachments = t.attachments || []
+          for (const f of saved) {
+            t.attachments.push({
+              name: f.name,
+              path: f.path,
+              size: f.size,
+              mimeType: f.mimeType,
+              agentId,
+              agentName: agent.name,
+              remoteSessionId: session.remoteSessionId!,
+              nodeBaseUrl: target.baseUrl.replace(/\/+$/, ''),
+              source: 'relay',
+              uploadedAt: Date.now(),
+            })
+          }
+        })
+        return { agentId, agentName: agent.name, ok: true, files: saved.map((f) => ({ name: f.name, path: f.path, size: f.size })) }
+      }),
+    )
+    return { ok: true, results }
+  }
+
+  // ---------- 附件 P2P 直传（控制面）：下发 DSH 节点直连配方，客户端直传节点，跨节点经「下载 URL + 密钥」互访 ----------
+
+  /**
+   * 直传登记簿：init 下发的 uploadId → 目标与待登记信息（客户端在节点侧 complete 后凭此登记附件）。
+   * 只存节点地址/会话，不存节点密钥（密钥仅在 init 响应中下发一次）；30 分钟 TTL。
+   */
+  private directPending = new Map<string, {
+    taskId: string; name: string; size: number; mimeType?: string
+    agentId: string; agentName: string
+    nodeBaseUrl: string; nodeIntranetBaseUrl?: string; nodeSessionId: string
+    createdAt: number
+  }>()
+  private static readonly DIRECT_PENDING_TTL_MS = 30 * 60_000
+
+  private pruneDirectPending(): void {
+    const now = Date.now()
+    for (const [k, v] of this.directPending) {
+      if (now - v.createdAt > TaskEngine.DIRECT_PENDING_TTL_MS) this.directPending.delete(k)
+    }
+  }
+
+  /** 跨节点下载 URL：DSH 下载接口只认 Authorization: Bearer 头（不支持 query 密钥），URL 与密钥必须成对交付 */
+  public buildNodeDownloadUrl(nodeBaseUrl: string, nodeSessionId: string, path: string): string {
+    const base = nodeBaseUrl.replace(/\/+$/, '')
+    return path.startsWith('/')
+      ? `${base}/fs/download?path=${encodeURIComponent(path)}`
+      : `${base}/sessions/${encodeURIComponent(nodeSessionId)}/files/download?path=${encodeURIComponent(path)}`
+  }
+
+  /**
+   * 直传初始化（P2P 控制面）：解析附件实际目标节点（项目工作区任务 = 项目节点主会话，否则第一个成员/主会话节点），
+   * 确保远端会话后下发「节点 API 地址 + 密钥 + 会话 + 分片端点模板」。WEB 与 MCP 调用方据此直连节点上传，
+   * 本服务不经手文件字节；客户端在节点侧 complete 拿到落盘 path 后调 directUploadRegister 登记附件。
+   */
+  public async directUploadInit(
+    taskId: string,
+    name: string,
+    size: number,
+    mimeType?: string,
+  ): Promise<{
+    ok: boolean
+    uploadId?: string
+    taskId?: string
+    name?: string
+    size?: number
+    target?: { agentId: string; agentName: string; baseUrl: string; apiKey: string; sessionId: string; intranetBaseUrl?: string }
+    error?: string
+  }> {
+    this.pruneDirectPending()
+    const task = this.store.getTask(taskId)
+    if (!task) return { ok: false, error: '任务不存在' }
+    const safeSize = Math.max(0, Math.floor(Number(size) || 0))
+    if (safeSize <= 0) return { ok: false, error: '缺少或非法 size（文件字节大小）' }
+    if (safeSize > 2 * 1024 * 1024 * 1024) return { ok: false, error: '文件超过 2GB 上限' }
+    const safeName = String(name || '').split(/[\\/]/).pop() || `upload-${Date.now()}`
+    // 主节点选择：项目工作区任务统一落项目节点主会话；无成员任务 = 节点直发/主会话语义，落任务节点
+    // （即便 draft 尚无 __node__ 会话，ensureSession 也会在该节点建会话）；多成员任务取第一个成员，其余走跨节点下载
+    const exec = this.taskExec(task)
+    const projectWs = exec.workspace?.trim() || ''
+    const memberCount = (task.memberAgentIds || []).filter(Boolean).length + (task.expertMembers || []).length
+    const targetIds = memberCount === 0 || (exec.dshRef && projectWs) ? [NODE_AGENT_ID] : this.attachmentTargetAgentIds(task)
+    const agentId = targetIds[0]
+    if (!agentId) return { ok: false, error: '任务没有可接收附件的成员' }
+    const agent = await this.resolveMemberAgent(task, agentId)
+      ?? (agentId === NODE_AGENT_ID ? this.makeNodeAgent(exec) : undefined)
+    let target: DshTarget | undefined = await this.resolveExecTarget(task, agentId)
+    if (!agent || !target) return { ok: false, error: '节点不可用' }
+    const session = await this.ensureSession(taskId, agent, target)
+    if (!session.ok || !session.remoteSessionId) return { ok: false, error: session.error || '会话创建失败' }
+    if (session.target) target = session.target
+    const baseUrl = target.baseUrl.replace(/\/+$/, '')
+    const sessionId = session.remoteSessionId
+    // 内网基址：mapping 的 local 字段是 natpass 隧道的节点侧本机端（如 127.0.0.1:19387）。
+    // 它有歧义（每个节点的本机端都长这样），不靠调用方判断——直传接口全部会话作用域，
+    // 客户端对内网基址发一次节点 init：返回 uploadId 即证明通向的就是目标任务节点，否则回退公网。
+    let intranetBaseUrl: string | undefined
+    if (exec.dshRef?.kind === 'mapping') {
+      const ep = this.directory.resolveMapping(exec.dshRef.mappingId)
+      const local = String(ep?.local || '').trim()
+      const m = /^(?:([^:]+))?:?(\d+)$/.exec(local)
+      if (m) {
+        const host = m[1] && m[1] !== '0.0.0.0' ? m[1] : '127.0.0.1'
+        intranetBaseUrl = `http://${host}:${m[2]}/api/v1`
+      }
+    }
+    const uploadId = `dup-${randomUUID().replace(/-/g, '').slice(0, 20)}`
+    this.directPending.set(uploadId, {
+      taskId, name: safeName, size: safeSize, mimeType: mimeType || undefined,
+      agentId, agentName: agent.name, nodeBaseUrl: baseUrl,
+      ...(intranetBaseUrl ? { nodeIntranetBaseUrl: intranetBaseUrl } : {}),
+      nodeSessionId: sessionId,
+      createdAt: Date.now(),
+    })
+    return {
+      ok: true,
+      uploadId,
+      taskId,
+      name: safeName,
+      size: safeSize,
+      target: {
+        agentId, agentName: agent.name, baseUrl, apiKey: target.apiKey || '', sessionId,
+        ...(intranetBaseUrl ? { intranetBaseUrl } : {}),
+      },
+    }
+  }
+
+  /**
+   * 直传登记：客户端在节点侧 complete 拿到落盘 path 后调用，把附件（含节点定位与跨节点下载 URL）记入任务。
+   * 登记后 uploadId 一次性作废；同任务同名附件不去重（调用方可用节点侧实际返回名）。
+   */
+  public async directUploadRegister(
+    taskId: string,
+    uploadId: string,
+    path: string,
+    size?: number,
+    mimeType?: string,
+  ): Promise<{
+    ok: boolean
+    attachment?: { name: string; path: string; size: number; mimeType?: string; agentId: string; agentName: string; downloadUrl: string }
+    downloadUrlIntranet?: string
+    error?: string
+  }> {
+    this.pruneDirectPending()
+    const pending = this.directPending.get(uploadId)
+    if (!pending || pending.taskId !== taskId) return { ok: false, error: '直传会话不存在或已登记过（init 后 30 分钟内有效）' }
+    const safePath = String(path || '').trim()
+    if (!safePath) return { ok: false, error: '缺少 path（节点侧 complete 返回的落盘路径）' }
+    const attSize = Math.max(0, Math.floor(Number(size) || pending.size || 0))
+    const downloadUrl = this.buildNodeDownloadUrl(pending.nodeBaseUrl, pending.nodeSessionId, safePath)
+    const downloadUrlIntranet = pending.nodeIntranetBaseUrl
+      ? this.buildNodeDownloadUrl(pending.nodeIntranetBaseUrl, pending.nodeSessionId, safePath)
+      : undefined
+    this.directPending.delete(uploadId)
+    this.store.mutateTask(taskId, (t) => {
+      t.attachments = t.attachments || []
+      t.attachments.push({
+        name: pending.name,
+        path: safePath,
+        size: attSize,
+        mimeType: mimeType || pending.mimeType,
+        agentId: pending.agentId,
+        agentName: pending.agentName,
+        remoteSessionId: pending.nodeSessionId,
+        nodeBaseUrl: pending.nodeBaseUrl,
+        ...(pending.nodeIntranetBaseUrl ? { nodeIntranetBaseUrl: pending.nodeIntranetBaseUrl } : {}),
+        uploadedAt: Date.now(),
+        source: 'direct',
+      })
+    })
+    this.taskLog(taskId, 'info', `附件直传落盘（${pending.agentName}）: ${safePath}；跨节点下载 URL: ${downloadUrl}`)
+    return {
+      ok: true,
+      attachment: { name: pending.name, path: safePath, size: attSize, mimeType: mimeType || pending.mimeType, agentId: pending.agentId, agentName: pending.agentName, downloadUrl },
+      ...(downloadUrlIntranet ? { downloadUrlIntranet } : {}),
+    }
+  }
+
+  /**
+   * 直传回退（流式代理）：浏览器 https 页面无法直连 http 节点地址（混合内容拦截，127.0.0.1 豁免除外）。
+   * 调用方把文件体原样 PUT 到本端点，服务端边收边以 4MB 分片写入节点 resumable 会话——
+   * 纯管道不落盘，内存有界（>8MB 触发读端背压）。完成后自动登记附件（等价 directUploadRegister）。
+   * 失败不消费登记簿：可重试本端点（节点侧重新 init 全量重传）。
+   */
+  public async directUploadRelay(
+    taskId: string,
+    uploadId: string,
+    body: IncomingMessage,
+  ): Promise<{
+    ok: boolean
+    accepted?: boolean
+    attachment?: { name: string; path: string; size: number; mimeType?: string; agentId: string; agentName: string; downloadUrl: string }
+    downloadUrlIntranet?: string
+    error?: string
+  }> {
+    this.pruneDirectPending()
+    const pending = this.directPending.get(uploadId)
+    if (!pending || pending.taskId !== taskId) return { ok: false, error: '直传会话不存在或已登记过（init 后 30 分钟内有效）' }
+    const task = this.store.getTask(taskId)
+    if (!task) return { ok: false, error: '任务不存在' }
+    const target = await this.resolveExecTarget(task, pending.agentId)
+    if (!target?.online || !target.baseUrl) return { ok: false, error: '节点不可用' }
+    const sessionId = pending.nodeSessionId
+
+    // 请求体 → 有界缓冲队列（背压：>8MB 暂停读，消费后恢复）
+    const queue: Buffer[] = []
+    let queued = 0
+    let ended = false
+    let streamErr: any = null
+    let wakeup: (() => void) | null = null
+    body.on('data', (c: Buffer) => {
+      queue.push(c)
+      queued += c.length
+      if (queued > 8 * 1024 * 1024) body.pause()
+      const w = wakeup
+      if (w) { wakeup = null; w() }
+    })
+    body.once('end', () => { ended = true; const w = wakeup; if (w) { wakeup = null; w() } })
+    body.once('error', (e: any) => { streamErr = e ?? new Error('上传流错误'); ended = true; const w = wakeup; if (w) { wakeup = null; w() } })
+
+    let buf = Buffer.alloc(0)
+    const readSlice = async (offset: number, length: number): Promise<Buffer> => {
+      while (buf.length < length && !ended) {
+        if (!queue.length) { body.resume(); await new Promise<void>((r) => { wakeup = r }) }
+        while (queue.length) {
+          const c = queue.shift()!
+          buf = Buffer.concat([buf, c])
+          queued -= c.length
+        }
+        if (streamErr) { const e = streamErr; streamErr = null; throw e }
+      }
+      while (queue.length) { buf = Buffer.concat([buf, queue.shift()!]) }
+      if (buf.length < length && ended) {
+        if (buf.length === 0) throw new Error(`客户端上传字节数不足（节点已确认 ${offset}/${pending.size}）`)
+        length = buf.length // 末段短读：节点按实收字节记账
+      }
+      const out = buf.subarray(0, length)
+      buf = buf.subarray(length)
+      if (buf.length === 0) buf = Buffer.alloc(0)
+      return out
+    }
+
+    const up = await this.client.uploadFileResumable(
+      target,
+      sessionId,
+      { filename: pending.name, mimeType: pending.mimeType, size: pending.size },
+      readSlice,
+      { chunkSize: 4 * 1024 * 1024 },
+    ).catch((e: any) => ({ ok: false as const, error: e?.message || String(e) }))
+    if (!up.ok) {
+      this.taskLog(taskId, 'error', `附件流式代理失败（${pending.agentName}）: ${up.error}`)
+      return { ok: false, error: up.error }
+    }
+    const saved = (up.files || [])[0]
+    if (!saved?.path) return { ok: false, error: '节点 complete 未返回落盘路径' }
+    const reg = await this.directUploadRegister(taskId, uploadId, saved.path, saved.size || pending.size, pending.mimeType)
+    if (!reg.ok) return { ok: false, error: reg.error }
+    return {
+      ok: true,
+      accepted: true,
+      attachment: reg.attachment,
+      ...(reg.downloadUrlIntranet ? { downloadUrlIntranet: reg.downloadUrlIntranet } : {}),
+    }
+  }
+
+  /** 解析下载请求 → 远端流。返回 Response 供 router 转发。 */
+  public async prepareFileDownload(
+    taskId: string,
+    agentId: string | undefined,
+    filePath: string,
+  ): Promise<{ ok: boolean; res?: any; name?: string; agentName?: string; error?: string }> {
+    const task = this.store.getTask(taskId)
+    if (!task) return { ok: false, error: '任务不存在' }
+    if (!filePath || !filePath.trim()) return { ok: false, error: '缺少 path 参数' }
+    let aid = agentId?.trim()
+    if (!aid) {
+      const bound = Object.keys(task.sessions || {})
+      aid = task.memberAgentIds.find((m) => bound.includes(m)) || task.memberAgentIds[0]
+    }
+    if (!aid) return { ok: false, error: '任务没有成员' }
+    const agent = this.store.getAgent(aid)
+    if (!agent) return { ok: false, error: `成员不存在: ${aid}` }
+    const binding = task.sessions?.[aid]
+    if (!binding?.remoteSessionId) return { ok: false, error: `成员「${agent.name}」尚无远端会话（先发送一条消息以建立会话）` }
+    const target = await this.resolveExecTarget(task, aid)
+    if (!target) return { ok: false, error: '节点不可用' }
+
+    // 绝对路径 → 工作区相对路径（远端 safeJoin 以 cwd 为根解析）
+    let rel = filePath.trim().replace(/\\/g, '/')
+    const info = await this.client.getSessionInfo(target, binding.remoteSessionId)
+    const cwd = info.ok ? info.cwd?.replace(/\/+$/, '') : undefined
+    if (cwd && rel.startsWith(cwd)) {
+      rel = rel.slice(cwd.length).replace(/^\//, '')
+    } else {
+      rel = rel.replace(/^\//, '')
+    }
+
+    const dl = await this.client.downloadFile(target, binding.remoteSessionId, rel)
+    if (!dl.ok) return { ok: false, error: dl.error || '下载失败', agentName: agent.name }
+    return { ok: true, res: dl.res, name: dl.name, agentName: agent.name }
+  }
+}

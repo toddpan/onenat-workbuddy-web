@@ -1,0 +1,21 @@
+{
+  "agents": [],
+  "tasks": [],
+  "schedules": [],
+  "projects": [],
+  "teams": [],
+  "settings": {
+    "onenat": {
+      "baseUrl": "http://127.0.0.1:18085",
+      "apiKey": "onk-mock-key-000",
+      "autoRefreshMs": 60000
+    },
+    "planner": {},
+    "xiaozhi": {
+      "endpoints": []
+    },
+    "archive": {
+      "taskArchiveDays": 7
+    }
+  }
+}

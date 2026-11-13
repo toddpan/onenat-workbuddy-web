@@ -1,0 +1,7 @@
+{
+  "protected": {
+    "src/web-ui.ts": "837da8491f4515c8320344c4f36aa8c8077595c5c69a8dc1eed11e72c4568ede",
+    "scripts/project-node-ui-test.mjs": "2220e0ce129b43a879e115b204a8e725460ed411481559c18e3c91f036af4e31"
+  },
+  "noUiEdits": true
+}

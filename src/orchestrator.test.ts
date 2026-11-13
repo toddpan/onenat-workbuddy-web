@@ -17,6 +17,7 @@ import {
   buildTaskContract,
   buildUpstreamDigests,
   buildUpstreamSection,
+  extractUpstreamFilePaths,
   parsePlanJson,
   recoverAssigneeFromText,
   sanitizeEngineInstruction,
@@ -328,16 +329,20 @@ function badPlanFor(m: PlannerMember): PlanDraft {
 test('buildPlannerUserMessage: 主智能体花名册标注、节点标注与新分工约束', () => {
   const main = { ...member(NODE_AGENT_ID, MAIN_AGENT_LABEL), nodeLabel: '笔记本甲' }
   const feishu = { ...member('a2', '飞书消息'), nodeLabel: '测试 B 环境' }
-  const msg = buildPlannerUserMessage('读表查禅道后发飞书', [main, feishu], { priorityAgentIds: ['a2'] })
-  // 主智能体身份标注 + 每成员节点标注
-  assert.ok(msg.includes('【主智能体·任务发起节点'))
-  assert.ok(msg.includes('节点=测试 B 环境'))
-  // 分工约束：被 @ 成员只做职责内步骤，其余给主智能体（不再有「核心执行子任务分配给该智能体」旧话术）
-  assert.ok(msg.includes('只承担与其角色/职责/技能匹配的子任务'))
-  assert.ok(msg.includes('分配给主智能体自己执行'))
-  assert.ok(!msg.includes('请务必将核心执行子任务分配给该智能体'))
-  // 节点归属硬约束规则行
-  assert.ok(msg.includes('硬约束（节点归属）'))
+  const stats = { ...member('a3', '工单统计'), nodeLabel: '笔记本甲' }
+  // 多成员 @：职责内分工 + 其余给主智能体
+  const multi = buildPlannerUserMessage('读表查禅道后发飞书', [main, feishu, stats], { priorityAgentIds: ['a2', 'a3'] })
+  assert.ok(multi.includes('【主智能体·任务发起节点'))
+  assert.ok(multi.includes('节点=测试 B 环境'))
+  assert.ok(multi.includes('只承担与其角色/职责/技能匹配的子任务'))
+  assert.ok(multi.includes('分配给主智能体自己执行'))
+  assert.ok(!multi.includes('请务必将核心执行子任务分配给该智能体'))
+  assert.ok(multi.includes('硬约束（节点归属）'))
+  // 单成员 @（delegate 轮）：恰好 1 个子任务给该成员，禁止主智能体自留核验跳
+  const single = buildPlannerUserMessage('读表查禅道后发飞书', [main, feishu], { priorityAgentIds: ['a2'] })
+  assert.ok(single.includes('单成员聚焦轮'))
+  assert.ok(single.includes('恰好拆解为 1 个子任务'))
+  assert.ok(!single.includes('其余全部子任务分配给主智能体自己执行'), '单成员轮不得再要求主智能体自留')
 })
 
 test('fallbackPlan: 主智能体伪成员不参与兜底分配', () => {
@@ -448,4 +453,25 @@ test('summarize: 团队轮覆盖度按团队名册计，缺员给出动态专家
   const miss = s.coverage!.missing[0]
   assert.equal(miss.id, makeExpertAgentId('alameda'), '缺员按动态专家伪 id 归因')
   assert.equal(miss.duty, 'd2')
+})
+
+// ---------- extractUpstreamFilePaths：上游结果文件路径候选（跨节点文件传参） ----------
+
+test('extractUpstreamFilePaths: 绝对路径提取、中西文行尾标点剥离与去重', () => {
+  const text = '分析完成。报告已写入 /tmp/wb-orch/report-final.md，请查阅。\n产物 [结果](/data/out/result.csv)，日志 /var/log/app/run.log.'
+  assert.deepEqual(
+    extractUpstreamFilePaths(text),
+    ['/tmp/wb-orch/report-final.md', '/data/out/result.csv', '/var/log/app/run.log'],
+  )
+})
+
+test('extractUpstreamFilePaths: 排除目录/裸词/下载端点/URL 段，超限截断', () => {
+  // 目录与裸词不算
+  assert.deepEqual(extractUpstreamFilePaths('产物目录 /tmp/wb-orch/out/ 与裸词 report 无关'), [])
+  // 已带下载链接的端点不重复注入；URL 的 host 段不误提
+  assert.deepEqual(extractUpstreamFilePaths('见 https://host/fs/download?path=/x/a.md 与 /fs/list?path=/d'), [])
+  // 反引号/引号包裹可提取；上限截断
+  const many = Array.from({ length: 10 }, (_, i) => `文件 /tmp/o/f${i}.txt`).join('，')
+  assert.equal(extractUpstreamFilePaths(many).length, 8, '默认上限 8')
+  assert.deepEqual(extractUpstreamFilePaths('配置见 `/opt/app/conf/app.yaml` 已生成'), ['/opt/app/conf/app.yaml'])
 })

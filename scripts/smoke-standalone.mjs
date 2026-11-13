@@ -129,7 +129,7 @@ async function main() {
     '--data', dataDir,
     '--onenat-base-url', `http://127.0.0.1:${MOCK_PORT}`,
     '--onenat-api-key', 'onk-mock-key-000',
-  ])
+  ], { WORKBUDDY_ALLOW_PRIVATE_DIRECT: '1' })
   await waitFor(async () => (await fetch(`${BASE}/healthz`)).ok, 'standalone server 就绪')
 
   // ---------- 1. 基础可达性 ----------
@@ -143,6 +143,8 @@ async function main() {
   // ---------- 登录鉴权 ----------
   const anonApi = await req('GET', `${PREFIX}/api/resources`)
   check('未登录访问业务 API 被拒（401）', anonApi.status === 401 && anonApi.json?.authRequired === true)
+  const anonAiPrompt = await req('GET', `${PREFIX}/api/ai/install-prompt`)
+  check('未登录访问 AI 安装提示词接口被拒（401）', anonAiPrompt.status === 401 && anonAiPrompt.json?.authRequired === true, `status=${anonAiPrompt.status}`)
   const anonConsole = await req('GET', `${PREFIX}/`)
   check('未登录访问控制台返回登录页', anonConsole.status === 200 && anonConsole.text.includes('请登录后使用'))
   const badLogin = await login('workbuddy', 'wrong-password')
@@ -163,6 +165,132 @@ async function main() {
   const consoleRes = await req('GET', `${PREFIX}/`)
   check('GET 控制台返回 HTML 单页', consoleRes.status === 200 && consoleRes.text.includes('OneNat WorkBuddy') && consoleRes.text.includes('</html>'))
 
+  // Backlog 聚合总览分组头「进入工作台」入口回归断言（静态渲染 + 跳转/回退/移动端热区实现都在控制台 HTML 内联 JS/CSS 里；功能已实现并经浏览器验收）
+  const blEnterIdx = consoleRes.text.indexOf('<button class="mini-btn bl-enter-btn"')
+  const blBoardIdx = consoleRes.text.indexOf('<button class="mini-btn bl-board-btn"')
+  check('待办分组头含「进入工作台」按钮且在「看板」之前', blEnterIdx > 0 && blBoardIdx > blEnterIdx, `enter=${blEnterIdx} board=${blBoardIdx}`)
+  // 「按钮在但点击无反应」「离线条目被 disabled」两类回归：静态断言绑定存在 + 进入按钮不带 disabled
+  check('进入工作台已绑定 [data-enter] 且离线条目不禁用',
+    consoleRes.text.includes("querySelectorAll('[data-enter]')")
+      && !/<button class="mini-btn bl-enter-btn"[^>]*\sdisabled/.test(consoleRes.text))
+  const blNavOk = consoleRes.text.includes('function enterProjectWorkspace')
+    && consoleRes.text.includes("history.pushState(null, '', '#work')")
+    && /\.bl-group-h \.bl-enter-btn[^{}]*\{[^}]*min-height: 44px/.test(consoleRes.text)
+  check('进入工作台复用跳转入口 + 可回退路由 + 移动端 44px 热区', blNavOk, blNavOk ? '' : '缺少 enterProjectWorkspace / pushState / 44px 热区')
+
+  // TASK-1：backlog 条目接入 ⌘K 全局检索（overview 懒加载 + 过滤未初始化/不可达项目 + 跳看板并开条目详情）
+  const blCmdIdx = consoleRes.text.indexOf('// ---------- ⌘K × Backlog 条目检索')
+  const blCmdEnd = consoleRes.text.indexOf('async function blOpenEditor')
+  const blCmdBlock = blCmdIdx > 0 && blCmdEnd > blCmdIdx ? consoleRes.text.slice(blCmdIdx, blCmdEnd) : ''
+  const cmdkBacklogOk = Boolean(blCmdBlock)
+    && consoleRes.text.includes("cmdkViewCmd('backlog', '待办 · Backlog', '✅')")
+    && consoleRes.text.includes('待办条目标题或状态')
+    && /function cmdkOpen\(\)[\s\S]{0,400}?cmdkBacklogPrefetch\(\);/.test(consoleRes.text)
+    && consoleRes.text.includes('if (query) { var blCmds = cmdkBacklogCmds();')
+    && blCmdBlock.includes("g.nodeStatus !== 'ok' || !g.initialized")
+    && blCmdBlock.includes("api('/backlog/overview')")
+    && blCmdBlock.includes("switchView('backlog')")
+    && blCmdBlock.includes('blOpenDetail(itemId)')
+  check('⌘K 接入 backlog 条目（跨项目聚合懒加载 / 过滤未初始化 / 跳看板并开条目详情）', cmdkBacklogOk,
+    cmdkBacklogOk ? '' : '缺少命令源 / 懒加载 / 过滤 / 跳转接线')
+  // 微信 X5 旧内核：新增代码段只允许 var/function/字符串拼接，不得出现可选链或空值合并
+  const blCmdLegacyOk = Boolean(blCmdBlock) && !/[?]\.[A-Za-z_$]/.test(blCmdBlock) && !blCmdBlock.includes('??')
+  check('⌘K backlog 代码段兼容旧内核（无 ?. / ??）', blCmdLegacyOk, blCmdLegacyOk ? '' : '新增段出现可选链/空值合并')
+
+  // Backlog 事项采集（简版）：看板窗口顶部「扫描」→ 候选预览（勾选）→ 落 Backlog 条目；服务端路由同源
+  const blCollectIdx = consoleRes.text.indexOf('/** 未完成事项采集（简版）：扫描本项目')
+  const blCollectEnd = consoleRes.text.indexOf('async function blOpenDetail')
+  const blCollectBlock = blCollectIdx > 0 && blCollectEnd > blCollectIdx ? consoleRes.text.slice(blCollectIdx, blCollectEnd) : ''
+  const blCollectOk = Boolean(blCollectBlock)
+    && consoleRes.text.includes('id="bl-collect"')
+    && consoleRes.text.includes('🔍 扫描未完成')
+    && consoleRes.text.includes("if (collectBtn) collectBtn.addEventListener('click', blCollect)")
+    && blCollectBlock.includes("'/backlog/collect'")
+    && blCollectBlock.includes("mode: 'preview'")
+    && blCollectBlock.includes("mode: 'create'")
+    && blCollectBlock.includes('function blCollectDialog(')
+    && blCollectBlock.includes('async function blCollectApply(')
+    && blCollectBlock.includes('blReloadBoard()')
+  check('看板顶部「扫描未完成」（预览勾选 → create keys → 刷新看板）', blCollectOk,
+    blCollectOk ? '' : '缺少按钮 / 预览弹窗 / 落盘 / 刷新接线')
+  const blCollectLegacyOk = Boolean(blCollectBlock) && !/[?]\.[A-Za-z_$]/.test(blCollectBlock) && !blCollectBlock.includes('??')
+  check('采集代码段兼容旧内核（无 ?. / ??）', blCollectLegacyOk, blCollectLegacyOk ? '' : '采集段出现可选链/空值合并')
+
+  // Backlog 查询能力（docs/design-backlog-query-filters.md §2/§4/§6）：待办聚合页与项目看板的查询栏、
+  // 筛选面板、就绪徽标、看板「显示更多」分页。断言对象 = 控制台内联的 web-ui 源码字面量：
+  // 锚点缺失即说明控件或请求接线被删/改名（回归保护）；文案/锚点调整时需同步更新本段。
+  const blQstateIdx = consoleRes.text.indexOf('* 查询/筛选状态（docs/design-backlog-query-filters.md §2/§4/§6）：')
+  const blQcmdkIdx = consoleRes.text.indexOf('// ---------- ⌘K × Backlog 条目检索（TASK-1）')
+  const blQblock = blQstateIdx > 0 && blQcmdkIdx > blQstateIdx ? consoleRes.text.slice(blQstateIdx, blQcmdkIdx) : ''
+  const blQbarIdx = consoleRes.text.indexOf('// ---------- 查询栏 / 筛选面板 HTML ----------')
+  const blQinterIdx = consoleRes.text.indexOf('// ---------- 查询交互 ----------')
+  check('待办查询栏存在（搜索框 / ⚙筛选 / 排序下拉+方向 / 计数 / 清除筛选）',
+    Boolean(blQblock)
+      && consoleRes.text.includes('id="bl-qbar"')
+      && consoleRes.text.includes('id="bl-q"')
+      && consoleRes.text.includes('class="bl-qinput"')
+      && consoleRes.text.includes('placeholder="搜索标题')
+      && consoleRes.text.includes('id="bl-f-toggle"')
+      && consoleRes.text.includes('id="bl-s-order"')
+      && consoleRes.text.includes('id="bl-s-dir"')
+      && consoleRes.text.includes('id="bl-qcnt"')
+      && consoleRes.text.includes('data-blf-clear="1"')
+      && consoleRes.text.includes('清除筛选'),
+    blQblock ? `queryBlock=${blQblock.length}` : '缺少查询状态段')
+  check('筛选面板存在（facets 驱动的 chips：状态/优先级/类型/标签/指派/里程碑/组件 + 就绪/被阻塞）',
+    blQbarIdx > 0 && blQinterIdx > blQbarIdx
+      && consoleRes.text.includes('function blFilterPanelHtml')
+      && consoleRes.text.includes("blFacetChipsRow('状态'")
+      && consoleRes.text.includes("blFacetChipsRow('优先级'")
+      && consoleRes.text.includes("blFacetChipsRow('标签'")
+      && consoleRes.text.includes("blFacetChipsRow('里程碑'")
+      && consoleRes.text.includes("'✅ 就绪（可开工）'")
+      && consoleRes.text.includes("'⛔ 被阻塞'")
+      && consoleRes.text.includes("'仅未完成'")
+      && consoleRes.text.includes('blCliText'),
+    blQbarIdx > 0 ? `bar=${blQbarIdx} interaction=${blQinterIdx}` : '缺少查询栏 HTML 段')
+  check('计数与筛选态提示（匹配 N / 共 M · 被筛选隐藏 X 条 · 无匹配待办保留分组头）',
+    consoleRes.text.includes("'匹配 ' + matched + ' / 共 '")
+      && consoleRes.text.includes('被筛选隐藏 ')
+      && consoleRes.text.includes('无匹配待办'))
+  check('就绪态徽标（✅ 就绪 / ⛔ 阻塞，title 列出未完成与无法解析依赖）',
+    consoleRes.text.includes('function blReadyBadgeHtml')
+      && consoleRes.text.includes('>✅ 就绪</span>')
+      && consoleRes.text.includes('>⛔ 阻塞</span>')
+      && consoleRes.text.includes('bl-st-ready'))
+  check('看板「显示更多」分页（window.nextSkip → skip 再请求并追加）',
+    blQblock.includes('id="bl-more"')
+      && blQblock.includes('显示更多')
+      && blQblock.includes('data-skip=')
+      && blQblock.includes('window.nextSkip')
+      && blQblock.includes('params.skip = String(skip)'))
+  check('前端请求带查询参数（overview 与项目看板共用 blQueryParams/blQs）',
+    blQblock.includes('function blQueryParams')
+      && blQblock.includes('function blQs')
+      && blQblock.includes('p.search = f.search')
+      && blQblock.includes("p.openOnly = '1'")
+      && blQblock.includes("p.ready = '1'")
+      && blQblock.includes("p.blocked = '1'")
+      && blQblock.includes("p.labelMatch = 'all'")
+      && blQblock.includes('p.milestone')
+      && blQblock.includes("p.unassigned = '1'")
+      && blQblock.includes('p.status = f.statuses.slice()')
+      && blQblock.includes('p.priority = f.priorities')
+      && blQblock.includes('p.sort =')
+      && blQblock.includes('p.order =')
+      && blQblock.includes("'/backlog/overview' + (qs ? '?' + qs : '')")
+      && blQblock.includes("encodeURIComponent(b.projectId) + '/backlog?' + blQs(params)"),
+    blQblock ? `queryBlock=${blQblock.length}` : '缺少查询状态段')
+  check('facets 消费 + 排序维度新增 id（筛选项来自服务端 facets，排序下拉含 ID）',
+    consoleRes.text.includes('var BL_FACET_KEYS = [')
+      && consoleRes.text.includes("'taskProjects']")
+      && consoleRes.text.includes('function blNormFacets')
+      && consoleRes.text.includes('facets.statuses')
+      && consoleRes.text.includes("['id', 'ID']"))
+  // 微信 X5 旧内核：新增查询段只允许 var/function/字符串拼接，不得出现可选链或空值合并（与既有 ⌘K/采集段检查同规则）
+  const blQueryLegacyOk = Boolean(blQblock) && !/[?]\.[A-Za-z_$]/.test(blQblock) && !blQblock.includes('??')
+  check('查询段兼容旧内核（无 ?. / ??）', blQueryLegacyOk, blQueryLegacyOk ? '' : '新增查询段出现可选链/空值合并')
+
   const notFound = await req('GET', '/nope')
   check('未知路径返回 404 JSON', notFound.status === 404 && notFound.json?.ok === false)
 
@@ -180,6 +308,33 @@ async function main() {
   // ---------- 3. 设置（Key 打码） ----------
   const settings = await req('GET', `${PREFIX}/api/settings`)
   check('设置读取且 API Key 打码', settings.status === 200 && String(settings.json?.data?.onenat?.apiKey || '').includes('…'))
+
+  // ---------- 3.1 AI 安装提示词：服务端统一来源（Web/安卓共用同一份正文） ----------
+  const aiPrompt = await req('GET', `${PREFIX}/api/ai/install-prompt`)
+  const aiData = aiPrompt.json?.data || {}
+  const expectBase = `${BASE}${PREFIX}`
+  check('AI 安装提示词接口 200，base 以 PREFIX 结尾', aiPrompt.status === 200 && aiPrompt.json?.ok === true && aiData.base === expectBase, `base=${aiData.base}`)
+  check('AI 安装提示词 URL 拼接正确（mcp / 专家 MCP / 安装脚本）',
+    aiData.mcpUrl === `${expectBase}/mcp` && aiData.expertMcpUrl === `${expectBase}/api/experts/mcp` && aiData.installScriptUrl === `${expectBase}/install-skill.sh`,
+    `mcp=${aiData.mcpUrl} expert=${aiData.expertMcpUrl} script=${aiData.installScriptUrl}`)
+  check('未生成令牌：hasToken=false 且正文含占位符与三段标题',
+    aiData.hasToken === false && aiData.token === ''
+      && String(aiData.installPrompt || '').includes('<先生成APIKEY>')
+      && String(aiData.installPrompt || '').includes('【第 1 步')
+      && String(aiData.installPrompt || '').includes('【第 2 步')
+      && String(aiData.installPrompt || '').includes('【使用约定（两通道一致）】'),
+    `hasToken=${aiData.hasToken} len=${String(aiData.installPrompt || '').length}`)
+  const overrideBase = 'https://override.example.com/custom/path'
+  const aiOverride = await req('GET', `${PREFIX}/api/ai/install-prompt?base=${encodeURIComponent(overrideBase + '/')}`)
+  const ovData = aiOverride.json?.data || {}
+  check('?base= 覆盖生效且归一化（去尾斜杠，curl 行内嵌该 base）',
+    aiOverride.status === 200 && ovData.base === overrideBase
+      && ovData.mcpUrl === `${overrideBase}/mcp`
+      && String(ovData.installPrompt || '').includes(`curl -fsSL ${overrideBase}/install-skill.sh | bash -s -- --base-url ${overrideBase} `),
+    `base=${ovData.base}`)
+  const badBaseFtp = await req('GET', `${PREFIX}/api/ai/install-prompt?base=${encodeURIComponent('ftp://evil.example.com/x')}`)
+  const badBaseUrl = await req('GET', `${PREFIX}/api/ai/install-prompt?base=${encodeURIComponent('not-a-url')}`)
+  check('非法 base 参数被拒（400）', badBaseFtp.status === 400 && badBaseUrl.status === 400 && badBaseFtp.json?.ok === false, `ftp=${badBaseFtp.status} raw=${badBaseUrl.status}`)
 
   // ---------- 4. 子智能体 CRUD ----------
   const created = await req('POST', `${PREFIX}/api/agents`, {
@@ -241,15 +396,21 @@ async function main() {
   const tasks = await req('GET', `${PREFIX}/api/tasks`)
   check('任务列表可读', (tasks.json?.data || []).some((t) => t.id === taskId))
 
-  // ---------- 5.2 项目任务节点以项目为准（P0-3）：带 projectId 时忽略 nodeRef，执行节点由 project.dshRef 决定 ----------
+  // ---------- 5.2 项目工作区与执行节点解耦：项目任务保留显式 nodeRef ----------
   const proj = await req('POST', `${PREFIX}/api/projects`, { name: '冒烟项目-P0-3', dshRef: { kind: 'mapping', mappingId: 'map-dsh-01' } })
   const projId = proj.json?.data?.id
   check('创建项目（绑定 mock DSH 映射）', proj.status === 200 && proj.json?.ok === true && Boolean(projId), `id=${projId}`)
   const projTask = await req('POST', `${PREFIX}/api/tasks`, { title: '冒烟项目任务', projectId: projId, nodeRef: { kind: 'mapping', mappingId: 'map-not-this-one' }, mode: 'chat' })
   const projTaskId = projTask.json?.data?.id
-  check('项目任务忽略 nodeRef（节点以项目为准）', [200, 201].includes(projTask.status) && projTask.json?.data?.projectId === projId && !projTask.json?.data?.nodeRef, `nodeRef=${JSON.stringify(projTask.json?.data?.nodeRef ?? null)}`)
+  check('项目任务保留显式执行 nodeRef', [200, 201].includes(projTask.status) && projTask.json?.data?.projectId === projId && projTask.json?.data?.nodeRef?.mappingId === 'map-not-this-one', `nodeRef=${JSON.stringify(projTask.json?.data?.nodeRef ?? null)}`)
   const projTaskRead = await req('GET', `${PREFIX}/api/tasks/${projTaskId}`)
-  check('项目任务回读仍无 nodeRef', projTaskRead.status === 200 && !projTaskRead.json?.data?.nodeRef)
+  check('项目任务回读执行节点快照', projTaskRead.status === 200 && projTaskRead.json?.data?.nodeRef?.mappingId === 'map-not-this-one')
+  // 回归（2026-11-06）：任务内模型目录必须按 taskId 服务端权威解析（实际执行节点），
+  // 前端误传 node= 不得改变目录来源（曾致 brain 项目任务弹出公司笔记本的模型目录）
+  const pmTask = await req('GET', `${PREFIX}/api/planner/options?taskId=${projTaskId}&node=map-dsh-01`)
+  check('模型目录按 taskId 执行节点权威解析，离线不回退文件节点', pmTask.status === 200 && pmTask.json?.data?.node === 'map-not-this-one' && Boolean(pmTask.json?.data?.nodeError), `node=${pmTask.json?.data?.node} err=${pmTask.json?.data?.nodeError || ''}`)
+  const pmTaskMiss = await req('GET', `${PREFIX}/api/planner/options?taskId=task-not-exist`)
+  check('模型目录 taskId 不存在/不可见 → 404', pmTaskMiss.status === 404)
   const soloTask = await req('POST', `${PREFIX}/api/tasks`, { title: '冒烟单独任务', nodeRef: { kind: 'mapping', mappingId: 'map-dsh-01' }, mode: 'chat' })
   check('单独任务保留 nodeRef（不误伤）', [200, 201].includes(soloTask.status) && soloTask.json?.data?.nodeRef?.mappingId === 'map-dsh-01')
   // S1-2：统计不支持时如实给出原因（新任务尚无远端会话 → no_session）
@@ -282,7 +443,7 @@ async function main() {
   // ---------- 6. 工具 HTTP 通道 ----------
   const toolList = await req('GET', `${PREFIX}/api/tools`)
   const toolNames = (toolList.json?.tools || []).map((t) => t.name)
-  check('工具清单暴露 14 个工具', toolList.status === 200 && toolNames.length === 14 && toolNames.includes('workbuddy_project_manage') && toolNames.includes('workbuddy_task_ask_answer') && toolNames.includes('workbuddy_expert_manage'), toolNames.join(','))
+  check('工具清单包含核心工具（含 team_manage / backlog_manage）', toolList.status === 200 && toolNames.length >= 16 && toolNames.includes('workbuddy_project_manage') && toolNames.includes('workbuddy_task_ask_answer') && toolNames.includes('workbuddy_expert_manage') && toolNames.includes('workbuddy_team_manage') && toolNames.includes('workbuddy_backlog_manage'), toolNames.join(','))
   check('工具清单含参数 schema', (toolList.json?.tools || []).every((t) => t.parameters && typeof t.parameters === 'object'))
 
   const toolListCall = await req('POST', `${PREFIX}/api/tools/workbuddy_resource_manage`, { action: 'list' })
@@ -336,12 +497,14 @@ async function main() {
     ],
   })
   const teamId = teamCreated.json?.data?.id
-  check('创建专家团（合同字段回读，enabled 默认 false）', teamCreated.status === 200 && Boolean(teamId) && teamCreated.json?.data?.members?.length === 2 && teamCreated.json?.data?.goal === '评审冒烟方案并定位交付风险' && teamCreated.json?.data?.enabled === false)
+  // v2026.11.1 起新建团默认启用（停用是高级操作；停用团在 @ 词典双过滤会让 @ 名静默直发）
+  check('创建专家团（合同字段回读，enabled 默认 true）', teamCreated.status === 200 && Boolean(teamId) && teamCreated.json?.data?.members?.length === 2 && teamCreated.json?.data?.goal === '评审冒烟方案并定位交付风险' && teamCreated.json?.data?.enabled === true)
   const teamsList = await req('GET', `${PREFIX}/api/teams`)
   check('专家团列表回读', (teamsList.json?.data || []).some((t) => t.id === teamId))
-  // Phase 5：enabled 默认 false —— 停用团队发任务被拒；显式启用后放行
+  // 停用是显式操作：显式停用后发任务被拒；再启用放行
+  const teamDisable = await req('POST', `${PREFIX}/api/teams`, { ...teamCreated.json.data, enabled: false })
   const teamTaskDisabled = await req('POST', `${PREFIX}/api/tasks`, { title: '冒烟团队任务', teamId })
-  check('停用专家团创建任务被拒（400）', teamTaskDisabled.status === 400)
+  check('停用专家团创建任务被拒（400）', teamDisable.status === 200 && teamTaskDisabled.status === 400)
   const teamEnable = await req('POST', `${PREFIX}/api/teams`, { ...teamCreated.json.data, enabled: true })
   check('专家团启用', teamEnable.status === 200 && teamEnable.json?.data?.enabled === true)
   const teamTask = await req('POST', `${PREFIX}/api/tasks`, { title: '冒烟团队任务', teamId })
@@ -384,6 +547,8 @@ async function main() {
   const withToken = await fetch(`http://127.0.0.1:${PORT2}${PREFIX}/api/tools`, { headers: { Authorization: 'Bearer secret-token' } }).then((r) => r.status)
   check('工具通道无令牌被拒（401）', noToken === 401, `status=${noToken}`)
   check('工具通道携带令牌放行（200）', withToken === 200, `status=${withToken}`)
+  const historyService = await fetch(`http://127.0.0.1:${PORT2}${PREFIX}/api/tasks/history`, { headers: { Authorization: 'Bearer secret-token' } })
+  check('BOT 历史索引拒绝无用户绑定服务令牌（403）', historyService.status === 403, `status=${historyService.status}`)
   const tLogin = await fetch(`http://127.0.0.1:${PORT2}${PREFIX}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

@@ -48,6 +48,10 @@ const TASK_ID = 'task-test'
 const TURN_ID = 'turn-test'
 const FULL_TEXT = '## 最终结论\n\n' + '这是服务端权威的完整正文，必须一字不差地显示出来。'.repeat(20) + '\n\nEND-MARKER-987654321'
 const PARTIAL_TEXT = FULL_TEXT.slice(0, 120)
+// markdown 语法富集中间态：快照里故意留一个未闭合的 **加粗，由后续 delta 补上闭合——验证流式渲染与语法补全
+const MD_OPEN = '## 审计进行中\n\n这把范围收缩到了铁证级别：**RTX 的解析光源列表是空的**——不但我的天灯，连太阳都从未注册；\n\n`UsdLux.SphereLight.Define` 是同一条构造路径。判定实验：**全黑'
+const MD_CLOSE = '(16,0)**——两种机位都是。\n\nEND-MARKER-987654321'
+const MD_FULL = MD_OPEN + MD_CLOSE
 
 /** 每个场景独立的可控 EventSource */
 class FakeEventSource {
@@ -100,7 +104,7 @@ function makeTask(text, streaming, extraHistoryTurns = 0) {
   }
 }
 
-async function runScenario(name, { detailText, chatEvents, postReconnectTask, extraHistoryTurns = 0, taskAtReconnect }) {
+async function runScenario(name, { detailText, chatEvents, postReconnectTask, extraHistoryTurns = 0, taskAtReconnect, midCheck, lateEvents, fullText }) {
   FakeEventSource.instances = []
   let currentTask = makeTask(detailText, true, extraHistoryTurns)
   let detailCalls = 0
@@ -150,6 +154,10 @@ async function runScenario(name, { detailText, chatEvents, postReconnectTask, ex
   await new Promise((r) => window.requestAnimationFrame(() => r()))
   await sleep(30)
 
+  // C6：流式进行中（尚无 turn_end）的中间态断言——快照必须已按 markdown 渲染、后续 delta 必须续写渲染
+  let midOk = true
+  if (midCheck) midOk = await midCheck(window)
+
   const domMsgsBefore = window.document.querySelectorAll('#chat-scroll .msg').length
 
   // C4/C5：重连
@@ -161,17 +169,28 @@ async function runScenario(name, { detailText, chatEvents, postReconnectTask, ex
     await new Promise((r) => window.requestAnimationFrame(() => r()))
   }
 
+  // C6：中间态断言之后再补发收尾事件（如 turn_end），走通用 END-MARKER 断言
+  if (lateEvents) {
+    for (const ev of lateEvents) {
+      es.emit(ev.type, ev.data)
+      await sleep(0)
+    }
+    await new Promise((r) => window.requestAnimationFrame(() => r()))
+    await sleep(30)
+  }
+
   const domMsgsAfter = window.document.querySelectorAll('#chat-scroll .msg').length
   const el = wb.state.turnEls[TURN_ID]
   const shown = el ? el.blocks.textContent : ''
-  let ok = shown.includes('END-MARKER-987654321')
+  let ok = midOk && shown.includes('END-MARKER-987654321')
   if (extraHistoryTurns > 0 && domMsgsAfter !== domMsgsBefore) {
     // 回源补齐不得把被 initialVisibleLimit 折叠的旧轮次重复补到末尾
     console.log(`  ⚠️ 重连后气泡数变化 ${domMsgsBefore} → ${domMsgsAfter}（折叠轮次被重复补插）`)
     ok = false
   }
+  const expectedFull = fullText || FULL_TEXT
   const shownChars = shown.replace(/\s+/g, '').length
-  const fullChars = FULL_TEXT.replace(/\s+/g, '').length
+  const fullChars = expectedFull.replace(/\s+/g, '').length
   console.log(`\n[${name}]`)
   console.log(`  显示字符数 ${shownChars} / 期望 ${fullChars}  结尾标记: ${ok ? '✅ 在' : '❌ 缺失'}`)
   if (!ok) console.log('  实际显示尾部:', JSON.stringify(shown.slice(-120)))
@@ -218,6 +237,42 @@ const scenarios = [
     extraHistoryTurns: 20, // 共 42 轮 > initialVisibleLimit(30)
     chatEvents: [{ type: 'gap', stop: true }],
     postReconnectTask: makeTask(FULL_TEXT, false, 20),
+  }],
+  ['C6 中途加入 + delta 续写（快照须渲染 MD、流式不断更、未闭合语法补全）', {
+    detailText: MD_OPEN,
+    chatEvents: [],
+    fullText: MD_FULL,
+    midCheck: async (window) => {
+      await sleep(450) // 越过 400ms 节流窗
+      const es = FakeEventSource.instances[FakeEventSource.instances.length - 1]
+      es.emit('turn_delta', { type: 'turn_delta', turnId: TURN_ID, delta: MD_CLOSE, seq: 1 })
+      await sleep(0)
+      await new Promise((r) => window.requestAnimationFrame(() => r()))
+      await sleep(30)
+      const el = window.__wb.state.turnEls[TURN_ID]
+      const shown = el ? el.blocks.textContent : ''
+      const problems = []
+      if (!shown.includes('END-MARKER-987654321')) problems.push('续写 delta 未渲染（流式更新冻结）')
+      if (shown.includes('**') || shown.includes('## ') || shown.includes('`')) problems.push('流式正文未按 markdown 渲染（语法字符裸露）')
+      if (problems.length) {
+        console.log('  [midCheck] ❌ ' + problems.join('；'))
+        console.log('  实际显示头部:', JSON.stringify(shown.slice(0, 140)))
+        return false
+      }
+      return true
+    },
+    lateEvents: [
+      { type: 'turn_end', data: { type: 'turn_end', turn: makeTask(MD_FULL, false).turns[1] } },
+    ],
+  }],
+  ['C7 停止/取消（无逐轮 turn_end，task_end 须兜底收敛渲染）', {
+    detailText: '',
+    chatEvents: [
+      { type: 'turn_start', data: { type: 'turn_start', turn: { id: TURN_ID, seq: 2, role: 'agent', agentId: 'agent-1', agentName: '测试子智能体', text: '', streaming: true, at: Date.now() } } },
+      { type: 'turn_delta', data: { type: 'turn_delta', turnId: TURN_ID, delta: PARTIAL_TEXT, seq: 0 } },
+      { type: 'task_status', data: { type: 'task_status', status: 'cancelled' } },
+      { type: 'task_end', data: { type: 'task_end', task: makeTask(FULL_TEXT, false) } },
+    ],
   }],
 ]
 

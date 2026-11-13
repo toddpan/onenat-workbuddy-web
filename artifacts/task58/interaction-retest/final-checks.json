@@ -1,0 +1,33 @@
+{
+  "at": "2026-11-06T17:56:25.444Z",
+  "browserGroups": 7,
+  "realPointerCloses": [
+    {
+      "width": 320,
+      "isTrusted": true,
+      "hit": "btn-ws-close",
+      "sidebarClosed": true
+    },
+    {
+      "width": 390,
+      "isTrusted": true,
+      "hit": "btn-ws-close",
+      "sidebarClosed": true
+    },
+    {
+      "width": 768,
+      "isTrusted": true,
+      "hit": "btn-ws-close",
+      "sidebarClosed": true
+    }
+  ],
+  "originalFailureUnchanged": true,
+  "productUiUnchanged": true,
+  "helperRemoteTests": 25,
+  "independentBoundaryTests": 2,
+  "boundariesAreSubset": true,
+  "fixtureStopRequested": true,
+  "fixtureCleanupVerified": true,
+  "diffCheck": "PASS",
+  "verifiedAt": "2026-11-06T17:58:23.177Z"
+}

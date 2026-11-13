@@ -253,6 +253,34 @@ export function buildUpstreamDigests(
   return upstream
 }
 
+/**
+ * 从上游产出文本提取结果文件路径候选（跨节点文件传参：下游凭路径向上游成员节点取文件）。
+ * 设计理念（docs/design-cross-node-file-passing.md）：上游产出中引用的文件不在下游节点上，
+ * 平台把「绝对路径 → 上游节点下载 URL + 密钥」写进下游提示词，替代跨节点直读文件系统。
+ * 规则：仅取以 / 开头的绝对 POSIX 路径（目录+文件两级起）且带常见文件扩展名；
+ * 捕获后剥离粘连的中西文行尾标点；剔除下载端点与超长项；去重、上限截断。
+ */
+export function extractUpstreamFilePaths(content: string, limit = 8): string[] {
+  if (!content) return []
+  const out: string[] = []
+  const seen = new Set<string>()
+  // 左守卫排除「前缀是路径字符或 =」的误配（https://host/a.txt 的 host 段、URL ?path=/x 的查询参数归属第三方主机）
+  for (const m of content.matchAll(/(?:^|[^\w./@=\-])(\/[\w.@+/-]*\/[\w.@+-]+)/g)) {
+    const p = m[1].replace(/[.,;:!?,，。；：、！？）)】」"'\]]+$/, '')
+    // 必须带文件扩展名（末段 .字母数字尾缀）且至少两级（目录+文件），目录/裸词不算结果文件
+    if (!/\.[A-Za-z0-9]{1,8}$/.test(p)) continue
+    if ((p.match(/\//g) || []).length < 2) continue
+    // 下载端点不算文件路径（上游原文里已带下载链接的不重复注入）
+    if (p.includes('/fs/download') || p.includes('/fs/list')) continue
+    if (p.length > 512 || p.length < 4) continue
+    if (seen.has(p)) continue
+    seen.add(p)
+    out.push(p)
+    if (out.length >= limit) break
+  }
+  return out
+}
+
 /** 规划提示词组装选项（planTask opts 的提示词相关子集） */
 export interface PlannerPromptOptions {
   priorityAgentIds?: string[]
@@ -292,9 +320,11 @@ export function buildPlannerUserMessage(
     })
     .join('\n')
 
-  const priorityHint = opts?.priorityAgentIds?.length
-    ? `\n重要分工约束: 用户在本轮消息中显式 @ 指定了 ${members.filter(m => opts.priorityAgentIds!.includes(m.agent.id)).map(m => `${m.agent.name}(id=${m.agent.id})`).join('、')}。被 @ 成员只承担与其角色/职责/技能匹配的子任务（例如消息通知类成员只做消息发送，且该子任务依赖产出它的前置子任务）；其余全部子任务分配给主智能体自己执行。禁止把非被 @ 成员职责的工作塞给它，也禁止主智能体只当旁观者。\n`
-    : ''
+  const priorityHint = !opts?.priorityAgentIds?.length
+    ? ''
+    : opts.priorityAgentIds.length === 1
+      ? `\n重要分工约束（单成员聚焦轮）: 用户本轮只显式 @ 了一位成员（${members.filter(m => opts.priorityAgentIds!.includes(m.agent.id)).map(m => `${m.agent.name}(id=${m.agent.id})`).join('、')}）。恰好拆解为 1 个子任务并全部分配给该成员；禁止为主智能体（调度方）自留任何核验/汇总/复核类子任务——核验与最终汇总由系统统一生成，自留子任务属于重复劳动，会被系统直接裁掉。\n`
+      : `\n重要分工约束: 用户在本轮消息中显式 @ 指定了 ${members.filter(m => opts.priorityAgentIds!.includes(m.agent.id)).map(m => `${m.agent.name}(id=${m.agent.id})`).join('、')}。被 @ 成员只承担与其角色/职责/技能匹配的子任务（例如消息通知类成员只做消息发送，且该子任务依赖产出它的前置子任务）；其余全部子任务分配给主智能体自己执行。禁止把非被 @ 成员职责的工作塞给它，也禁止主智能体只当旁观者。\n`
 
   return [
     '你是多智能体任务规划器。你的唯一产出是一份 JSON 计划，绝对不要亲自执行或回答主任务本身；不要输出思考/推理过程文字，直接给出 JSON 本体。',
@@ -699,7 +729,9 @@ export class Orchestrator {
           const key = teamMemberKey(m)
           return { id: key, name: nameOf(key), duty: m.duty }
         })
-      : [...new Set(subtasks.map((s) => s.agentId))].map((id) => ({ id, name: nameOf(id) }))
+      // 普通轮剔除主智能体伪成员：__node__ 是调度方本身，不是「成员」——计入覆盖度会让
+      // 单专家任务显示 2/2 的虚胖口径（线上评审确认），成员覆盖只统计真实参与者
+      : [...new Set(subtasks.map((s) => s.agentId).filter((id) => id !== NODE_AGENT_ID))].map((id) => ({ id, name: nameOf(id) }))
     const coverage: TaskCoverage | undefined = subtasks.length || team
       ? buildCoverage(memberKeys, subtasks)
       : undefined
@@ -792,7 +824,21 @@ export function buildCoverage(
   const completedMembers = members.filter((m) => (completedBy.get(m.id) || 0) > 0)
   const missing = members
     .filter((m) => !(completedBy.get(m.id) || 0))
-    .map((m) => ({ id: m.id, name: m.name, ...(m.duty ? { duty: m.duty } : {}), error: errorBy.get(m.id) || '未分配到子任务或未返回有效产出' }))
+    .map((m) => {
+      const assignedSub = subtasks.find((x) => x.agentId === m.id)
+      const reason: 'unassigned' | 'failed' | 'skipped' = !assignedSub
+        ? 'unassigned'
+        : assignedSub.status === 'skipped'
+          ? 'skipped'
+          : 'failed'
+      return {
+        id: m.id,
+        name: m.name,
+        ...(m.duty ? { duty: m.duty } : {}),
+        error: errorBy.get(m.id) || '未分配到子任务或未返回有效产出',
+        reason,
+      }
+    })
   const total = members.length
   const completed = completedMembers.length
   return {

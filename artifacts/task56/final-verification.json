@@ -1,0 +1,33 @@
+{
+  "status": "passed",
+  "unit": [
+    216,
+    216
+  ],
+  "executionIntegration": [
+    8,
+    8
+  ],
+  "identityIntegration": [
+    10,
+    10
+  ],
+  "smoke": [
+    93,
+    93
+  ],
+  "mcpSmoke": [
+    28,
+    28
+  ],
+  "live": [
+    4,
+    4
+  ],
+  "linksChecked": 36,
+  "credentialScan": "passed",
+  "remoteFixtureCleanup": "passed",
+  "gitDiffCheck": "passed",
+  "productionDeployed": false,
+  "commitOrPush": false
+}

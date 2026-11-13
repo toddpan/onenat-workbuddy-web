@@ -1,0 +1,11 @@
+--- current compiled install
++++ isolated old exact-name predicate
+@@ -16,7 +16,7 @@
+     try {
+         const data = readFileSync(new URL('../scripts/workspace-remote.mjs', import.meta.url));
+         const out = await client.uploadFiles(target, sessionId, [{ filename: WORKSPACE_ACCESS_CLI_NAME, data, mimeType: 'text/javascript' }]);
+-        return out.ok ? out.files?.find((file) => WORKSPACE_ACCESS_CLI_BASENAME.test(file.name) && isWorkspaceAccessCliPath(file.path) && (file.path.replace(/\\/g, '/').split('/').pop() === file.name))?.path : undefined;
++        return out.ok ? out.files?.find((file) => file.name === WORKSPACE_ACCESS_CLI_NAME)?.path : undefined;
+     }
+     catch {
+         return undefined;

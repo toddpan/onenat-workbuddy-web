@@ -17,6 +17,7 @@ import type {
   ResolvedEndpoint,
   ResourceSnapshot,
 } from './types.js'
+import { firstUnsafeHeaderChar, unsafeApiKeyError } from './header-safe.js'
 
 const WEB_PORT_MIN = 3000
 const WEB_PORT_MAX = 9999
@@ -80,6 +81,11 @@ export class OnenatDirectory {
     this.apiKey = apiKey || ''
     this.snapshot = undefined
     this.credCache.clear()
+    this.credLastGood.clear()
+    this.credInflight.clear()
+    this.credCalls = []
+    this.credLimitedUntil = 0
+    this.credBackoffLevel = 0
   }
 
   /**
@@ -89,6 +95,10 @@ export class OnenatDirectory {
   public invalidateCredential(mappingId?: string): void {
     if (mappingId) this.credCache.delete(mappingId)
     else this.credCache.clear()
+    if (!mappingId) {
+      this.credLastGood.clear()
+      this.credLimitedUntil = 0
+    }
   }
 
   public get configured(): boolean {
@@ -268,11 +278,26 @@ export class OnenatDirectory {
   /** 探测档案 TTL：节点下拉打开时按需刷新，平时不主动打节点 */
   private static ENGINE_TTL = 90_000
   /**
-   * 平台凭证接口限速退避：凭证 429 后全局暂停探测（生产流量与探测共用同一 5 次/分预算，
-   * 不退避的 warmup 会跟派发流量互相挤兑）。退避期内探测返回「健康未知」而非再打凭证接口。
+   * 平台凭证接口限速退避：凭证 429 后全局暂停拉取（探测与生产流量共用同一 5 次/分预算，
+   * 不退避的一方会跟另一方互相挤兑）。退避期内所有凭证调用回落最近一次成功值，不再打凭证接口。
+   * 2026-11-03 全节点离线事故教训：旧实现只有探测检查退避，生产流量（任务轮询/监控巡检）
+   * 继续打凭证接口 → 每次逻辑请求 2 次真实 HTTP（429+重试）→ 预算永远饱和 → 退避每 5 分钟
+   * 被重新触发，形成「永久退避」死循环，节点明明健康却全部显示离线。
    */
   private credLimitedUntil = 0
-  private static CRED_LIMIT_BACKOFF = 5 * 60_000
+  /** 渐进退避：连续 429 按level 翻倍（60s → 120s → 240s → 封顶 300s）；成功拉取后归零。
+   *  单次偶发 429（两实例共享全局 5 次/分预算时难免相撞）不应重罚 5 分钟。 */
+  private credBackoffLevel = 0
+  private static CRED_LIMIT_BACKOFF_BASE = 60_000
+  private static CRED_LIMIT_BACKOFF_MAX = 5 * 60_000
+  /** 同映射并发拉取去重：探测风暴/多标签轮询同一瞬间只会发出一次真实凭证请求 */
+  private credInflight = new Map<string, Promise<OnenatCredentials>>()
+  /** 本地预算守卫：60s 滑动窗口内真实凭证请求上限。
+   *  ⚠ 线上+线下两个 workbuddy 实例共享 natpass 服务端同一个全局 5 次/分预算
+   *  （2026-11-03 实测，按来源 IP 各自 4 次/分相加仍会撞 429），单实例取 2 留足余量。 */
+  private credCalls: number[] = []
+  private static CRED_BUDGET_CALLS = 2
+  private static CRED_BUDGET_WINDOW = 60_000
 
   public engineInfoOf(mappingId: string): DshEngineInfo | undefined {
     return this.engineCache.get(mappingId)
@@ -302,9 +327,8 @@ export class OnenatDirectory {
       return info
     }
     if (!ep.online || !ep.baseUrl) return fail('映射离线或公网入口未合成')
-    if (Date.now() < this.credLimitedUntil) {
-      return fail(`平台凭证接口限速退避中（${Math.ceil((this.credLimitedUntil - Date.now()) / 1000)}s 后自动恢复），节点健康未知`)
-    }
+    // 注意：退避期不做早退 —— fetchMappingCredentials 在退避/预算受限时会回落最近一次成功凭证
+    // （key 本来就好），探测继续直打节点，报告真实健康。「健康未知」只应出现在真没凭证的冷启动。
     const root = cleanBaseUrl(ep.baseUrl)
     const call = async (apiKey?: string, path = 'system/status'): Promise<{ res: Response; json: any }> => {
       const headers: Record<string, string> = { Accept: 'application/json' }
@@ -324,7 +348,8 @@ export class OnenatDirectory {
     // 重试只会每节点再烧一次限速预算（实测会把整轮探测拖进连环 429）。
     let cred = await this.fetchMappingCredentials(ep.mappingId)
     if (!cred.ok && /429|频繁/i.test(String(cred.error || ''))) {
-      this.credLimitedUntil = Date.now() + OnenatDirectory.CRED_LIMIT_BACKOFF
+      // fetchMappingCredentials 内部已设渐进退避；这里只保留兜底（防御未来调用路径变化）
+      this.credLimitedUntil = Math.max(this.credLimitedUntil, Date.now() + OnenatDirectory.CRED_LIMIT_BACKOFF_BASE)
     }
     let statusJson: any
     try {
@@ -439,22 +464,53 @@ export class OnenatDirectory {
     return out
   }
 
-  /** 下载应用技能文件全文（url 已自带 key） */
   /**
    * 读取映射实例的有效凭证（映射覆盖优先，回退应用默认）。
-   * ONENAT 侧限速 5 次/分 ⇒ 本地缓存，但**成功值与失败值分开计时**：
-   * 成功值 30s（保证刚改完凭证就派发也能取到新值），403/429 等失败 15s；
+   * ONENAT 侧限速 5 次/分 ⇒ 三层防护后才发真实请求：
+   * ① 全局退避（credLimitedUntil）内不打接口，回落最近一次成功值；
+   * ② 同映射 inflight 去重（探测风暴/多路轮询同一瞬间共享一次拉取）；
+   * ③ 本地滑动窗口预算（60s 内 ≤4 次真实请求，绝不打满服务端 5 次/分）。
+   * 成功值缓存 10 分钟（轮换即时性由 401 自愈 force 强拉保证），失败值短负缓存 15s；
    * 失败值永远不会被当成可用凭证。
    * 返回值带 resolvedFrom（mapping=实例独立 / app=继承应用默认）与 fetchedAt。
    */
   public async fetchMappingCredentials(mappingId: string, force = false): Promise<OnenatCredentials> {
+    if (!force && Date.now() < this.credLimitedUntil) {
+      const wait = Math.ceil((this.credLimitedUntil - Date.now()) / 1000)
+      return (
+        this.credLastGood.get(mappingId) ||
+        this.credCache.get(mappingId)?.data || { ok: false, error: `平台凭证接口限速退避中（${wait}s 后自动恢复）`, fetchedAt: Date.now() }
+      )
+    }
     const cached = this.credCache.get(mappingId)
     const ttl = cached?.data.ok ? OnenatDirectory.CRED_TTL : OnenatDirectory.CRED_NEG_TTL
     if (!force && cached && Date.now() - cached.at < ttl) return cached.data
+    const inflight = this.credInflight.get(mappingId)
+    if (inflight) return inflight
+    const p = this.doFetchMappingCredentials(mappingId, force).finally(() => this.credInflight.delete(mappingId))
+    this.credInflight.set(mappingId, p)
+    return p
+  }
+
+  /** 60s 滑动窗口内真实凭证请求是否还有预算（先清理过期时间戳） */
+  private credBudgetAvailable(): boolean {
+    const now = Date.now()
+    this.credCalls = this.credCalls.filter((t) => now - t < OnenatDirectory.CRED_BUDGET_WINDOW)
+    return this.credCalls.length < OnenatDirectory.CRED_BUDGET_CALLS
+  }
+
+  private async doFetchMappingCredentials(mappingId: string, force: boolean): Promise<OnenatCredentials> {
+    const budgetFail = (): OnenatCredentials => ({ ok: false, error: '凭证接口本地限速保护中（稍后自动重试）', fetchedAt: Date.now() })
     // ONENAT 凭证接口限速极严（5 次/分），429 时退避重试一次再放弃
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         if (attempt > 0) await new Promise((r) => setTimeout(r, 2000))
+        if (!this.credBudgetAvailable()) {
+          // 预算耗尽：回落最近成功值（绝不打满服务端限速）。负缓存照常短 TTL，
+          // 窗口滑过后自然重试 —— 保证收敛，不会像 429 那样把预算互相挤兑光。
+          return this.credLastGood.get(mappingId) || this.credCache.get(mappingId)?.data || budgetFail()
+        }
+        this.credCalls.push(Date.now())
         const res = await fetch(`${this.baseUrl}/api/v1/mappings/${encodeURIComponent(mappingId)}/credentials`, {
           headers: this.headers(),
           signal: AbortSignal.timeout(10_000),
@@ -462,8 +518,13 @@ export class OnenatDirectory {
         const json: any = await res.json().catch(() => ({}))
         if (!res.ok) {
           const data: OnenatCredentials = { ok: false, error: json?.error || `HTTP ${res.status}`, fetchedAt: Date.now() }
-          // 403/429 属策略性失败：只做短负缓存，避免连环触发限速
+          // 403/429 属策略性失败：短负缓存挡连环触发；429 额外触发渐进退避（探测与生产流量同享）
           if (res.status === 403 || res.status === 429) this.credCache.set(mappingId, { at: Date.now(), data })
+          if (res.status === 429) {
+            const delay = Math.min(OnenatDirectory.CRED_LIMIT_BACKOFF_BASE * 2 ** this.credBackoffLevel, OnenatDirectory.CRED_LIMIT_BACKOFF_MAX)
+            this.credBackoffLevel += 1
+            this.credLimitedUntil = Date.now() + delay
+          }
           if (res.status === 429 && attempt === 0) continue
           // 限速/策略失败时回落最近一次成功凭证：key 本来就好，绝不能因为拿不到凭证而 401
           return this.credLastGood.get(mappingId) || data
@@ -478,8 +539,20 @@ export class OnenatDirectory {
           resolvedFrom: json?.resolved_from || json?.resolvedFrom,
           fetchedAt: Date.now(),
         }
+        // 凭证内容安全校验（2026-11-06 pjy-DSH 线上事故）：ONENAT 后台把一段中文文本误存为
+        // 映射 API Key 时，下游 Authorization: Bearer <key> 会让 undici 抛 ByteString 天书。
+        // 这里把坏凭证拦成 ok:false + 可操作文案；只进短负缓存挡连环触发，
+        // 绝不写 credLastGood（防限速回落时继续把坏值当救命凭证用）。
+        const credValue = data.apiKey || data.token || ''
+        if (credValue && firstUnsafeHeaderChar(credValue)) {
+          const invalid: OnenatCredentials = { ok: false, error: unsafeApiKeyError('映射 API Key', credValue), fetchedAt: Date.now() }
+          this.credCache.set(mappingId, { at: Date.now(), data: invalid })
+          this.log(`[onenat] 映射 ${mappingId} 凭证非法已拒用：${invalid.error}`)
+          return invalid
+        }
         this.credCache.set(mappingId, { at: Date.now(), data })
         this.credLastGood.set(mappingId, data)
+        this.credBackoffLevel = 0
         return data
       } catch (err: any) {
         if (attempt > 0) {

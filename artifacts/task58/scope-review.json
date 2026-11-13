@@ -1,0 +1,9 @@
+{
+  "trackedFilesDifferingFromTurnStart": [
+    "a/src/engine.test.ts b/src/engine.test.ts",
+    "a/src/engine.ts b/src/engine.ts",
+    "a/src/web-ui.ts b/src/web-ui.ts"
+  ],
+  "task58ProductFile": "src/web-ui.ts",
+  "note": "Other changed files are concurrent existing work preserved; see baseline and status."
+}

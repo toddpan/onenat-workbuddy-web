@@ -1,0 +1,1910 @@
+{
+  "observations": [
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/system/status",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/system/status",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/presets",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/presets",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/presets",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/system/status",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "POST",
+      "path": "/api/v1/sessions",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "title": "[WorkBuddy] Task58 desktop browser executi",
+        "agentPreset": "cordis"
+      }
+    },
+    {
+      "name": "executor",
+      "method": "PUT",
+      "path": "/api/v1/sessions/session-executor-1/permission",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "preset": "danger-full-access"
+      }
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-1/questions",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "POST",
+      "path": "/api/v1/sessions/session-executor-1/files",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "POST",
+      "path": "/api/v1/sessions/session-executor-1/prompt-stream",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "promptReceived": true
+      }
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-1/stats",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-1/todos",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-1/skills",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-1",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-1/goal",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-1/plan",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-1/permission",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/system/status",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/presets",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/presets",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/system/status",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/workspaces",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "POST",
+      "path": "/api/v1/workspaces",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "path": "/owner/project",
+        "title": "project"
+      }
+    },
+    {
+      "name": "owner",
+      "method": "POST",
+      "path": "/api/v1/sessions",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "title": "[WorkBuddy] Task58 mobile browser 320",
+        "agentPreset": "cordis",
+        "cwd": "/owner/project"
+      }
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-2",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "PUT",
+      "path": "/api/v1/sessions/session-owner-2/permission",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "preset": "danger-full-access"
+      }
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-2/questions",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "POST",
+      "path": "/api/v1/sessions/session-owner-2/prompt-stream",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "promptReceived": true
+      }
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-2/stats",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-2/todos",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-2/skills",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-2",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-2/goal",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-2/plan",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-2/permission",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/system/status",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/presets",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/system/status",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/system/status",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/presets",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/presets",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/presets",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/system/status",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "POST",
+      "path": "/api/v1/sessions",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "title": "[WorkBuddy] Task58 desktop browser executi",
+        "agentPreset": "cordis"
+      }
+    },
+    {
+      "name": "executor",
+      "method": "PUT",
+      "path": "/api/v1/sessions/session-executor-3/permission",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "preset": "danger-full-access"
+      }
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-3/questions",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "POST",
+      "path": "/api/v1/sessions/session-executor-3/files",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "POST",
+      "path": "/api/v1/sessions/session-executor-3/prompt-stream",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "promptReceived": true
+      }
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-3/stats",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-3/todos",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-3/skills",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-3",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-3/plan",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-3/goal",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-3/permission",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/presets",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/presets",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/system/status",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/workspaces",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "POST",
+      "path": "/api/v1/workspaces",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "path": "/owner/project",
+        "title": "project"
+      }
+    },
+    {
+      "name": "owner",
+      "method": "POST",
+      "path": "/api/v1/sessions",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "title": "[WorkBuddy] Task58 mobile browser 320",
+        "agentPreset": "cordis",
+        "cwd": "/owner/project"
+      }
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-4",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "PUT",
+      "path": "/api/v1/sessions/session-owner-4/permission",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "preset": "danger-full-access"
+      }
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-4/questions",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "POST",
+      "path": "/api/v1/sessions/session-owner-4/prompt-stream",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "promptReceived": true
+      }
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-4/stats",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-4/todos",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-4/skills",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-4",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-4/plan",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-4/goal",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-4/permission",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/presets",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/presets",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/presets",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/presets",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/system/status",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "POST",
+      "path": "/api/v1/sessions",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "title": "[WorkBuddy] Task58 desktop browser executi",
+        "agentPreset": "cordis"
+      }
+    },
+    {
+      "name": "executor",
+      "method": "PUT",
+      "path": "/api/v1/sessions/session-executor-5/permission",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "preset": "danger-full-access"
+      }
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-5/questions",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "POST",
+      "path": "/api/v1/sessions/session-executor-5/files",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "POST",
+      "path": "/api/v1/sessions/session-executor-5/prompt-stream",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "promptReceived": true
+      }
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-5/stats",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-5/todos",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-5/skills",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-5",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-5/plan",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-5/goal",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-5/permission",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/presets",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/presets",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/system/status",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/workspaces",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "POST",
+      "path": "/api/v1/workspaces",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "path": "/owner/project",
+        "title": "project"
+      }
+    },
+    {
+      "name": "owner",
+      "method": "POST",
+      "path": "/api/v1/sessions",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "title": "[WorkBuddy] Task58 mobile browser 320",
+        "agentPreset": "cordis",
+        "cwd": "/owner/project"
+      }
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-6",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "PUT",
+      "path": "/api/v1/sessions/session-owner-6/permission",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "preset": "danger-full-access"
+      }
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-6/questions",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "POST",
+      "path": "/api/v1/sessions/session-owner-6/prompt-stream",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "promptReceived": true
+      }
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-6/stats",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-6/todos",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-6/skills",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-6",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-6/plan",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-6/goal",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-6/permission",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/presets",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/system/status",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/system/status",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/presets",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/presets",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/presets",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/system/status",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "POST",
+      "path": "/api/v1/sessions",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "title": "[WorkBuddy] Task58 desktop browser executi",
+        "agentPreset": "cordis"
+      }
+    },
+    {
+      "name": "executor",
+      "method": "PUT",
+      "path": "/api/v1/sessions/session-executor-7/permission",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "preset": "danger-full-access"
+      }
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-7/questions",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "POST",
+      "path": "/api/v1/sessions/session-executor-7/files",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "POST",
+      "path": "/api/v1/sessions/session-executor-7/prompt-stream",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "promptReceived": true
+      }
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-7/stats",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-7/todos",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-7/skills",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-7",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-7/goal",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-7/plan",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-executor-7/permission",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/system/status",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/presets",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/presets",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/system/status",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "POST",
+      "path": "/api/v1/workspaces",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "path": "/owner/project",
+        "title": "project"
+      }
+    },
+    {
+      "name": "owner",
+      "method": "POST",
+      "path": "/api/v1/sessions",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "title": "[WorkBuddy] Task58 mobile browser 320",
+        "agentPreset": "cordis",
+        "cwd": "/owner/project"
+      }
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-8",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "PUT",
+      "path": "/api/v1/sessions/session-owner-8/permission",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "preset": "danger-full-access"
+      }
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-8/questions",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "POST",
+      "path": "/api/v1/sessions/session-owner-8/prompt-stream",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "promptReceived": true
+      }
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-8/stats",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-8/todos",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-8/skills",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-8",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-8/goal",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-8/plan",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/presets",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-8/permission",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/system/status",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Fconfig.yml",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks%2Ftask-1%20-%20Owner%20backlog.md",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Fconfig.yml",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks%2Ftask-1%20-%20Owner%20backlog.md",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/system/status",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "POST",
+      "path": "/api/v1/workspaces",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "path": "/owner/project",
+        "title": "project"
+      }
+    },
+    {
+      "name": "owner",
+      "method": "POST",
+      "path": "/api/v1/sessions",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "title": "[WorkBuddy] Task58 mobile browser 390",
+        "agentPreset": "cordis",
+        "cwd": "/owner/project"
+      }
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-9",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "PUT",
+      "path": "/api/v1/sessions/session-owner-9/permission",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "preset": "danger-full-access"
+      }
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-9/questions",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "POST",
+      "path": "/api/v1/sessions/session-owner-9/prompt-stream",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "promptReceived": true
+      }
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-9/stats",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-9/todos",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-9/skills",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-9",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-9/goal",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-9/plan",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/presets",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-9/permission",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Fconfig.yml",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks%2Ftask-1%20-%20Owner%20backlog.md",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Fconfig.yml",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks%2Ftask-1%20-%20Owner%20backlog.md",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/system/status",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "POST",
+      "path": "/api/v1/workspaces",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "path": "/owner/project",
+        "title": "project"
+      }
+    },
+    {
+      "name": "owner",
+      "method": "POST",
+      "path": "/api/v1/sessions",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "title": "[WorkBuddy] Task58 mobile browser 768",
+        "agentPreset": "cordis",
+        "cwd": "/owner/project"
+      }
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-10",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "PUT",
+      "path": "/api/v1/sessions/session-owner-10/permission",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "preset": "danger-full-access"
+      }
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-10/questions",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "POST",
+      "path": "/api/v1/sessions/session-owner-10/prompt-stream",
+      "query": "",
+      "authorized": true,
+      "body": {
+        "promptReceived": true
+      }
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-10/stats",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-10/todos",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-10/skills",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-10",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-10/plan",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-10/goal",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/sessions/session-owner-10/permission",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/presets",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Fconfig.yml",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks%2Ftask-1%20-%20Owner%20backlog.md",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Fconfig.yml",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/list",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks&all=1",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/fs/download",
+      "query": "?path=%2Fowner%2Fproject%2Fbacklog%2Ftasks%2Ftask-1%20-%20Owner%20backlog.md",
+      "authorized": true
+    },
+    {
+      "name": "owner",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/system/status",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "query": "",
+      "authorized": true
+    },
+    {
+      "name": "executor",
+      "method": "GET",
+      "path": "/api/v1/presets",
+      "query": "",
+      "authorized": true
+    }
+  ],
+  "tasks": [
+    {
+      "id": "task-423a2835",
+      "projectId": "proj-lyam52nf",
+      "nodeRef": {
+        "kind": "mapping",
+        "mappingId": "file-owner"
+      },
+      "status": "completed"
+    },
+    {
+      "id": "task-b7d23fc1",
+      "projectId": "proj-lyam52nf",
+      "nodeRef": {
+        "kind": "mapping",
+        "mappingId": "file-owner"
+      },
+      "status": "completed"
+    },
+    {
+      "id": "task-16a625b8",
+      "projectId": "proj-lyam52nf",
+      "nodeRef": {
+        "kind": "mapping",
+        "mappingId": "file-owner"
+      },
+      "status": "completed"
+    },
+    {
+      "id": "task-7cc061d3",
+      "projectId": "proj-lyam52nf",
+      "nodeRef": {
+        "kind": "mapping",
+        "mappingId": "execution"
+      },
+      "status": "completed"
+    },
+    {
+      "id": "task-acb21a73",
+      "projectId": "proj-lyam52nf",
+      "nodeRef": {
+        "kind": "mapping",
+        "mappingId": "file-owner"
+      },
+      "status": "completed"
+    },
+    {
+      "id": "task-adc02a39",
+      "projectId": "proj-lyam52nf",
+      "nodeRef": {
+        "kind": "mapping",
+        "mappingId": "execution"
+      },
+      "status": "completed"
+    },
+    {
+      "id": "task-04be9499",
+      "projectId": "proj-lyam52nf",
+      "nodeRef": {
+        "kind": "mapping",
+        "mappingId": "file-owner"
+      },
+      "status": "completed"
+    },
+    {
+      "id": "task-31e15e7f",
+      "projectId": "proj-lyam52nf",
+      "nodeRef": {
+        "kind": "mapping",
+        "mappingId": "execution"
+      },
+      "status": "completed"
+    },
+    {
+      "id": "task-0d9bed81",
+      "projectId": "proj-lyam52nf",
+      "nodeRef": {
+        "kind": "mapping",
+        "mappingId": "file-owner"
+      },
+      "status": "completed"
+    },
+    {
+      "id": "task-a4de6d64",
+      "projectId": "proj-lyam52nf",
+      "nodeRef": {
+        "kind": "mapping",
+        "mappingId": "execution"
+      },
+      "status": "completed"
+    }
+  ],
+  "control": {
+    "ownerOnline": true,
+    "extraOnline": true
+  }
+}

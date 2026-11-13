@@ -8,6 +8,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameSync, rmSync } from 'node:fs'
+import { ensurePrivateDir, hardenDirFiles, PRIVATE_FILE_MODE } from './fs-perms.js'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
@@ -35,6 +36,12 @@ export interface LibEntry {
   sourceNode?: string
   /** 插件家族（引擎形态）：dsh / zcode / 未来扩展的其它 AGENT 家族；技能不设。导入时随来源节点/目标 agent 匹配校验 */
   family?: string
+  /**
+   * 归属用户（上传/导入时服务端权威写入；缺省 = 宽容模式）：
+   * - 条目查看/下载/安装全员（共享资产池语义不变）；删除仅归属人+admin
+   * - 缺省（存量条目）：可见可用全员，删除仅 admin（docs/design-user-project-management.md §11）
+   */
+  ownerUserId?: string
 }
 
 export interface LibInstallTarget {
@@ -78,6 +85,7 @@ export class SkillPluginLibrary {
     for (const d of [this.libDir, this.skillsDir(), this.pluginsDir()]) {
       try {
         if (!existsSync(d)) mkdirSync(d, { recursive: true })
+        hardenDirFiles(d, 1) // task-54 V2：存量库文件与索引收紧 0600
       } catch { /* 只读文件系统下降级：入库/下载不可用，不影响其余功能 */ }
     }
     this.index = this.loadIndex()
@@ -108,7 +116,7 @@ export class SkillPluginLibrary {
   private save(): void {
     try {
       const tmp = this.indexPath() + '.tmp'
-      writeFileSync(tmp, JSON.stringify(this.index, null, 2), 'utf-8')
+      writeFileSync(tmp, JSON.stringify(this.index, null, 2), { encoding: 'utf-8', mode: PRIVATE_FILE_MODE })
       renameSync(tmp, this.indexPath())
     } catch (err: any) {
       this.log(`技能插件库 index.json 写入失败: ${err?.message || err}`)
@@ -135,13 +143,14 @@ export class SkillPluginLibrary {
     source: 'upload' | 'import',
     sourceNode?: string,
     family?: string,
+    ownerUserId?: string,
   ): Promise<LibEntry> {
     if (file.data.length === 0) throw new Error('文件为空')
     if (file.data.length > MAX_ARCHIVE_BYTES) throw new Error(`文件超过 ${Math.round(MAX_ARCHIVE_BYTES / 1024 / 1024)}MB 上限`)
     const id = randomUUID().slice(0, 8)
     const filename = sanitizeFilename(file.filename || (kind === 'skill' ? 'skill.zip' : 'plugin.tgz'))
     const dir = kind === 'skill' ? this.skillsDir() : this.pluginsDir()
-    writeFileSync(join(dir, id), file.data)
+    writeFileSync(join(dir, id), file.data, { mode: PRIVATE_FILE_MODE })
     const meta = await parseArchiveMeta(kind, filename, file.data).catch(() => undefined)
     const entry: LibEntry = {
       id,
@@ -155,6 +164,7 @@ export class SkillPluginLibrary {
       source,
       ...(sourceNode ? { sourceNode } : {}),
       ...(family ? { family } : {}),
+      ...(ownerUserId ? { ownerUserId } : {}),
     }
     this.index.entries.push(entry)
     this.save()
@@ -270,7 +280,7 @@ async function parseArchiveMeta(kind: LibKind, filename: string, data: Buffer): 
   const marker = kind === 'skill' ? /(^|\/)SKILL\.md$/i : /(^|\/)package\.json$/
   const tmp = join(tmpdir(), `wb-lib-${randomUUID().slice(0, 8)}${isZip ? '.zip' : '.tgz'}`)
   try {
-    writeFileSync(tmp, data)
+    writeFileSync(tmp, data, { mode: PRIVATE_FILE_MODE })
     let entry: string | undefined
     let content: string | undefined
     if (isZip) {

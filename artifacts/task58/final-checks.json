@@ -1,0 +1,13 @@
+{
+  "mockBrowserGroups": 7,
+  "realBrowserGroups": 5,
+  "productFile": "src/web-ui.ts",
+  "productSha256": "4136b35444cc38bdaa878c37132f419f081cff4c4cfab2f709ef8ac28fbe08f5",
+  "buildSourceMatches": true,
+  "cleanupVerified": true,
+  "taskLocalAcChecked": 3,
+  "dependency": "task-56 Done",
+  "platformStatus": "In Progress; original dispatch writeback",
+  "diffCheck": "PASS",
+  "onenatCredentialRedaction": "PASS"
+}

@@ -1,0 +1,242 @@
+{
+  "base": "https://natpass.yikaihui.com/onenat-workbuddy",
+  "at": "2026-11-02T22:15:28.840Z",
+  "admin": "wb-qa",
+  "member": "qa-ego-zths6q@example.com",
+  "ids": {
+    "project": "proj-omquu6ms",
+    "agent": "agent-3fnbuuii",
+    "unboundAgent": "agent-q382yri3",
+    "ssh": "ssh-cwgz6v5d",
+    "user": "usr-5a04e07bc88dfbe8"
+  },
+  "total": 45,
+  "failures": 0,
+  "results": [
+    {
+      "name": "① 管理员登录成功",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "② 管理员邀请普通用户并拿到邀请令牌",
+      "pass": true,
+      "detail": "status=201"
+    },
+    {
+      "name": "② 普通用户激活并自动登录",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "③ 管理员创建 SSH 资源（归属=管理员）",
+      "pass": true,
+      "detail": "status=200 id=ssh-cwgz6v5d"
+    },
+    {
+      "name": "③ SSH 资源回显脱敏（无明文密码）",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "③ 管理员创建子智能体（归属=管理员）",
+      "pass": true,
+      "detail": "status=200 id=agent-3fnbuuii"
+    },
+    {
+      "name": "③ 子智能体回显含归属人",
+      "pass": true,
+      "detail": "ownerUserId=usr-9e819f8d16093768"
+    },
+    {
+      "name": "③ 管理员创建未绑定子智能体（对照组）",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "③ 管理员创建项目",
+      "pass": true,
+      "detail": "status=200 id=proj-omquu6ms"
+    },
+    {
+      "name": "③ 管理员把普通用户加入项目",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "④ 普通用户 SSH 列表不含他人资源",
+      "pass": true,
+      "detail": "list=2"
+    },
+    {
+      "name": "④ 普通用户取 SSH 明文凭据 404（防枚举）",
+      "pass": true,
+      "detail": "status=404"
+    },
+    {
+      "name": "④ 普通用户 exec 他人 SSH 资源 403",
+      "pass": true,
+      "detail": "status=403"
+    },
+    {
+      "name": "④ 普通用户删除他人 SSH 资源 403",
+      "pass": true,
+      "detail": "status=403"
+    },
+    {
+      "name": "④ 普通用户改他人 SSH 资源 403",
+      "pass": true,
+      "detail": "status=403"
+    },
+    {
+      "name": "④ 普通用户智能体列表不含他人智能体",
+      "pass": true,
+      "detail": "list=18"
+    },
+    {
+      "name": "④ 普通用户取他人子智能体 404",
+      "pass": true,
+      "detail": "status=404"
+    },
+    {
+      "name": "④ 普通用户改他人子智能体 403",
+      "pass": true,
+      "detail": "status=403"
+    },
+    {
+      "name": "④ 普通用户删他人子智能体 403",
+      "pass": true,
+      "detail": "status=403"
+    },
+    {
+      "name": "④ 普通用户同名同节点新建被拒（不得复用他人资产）",
+      "pass": true,
+      "detail": "status=403"
+    },
+    {
+      "name": "⑤ 归属人可取 SSH 明文凭据",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "⑤ 归属人可读子智能体 apiKey / 提示词",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "⑥ 项目绑定 SSH 资源",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "⑥ 项目绑定子智能体为默认协作成员",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "⑥ 绑定后普通用户可见该 SSH 资源（脱敏）",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "⑥ 绑定后普通用户仍拿不到明文凭据",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "⑥ 绑定后普通用户可使用该资源（非 403）",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "⑥ 绑定后普通用户仍不能删除资源 403",
+      "pass": true,
+      "detail": "status=403"
+    },
+    {
+      "name": "⑥ 绑定后普通用户可见子智能体但提示词脱敏",
+      "pass": true,
+      "detail": "status=200 data={\"id\":\"agent-3fnbuuii\",\"name\":\"QA-EGO 共享子智能体\",\"dshRef\":{\"kind\":\"direct\",\"apiBaseUrl\":\"http://127.0.0.1:1\"},\"ownerUserId\":\"usr-9e819f8d16093768\",\"resources\":[],\""
+    },
+    {
+      "name": "⑥ 绑定后普通用户仍不能删除子智能体 403",
+      "pass": true,
+      "detail": "status=403"
+    },
+    {
+      "name": "⑥ 未绑定到项目的子智能体对普通用户仍 404",
+      "pass": true,
+      "detail": "status=404"
+    },
+    {
+      "name": "⑦ 默认普通成员不可邀请（403）",
+      "pass": true,
+      "detail": "status=403"
+    },
+    {
+      "name": "⑦ 开启「成员可邀请」开关",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "⑦ 开关打开后普通成员可邀请（201）",
+      "pass": true,
+      "detail": "status=201"
+    },
+    {
+      "name": "⑦ 清理：撤销普通成员发出的项目邀请",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "⑧ 普通用户看不到他人归属的线上子智能体",
+      "pass": true,
+      "detail": "管理员可见 20 个（他人归属未共享 1 个），普通用户可见 19 个，泄漏 0 个"
+    },
+    {
+      "name": "⑧ 普通用户能看到项目显式共享的子智能体（应可见）",
+      "pass": true,
+      "detail": "可见=true"
+    },
+    {
+      "name": "⑧ 普通用户看不到未绑定的子智能体（应不可见）",
+      "pass": true,
+      "detail": "可见=false"
+    },
+    {
+      "name": "⑧ 存量（无归属）子智能体对普通用户仍可见（宽容模式）",
+      "pass": true,
+      "detail": "存量 18 个，普通用户可见 18 个"
+    },
+    {
+      "name": "⑧ 普通用户读存量子智能体时私有配置脱敏",
+      "pass": true,
+      "detail": "id=agent-y4sfsk4h status=200"
+    },
+    {
+      "name": "⑧ 普通用户删除存量子智能体 403（线上事故回归）",
+      "pass": true,
+      "detail": "status=403"
+    },
+    {
+      "name": "⑨ healthz 正常",
+      "pass": true,
+      "detail": "{\"ok\":true,\"service\":\"onenat-workbuddy-web\",\"version\":\"2026.11.1\",\"standalone\":true,\"authRequired\":true,\"uptimeSec\":65,\""
+    },
+    {
+      "name": "⑨ 监控总览可读（既有功能回归）",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "⑨ 普通用户项目列表只含自己所属项目",
+      "pass": true,
+      "detail": "status=200 count=19"
+    },
+    {
+      "name": "⑨ 未登录访问业务接口被拒（fail-closed）",
+      "pass": true,
+      "detail": "status=401"
+    }
+  ]
+}

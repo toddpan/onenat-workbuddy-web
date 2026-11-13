@@ -18,7 +18,7 @@ import { WorkStore } from '../dist/store.js'
 import { TaskEngine } from '../dist/engine.js'
 import { AgentResolver } from '../dist/resolver.js'
 import { PromptComposer } from '../dist/prompt-composer.js'
-import { Planner } from '../dist/planner.js'
+import { Orchestrator } from '../dist/orchestrator.js' // Phase-3 合并后 Planner 并入 orchestrator（旧 dist/planner.js 已不存在）
 
 const OUT = '/tmp/wb-mock-test'
 rmSync(OUT, { recursive: true, force: true })
@@ -171,7 +171,7 @@ const directory = {
   fetchMappingCredentials: async () => ({ ok: false }),
 }
 const resolver = new AgentResolver(store, directory)
-const engine = new TaskEngine(store, directory, resolver, new PromptComposer(directory), new Planner(store, resolver))
+const engine = new TaskEngine(store, directory, resolver, new PromptComposer(directory), new Orchestrator(store, resolver))
 const agent = store.upsertAgent({ name: 'mock', dshRef: { kind: 'direct', apiBaseUrl: base }, resources: [], enabled: true })
 const task = await engine.createTask({ memberAgentIds: [agent.id], mode: 'chat', message: 'PROMPT-FRAGMENT-UNIQUE' })
 

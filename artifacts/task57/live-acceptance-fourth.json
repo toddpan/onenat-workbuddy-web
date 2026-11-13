@@ -1,0 +1,45 @@
+{
+  "at": "2026-11-06T16:38:44.273Z",
+  "tag": "wb-task57-b484b42a89a1f705",
+  "ownerId": "6cc2987d",
+  "executorId": "5602f2c2",
+  "ownerRoot": "/tmp/wb-task57-b484b42a89a1f705-owner",
+  "executorRoot": "/tmp/wb-task57-b484b42a89a1f705-executor",
+  "checks": [
+    {
+      "name": "real owner/executor isolated fixtures and independent filesystems",
+      "result": "PASS",
+      "evidence": {
+        "ownerRoot": "/tmp/wb-task57-b484b42a89a1f705-owner",
+        "executorRoot": "/tmp/wb-task57-b484b42a89a1f705-executor",
+        "initialHashes": {
+          "main": "6e8468339df537a8793136a806423e119eef1ee411e4d7561ea3fb915036c8e2",
+          "child": "83dcaebeec5128ee07aebee3ccddcafd33333ad92d080e8413ada8242b1d091d"
+        },
+        "ownerRootAbsentOnExecutor": true
+      }
+    },
+    {
+      "name": "AC1/2/3 main without mentions actually runs list/read/write/CAS/exec on owner",
+      "result": "FAIL",
+      "error": "No actual executor session"
+    }
+  ],
+  "requests": [],
+  "toolCalls": [],
+  "cleanup": [
+    {
+      "node": "6cc2987d",
+      "directory": "/tmp/wb-task57-b484b42a89a1f705-owner",
+      "removed": true
+    },
+    {
+      "node": "5602f2c2",
+      "directory": "/tmp/wb-task57-b484b42a89a1f705-executor",
+      "removed": true
+    }
+  ],
+  "mainStatus": "failed",
+  "error": "No actual executor session",
+  "finishedAt": "2026-11-06T16:38:50.928Z"
+}

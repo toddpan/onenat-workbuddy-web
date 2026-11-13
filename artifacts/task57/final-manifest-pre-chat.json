@@ -1,0 +1,42 @@
+{
+  "report": "Final v3 real acceptance 4/4; all local checks passed",
+  "sha256": {
+    "src/engine.ts": "29d3bc55a9d82e2255b91af1f9431482cdebb5367bee89d72ac05fc2dc659951",
+    "src/engine.test.ts": "4e95b13e0ce69442bfbd1cb20869f82b8dd2918d8b867fa24d5e2f81b0a7c3dc",
+    "src/workspace-access.ts": "dd9d79813bc23f2b4704e8e59b69df01a863ffd36c050bc4b54f34b65809fbc7",
+    "scripts/workspace-remote.mjs": "6c561494101a81de7b50a82b9cb63eb38b351b27cb206edb9ec4e1720a31b4cc",
+    "scripts/workspace-remote-test.mjs": "a6d1b9c3db57c353b1c82b8a6ac7d8577058f668e0bc099537f77aa320eda2d9",
+    "scripts/workspace-access-test.mjs": "da2f5660a71bcf50c238a6dda70fc1c597e3e8821b1074934ba9b6490eef874b",
+    "scripts/workspace-roundtrip-live.mjs": "ad2910b5809661b6e9000931b86cc21cf29e50623f18e31bd2ab85453d23a1ea",
+    "scripts/project-workspace-live.mjs": "1207f57002ae462ce7ba66e458ac774a308a5af16a31830c0a302e7d422379b2",
+    "scripts/project-execution-e2e.mjs": "666e16286a821457e404197b01a2c0a59ddd7997a2460ff49ae9d1fd2253db9f",
+    "scripts/project-workspace-e2e.mjs": "a82d0ecf16a05a10344033fb4c3ba25bb60f8dc8e0a8ec2a244f8dc709f44205",
+    "scripts/deploy-standalone.sh": "80865e6b971303cb0603379e2acde6339e1c22c13ac2782dad84cffd1d15826c",
+    "docs/standalone-deploy.md": "02ee803ad4910a7c967e6829af86cbf36c8fb0fca0f3f7e54e5d2a17bfdc27dd",
+    "docs/task-57-acceptance.md": "60c3f7e084438bfc0cea458f7fca86752662ec55270451bb796be4eea0f55c45",
+    "docs/project-workspace-nodes.md": "d49d0846c7b904160f9d94f925ed75172a45da17220d6cf6ce9e574e5d99d770",
+    "backlog/tasks/task-57 - 工作区解耦：远程文件访问与命令通道.md": "0a58ae7e46e22e642fb0c529a24950faf606ceeacf701fe63ea888fda0fc25e8"
+  },
+  "linksChecked": [
+    "docs/task-57-acceptance.md",
+    "docs/project-workspace-nodes.md",
+    "backlog/tasks/task-57 - 工作区解耦：远程文件访问与命令通道.md"
+  ],
+  "scope": {
+    "unchangedPreexistingTrackedSections": 23,
+    "changedPreexistingTrackedSections": [
+      "a/src/engine.test.ts b/src/engine.test.ts",
+      "a/src/engine.ts b/src/engine.ts",
+      "a/src/web-ui.ts b/src/web-ui.ts"
+    ],
+    "newTrackedSections": [
+      "a/docs/standalone-deploy.md b/docs/standalone-deploy.md",
+      "a/scripts/deploy-standalone.sh b/scripts/deploy-standalone.sh"
+    ],
+    "concurrentTask58": [
+      "src/web-ui.ts"
+    ],
+    "uiTestUnchangedSinceContinuation": true,
+    "note": "Only engine source/test changed preexisting tracked task57 hunks; concurrent UI left intact."
+  }
+}

@@ -12,20 +12,63 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { TaskHistory, TaskHistoryError } from './task-history.js'
+import { TaskActivity } from './task-activity.js'
 import { Readable } from 'node:stream'
 import { randomUUID } from 'node:crypto'
 import type { OnenatDirectory } from './onenat.js'
 import { OnenatDirectory as Dir } from './onenat.js'
 import type { TaskEngine } from './engine.js'
+import { validateToolArgs } from './tool-contracts.js'
+
+/** Match tool/MCP routing validation without dropping REST-only task fields. */
+function taskRouteArgs(body: Record<string, any>, action: 'create' | 'send', taskId?: string) {
+  const route = Object.fromEntries(['chatAgentId', 'mode', 'memberAgentIds', 'teamId', 'nodeRef', 'projectId'].filter(key => body[key] !== undefined).map(key => [key, body[key]]))
+  const checked = validateToolArgs('workbuddy_task_manage', { ...route, action, ...(action === 'send' ? { taskId, message: body.message } : {}) })
+  if (checked.errors.length) throw Object.assign(new Error(checked.errors.map(e => `${e.path}: ${e.message}`).join('；')), { code: 'INVALID_PARAM' })
+  const { action: _action, message: _message, taskId: _taskId, ...args } = checked.args
+  return args
+}
 import type { AgentResolver } from './resolver.js'
 import type { PromptComposer } from './prompt-composer.js'
 import { interactionGuard } from './prompt-composer.js'
 import type { Orchestrator } from './orchestrator.js'
 import type { WorkStore } from './store.js'
 import { isNodeAbsolutePath, WORK_DIR_NOT_ABSOLUTE_MSG } from './store.js'
-import { DshClient } from './remote-client.js'
+import { agentDisplayProfile, mergeAgentDisplay } from './agent-display.js'
+import { normalizeWorkspacePath, validateWorkspacePath, ProjectWorkspaceConflictError } from './workspace.js'
+import { requireProjectFiles, requireNodeFiles, projectFilePath, workspaceChild, requireWorkspacePath, checkWorkspaceFsPath, writeProjectFile, WorkspaceFileError } from './workspace-files.js'
+import { DshClient, type RemoteModelEntry } from './remote-client.js'
+import {
+  backlogInstructionSnippet,
+  createItem,
+  deleteItem,
+  encodeFrontmatter,
+  findItem,
+  initBacklog,
+  listBacklog,
+  normalizeItemId,
+  readItem,
+  replaceAcceptance,
+  replaceDescription,
+  writeItem,
+} from './backlog.js'
+import {
+  dispatchBacklogItem,
+  listBacklogWithTasks,
+  mergeBacklogFacets,
+  overviewBacklog,
+  stripBacklogItemSearchText,
+  stripBacklogSearchText,
+  summarizeBacklogOverview,
+  type BacklogDispatchResult,
+} from './backlog-service.js'
+import { applyBacklogQuery, parseBacklogQuery } from './backlog-query.js'
+import { applyProjectCollect, previewProjectCollect } from './backlog-collect.js'
 import { SshInputError, execOnSshResource, maskSshResource, normalizeSshResource, testSshResource } from './ssh-resources.js'
 import type { SshResourceStore } from './ssh-store.js'
+import { GroupStore, GroupStoreError, normalizeGroupRoom } from './groups.js'
 import type { ScheduleRunner } from './scheduler.js'
 import { normalizeRule, nextRun, ruleText } from './scheduler.js'
 import { SCHEDULE_TEMPLATES } from './schedule-templates.js'
@@ -40,9 +83,31 @@ import { UsageService } from './usage.js'
 import type { XiaozhiMcpClient } from './xiaozhi-mcp.js'
 import type { DshRef, Project, SubAgent, WorkTask, ScheduledTask } from './types.js'
 import { NODE_AGENT_ID, MAIN_AGENT_LABEL, projectDefaultAgentIds, projectDefaultAgentIdsFromInput } from './types.js'
+import {
+  canAccessProject,
+  canManageAgent,
+  canManageOwned,
+  canManageResource,
+  canManageSchedule,
+  canManageTask,
+  canUseResource,
+  canUseAgent,
+  canViewAgent,
+  canViewResource,
+  canViewSchedule,
+  canViewTask,
+  maskAgentForViewer,
+  visibleTasks,
+  type PermContext,
+} from './perm.js'
 import type { MonitorService } from './monitor.js'
+import { ProjectAgents } from './project-agents.js'
+import { queryProjects, compactProject } from './project-query.js'
+import { queryMonitorOverview } from './monitor-query.js'
 import { SkillPluginLibrary, buildSkillInstallPrompt, buildPluginInstallPrompt, buildPluginExportPrompt, buildPluginListExportPrompt, buildProjectImportPrompt, extractExportedPaths } from './library.js'
 import type { LibKind } from './library.js'
+import { requestPublicBase } from './mcp-server.js'
+import { buildAiInstallPayload, normalizeInstallBase } from './ai-install.js'
 import { renderWebUi } from './web-ui.js'
 import { renderMonitorUi } from './monitor-ui.js'
 import { formatDateVersion, parseDateVersion, readPackageVersion } from './date-version.js'
@@ -65,7 +130,10 @@ interface MemberTodos {
 
 export class WorkBuddyRouter {
   private client = new DshClient()
+  private historyIndex?: TaskHistory
   private version = formatDateVersion(readPackageVersion())
+  /** GET /api/resources 微缓存：折叠多标签页秒级轮询风暴（节点状态 1.5s 粒度足够） */
+  private resourcesCache: { at: number; body: string } | undefined
   /** 内置专家名册（The Agency persona 快照），根目录可用 WORKBUDDY_EXPERT_ROOT 覆盖 */
   private registry = new ExpertRegistry()
 
@@ -85,6 +153,7 @@ export class WorkBuddyRouter {
     private mail?: MailService,
     private auditLog?: AuditLog,
     private limiter?: RateLimiter,
+    private groupsStore?: GroupStore,
   ) {
     // 用户自建专家层：数据落 <dataDir>/user-experts.json，与只读资产层合并为统一视图
     this.registry.attachUserStore(new UserExpertStore(store.dataDir))
@@ -95,11 +164,34 @@ export class WorkBuddyRouter {
     return this.registry
   }
 
-  /** 当前请求会话（dispatch 时注入；权限判定与审计展示用） */
-  private session?: SessionInfo
+  /** 协作群存储（断言注入：server.ts 单例装配（裁定 A）或测试注入；懒建兜底已拆除——双实例会互相覆盖丢数据） */
+  private get groupStore(): GroupStore {
+    if (!this.groupsStore) throw new Error('GroupStore 未装配：server.ts 必须注入单例实例（裁定 A）')
+    return this.groupsStore
+  }
+
+  /** Request-local identity: concurrent parsing/remote calls must never overwrite another user's permissions. */
+  private requestContext = new AsyncLocalStorage<{ session?: SessionInfo }>()
+  private get session(): SessionInfo | undefined {
+    return this.requestContext.getStore()?.session
+  }
 
   private isPlatformAdmin(): boolean {
     return this.session?.role === 'admin'
+  }
+
+  /**
+   * 全局配置/聚合面门禁（§11 矩阵：设置/监控/语音助手/库设置等全局面仅管理员）。
+   * 浏览器会话非 admin → 拦；AI 工具通道（无用户身份、server.ts 白名单内）保持服务级开放
+   * ——token→用户绑定属遗留项，通道硬化见 tool-ops.ts aiTokenOnly。
+   */
+  private isAdminOrServiceChannel(): boolean {
+    return !this.session || this.isPlatformAdmin()
+  }
+
+  /** 全局面门禁拒绝响应（配合 isAdminOrServiceChannel 使用） */
+  private denyNotAdmin(res: ServerResponse, what: string): void {
+    this.sendJson(res, 403, { ok: false, error: `仅平台管理员可${what}` })
   }
 
   /** 项目是否启用成员隔离（存量项目无 owner 且无成员 → 宽容模式，登录用户可见） */
@@ -107,20 +199,69 @@ export class WorkBuddyRouter {
     return Boolean(proj.owner || (proj.projectMembers && proj.projectMembers.length))
   }
 
+  /** 项目是否可见：宽容模式（无 owner 且无成员）对登录用户可见；隔离模式仅成员/admin */
   private canSeeProject(proj: Project): boolean {
     if (!WorkBuddyRouter.projectIsolated(proj)) return true
-    if (this.isPlatformAdmin()) return true
-    const uid = this.session?.userId
-    if (!uid) return false
-    return Boolean(proj.projectMembers?.some((m) => m.userId === uid))
+    return canAccessProject(this.session, proj, 'view')
   }
 
+  /** 是否项目 owner（含平台管理员）：统一走 perm.ts 的 canAccessProject，避免散落判定 */
   private isProjectOwner(proj: Project): boolean {
-    if (this.isPlatformAdmin()) return true
-    const uid = this.session?.userId
-    if (!uid) return false
-    if (proj.owner === uid) return true
-    return Boolean(proj.projectMembers?.some((m) => m.userId === uid && m.role === 'owner'))
+    return canAccessProject(this.session, proj, 'manageMembers')
+  }
+
+  /**
+   * §11 任务取用辅助：取任务并做可见性判定（不可见与不存在统一 404，防枚举）。
+   * 聊天/流/附件/goal-plan/subtasks/stats 等 view 级入口用 taskForView；
+   * 改名/删除/归档/成员/模型预设/permission/queue 等管理入口用 taskForManage。
+   */
+  private taskForView(taskId: string): WorkTask | undefined {
+    const task = this.store.getTask(taskId)
+    if (!task || (this.session && !canViewTask(this.session, task, this.permContext()))) return undefined
+    return task
+  }
+
+  /** 任务管理权取用：不可见/不存在返回 undefined（统一 404），存在但无管理权返回 'forbidden' */
+  private taskForManage(taskId: string): { task?: WorkTask; forbidden?: boolean } {
+    const task = this.store.getTask(taskId)
+    if (!task || !canViewTask(this.session, task, this.permContext())) return {}
+    if (!canManageTask(this.session, task)) return { forbidden: true }
+    return { task }
+  }
+
+  /**
+   * 权限判定上下文（§10）：项目集合 —— 资源/智能体的「项目绑定共享」判定依据。
+   * 判定逻辑统一在 perm.ts，路由层只调用，不散落 if。
+   */
+  private permContext(): PermContext {
+    return { projects: this.store.getProjects() }
+  }
+
+  /** 专家团脱敏：非归属人看不到主理人补充规则（私有配置） */
+  private maskTeamForViewer<T extends { id: string; ownerUserId?: string; coordinatorPrompt?: string }>(
+    team: T,
+    session: SessionInfo | undefined,
+  ): T {
+    if (!team.ownerUserId) return team
+    if (this.isPlatformAdmin()) return team
+    if (team.ownerUserId === session?.userId) return team
+    const clone: Record<string, unknown> = { ...(team as unknown as Record<string, unknown>) }
+    delete clone.coordinatorPrompt
+    return clone as unknown as T
+  }
+
+  /**
+   * backlog 待办 → WorkTask 一键派发（B4，docs/design-backlog-integration.md §6.1）。
+   * 实现在 backlog-service（工具通道复用同一段派发+回写关联逻辑，避免分叉）。
+   */
+  private async dispatchBacklogItem(
+    proj: Project,
+    target: any,
+    workspace: string,
+    itemId: string,
+    opts: { force?: boolean; instruction?: string } = {},
+  ): Promise<BacklogDispatchResult> {
+    return dispatchBacklogItem({ client: this.client, engine: this.engine }, proj, target, workspace, itemId, { ...opts, ownerUserId: this.session?.userId })
   }
 
   /** 发送用户邀请邮件：结果随响应返回（sent/status/error）供 UI 提示；失败不抛错，inviteLink 仍可手动复制 */
@@ -165,6 +306,7 @@ export class WorkBuddyRouter {
   /** 项目导入上传令牌（token → 待入库信息）；2 小时未收到上传自动作废 */
   private pendingProjectImports = new Map<string, {
     importId: string
+    ownerUserId?: string
     name: string
     path: string
     nodeRef: DshRef
@@ -263,7 +405,7 @@ export class WorkBuddyRouter {
         const buf = Buffer.from(await dl.res.arrayBuffer())
         const filename = p.split('/').pop() || 'plugin.tgz'
         if (seen.has(`${filename}:${buf.length}`)) continue
-        imported.push(await this.library.add('plugin', { filename, data: buf }, 'import', sourceLabel, family))
+        imported.push(await this.library.add('plugin', { filename, data: buf }, 'import', sourceLabel, family, this.session?.userId))
         seen.add(`${filename}:${buf.length}`)
       } catch (err: any) {
         failed.push({ file: p, error: err?.message || String(err) })
@@ -294,7 +436,17 @@ export class WorkBuddyRouter {
    * 解析 fs 通道目标节点：优先 node=<dshRef JSON>（项目工作区浏览，无需子智能体），
    * 否则回退 agent=<id>（子智能体所在节点）。三个返回字段与 list/mkdir 既有行为一致。
    */
-  private async resolveFsTarget(url: URL, fallbackAgentId?: string): Promise<{ ok: true; target: any } | { ok: false; status: number; error: string }> {
+  private async resolveFsTarget(url: URL, fallbackAgentId?: string, fileAction?: 'read' | 'write'): Promise<{ ok: true; target: any; project?: Project } | { ok: false; status: number; error: string }> {
+    const projectId = url.searchParams.get('projectId') || ''
+    if (projectId) {
+      const project = this.store.getProject(projectId)
+      if (!project || (this.session && !this.canSeeProject(project))) return { ok: false, status: 404, error: '项目不存在' }
+      if (fileAction) requireProjectFiles(this.session, project, fileAction === 'write')
+      const target = await this.resolver.resolveRef(project.dshRef, project.apiKey, 'project-workspace')
+      if (!target.online || !target.baseUrl) return { ok: false, status: 502, error: target.error || '文件归属节点不可达' }
+      return { ok: true, target, project }
+    }
+    if (fileAction) requireNodeFiles(this.session)
     const nodeParam = url.searchParams.get('node') || ''
     if (nodeParam) {
       let nref: any
@@ -308,6 +460,44 @@ export class WorkBuddyRouter {
     const target = await this.resolver.resolve(agent)
     if (!target.online || !target.baseUrl) return { ok: false, status: 502, error: target.error || '节点不可达' }
     return { ok: true, target }
+  }
+
+  /** Authorize paths before remote file IO, then reject remote descendant links. */
+  private async projectFsPath(scope: { target: any; project?: Project }, input: string | undefined, write = false, absent = false, recursive = false) {
+    if (!scope.project) return { path: input || '', exists: true, listing: undefined }
+    const path = projectFilePath(scope.project, input)
+    requireWorkspacePath(this.session, scope.project, this.store.getProjects(), this.directory, path, write, recursive)
+    const checked = await checkWorkspaceFsPath(this.client, scope.target, scope.project, path, absent)
+    return { path, ...checked }
+  }
+
+  /** Preserve completed saves if a later file conflicts or its remote outcome is uncertain. */
+  private async saveProjectUploads(scope: { target: any; project: Project }, dir: string, files: Array<{ filename: string; data: Buffer }>, expectedSha256?: string) {
+    const saved: Array<{ name: string; path: string; size: number; sha256?: string }> = []
+    let currentName: string | undefined
+    try {
+      if (!files.length) throw new WorkspaceFileError(400, 'FILES_REQUIRED', '未找到上传文件')
+      const names = new Set<string>()
+      for (const file of files) {
+        workspaceChild(projectFilePath(scope.project, dir), file.filename)
+        if (names.has(file.filename)) throw new WorkspaceFileError(400, 'DUPLICATE_FILENAME', '同一批次不能包含重复文件名')
+        names.add(file.filename)
+      }
+      for (const file of files) {
+        currentName = file.filename
+        const path = workspaceChild(projectFilePath(scope.project, dir), file.filename)
+        const checked = await this.projectFsPath(scope, path, true, true)
+        if (checked.exists && (!expectedSha256 || files.length !== 1)) throw new WorkspaceFileError(428, 'VERSION_REQUIRED', '同名文件未覆盖：更新须先读取并携带 expectedSha256，每次只更新一个文件')
+        const out = await writeProjectFile(scope.project, scope.target, this.directory, path, file.data, expectedSha256)
+        if (!out.ok) return { status: out.code === 'CAS_MISMATCH' ? 409 : 400, body: { ...out, files: saved, partial: saved.length > 0, failedFile: currentName } }
+        saved.push({ name: file.filename, path, size: file.data.length, sha256: out.sha256 })
+      }
+      return { status: 200, body: { ok: true, files: saved } }
+    } catch (err) {
+      const status = err instanceof WorkspaceFileError ? err.status : 502
+      const code = err instanceof WorkspaceFileError ? err.code : 'WORKSPACE_UPLOAD_FAILED'
+      return { status, body: { ok: false, code, error: (err as Error).message || '远端上传失败', files: saved, partial: saved.length > 0, failedFile: currentName } }
+    }
   }
 
   private async parseBody(req: IncomingMessage): Promise<any> {
@@ -365,6 +555,7 @@ export class WorkBuddyRouter {
       id: proj.id,
       name: proj.name,
       dshRef: proj.dshRef,
+      defaultExecutionNodeRef: proj.defaultExecutionNodeRef,
       nodeTitle: nodeTitle || '(未配置节点)',
       workspace: proj.workspace || '',
       instruction: proj.instruction || '',
@@ -376,6 +567,7 @@ export class WorkBuddyRouter {
       skillNames: proj.skillNames,
       owner: proj.owner,
       ownerInfo: proj.owner ? this.auth?.describeUser(proj.owner) || null : null,
+      allowMemberInvite: proj.allowMemberInvite === true,
       projectMembers: (proj.projectMembers || []).map((m) => ({ ...m, userInfo: this.auth?.describeUser(m.userId) || null })),
       isolated: WorkBuddyRouter.projectIsolated(proj),
       archived: Boolean(proj.archivedAt),
@@ -388,27 +580,34 @@ export class WorkBuddyRouter {
 
   /** 创建/更新项目（校验名称与节点；默认协作成员必须存在；defaultAgentIds 为 canonical，expertIds 兼容别名） */
   private upsertProjectFromInput(body: any): Project {
-    const name = String(body?.name || '').trim()
+    const existing = body?.id ? this.store.getProject(String(body.id)) : undefined
+    const name = String(body?.name ?? existing?.name ?? '').trim()
     if (!name) throw new Error('缺少项目名称')
     const dshRef = body?.dshRef ? (body.dshRef as DshRef) : undefined
-    const existing = body?.id ? this.store.getProject(String(body.id)) : undefined
+    if (existing && !this.canSeeProject(existing)) throw Object.assign(new Error('项目不存在'), { status: 404 })
+    if (existing && !this.isProjectOwner(existing)) throw Object.assign(new Error('仅项目 owner 或平台管理员可编辑项目'), { status: 403 })
+    if (existing && WorkBuddyRouter.archivedBlocked(existing)) throw new Error('项目已归档（只读），请先恢复再编辑')
     const finalRef = dshRef || existing?.dshRef
     if (!finalRef) throw new Error('缺少项目 DSH 节点（dshRef）')
+    const checkedRef = normalizeDshRef(finalRef)
+    if ('error' in checkedRef) throw new Error(checkedRef.error)
+    const executionRef = body?.defaultExecutionNodeRef == null ? undefined : normalizeDshRef(body.defaultExecutionNodeRef)
+    if (executionRef && 'error' in executionRef) throw new Error(executionRef.error)
     // 显式传入（含 []）即生效并写 canonical；未传时保留既有值。expertIds 传入时视为同一字段的旧写法。
     const defaultAgentIds = projectDefaultAgentIdsFromInput(body)
-    for (const eid of defaultAgentIds || []) {
-      if (!this.store.getAgent(eid)) throw new Error(`默认协作成员不存在: ${eid}`)
-    }
+    new ProjectAgents(this.store).validateAgents(defaultAgentIds || [], { session: this.session })
     return this.store.upsertProject({
       id: body?.id ? String(body.id) : undefined,
       name,
-      dshRef: finalRef,
+      dshRef: checkedRef,
+      ...(body?.defaultExecutionNodeRef !== undefined ? { defaultExecutionNodeRef: executionRef as DshRef | undefined } : {}),
       apiKey: body?.apiKey !== undefined ? String(body.apiKey) : undefined,
       workspace: body?.workspace !== undefined ? String(body.workspace) : undefined,
       instruction: body?.instruction !== undefined ? String(body.instruction) : undefined,
       ...(defaultAgentIds !== undefined ? { defaultAgentIds } : {}),
       connectorIds: Array.isArray(body?.connectorIds) ? body.connectorIds.map(String) : (existing?.connectorIds || []),
       skillNames: Array.isArray(body?.skillNames) ? body.skillNames.map(String) : (existing?.skillNames || []),
+      ...(body?.allowMemberInvite !== undefined ? { allowMemberInvite: Boolean(body.allowMemberInvite) } : {}),
     })
   }
 
@@ -420,8 +619,11 @@ export class WorkBuddyRouter {
       id: t.id,
       title: t.title,
       mode: t.mode,
+      chatAgentId: t.chatAgentId,
       status: t.status,
       projectId: t.projectId || undefined,
+      // §11：前端按钮门控依据（canManageTaskUi 与服务端同口径）
+      ownerUserId: t.ownerUserId,
       running: this.engine.isRunning(t.id),
       pendingAsk: Boolean(t.pendingAsk),
       memberAgentIds: t.memberAgentIds,
@@ -449,7 +651,7 @@ export class WorkBuddyRouter {
   // ---------- 定时任务辅助 ----------
 
   /** 校验 + 保存（create/update 共用） */
-  private upsertScheduleFromInput(body: any): ScheduledTask {
+  private upsertScheduleFromInput(body: any, opts: { ownerUserId?: string } = {}): ScheduledTask {
     const name = String(body?.name || '').trim()
     if (!name) throw new Error('缺少名称')
     const agentIds = Array.isArray(body?.agentIds) ? Array.from(new Set((body.agentIds as any[]).map(String))) : []
@@ -488,6 +690,8 @@ export class WorkBuddyRouter {
       rule,
       enabled,
       nextRunAt,
+      // §11：归属仅在创建时由服务端会话写入（AI 工具通道无会话 → 缺省宽容模式）
+      ...(opts.ownerUserId ? { ownerUserId: opts.ownerUserId } : {}),
       ...(existing ? { runs: existing.runs, lastRunAt: existing.lastRunAt, createdAt: existing.createdAt, totalRuns: existing.totalRuns, successRuns: existing.successRuns } : {}),
     })
   }
@@ -501,6 +705,8 @@ export class WorkBuddyRouter {
       name: s.name,
       description: s.description,
       agentIds: s.agentIds,
+      // §11：前端按钮门控依据（canManageScheduleUi 与服务端同口径）
+      ownerUserId: s.ownerUserId,
       agents: agents.map((a) => ({ id: a.id, name: a.name, enabled: a.enabled !== false })),
       nodeMappingId: s.nodeMappingId,
       nodeTitle,
@@ -572,9 +778,7 @@ export class WorkBuddyRouter {
         try {
           // 节点主会话（__node__）无智能体记录：按任务节点解析
           const agent = this.store.getAgent(agentId)
-          const target = agent
-            ? await this.resolver.resolve(agent)
-            : await this.engine.resolveExecTarget(task, agentId)
+          const target = await this.engine.resolveExecTarget(task, agentId)
           if (!target || !target.online || !target.baseUrl) return null
           const r = await this.client.getSessionStats(target, binding.remoteSessionId)
           if (!r.ok || !r.stats) return { agentId, ok: false, supported: r.supported !== false, error: r.error }
@@ -684,16 +888,7 @@ export class WorkBuddyRouter {
       if (!binding?.remoteSessionId) continue
       const agent = this.store.getAgent(agentId)
       try {
-        let target = agent
-          ? await this.resolver.resolve(agent).catch(() => undefined)
-          : await this.engine.resolveExecTarget(task, agentId).catch(() => undefined)
-        if (!target || !target.online || !target.baseUrl) {
-          // 回退（与 cancelTask 同款）：会话绑定自带节点直连地址时直接使用，
-          // ONENAT 解析不可达（离线/配置漂移）也能对节点直发协作指令
-          if (binding.baseUrl) {
-            target = { baseUrl: binding.baseUrl, apiKey: this.engine.taskExec(task).apiKey, agentId, online: true } as any
-          }
-        }
+        const target = await this.engine.resolveExecTarget(task, agentId).catch(() => undefined)
         if (!target || !target.online || !target.baseUrl) continue
         return { target, remoteSessionId: binding.remoteSessionId, agentId }
       } catch { /* 下一个成员 */ }
@@ -838,9 +1033,7 @@ export class WorkBuddyRouter {
         try {
           if (!binding?.remoteSessionId) return { agentId, agentName, ok: false, supported: true, error: '成员会话未建立' }
           // 节点主会话（__node__）无智能体记录：按任务节点解析
-          const target = agent
-            ? await this.resolver.resolve(agent)
-            : await this.engine.resolveExecTarget(task, agentId)
+          const target = await this.engine.resolveExecTarget(task, agentId)
           if (!target || !target.online || !target.baseUrl) return { agentId, agentName, ok: false, supported: true, error: (target as any)?.error || '节点离线' }
           const r = await this.client.getSessionTodos(target, binding.remoteSessionId)
           if (!r.ok) return { agentId, agentName, ok: false, supported: r.supported !== false, error: r.error }
@@ -931,9 +1124,7 @@ export class WorkBuddyRouter {
           const agentName = agent?.name || (agentId === '__node__' ? '主会话' : agentId)
           if (!agent && agentId !== '__node__') return null
           // 节点主会话（__node__）无智能体记录：按任务节点解析（仅会话作用域，无默认技能根回退）
-          const target = agent
-            ? await this.resolver.resolve(agent)
-            : await this.engine.resolveExecTarget(task, agentId)
+          const target = await this.engine.resolveExecTarget(task, agentId)
           if (!target || !target.online || !target.baseUrl) return { agentId, agentName, ok: false, supported: true, skills: [] }
           const binding = task.sessions?.[agentId]
           if (binding?.remoteSessionId) {
@@ -999,7 +1190,17 @@ export class WorkBuddyRouter {
   }
 
   public async dispatch(req: IncomingMessage, res: ServerResponse, prefix: string, opts?: { auth?: boolean; session?: SessionInfo }): Promise<boolean> {
-    this.session = opts?.session
+    return this.requestContext.run({ session: opts?.session }, async () => {
+      try { return await this.dispatchRequest(req, res, prefix, opts) }
+      catch (err) {
+        if (!(err instanceof WorkspaceFileError)) throw err
+        this.sendJson(res, err.status, { ok: false, code: err.code, error: err.message })
+        return true
+      }
+    })
+  }
+
+  private async dispatchRequest(req: IncomingMessage, res: ServerResponse, prefix: string, opts?: { auth?: boolean; session?: SessionInfo }): Promise<boolean> {
     const rawUrl = req.url || '/'
     const method = (req.method || 'GET').toUpperCase()
     if (method === 'OPTIONS') {
@@ -1033,8 +1234,9 @@ export class WorkBuddyRouter {
       return true
     }
 
-    // ---------- 小智 MCP 接入（语音助手页，多实例管理；控制台会话） ----------
+    // ---------- 小智 MCP 接入（语音助手页，多实例管理；§11 全局接入点配置仅平台管理员） ----------
     if (p === '/api/xiaozhi/status' && method === 'GET') {
+      if (!this.isAdminOrServiceChannel()) { this.denyNotAdmin(res, '管理语音助手接入'); return true }
       const statusMap = new Map((this.xiaozhi?.listStatus() || []).map((s) => [s.id, s]))
       const endpoints = (this.store.getSettings().xiaozhi?.endpoints || []).map((e) => ({
         ...e,
@@ -1045,6 +1247,7 @@ export class WorkBuddyRouter {
       return true
     }
     if (p === '/api/xiaozhi/endpoints' && method === 'POST') {
+      if (!this.isAdminOrServiceChannel()) { this.denyNotAdmin(res, '管理语音助手接入'); return true }
       const body = await this.parseBody(req)
       const endpoint = String(body?.endpoint || '').trim()
       if (!/^wss?:\/\//.test(endpoint)) {
@@ -1065,6 +1268,7 @@ export class WorkBuddyRouter {
     }
     const xzDelMatch = /^\/api\/xiaozhi\/endpoints\/([^/]+)$/.exec(p)
     if (xzDelMatch && method === 'DELETE') {
+      if (!this.isAdminOrServiceChannel()) { this.denyNotAdmin(res, '管理语音助手接入'); return true }
       const id = decodeURIComponent(xzDelMatch[1])
       const list = (this.store.getSettings().xiaozhi?.endpoints || []).filter((e) => e.id !== id)
       this.saveXiaozhiEndpoints(list)
@@ -1086,16 +1290,33 @@ export class WorkBuddyRouter {
       } else if (scope === 'all') {
         if (!this.isPlatformAdmin()) { this.sendJson(res, 403, { ok: false, error: '仅平台管理员可查看全部项目' }); return true }
       }
-      this.sendJson(res, 200, { ok: true, data: list.map((proj) => this.projectSummary(proj)) })
+      try {
+        const q = url.searchParams
+        const options = Object.fromEntries(['name', 'workspace', 'keyword', 'limit', 'offset', 'compact'].filter(k => q.has(k)).map(k => [k, q.get(k)]))
+        // Existing console consumers expect the complete array without query options.
+        if (!Object.keys(options).length) {
+          this.sendJson(res, 200, { ok: true, data: list.map(proj => this.projectSummary(proj)) })
+        } else {
+          const query = queryProjects(list, options)
+          const tasks = this.store.getTasks().filter(t => !this.session || canViewTask(this.session, t, this.permContext()))
+          const data = query.rows.map(proj => query.compact
+            ? compactProject(proj, tasks.filter(t => t.projectId === proj.id).length)
+            : this.projectSummary(proj))
+          this.sendJson(res, 200, { ok: true, data, ...query.metadata })
+        }
+      } catch (err: any) {
+        this.sendJson(res, err.status || 400, { ok: false, error: err.message, code: 'INVALID_PARAMS' })
+      }
       return true
     }
     if (p === '/api/projects' && method === 'POST') {
       const body = await this.parseBody(req)
       try {
+        const existing = body?.id ? this.store.getProject(String(body.id)) : undefined
         const saved = this.upsertProjectFromInput(body)
-        this.audit('project.create', 'project', saved.id, saved.name)
-        // 创建者自动成为 owner（未启用成员隔离的存量流程不受影响）
-        if (this.session?.userId && !saved.owner) {
+        this.audit(existing ? 'project.update' : 'project.create', 'project', saved.id, saved.name)
+        // Only a new project gets the creator's ACL. Editing a legacy project must not claim it or replace members.
+        if (!existing && this.session?.userId) {
           const finalized = this.store.upsertProject({
             id: saved.id,
             owner: this.session.userId,
@@ -1106,17 +1327,28 @@ export class WorkBuddyRouter {
         }
         this.sendJson(res, 200, { ok: true, data: this.projectSummary(saved) })
       } catch (err: any) {
-        this.sendJson(res, 400, { ok: false, error: err?.message || String(err) })
+        this.sendJson(res, err?.status || 400, { ok: false, error: err?.message || String(err), ...(err?.code ? { code: err.code } : {}) })
       }
       return true
     }
     // ---------- 项目：从远程 DSH 导入（发分析任务 → 节点智能体分析项目 → 回调平台接口自动建项目） ----------
     if (p === '/api/projects/import' && method === 'POST') {
       const body = await this.parseBody(req)
-      const nodeRef = body?.nodeRef && typeof body.nodeRef === 'object' && typeof body.nodeRef.kind === 'string' ? (body.nodeRef as DshRef) : undefined
-      const wsPath = String(body?.workspacePath || '').trim()
-      if (!nodeRef || !wsPath) {
-        this.sendJson(res, 400, { ok: false, error: '缺少 nodeRef（来源 DSH 主节点）或 workspacePath（远端工作区路径）' })
+      const nodeRef = normalizeDshRef(body?.nodeRef)
+      const wsPath = normalizeWorkspacePath(String(body?.workspacePath || ''))
+      if ('error' in nodeRef || !wsPath) {
+        this.sendJson(res, 400, { ok: false, error: '缺少合法 nodeRef（来源 DSH 主节点）或 workspacePath（远端工作区路径）' })
+        return true
+      }
+      try { validateWorkspacePath(wsPath) } catch (err: any) {
+        this.sendJson(res, err.status, { ok: false, code: err.code, error: err.message })
+        return true
+      }
+      const matches = this.store.getProjectsForWorkspace(nodeRef, wsPath)
+      if (matches.length) {
+        const existing = matches.find((proj) => this.canSeeProject(proj))
+        if (!existing) { this.sendJson(res, 409, { ok: false, code: 'PROJECT_WORKSPACE_CONFLICT', error: new ProjectWorkspaceConflictError().message }); return true }
+        this.sendJson(res, 200, { ok: true, data: { projectId: existing.id, project: this.projectSummary(existing), reused: true } })
         return true
       }
       const name = String(body?.name || '').trim() || wsPath.split('/').filter(Boolean).pop() || '导入项目'
@@ -1144,6 +1376,7 @@ export class WorkBuddyRouter {
           nodeRef,
           message: buildProjectImportPrompt({ name, path: wsPath, createUrl, nodeLabel, nodeKey: this.nodeKeyOf(nodeRef), importId, experts: expertCandidates, connectors: connectorCandidates }),
           creator: 'console',
+          ownerUserId: this.session?.userId,
         })
       } catch (err: any) {
         this.sendJson(res, 200, { ok: false, error: err?.message || '发起导入任务失败' })
@@ -1153,7 +1386,7 @@ export class WorkBuddyRouter {
       for (const [k, v] of this.pendingProjectImports) {
         if (Date.now() - v.at > 2 * 60 * 60 * 1000) this.pendingProjectImports.delete(k)
       }
-      this.pendingProjectImports.set(token, { importId, name, path: wsPath, nodeRef, nodeLabel, taskId: task.id, at: Date.now() })
+      this.pendingProjectImports.set(token, { importId, ownerUserId: this.session?.userId, name, path: wsPath, nodeRef, nodeLabel, taskId: task.id, at: Date.now() })
       this.sendJson(res, 200, { ok: true, data: { taskId: task.id, importId, nodeLabel } })
       return true
     }
@@ -1173,7 +1406,7 @@ export class WorkBuddyRouter {
       }
       // 防串号校验（载荷必须带与导入令牌一致的 node/workspace，提示词已预填）：同机并发导入可能互相
       // 覆盖载荷文件，比对不符即 409 拒收，避免把 A 项目的表单写进 B 项目（2026-10-18 线上事故）
-      const normPath = (v: string) => v.replace(/\/+$/, '')
+      const normPath = normalizeWorkspacePath
       const bodyNode = String(body.node || '').trim()
       const bodyWorkspace = String(body.workspace || '').trim()
       if (bodyNode !== this.nodeKeyOf(pending.nodeRef) || normPath(bodyWorkspace) !== normPath(pending.path)) {
@@ -1203,17 +1436,21 @@ export class WorkBuddyRouter {
         }
       }
       const instruction = String(body.instruction || '').trim().slice(0, 6000) || (String(body.summary || '').trim() ? `项目概述：${String(body.summary).trim()}` : undefined)
-      // 幂等：同节点同路径的项目已存在 → 视为重新导入，更新原项目而不是重复建卡
-      const sameRef = (a: DshRef, b: DshRef): boolean => {
-        if (a.kind !== b.kind) return false
-        if (a.kind === 'mapping' && b.kind === 'mapping') return a.mappingId === b.mappingId
-        if (a.kind === 'direct' && b.kind === 'direct') return a.apiBaseUrl === b.apiBaseUrl
-        if (a.kind === 'app' && b.kind === 'app') return a.appId === b.appId
+      // Callback identity comes from the import initiator, never the current request's cookie.
+      // Re-read account role/status and membership so revocation while analysis ran takes effect.
+      const user = pending.ownerUserId ? this.auth?.getUserById(pending.ownerUserId) : undefined
+      if (pending.ownerUserId && user?.status !== 'active') {
+        this.sendJson(res, 403, { ok: false, error: '发起导入的用户已不可用，请重新登录后发起导入' })
         return true
       }
-      const existing = this.store.getProjects().find((pr) => pr.workspace && normPath(pr.workspace) === normPath(pending.path) && sameRef(pr.dshRef, pending.nodeRef))
-      const project = this.store.upsertProject({
-        id: existing?.id,
+      const matches = this.store.getProjectsForWorkspace(pending.nodeRef, pending.path)
+      const existing = matches.find((pr) => !pending.ownerUserId || canAccessProject(user ? { userId: user.id, role: user.role } : undefined, pr, 'view'))
+      if (matches.length && !existing) {
+        this.sendJson(res, 409, { ok: false, code: 'PROJECT_WORKSPACE_CONFLICT', error: new ProjectWorkspaceConflictError().message })
+        return true
+      }
+      const project = existing || this.store.upsertProject({
+        ...(pending.ownerUserId ? { owner: pending.ownerUserId, projectMembers: [{ userId: pending.ownerUserId, role: 'owner' as const, joinedAt: Date.now() }] } : {}),
         name,
         dshRef: pending.nodeRef,
         workspace: pending.path,
@@ -1231,6 +1468,27 @@ export class WorkBuddyRouter {
       this.sendJson(res, 200, { ok: true, data: { projectId: project.id, name: project.name, workspace: project.workspace, node: pending.nodeRef, nodeLabel: pending.nodeLabel, updated: Boolean(existing), dropped } })
       return true
     }
+    // Both orientations share one service and the same project-owned relationship list.
+    const projectBots = /^\/api\/projects\/([^/]+)\/agents(?:\/([^/]+))?$/.exec(p)
+    const botProjects = /^\/api\/agents\/([^/]+)\/projects(?:\/([^/]+))?$/.exec(p)
+    if (projectBots || botProjects) {
+      const relations = new ProjectAgents(this.store)
+      const actor = { session: this.session }
+      try {
+        const projectId = decodeURIComponent(projectBots?.[1] || botProjects?.[2] || '')
+        const agentId = decodeURIComponent(botProjects?.[1] || projectBots?.[2] || '')
+        if (method === 'GET' && !(projectBots?.[2] || botProjects?.[2])) {
+          this.sendJson(res, 200, { ok: true, data: projectBots ? relations.forProject(projectId, actor) : relations.forAgent(agentId, actor) })
+        } else if ((method === 'PUT' || method === 'DELETE') && projectId && agentId) {
+          const data = relations.change(projectId, agentId, method === 'PUT', actor)
+          this.audit(method === 'PUT' ? 'project.bot.link' : 'project.bot.unlink', 'project', projectId, agentId)
+          this.sendJson(res, 200, { ok: true, data })
+        } else this.sendJson(res, 405, { ok: false, error: '使用 GET 查询或 PUT/DELETE 修改单条关联' })
+      } catch (err: any) {
+        this.sendJson(res, err.status || 400, { ok: false, code: err.code, error: err.message })
+      }
+      return true
+    }
     const projMatch = /^\/api\/projects\/([^/]+)$/.exec(p)
     if (projMatch) {
       const id = decodeURIComponent(projMatch[1])
@@ -1243,7 +1501,7 @@ export class WorkBuddyRouter {
         return true
       }
       if (method === 'DELETE') {
-        if (proj && WorkBuddyRouter.projectIsolated(proj) && !this.isProjectOwner(proj)) {
+        if (proj && !this.isProjectOwner(proj)) {
           this.sendJson(res, 403, { ok: false, error: '仅项目 owner 或平台管理员可删除项目' })
           return true
         }
@@ -1252,7 +1510,7 @@ export class WorkBuddyRouter {
         return true
       }
       if (method === 'PATCH' || method === 'PUT') {
-        if (proj && WorkBuddyRouter.projectIsolated(proj) && !this.isProjectOwner(proj)) {
+        if (proj && !this.isProjectOwner(proj)) {
           this.sendJson(res, 403, { ok: false, error: '仅项目 owner 或平台管理员可编辑项目' })
           return true
         }
@@ -1265,7 +1523,7 @@ export class WorkBuddyRouter {
           const saved = this.upsertProjectFromInput({ ...body, id })
           this.sendJson(res, 200, { ok: true, data: this.projectSummary(saved) })
         } catch (err: any) {
-          this.sendJson(res, 400, { ok: false, error: err?.message || String(err) })
+          this.sendJson(res, err?.status || 400, { ok: false, error: err?.message || String(err), ...(err?.code ? { code: err.code } : {}) })
         }
         return true
       }
@@ -1396,7 +1654,21 @@ export class WorkBuddyRouter {
     if (projInviteMatch) {
       const proj = this.store.getProject(decodeURIComponent(projInviteMatch[1]))
       if (!proj || !this.canSeeProject(proj)) { this.sendJson(res, 404, { ok: false, error: '项目不存在' }); return true }
-      if (!this.isProjectOwner(proj)) { this.sendJson(res, 403, { ok: false, error: '仅项目 owner 或平台管理员可管理项目邀请' }); return true }
+      // 邀请创建：owner / 平台管理员 / 开启「成员可邀请」开关的 member（§10.2 allowMemberInvite）
+      // 邀请列表与重发/撤销：仍限 owner / 平台管理员
+      const isInviteCreate = method === 'POST' && !projInviteMatch[2]
+      const inviteAllowed = isInviteCreate
+        ? canAccessProject(this.session, proj, 'invite')
+        : this.isProjectOwner(proj)
+      if (!inviteAllowed) {
+        this.sendJson(res, 403, {
+          ok: false,
+          error: isInviteCreate
+            ? '仅项目 owner、平台管理员，或开启「成员可邀请」的成员可邀请他人'
+            : '仅项目 owner 或平台管理员可管理项目邀请',
+        })
+        return true
+      }
       const sendProjectInviteMail = async (email: string, role: 'owner' | 'member', token: string) => {
         const inviteLink = `${this.requestBase(req, prefix)}/project-invite?token=${token}`
         if (!this.mail) return { sent: false, status: 'mock' as const, error: '邮件服务不可用', inviteLink }
@@ -1451,6 +1723,250 @@ export class WorkBuddyRouter {
           this.sendJson(res, 201, { ok: true, data: { email: emailRaw, role, emailSent: email.sent, emailStatus: email.status, emailError: email.error, inviteLink: email.inviteLink, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 } })
           return true
         }
+      }
+    }
+
+    // ---------- Backlog 集成（B1-B7，docs/design-backlog-integration.md §5.2/§6/§7.3） ----------
+    // 全部过既有鉴权（外层 dispatch）+ 项目可见性门（canSeeProject）；写操作过归档只读拦截（P-08 语义同 /api/tasks）。
+    if (p === '/api/backlog/overview' && method === 'GET') {
+      // 聚合与失败隔离逻辑收敛在 backlog-service（工具通道 overview 复用同一实现）；
+      // 查询契约见 docs/design-backlog-query-filters.md §4.2：data 仍是项目分组数组（向后兼容），
+      // 信封额外带 query / summary / facets。默认不排除已完成（openOnly 才按各项目 statuses 排除）。
+      const q = new URL(req.url || '/', 'http://localhost').searchParams
+      const parsed = parseBacklogQuery(q)
+      if (parsed.errors.length) {
+        this.sendJson(res, 400, { ok: false, error: parsed.errors.join('；'), code: 'INVALID_QUERY', errors: parsed.errors })
+        return true
+      }
+      const visible = this.store.getProjects().filter((pr) => this.canSeeProject(pr))
+      // projectIds 先筛项目（项目作用域）；条目过滤由 service 逐项目按各自 statuses 应用
+      const scoped = parsed.query.projectIds?.length
+        ? visible.filter((pr) => parsed.query.projectIds!.includes(pr.id))
+        : visible
+      const data = await overviewBacklog(
+        { client: this.client, store: this.store, resolver: this.resolver },
+        scoped,
+        { query: parsed.query },
+      )
+      this.sendJson(res, 200, {
+        ok: true,
+        data,
+        query: parsed.query,
+        summary: summarizeBacklogOverview(data),
+        facets: mergeBacklogFacets(data.map((row) => row.facets)),
+      })
+      return true
+    }
+
+    if (p.startsWith('/api/projects/') && p.includes('/backlog')) {
+      const segs = p.split('/').filter(Boolean) // ['api','projects',<id>,'backlog',...]
+      const proj = this.store.getProject(segs[2])
+      if (!proj || !this.canSeeProject(proj)) { this.sendJson(res, 404, { ok: false, error: '项目不存在或不可见' }); return true }
+      const rest = segs.slice(4)
+      const projectId = proj.id
+      const readOnly = Boolean(proj.archivedAt)
+      const rejectArchived = () => {
+        this.sendJson(res, 400, { ok: false, error: '项目已归档（只读），请先恢复再操作 backlog' })
+      }
+      const nodeCtx = async (): Promise<{ ok: true; target: any; workspace: string } | { ok: false; status: number; error: string }> => {
+        if (!proj.workspace) return { ok: false, status: 400, error: '项目未配置工作目录（workspace），无法使用 backlog' }
+        const target = await this.resolver.resolveRef(proj.dshRef, proj.apiKey, 'project-backlog')
+        if (!target.online || !target.baseUrl) return { ok: false, status: 502, error: target.error || '节点不可达' }
+        return { ok: true, target, workspace: proj.workspace }
+      }
+      try {
+        // GET 列表（读：归档项目也允许只读查看）；查询契约见 docs/design-backlog-query-filters.md §4.1：
+        // 先取全量条目（ready/blocked 判依赖需要全量语料），再用查询引擎过滤/排序/切窗。
+        // 旧参数 ?orderBy=&order= 由 parseBacklogQuery 归一为 sort/order，继续可用。
+        if (rest.length === 0 && method === 'GET') {
+          const ctx = await nodeCtx()
+          if (!ctx.ok) { this.sendJson(res, ctx.status, { ok: false, error: ctx.error }); return true }
+          const parsed = parseBacklogQuery(new URL(req.url || '/', 'http://localhost').searchParams)
+          if (parsed.errors.length) {
+            this.sendJson(res, 400, { ok: false, error: parsed.errors.join('；'), code: 'INVALID_QUERY', errors: parsed.errors })
+            return true
+          }
+          const list = await listBacklogWithTasks(
+            { client: this.client, store: this.store },
+            ctx.target,
+            ctx.workspace,
+            projectId,
+          )
+          const result = applyBacklogQuery(list.items, parsed.query, { statuses: list.config.statuses })
+          this.sendJson(res, 200, {
+            ok: true,
+            data: {
+              ...list,
+              // 覆盖 list.items：过滤/排序/切窗后的条目（带 isReady 等派生字段，searchText 已剥离）
+              items: stripBacklogSearchText(result.items),
+              total: result.total,
+              matched: result.matched,
+              counts: result.counts,
+              window: result.window,
+              facets: result.facets,
+              query: parsed.query,
+              archived: readOnly,
+              statuses: list.config.statuses,
+              defaultStatus: list.config.defaultStatus,
+              instructionSnippet: backlogInstructionSnippet(),
+            },
+          })
+          return true
+        }
+        // POST 未完成事项采集（简版：A 任务账本 + B 工作区代码/文档确定性扫描）
+        // mode=preview（缺省）：只算候选、不写节点；mode=create：按 keys 落盘为 backlog 待办（keys 省略 = 全建）。
+        // 幂等靠条目正文 sourceKey 对账 —— 重复点击不会重复登记；docs/design-backlog-auto-collect.md
+        if (rest.length === 1 && rest[0] === 'collect' && method === 'POST') {
+          if (readOnly) { rejectArchived(); return true }
+          const body = await this.parseBody(req)
+          const mode = body?.mode === 'create' ? 'create' : 'preview'
+          const ctx = await nodeCtx()
+          if (!ctx.ok) { this.sendJson(res, ctx.status, { ok: false, error: ctx.error }); return true }
+          if (mode === 'preview') {
+            const data = await previewProjectCollect(this.client, this.store, proj, ctx.target, ctx.workspace)
+            this.audit('backlog.collect.preview', 'project', projectId, `candidates=${data.candidates.length}`)
+            this.sendJson(res, 200, { ok: true, data })
+            return true
+          }
+          const keys = Array.isArray(body?.keys) ? body.keys.map(String).filter(Boolean) : undefined
+          const data = await applyProjectCollect(this.client, this.store, proj, ctx.target, ctx.workspace, keys)
+          this.audit('backlog.collect', 'project', projectId, `created=${data.created.length}/${data.candidates}`)
+          this.sendJson(res, 200, { ok: true, data })
+          return true
+        }
+        // POST 初始化（途径 A，幂等）
+        if (rest.length === 1 && rest[0] === 'init' && method === 'POST') {
+          if (readOnly) { rejectArchived(); return true }
+          const body = await this.parseBody(req)
+          const ctx = await nodeCtx()
+          if (!ctx.ok) { this.sendJson(res, ctx.status, { ok: false, error: ctx.error }); return true }
+          const out = await initBacklog(this.client, ctx.target, ctx.workspace, { projectName: proj.name, sample: Boolean(body?.sample) })
+          if (body?.updateInstruction && !`${proj.instruction || ''}`.includes('## Backlog 待办协作约定')) {
+            this.store.upsertProject({ id: projectId, instruction: `${proj.instruction ? proj.instruction + '\n\n' : ''}${backlogInstructionSnippet()}` } as any)
+          }
+          this.audit('backlog.init', 'project', projectId, `sample=${Boolean(body?.sample)}`)
+          this.sendJson(res, 200, { ok: true, data: out })
+          return true
+        }
+        // POST 新建
+        if (rest.length === 1 && rest[0] === 'items' && method === 'POST') {
+          if (readOnly) { rejectArchived(); return true }
+          const body = await this.parseBody(req)
+          if (!String(body?.title || '').trim()) { this.sendJson(res, 400, { ok: false, error: '标题必填' }); return true }
+          const ctx = await nodeCtx()
+          if (!ctx.ok) { this.sendJson(res, ctx.status, { ok: false, error: ctx.error }); return true }
+          const item = await createItem(this.client, ctx.target, ctx.workspace, {
+            title: String(body.title).trim(),
+            description: body.description ? String(body.description) : undefined,
+            acceptance: Array.isArray(body.acceptance) ? body.acceptance.map(String).filter(Boolean) : undefined,
+            labels: Array.isArray(body.labels) ? body.labels.map(String).filter(Boolean) : undefined,
+            dependencies: Array.isArray(body.dependencies) ? body.dependencies.map(String).filter(Boolean) : undefined,
+            assignees: Array.isArray(body.assignees) ? body.assignees.map(String).filter(Boolean) : undefined,
+            priority: body.priority ? String(body.priority) : undefined,
+            dueDate: body.dueDate ? String(body.dueDate) : undefined,
+          })
+          this.audit('backlog.create', 'project', projectId, item.itemId)
+          this.sendJson(res, 201, { ok: true, data: item })
+          return true
+        }
+        // POST 批量派发
+        if (rest.length === 1 && rest[0] === 'dispatch-batch' && method === 'POST') {
+          if (readOnly) { rejectArchived(); return true }
+          const body = await this.parseBody(req)
+          const itemIds = Array.isArray(body?.itemIds) ? body.itemIds.map(String) : []
+          if (!itemIds.length) { this.sendJson(res, 400, { ok: false, error: 'itemIds 不能为空' }); return true }
+          const ctx = await nodeCtx()
+          if (!ctx.ok) { this.sendJson(res, ctx.status, { ok: false, error: ctx.error }); return true }
+          const results: Array<{ itemId: string; ok: boolean; taskId?: string; error?: string }> = []
+          for (const itemId of itemIds) {
+            try {
+              const r = await this.dispatchBacklogItem(proj, ctx.target, ctx.workspace, itemId, { force: Boolean(body?.force) })
+              results.push({ itemId, ok: true, taskId: r.task.id })
+            } catch (err: any) {
+              results.push({ itemId, ok: false, error: String(err?.message || err).slice(0, 200) })
+            }
+          }
+          this.audit('backlog.dispatch-batch', 'project', projectId, `${results.filter((r) => r.ok).length}/${results.length}`)
+          this.sendJson(res, 200, { ok: true, data: results })
+          return true
+        }
+        // /items/<itemId>[/<action>]
+        if (rest.length >= 2 && rest[0] === 'items') {
+          const itemId = decodeURIComponent(rest[1])
+          const action = rest[2] || ''
+          const ctx = await nodeCtx()
+          if (!ctx.ok) { this.sendJson(res, ctx.status, { ok: false, error: ctx.error }); return true }
+          const found = await findItem(this.client, ctx.target, ctx.workspace, itemId)
+          if (!found) { this.sendJson(res, 404, { ok: false, error: `待办 ${itemId} 不存在` }); return true }
+          const { item } = found
+          if (!action && method === 'GET') {
+            const raw = await readItem(this.client, ctx.target, ctx.workspace, item.fileName)
+            const linked = this.store.getTasks()
+              .filter((t) => t.backlogRef?.projectId === projectId && normalizeItemId(t.backlogRef!.itemId) === normalizeItemId(item.itemId))
+              .sort((a, b) => b.updatedAt - a.updatedAt)
+            this.sendJson(res, 200, {
+              ok: true,
+              // searchText 是服务端检索语料，任何回包都不得携带
+              data: { item: stripBacklogItemSearchText(item), raw, statuses: found.list.config.statuses, tasks: linked.map((t) => ({ id: t.id, status: t.status, summaryStatus: t.summary?.status || '', summary: t.summary ? { overview: t.summary.overview, finalConclusion: t.summary.finalConclusion, completedAt: t.summary.completedAt } : null, writebackFailed: t.backlogWritebackFailed || null, updatedAt: t.updatedAt })) },
+            })
+            return true
+          }
+          if (!action && (method === 'PUT' || method === 'PATCH')) {
+            if (readOnly) { rejectArchived(); return true }
+            const body = await this.parseBody(req)
+            const raw = await readItem(this.client, ctx.target, ctx.workspace, item.fileName)
+            let next = encodeFrontmatter(raw, {
+              title: body?.title !== undefined ? String(body.title).trim() : undefined,
+              status: body?.status !== undefined ? String(body.status) : undefined,
+              priority: body?.priority !== undefined ? String(body.priority) : undefined,
+              dueDate: body?.dueDate !== undefined ? String(body.dueDate) : undefined,
+              ordinal: body?.ordinal !== undefined ? Number(body.ordinal) : undefined,
+              labels: Array.isArray(body?.labels) ? body.labels.map(String).filter(Boolean) : undefined,
+              dependencies: Array.isArray(body?.dependencies) ? body.dependencies.map(String).filter(Boolean) : undefined,
+              assignees: Array.isArray(body?.assignees) ? body.assignees.map(String).filter(Boolean) : undefined,
+            })
+            if (typeof body?.description === 'string') next = replaceDescription(next, body.description)
+            if (Array.isArray(body?.acceptance)) next = replaceAcceptance(next, body.acceptance.map(String))
+            await writeItem(this.client, ctx.target, ctx.workspace, item.fileName, () => next, { base: raw })
+            this.audit('backlog.edit', 'project', projectId, item.itemId)
+            this.sendJson(res, 200, { ok: true, data: { itemId: item.itemId } })
+            return true
+          }
+          if (!action && method === 'DELETE') {
+            if (readOnly) { rejectArchived(); return true }
+            await deleteItem(this.client, ctx.target, ctx.workspace, item.fileName)
+            this.audit('backlog.delete', 'project', projectId, item.itemId)
+            this.sendJson(res, 200, { ok: true })
+            return true
+          }
+          if (action === 'dispatch' && method === 'POST') {
+            if (readOnly) { rejectArchived(); return true }
+            const body = await this.parseBody(req)
+            const r = await this.dispatchBacklogItem(proj, ctx.target, ctx.workspace, item.itemId, { force: Boolean(body?.force), instruction: body?.instruction ? String(body.instruction) : undefined })
+            this.audit('backlog.dispatch', 'project', projectId, `${item.itemId} → ${r.task.id}`)
+            this.sendJson(res, 200, { ok: true, data: r })
+            return true
+          }
+        }
+        // POST 重试回写：/backlog/retry-writeback/<taskId>
+        if (rest.length === 2 && rest[0] === 'retry-writeback' && method === 'POST') {
+          if (readOnly) { rejectArchived(); return true }
+          const task = this.store.getTask(rest[1])
+          if (!task || task.backlogRef?.projectId !== projectId) { this.sendJson(res, 404, { ok: false, error: '任务不存在或无 backlog 来源' }); return true }
+          try {
+            await this.engine.runBacklogWriteback(task)
+            this.sendJson(res, 200, { ok: true })
+          } catch (err: any) {
+            // 统一走引擎的失败记账：失败标记 + 退避计数推进（TASK-2 补偿器共用同一退避序列）
+            this.engine.recordWritebackFailure(task.id, err)
+            this.sendJson(res, 502, { ok: false, error: String(err?.message || err).slice(0, 300) })
+          }
+          return true
+        }
+      } catch (err: any) {
+        const conflict = err?.name === 'BacklogConflictError'
+        this.sendJson(res, conflict ? 409 : err?.status && Number(err.status) >= 400 ? Number(err.status) : 400, { ok: false, error: String(err?.message || err), code: conflict ? 'CONFLICT' : err?.code || undefined })
+        return true
       }
     }
 
@@ -1567,37 +2083,57 @@ export class WorkBuddyRouter {
       }
     }
 
-    // ---------- 监控大屏（只读聚合） ----------
+    // ---------- 监控大屏（只读聚合；§11 仅平台管理员，AI 工具通道白名单内保持开放） ----------
     if (this.monitor && p === '/api/monitor/overview' && method === 'GET') {
+      if (!this.isAdminOrServiceChannel()) { this.denyNotAdmin(res, '查看监控大屏'); return true }
       try {
-        const data = await this.monitor.getOverview()
+        const overview = await this.monitor.getOverview()
+        const q = new URL(req.url || '/', 'http://localhost').searchParams
+        const options = Object.fromEntries(['projectId', 'section', 'compact', 'limit'].filter(k => q.has(k)).map(k => [k, q.get(k)]))
+        const data = queryMonitorOverview(overview, options, {
+          projects: this.store.getProjects().filter(p => !this.session || this.canSeeProject(p)),
+          tasks: this.store.getTasks().filter(t => !this.session || canViewTask(this.session, t, this.permContext())),
+        })
         this.sendJson(res, 200, { ok: true, data })
       } catch (err: any) {
-        this.sendJson(res, 500, { ok: false, error: err?.message || String(err) })
+        this.sendJson(res, err.status || 500, { ok: false, error: err?.message || String(err) })
       }
       return true
     }
     if (this.monitor && p === '/api/monitor/events' && method === 'GET') {
+      if (!this.isAdminOrServiceChannel()) { this.denyNotAdmin(res, '查看监控大屏'); return true }
       const url = new URL(req.url || '/', 'http://localhost')
       const limit = Number(url.searchParams.get('limit') || 200)
       this.sendJson(res, 200, { ok: true, data: this.monitor.getRecentEvents(limit) })
       return true
     }
     if (this.monitor && p === '/api/monitor/history' && method === 'GET') {
+      if (!this.isAdminOrServiceChannel()) { this.denyNotAdmin(res, '查看监控大屏'); return true }
       const url = new URL(req.url || '/', 'http://localhost')
       const days = Number(url.searchParams.get('days') || 7)
       this.sendJson(res, 200, { ok: true, data: { days: this.monitor.readHistory(days) } })
       return true
     }
 
-    // ---------- Token 消耗明细报表（只读归因聚合） ----------
+    // ---------- Token 消耗明细报表（只读归因聚合；§11 全局报表仅管理员） ----------
     if (p === '/api/usage/tokens/summary' && method === 'GET') {
+      if (!this.isAdminOrServiceChannel()) { this.denyNotAdmin(res, '查看全局 Token 用量'); return true }
       const url = new URL(req.url || '/', 'http://localhost')
       const { from, to } = parseUsageRange(url)
       this.sendJson(res, 200, { ok: true, data: this.usage.summary(from, to) })
       return true
     }
     if (p === '/api/usage/tokens/records' && method === 'GET') {
+      // 带 taskId = 任务内「Token 明细」（S2-1，日常功能）：随任务可见性（§11 canViewTask）；
+      // 不带 taskId = 跨用户全局报表，仅平台管理员
+      const isPerTask = Boolean(new URL(req.url || '/', 'http://localhost').searchParams.get('taskId'))
+      if (isPerTask) {
+        const tid = new URL(req.url || '/', 'http://localhost').searchParams.get('taskId') || ''
+        if (!this.taskForView(tid)) { this.sendJson(res, 404, { ok: false, error: 'Task not found' }); return true }
+      } else if (!this.isAdminOrServiceChannel()) {
+        this.denyNotAdmin(res, '查看全局 Token 用量')
+        return true
+      }
       const url = new URL(req.url || '/', 'http://localhost')
       const { from, to } = parseUsageRange(url)
       const q = url.searchParams
@@ -1620,11 +2156,19 @@ export class WorkBuddyRouter {
     // ---------- 资源目录 ----------
     if (p === '/api/resources' && method === 'GET') {
       try {
+        // 微缓存 1.5s：多标签页秒级轮询（实测 2-3 次/秒）共享同一响应，
+        // probeAllDsh 也随之折叠 —— 否则轮询风暴会放大引擎探测与凭证预算消耗
+        const cached = this.resourcesCache
+        if (cached && Date.now() - cached.at < 1500) {
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
+          res.end(cached.body)
+          return true
+        }
         const snap = await this.directory.refresh(false)
         // 后台预热引擎探测（TTL 内不重复打节点）；响应不等它 —— 首屏拿到 endpoints，
         // 探测完成后前端经 /api/resources/probe 增量补 engine 字段
         void this.directory.probeAllDsh().catch(() => {})
-        this.sendJson(res, 200, {
+        const body = JSON.stringify({
           ok: true,
           data: {
             fetchedAt: snap.fetchedAt,
@@ -1633,6 +2177,9 @@ export class WorkBuddyRouter {
             endpoints: this.attachEngine(this.directory.listEndpoints()),
           },
         })
+        this.resourcesCache = { at: Date.now(), body }
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
+        res.end(body)
       } catch (err: any) {
         this.sendJson(res, 200, { ok: false, error: err?.message || String(err), data: { configured: this.directory.configured, endpoints: [] } })
       }
@@ -1640,6 +2187,7 @@ export class WorkBuddyRouter {
     }
     if (p === '/api/resources/refresh' && method === 'POST') {
       try {
+        this.resourcesCache = undefined
         const snap = await this.directory.refresh(true)
         this.sendJson(res, 200, { ok: true, data: { fetchedAt: snap.fetchedAt, endpoints: this.attachEngine(this.directory.listEndpoints()) } })
       } catch (err: any) {
@@ -1730,14 +2278,16 @@ export class WorkBuddyRouter {
       return true
     }
     if (p === '/api/schedules' && method === 'GET') {
-      const list = this.store.getSchedules().map((s) => this.scheduleSummary(s))
+      // §11：列表按可见性过滤（归属人/admin；存量=全员）
+      const list = this.store.getSchedules().filter((s) => canViewSchedule(this.session, s)).map((s) => this.scheduleSummary(s))
       this.sendJson(res, 200, { ok: true, data: list })
       return true
     }
     if (p === '/api/schedules' && method === 'POST') {
       const body = await this.parseBody(req)
       try {
-        const saved = this.upsertScheduleFromInput(body)
+        const saved = this.upsertScheduleFromInput(body, { ownerUserId: this.session?.userId })
+        this.audit('schedule.create', 'schedule', saved.id, saved.name)
         this.sendJson(res, 200, { ok: true, data: this.scheduleSummary(saved) })
       } catch (err: any) {
         this.sendJson(res, 400, { ok: false, error: err?.message || String(err) })
@@ -1845,7 +2395,8 @@ export class WorkBuddyRouter {
       const id = decodeURIComponent(schedMatch[1])
       if (method === 'GET') {
         const s = this.store.getSchedule(id)
-        if (!s) {
+        // §11：不可见按 404 处理（防枚举）
+        if (!s || !canViewSchedule(this.session, s)) {
           this.sendJson(res, 404, { ok: false, error: '定时任务不存在' })
           return true
         }
@@ -1853,14 +2404,43 @@ export class WorkBuddyRouter {
         return true
       }
       if (method === 'DELETE') {
+        const s = this.store.getSchedule(id)
+        if (!s) {
+          this.sendJson(res, 404, { ok: false, error: '定时任务不存在' })
+          return true
+        }
+        // §11：编辑/删除/toggle/run 仅归属人+admin（存量=仅 admin）；不可见统一 404 防枚举
+        if (!canViewSchedule(this.session, s)) {
+          this.sendJson(res, 404, { ok: false, error: '定时任务不存在' })
+          return true
+        }
+        if (!canManageSchedule(this.session, s)) {
+          this.sendJson(res, 403, { ok: false, error: '仅归属人或管理员可删除该定时任务' })
+          return true
+        }
         const ok = this.store.deleteSchedule(id)
+        if (ok) this.audit('schedule.delete', 'schedule', id, s.name)
         this.sendJson(res, 200, { ok: true, data: { deleted: ok } })
         return true
       }
       if (method === 'PATCH' || method === 'PUT') {
+        const s = this.store.getSchedule(id)
+        if (!s) {
+          this.sendJson(res, 404, { ok: false, error: '定时任务不存在' })
+          return true
+        }
+        if (!canViewSchedule(this.session, s)) {
+          this.sendJson(res, 404, { ok: false, error: '定时任务不存在' })
+          return true
+        }
+        if (!canManageSchedule(this.session, s)) {
+          this.sendJson(res, 403, { ok: false, error: '仅归属人或管理员可编辑该定时任务' })
+          return true
+        }
         const body = await this.parseBody(req)
         try {
           const saved = this.upsertScheduleFromInput({ ...body, id })
+          this.audit('schedule.update', 'schedule', id, saved.name)
           this.sendJson(res, 200, { ok: true, data: this.scheduleSummary(saved) })
         } catch (err: any) {
           this.sendJson(res, 400, { ok: false, error: err?.message || String(err) })
@@ -1876,7 +2456,16 @@ export class WorkBuddyRouter {
         this.sendJson(res, 404, { ok: false, error: '定时任务不存在' })
         return true
       }
+      if (!canViewSchedule(this.session, s)) {
+        this.sendJson(res, 404, { ok: false, error: '定时任务不存在' })
+        return true
+      }
+      if (!canManageSchedule(this.session, s)) {
+        this.sendJson(res, 403, { ok: false, error: '仅归属人或管理员可启停该定时任务' })
+        return true
+      }
       const enabled = !s.enabled
+      this.audit('schedule.toggle', 'schedule', id, `${s.name} → ${enabled ? '启用' : '停用'}`)
       this.store.mutateSchedule(id, (t) => {
         t.enabled = enabled
         t.nextRunAt = enabled ? nextRun(t.rule, Date.now()) : undefined
@@ -1887,8 +2476,18 @@ export class WorkBuddyRouter {
     const schedRunMatch = /^\/api\/schedules\/([^/]+)\/run$/.exec(p)
     if (schedRunMatch && method === 'POST') {
       const id = decodeURIComponent(schedRunMatch[1])
-      if (!this.store.getSchedule(id)) {
+      const sched = this.store.getSchedule(id)
+      if (!sched) {
         this.sendJson(res, 404, { ok: false, error: '定时任务不存在' })
+        return true
+      }
+      // §11：手动 run 会派生任务消耗资源，归管理面（仅归属人+admin）
+      if (!canViewSchedule(this.session, sched)) {
+        this.sendJson(res, 404, { ok: false, error: '定时任务不存在' })
+        return true
+      }
+      if (!canManageSchedule(this.session, sched)) {
+        this.sendJson(res, 403, { ok: false, error: '仅归属人或管理员可手动触发该定时任务' })
         return true
       }
       if (!this.scheduler) {
@@ -1897,6 +2496,7 @@ export class WorkBuddyRouter {
       }
       try {
         const run = await this.scheduler.fire(id, true)
+        this.audit('schedule.run', 'schedule', id, `${sched.name}（手动触发）`)
         this.sendJson(res, 200, { ok: true, data: run })
       } catch (err: any) {
         this.sendJson(res, 500, { ok: false, error: err?.message || String(err) })
@@ -1923,20 +2523,50 @@ export class WorkBuddyRouter {
     // ---------- 设置 ----------
     if (p === '/api/settings' && method === 'GET') {
       const s = this.store.getSettings()
-      this.sendJson(res, 200, { ok: true, data: { ...s, onenat: { ...s.onenat, apiKey: s.onenat.apiKey ? s.onenat.apiKey.slice(0, 8) + '…' : '' }, aiToken: this.auth?.getAiToken() || '' } })
+      const maskedOnenat = { ...s.onenat, apiKey: s.onenat.apiKey ? s.onenat.apiKey.slice(0, 8) + '…' : '' }
+      // §11：全局凭证面收敛——AI 工具通道 token 与小智接入点凭证仅平台管理员可见；
+      // 其余非敏感配置（base/默认模型/归档天数等）保留给普通用户页面展示
+      const data: Record<string, unknown> = this.isAdminOrServiceChannel()
+        ? { ...s, onenat: maskedOnenat, aiToken: this.auth?.getAiToken() || '' }
+        : { ...s, onenat: maskedOnenat, aiToken: '', xiaozhi: undefined }
+      this.sendJson(res, 200, { ok: true, data })
       return true
     }
-    // AI APIKEY 重置（仅登录会话；旧令牌立即失效，无需重启）
+    // AI 接入安装提示词：服务端统一来源（Web 控制台与安卓客户端共用同一份正文，禁止客户端另拼）
+    // 仅控制台登录会话；AI 令牌不在开放面内（由 server.ts 门禁统一回 403）
+    if (p === '/api/ai/install-prompt' && method === 'GET') {
+      const urlObj = new URL(req.url || '/', 'http://localhost')
+      const rawBase = urlObj.searchParams.get('base')
+      let base: string
+      if (rawBase === null) {
+        // 未指定：按本次请求头推导调用方视角基址（反代优先 x-forwarded-*），去尾部 `/`
+        base = requestPublicBase(req, prefix).replace(/\/+$/, '')
+      } else {
+        const normalized = normalizeInstallBase(rawBase)
+        if (!normalized) {
+          this.sendJson(res, 400, { ok: false, error: 'base 参数非法：需为 http(s):// 绝对地址（长度 ≤512，无控制字符）' })
+          return true
+        }
+        base = normalized
+      }
+      const token = this.auth?.getAiToken() || ''
+      this.sendJson(res, 200, { ok: true, data: buildAiInstallPayload(base, token) })
+      return true
+    }
+    // AI APIKEY 重置（仅平台管理员；旧令牌立即失效，无需重启）
     if (p === '/api/settings/ai-token/reset' && method === 'POST') {
+      if (!this.isAdminOrServiceChannel()) { this.denyNotAdmin(res, '重置 AI 接入令牌'); return true }
       if (!this.auth) {
         this.sendJson(res, 500, { ok: false, error: '认证服务未装配' })
         return true
       }
       const token = this.auth.resetAiToken()
+      this.audit('settings.ai-token.reset', 'settings', 'ai-token')
       this.sendJson(res, 200, { ok: true, data: { token } })
       return true
     }
     if (p === '/api/settings' && (method === 'POST' || method === 'PUT')) {
+      if (!this.isAdminOrServiceChannel()) { this.denyNotAdmin(res, '修改全局设置'); return true }
       const body = await this.parseBody(req)
       const patch: any = {}
       if (body.onenat) {
@@ -1956,6 +2586,7 @@ export class WorkBuddyRouter {
       const updated = this.store.updateSettings(patch)
       this.directory.configure(updated.onenat.baseUrl, updated.onenat.apiKey)
       this.directory.startAutoRefresh(updated.onenat.autoRefreshMs)
+      this.resourcesCache = undefined
       // 小智 MCP 接入点变更即时生效（免重启；兼容旧 {endpoint} 与新 {endpoints[]} 两种形状）
       if (patch.xiaozhi) {
         const list = Array.isArray(updated.xiaozhi?.endpoints) && updated.xiaozhi?.endpoints.length
@@ -1967,6 +2598,7 @@ export class WorkBuddyRouter {
       }
       // 归档天数变更即时生效：不等下一轮 30 分钟周期扫描（天数收窄时立刻归档超期任务；0 = sweep 直接跳过）
       if (patch.archive) void this.store.archiveSweep()
+      this.audit('settings.update', 'settings', 'global', Object.keys(patch).join(','))
       this.sendJson(res, 200, { ok: true, data: { ...updated, onenat: { ...updated.onenat, apiKey: updated.onenat.apiKey ? updated.onenat.apiKey.slice(0, 8) + '…' : '' } } })
       return true
     }
@@ -2016,12 +2648,18 @@ export class WorkBuddyRouter {
     const expertUpdateMatch = /^\/api\/experts\/([^/]+)$/.exec(p)
     if (expertUpdateMatch && method === 'PUT') {
       const id = decodeURIComponent(expertUpdateMatch[1])
-      if (!(await this.registry.get(id))) {
+      const entry = await this.registry.get(id)
+      if (!entry) {
         this.sendJson(res, 404, { ok: false, error: '专家不存在' })
         return true
       }
       if (!(await this.registry.isEditable(id))) {
         this.sendJson(res, 403, { ok: false, error: '内置/名册专家为只读，仅用户创建的专家可编辑' })
+        return true
+      }
+      // §11：用户专家条目按归属管理（归属人+admin；存量=仅 admin）；花名册查看/召唤全员不变
+      if (!canManageOwned(this.session, entry)) {
+        this.sendJson(res, 403, { ok: false, error: '仅专家归属人或管理员可编辑该专家' })
         return true
       }
       const body = await this.parseBody(req)
@@ -2048,7 +2686,8 @@ export class WorkBuddyRouter {
     // DELETE /api/experts/:id —— 删除用户自建专家；builtin/roster 只读 → 403
     if (expertUpdateMatch && method === 'DELETE') {
       const id = decodeURIComponent(expertUpdateMatch[1])
-      if (!(await this.registry.get(id))) {
+      const entry = await this.registry.get(id)
+      if (!entry) {
         this.sendJson(res, 404, { ok: false, error: '专家不存在' })
         return true
       }
@@ -2056,7 +2695,13 @@ export class WorkBuddyRouter {
         this.sendJson(res, 403, { ok: false, error: '内置/名册专家为只读，仅用户创建的专家可删除' })
         return true
       }
+      // §11：用户专家条目按归属管理（归属人+admin；存量=仅 admin）
+      if (!canManageOwned(this.session, entry)) {
+        this.sendJson(res, 403, { ok: false, error: '仅专家归属人或管理员可删除该专家' })
+        return true
+      }
       const deleted = await this.registry.deleteExpert(id)
+      if (deleted) this.audit('expert.delete', 'expert', id, entry.name)
       this.sendJson(res, deleted ? 200 : 404, deleted ? { ok: true, data: { deleted: true } } : { ok: false, error: '专家不存在' })
       return true
     }
@@ -2086,7 +2731,8 @@ export class WorkBuddyRouter {
             systemPrompt: String(body.systemPrompt ?? ''),
             executionPrompt: typeof body.executionPrompt === 'string' ? body.executionPrompt : undefined,
             role: typeof body.role === 'string' ? body.role : undefined,
-          })
+          }, { ownerUserId: this.session?.userId })
+          this.audit('expert.create', 'expert', saved.id, saved.name)
           this.sendJson(res, 200, { ok: true, data: saved })
         } catch (err: any) {
           this.sendJson(res, 400, { ok: false, error: err?.message || '创建专家失败' })
@@ -2096,13 +2742,39 @@ export class WorkBuddyRouter {
       return this.instantiateExpertFromRequest(req, res, String(body?.id ?? body?.expertId ?? '').trim(), body)
     }
     // ---------- 子智能体 ----------
+    // Display-only DTOs use an allowlist for every viewer, including administrators.
+    if (p === '/api/agents/profiles' && method === 'GET') {
+      const ctx = this.permContext()
+      const profiles = this.store.getAgents()
+        .filter((a) => canViewAgent(this.session, a, ctx))
+        .map(agentDisplayProfile)
+      this.sendJson(res, 200, { ok: true, data: profiles })
+      return true
+    }
+    const agentProfileMatch = /^\/api\/agents\/([^/]+)\/profile$/.exec(p)
+    if (agentProfileMatch && method === 'GET') {
+      const agent = this.store.getAgent(decodeURIComponent(agentProfileMatch[1]))
+      if (!agent || !canViewAgent(this.session, agent, this.permContext())) {
+        this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
+        return true
+      }
+      this.sendJson(res, 200, { ok: true, data: agentDisplayProfile(agent) })
+      return true
+    }
     if (p === '/api/agents' && method === 'GET') {
-      this.sendJson(res, 200, { ok: true, data: this.store.getAgents() })
+      // 权限（§10.4）：非归属人看到的是脱敏视图（无 apiKey / 提示词），不可见条目直接隐藏
+      const ctx = this.permContext()
+      const agents = this.store.getAgents()
+        .filter((a) => canViewAgent(this.session, a, ctx))
+        .map((a) => maskAgentForViewer(a, this.session))
+      this.sendJson(res, 200, { ok: true, data: agents })
       return true
     }
     // ---------- 专家团（合同式团队：共同目标/约束/交付要求 + 成员分工） ----------
     if (p === '/api/teams' && method === 'GET') {
-      this.sendJson(res, 200, { ok: true, data: this.store.getTeams() })
+      // 专家团是「公共花名册」：全员可见可用，仅归属人/admin 可改删（§10.4）
+      const teams = this.store.getTeams().map((t) => this.maskTeamForViewer(t, this.session))
+      this.sendJson(res, 200, { ok: true, data: teams })
       return true
     }
     if (p === '/api/teams' && method === 'POST') {
@@ -2122,8 +2794,18 @@ export class WorkBuddyRouter {
         this.sendJson(res, 400, { ok: false, error: parsed.error })
         return true
       }
+      // 权限（§10.4）：他人归属的专家团不可改；归属人由服务端权威写入
+      const existingTeam = body?.id ? this.store.getTeam(String(body.id)) : undefined
+      if (existingTeam && !canManageAgent(this.session, existingTeam)) {
+        this.sendJson(res, 403, { ok: false, error: '无权修改该专家团（仅归属人或管理员可改）' })
+        return true
+      }
+      // 归属：新建 = 当前用户；更新既有（存量无归属）保持原状，不静默转为个人私有
+      const ownerUserId = existingTeam
+        ? existingTeam.ownerUserId
+        : this.session?.userId
       // 语义：无 id 新建；带 id 更新既有团队（成员/合同字段整体替换）
-      const saved = this.store.upsertTeam({ ...parsed.value, id: body?.id || undefined })
+      const saved = this.store.upsertTeam({ ...parsed.value, id: body?.id || undefined, ownerUserId })
       this.sendJson(res, 200, { ok: true, data: saved })
       return true
     }
@@ -2132,10 +2814,23 @@ export class WorkBuddyRouter {
       const teamId = decodeURIComponent(teamMatch[1])
       if (method === 'GET') {
         const team = this.store.getTeam(teamId)
-        this.sendJson(res, team ? 200 : 404, team ? { ok: true, data: team } : { ok: false, error: '专家团不存在' })
+        if (!team) {
+          this.sendJson(res, 404, { ok: false, error: '专家团不存在' })
+          return true
+        }
+        this.sendJson(res, 200, { ok: true, data: this.maskTeamForViewer(team, this.session) })
         return true
       }
       if (method === 'DELETE') {
+        const team = this.store.getTeam(teamId)
+        if (!team) {
+          this.sendJson(res, 404, { ok: false, error: '专家团不存在' })
+          return true
+        }
+        if (!canManageAgent(this.session, team)) {
+          this.sendJson(res, 403, { ok: false, error: '无权删除该专家团（仅归属人或管理员可删）' })
+          return true
+        }
         this.sendJson(res, 200, { ok: true, data: { deleted: this.store.deleteTeam(teamId) } })
         return true
       }
@@ -2144,11 +2839,43 @@ export class WorkBuddyRouter {
       const body = await this.parseBody(req)
       // 部分更新：带 id 时 dshRef 缺省回退已有值
       const fallback = body?.id ? this.store.getAgent(String(body.id)) : undefined
+      // 权限（§10.4）：他人归属的子智能体不可改；归属人由服务端权威写入（不接受客户端传入）
+      if (fallback && !canManageAgent(this.session, fallback)) {
+        this.sendJson(res, 403, { ok: false, error: '无权修改该子智能体（仅归属人或管理员可改）' })
+        return true
+      }
+      if ((!fallback || Object.prototype.hasOwnProperty.call(body, 'name')) && (typeof body.name !== 'string' || !body.name.trim())) {
+        this.sendJson(res, 400, { ok: false, code: 'INVALID_PARAM', field: 'name', error: 'name 必须是非空字符串' })
+        return true
+      }
+      // 归属人：更新沿用原归属；复用同名条目时保留原归属；真正新建 = 当前用户
       const dshRef = normalizeDshRef(body.dshRef ?? fallback?.dshRef)
       if ('error' in dshRef) {
         this.sendJson(res, 400, { ok: false, error: dshRef.error })
         return true
       }
+      // 新建时 store 会按「同名 + 同 DSH 实体」复用既有条目（防双击重复）；复用他人归属的
+      // 智能体等于改他人资产，必须先过权限（§10.4）；复用时保留原归属，不转移 owner
+      let reuseTarget: SubAgent | undefined
+      if (!fallback) {
+        const nameRaw = String(body?.name ?? '').trim()
+        reuseTarget = nameRaw ? this.store.findAgentByNameAndRef(nameRaw, dshRef as DshRef) : undefined
+        if (reuseTarget && !canManageAgent(this.session, reuseTarget)) {
+          this.sendJson(res, 403, { ok: false, error: '同名子智能体已存在且归属他人，请改名或联系管理员' })
+          return true
+        }
+      }
+      try {
+        mergeAgentDisplay(body.display, (fallback || reuseTarget)?.display)
+      } catch (err: any) {
+        this.sendJson(res, 400, { ok: false, error: err.message })
+        return true
+      }
+      // 归属：新建 = 当前用户；更新既有（存量无归属）保持「无归属」原状，
+      // 不得因管理员编辑一次就把共享存量资产静默变成其个人私有资产。
+      const ownerUserId = fallback?.ownerUserId
+        ?? reuseTarget?.ownerUserId
+        ?? (fallback || reuseTarget ? undefined : this.session?.userId)
       const workDir = String(body?.workDir ?? '').trim()
       if (workDir && !isNodeAbsolutePath(workDir)) {
         this.sendJson(res, 400, { ok: false, error: WORK_DIR_NOT_ABSOLUTE_MSG })
@@ -2174,15 +2901,21 @@ export class WorkBuddyRouter {
         }
         delete body.fromExpertId
       }
-      const saved = this.store.upsertAgent({ ...(body as any), dshRef: dshRef as DshRef })
+      const saved = this.store.upsertAgent({
+        ...(body as any),
+        dshRef: dshRef as DshRef,
+        ownerUserId,
+        sharedProjectIds: Array.isArray(body?.sharedProjectIds)
+          ? body.sharedProjectIds.map(String).filter(Boolean)
+          : fallback?.sharedProjectIds,
+      })
       this.sendJson(res, 200, { ok: true, data: saved })
       return true
     }
     // 远端目录浏览与工作区文件管理
     if (p === '/api/agents/fs/list' && method === 'GET') {
       const url = new URL(req.url || '/', 'http://localhost')
-      // 项目工作目录浏览：node=<dshRef JSON>（与 agent 参数二选一）
-      const targetRes = await this.resolveFsTarget(url)
+      const targetRes = await this.resolveFsTarget(url, undefined, 'read')
       if (!targetRes.ok) {
         this.sendJson(res, targetRes.status, { ok: false, error: targetRes.error })
         return true
@@ -2190,13 +2923,19 @@ export class WorkBuddyRouter {
       const target = targetRes.target
       const dirPath = url.searchParams.get('path') || undefined
       const all = url.searchParams.get('all') === '1' || url.searchParams.get('all') === 'true'
-      const out = await this.client.fsList(target, dirPath || undefined, all)
+      const checked = await this.projectFsPath(targetRes, dirPath)
+      const out = checked.listing ? { ok: true, data: checked.listing } : await this.client.fsList(target, dirPath || undefined, all)
+      if (out.ok && out.data && targetRes.project) {
+        out.data.entries = out.data.entries.filter(entry => {
+          try { requireWorkspacePath(this.session, targetRes.project!, this.store.getProjects(), this.directory, entry.path, false); return true } catch { return false }
+        })
+      }
       this.sendJson(res, out.ok ? 200 : 400, out.ok ? out : { ok: false, error: out.error })
       return true
     }
     if (p === '/api/agents/fs/download' && method === 'GET') {
       const url = new URL(req.url || '/', 'http://localhost')
-      const targetRes = await this.resolveFsTarget(url)
+      const targetRes = await this.resolveFsTarget(url, undefined, 'read')
       if (!targetRes.ok) {
         this.sendJson(res, targetRes.status, { ok: false, error: targetRes.error })
         return true
@@ -2208,7 +2947,8 @@ export class WorkBuddyRouter {
         return true
       }
       const inline = url.searchParams.get('inline') === '1'
-      const out = await this.client.fsDownload(target, filePath, inline)
+      const checked = await this.projectFsPath(targetRes, filePath)
+      const out = await this.client.fsDownload(target, checked.path, inline)
       if (!out.ok || !out.res?.body) {
         this.sendJson(res, 404, { ok: false, error: out.error || '文件下载失败' })
         return true
@@ -2231,7 +2971,7 @@ export class WorkBuddyRouter {
     if (p === '/api/agents/fs/upload' && method === 'POST') {
       const url = new URL(req.url || '/', 'http://localhost')
       const destDir = String(url.searchParams.get('path') || '').trim()
-      const targetRes = await this.resolveFsTarget(url)
+      const targetRes = await this.resolveFsTarget(url, undefined, 'write')
       if (!targetRes.ok) {
         this.sendJson(res, targetRes.status, { ok: false, error: targetRes.error })
         return true
@@ -2241,6 +2981,7 @@ export class WorkBuddyRouter {
         this.sendJson(res, 400, { ok: false, error: '缺少目标目录 path' })
         return true
       }
+      await this.projectFsPath(targetRes, destDir, true)
       const contentType = String(req.headers['content-type'] || '')
       const raw = await readRawBuffer(req, UPLOAD_MAX_BYTES)
       if (raw.length === 0) {
@@ -2254,6 +2995,11 @@ export class WorkBuddyRouter {
         const rawName = (url.searchParams.get('filename') || String(req.headers['x-filename'] || '')).trim()
         files = [{ filename: sanitizeUploadName(rawName || `upload-${Date.now()}`), data: raw, mimeType: contentType }]
       }
+      if (targetRes.project) {
+        const out = await this.saveProjectUploads({ target, project: targetRes.project }, destDir, files, url.searchParams.get('expectedSha256') || undefined)
+        this.sendJson(res, out.status, out.body)
+        return true
+      }
       const out = await this.client.fsUpload(target, destDir, files)
       this.sendJson(res, out.ok ? 200 : 400, out.ok ? out : { ok: false, error: out.error })
       return true
@@ -2262,7 +3008,8 @@ export class WorkBuddyRouter {
       const url = new URL(req.url || '/', 'http://localhost')
       const body = method === 'POST' ? await this.parseBody(req) : null
       const targetPath = String(url.searchParams.get('path') || body?.path || '').trim()
-      const targetRes = await this.resolveFsTarget(url, body?.agent)
+      if (body?.projectId && !url.searchParams.has('projectId')) url.searchParams.set('projectId', String(body.projectId))
+      const targetRes = await this.resolveFsTarget(url, body?.agent, 'write')
       if (!targetRes.ok) {
         this.sendJson(res, targetRes.status, { ok: false, error: targetRes.error })
         return true
@@ -2272,12 +3019,27 @@ export class WorkBuddyRouter {
         this.sendJson(res, 400, { ok: false, error: '缺少 path 参数' })
         return true
       }
-      const out = await this.client.fsRemove(target, targetPath)
+      const checked = await this.projectFsPath(targetRes, targetPath, true, false, true)
+      if (targetRes.project && checked.path === projectFilePath(targetRes.project)) throw new WorkspaceFileError(403, 'WORKSPACE_ROOT_PROTECTED', '不能删除项目工作区根目录')
+      const out = await this.client.fsRemove(target, checked.path)
       this.sendJson(res, out.ok ? 200 : 400, out.ok ? out : { ok: false, error: out.error })
       return true
     }
     if (p === '/api/agents/fs/mkdir' && method === 'POST') {
       const body = await this.parseBody(req)
+      const requestUrl = new URL(req.url || '/', 'http://localhost')
+      if (body?.projectId) requestUrl.searchParams.set('projectId', String(body.projectId))
+      if (requestUrl.searchParams.has('projectId')) {
+        const result = await this.resolveFsTarget(requestUrl, undefined, 'write')
+        if (!result.ok) { this.sendJson(res, result.status, { ok: false, error: result.error }); return true }
+        const parent = projectFilePath(result.project!, String(body?.path || ''))
+        const child = workspaceChild(parent, String(body?.name || ''))
+        await this.projectFsPath(result, child, true, true)
+        const out = await this.client.fsMkdir(result.target, parent, String(body?.name || ''))
+        this.sendJson(res, out.ok ? 200 : 400, out.ok ? out : { ok: false, error: out.error })
+        return true
+      }
+      requireNodeFiles(this.session)
       // 项目工作目录浏览：node=<dshRef JSON>（与 agent 参数二选一）
       if (body?.node) {
         // 兼容字符串 JSON 与对象两种形态
@@ -2333,16 +3095,26 @@ export class WorkBuddyRouter {
     const agentMatch = /^\/api\/agents\/([^/]+)$/.exec(p)
     if (agentMatch && method === 'DELETE') {
       const id = decodeURIComponent(agentMatch[1])
+      const agent = this.store.getAgent(id)
+      if (!agent) {
+        this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
+        return true
+      }
+      if (!canManageAgent(this.session, agent)) {
+        this.sendJson(res, 403, { ok: false, error: '无权删除该子智能体（仅归属人或管理员可删）' })
+        return true
+      }
+      this.audit('agent.delete', 'agent', id, agent.name)
       this.sendJson(res, 200, { ok: true, data: { deleted: this.store.deleteAgent(id) } })
       return true
     }
     if (agentMatch && method === 'GET') {
       const agent = this.store.getAgent(decodeURIComponent(agentMatch[1]))
-      if (!agent) {
+      if (!agent || !canViewAgent(this.session, agent, this.permContext())) {
         this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
         return true
       }
-      this.sendJson(res, 200, { ok: true, data: agent })
+      this.sendJson(res, 200, { ok: true, data: maskAgentForViewer(agent, this.session) })
       return true
     }
     const pingMatch = /^\/api\/agents\/([^/]+)\/ping$/.exec(p)
@@ -2352,7 +3124,9 @@ export class WorkBuddyRouter {
         this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
         return true
       }
+      const observedAt = performance.now()
       const { target, ping } = await this.resolver.resolveWithPing(agent)
+      this.monitor?.observeAgentHealth(agent, { online: ping?.ok === true, error: ping?.error, baseUrl: target?.baseUrl }, observedAt)
       this.sendJson(res, 200, {
         ok: true,
         data: {
@@ -2380,13 +3154,13 @@ export class WorkBuddyRouter {
     // 任务节点模型目录（聊天输入框模型切换弹层用）：按任务/项目绑定节点解析
     const taskModelsMatch = /^\/api\/tasks\/([^/]+)\/models$/.exec(p)
     if (taskModelsMatch && method === 'GET') {
-      const task = this.store.getTask(decodeURIComponent(taskModelsMatch[1]))
+      const task = this.taskForView(decodeURIComponent(taskModelsMatch[1]))
       if (!task) {
         this.sendJson(res, 404, { ok: false, error: 'Task not found' })
         return true
       }
       // __node__（节点主会话）无 store 记录 → resolveExecTarget 按任务/项目节点解析（公开方法）
-      const target = await this.engine.resolveExecTarget(task, '__node__').catch(() => undefined)
+      const target = await this.engine.resolveExecTarget(task, task.chatAgentId || '__node__').catch(() => undefined)
       if (!target?.online || !target?.baseUrl) {
         this.sendJson(res, 200, { ok: false, error: (target as any)?.error || '任务节点不可达', data: { models: [] } })
         return true
@@ -2417,7 +3191,7 @@ export class WorkBuddyRouter {
       const aid = decodeURIComponent(skillsMatch[1])
       const url = new URL(req.url || '/', 'http://localhost')
       const agent = this.store.getAgent(aid)
-      if (!agent) {
+      if (!agent || !canViewAgent(this.session, agent, this.permContext())) {
         this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
         return true
       }
@@ -2443,7 +3217,7 @@ export class WorkBuddyRouter {
     if (bindingsMatch && method === 'GET') {
       const aid = decodeURIComponent(bindingsMatch[1])
       const agent = this.store.getAgent(aid)
-      if (!agent) {
+      if (!agent || !canViewAgent(this.session, agent, this.permContext())) {
         this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
         return true
       }
@@ -2455,6 +3229,11 @@ export class WorkBuddyRouter {
       const agent = this.store.getAgent(aid)
       if (!agent) {
         this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
+        return true
+      }
+      // §11：技能绑定是智能体配置面，与管理动作同权（仅归属人/admin；存量=仅 admin）
+      if (!canManageAgent(this.session, agent)) {
+        this.sendJson(res, 403, { ok: false, error: '仅归属人或管理员可修改该智能体的技能绑定' })
         return true
       }
       const body = await this.parseBody(req)
@@ -2470,6 +3249,11 @@ export class WorkBuddyRouter {
       const agent = this.store.getAgent(aid)
       if (!agent) {
         this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
+        return true
+      }
+      // §11：向智能体节点上传技能 = 管理动作（同 canManageAgent 口径）
+      if (!canManageAgent(this.session, agent)) {
+        this.sendJson(res, 403, { ok: false, error: '仅归属人或管理员可向该智能体上传技能' })
         return true
       }
       const target = await this.resolver.resolve(agent)
@@ -2508,7 +3292,7 @@ export class WorkBuddyRouter {
     if (skillPreviewMatch && method === 'GET') {
       const aid = decodeURIComponent(skillPreviewMatch[1])
       const agent = this.store.getAgent(aid)
-      if (!agent) {
+      if (!agent || !canViewAgent(this.session, agent, this.permContext())) {
         this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
         return true
       }
@@ -2542,6 +3326,11 @@ export class WorkBuddyRouter {
         this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
         return true
       }
+      // §11：删除节点上的技能文件 = 管理动作（同 canManageAgent 口径）
+      if (!canManageAgent(this.session, agent)) {
+        this.sendJson(res, 403, { ok: false, error: '仅归属人或管理员可删除该智能体的技能' })
+        return true
+      }
       const url = new URL(req.url || '/', 'http://localhost')
       const target = await this.resolver.resolve(agent)
       if (!target.online) {
@@ -2562,7 +3351,7 @@ export class WorkBuddyRouter {
       const aid = decodeURIComponent(skillDlMatch[1])
       const name = decodeURIComponent(skillDlMatch[2])
       const agent = this.store.getAgent(aid)
-      if (!agent) {
+      if (!agent || !canViewAgent(this.session, agent, this.permContext())) {
         this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
         return true
       }
@@ -2622,7 +3411,7 @@ export class WorkBuddyRouter {
         const failed: Array<{ filename: string; error: string }> = []
         for (const f of files) {
           try {
-            imported.push(await this.library.add(kind, { filename: f.filename || 'archive.bin', data: f.data }, 'upload'))
+            imported.push(await this.library.add(kind, { filename: f.filename || 'archive.bin', data: f.data }, 'upload', undefined, undefined, this.session?.userId))
           } catch (err: any) {
             failed.push({ filename: f.filename || '?', error: err?.message || String(err) })
           }
@@ -2632,6 +3421,7 @@ export class WorkBuddyRouter {
       }
       const libSettingsMatch = /^\/api\/library\/settings$/.exec(p)
       if (libSettingsMatch && method === 'POST') {
+        if (!this.isAdminOrServiceChannel()) { this.denyNotAdmin(res, '修改库共享基址'); return true }
         const body = await this.parseBody(req)
         this.library.setPublicBaseUrl(String(body?.publicBaseUrl || ''))
         this.sendJson(res, 200, { ok: true, data: { publicBaseUrl: this.library.publicBaseUrl() || '' } })
@@ -2639,7 +3429,19 @@ export class WorkBuddyRouter {
       }
       const libDelMatch = /^\/api\/library\/(skill|plugin)\/([^/]+)$/.exec(p)
       if (libDelMatch && method === 'DELETE') {
-        const ok = this.library.remove(decodeURIComponent(libDelMatch[2]))
+        const libId = decodeURIComponent(libDelMatch[2])
+        const entry = this.library.get(libId)
+        // §11：条目删除仅归属人+admin（存量=仅 admin）；查看/下载/安装保持全员
+        if (!entry) {
+          this.sendJson(res, 404, { ok: false, error: '条目不存在' })
+          return true
+        }
+        if (!canManageOwned(this.session, entry)) {
+          this.sendJson(res, 403, { ok: false, error: '仅条目归属人或管理员可删除该条目' })
+          return true
+        }
+        const ok = this.library.remove(libId)
+        if (ok) this.audit('library.delete', 'library', libId, entry ? `${libDelMatch[1]}:${entry.name}` : libDelMatch[1])
         if (!ok) this.sendJson(res, 404, { ok: false, error: '条目不存在' })
         else this.sendJson(res, 200, { ok: true })
         return true
@@ -2695,6 +3497,7 @@ export class WorkBuddyRouter {
                 nodeRef: ref,
                 message: prompt,
                 creator: 'console',
+                ownerUserId: this.session?.userId,
               })
               targets.push({ agentId: key, agentName: nodeLabel, taskId: task.id })
             } catch (err: any) {
@@ -2741,6 +3544,7 @@ export class WorkBuddyRouter {
               memberAgentIds: [agent.id],
               message: prompt,
               creator: 'console',
+              ownerUserId: this.session?.userId,
             })
             targets.push({ agentId: agent.id, agentName: agent.name, taskId: task.id })
           } catch (err: any) {
@@ -2797,7 +3601,7 @@ export class WorkBuddyRouter {
           }
           try {
             const buf = Buffer.from(await r.res.arrayBuffer())
-            imported.push(await this.library.add('skill', { filename: r.name || `${name}.tgz`, data: buf }, 'import', sourceLabel))
+            imported.push(await this.library.add('skill', { filename: r.name || `${name}.tgz`, data: buf }, 'import', sourceLabel, undefined, this.session?.userId))
             existing.add(name)
           } catch (err: any) {
             skipped.push({ name, reason: err?.message || '入库失败' })
@@ -2823,12 +3627,14 @@ export class WorkBuddyRouter {
             nodeRef,
             message: buildPluginExportPrompt(),
             creator: 'console',
+            ownerUserId: this.session?.userId,
           })
           : await this.engine.createTask({
             title: `导出插件 ← ${legacyAgent!.name}`,
             memberAgentIds: [legacyAgent!.id],
             message: buildPluginExportPrompt(),
             creator: 'console',
+            ownerUserId: this.session?.userId,
           })
         if (nodeRef) this.pluginImportRefs.set(task.id, { ref: nodeRef, label: nodeLabel, family: 'dsh' })
         this.sendJson(res, 200, {
@@ -2989,6 +3795,7 @@ export class WorkBuddyRouter {
           nodeRef,
           message: buildPluginListExportPrompt(items),
           creator: 'console',
+          ownerUserId: this.session?.userId,
         })
         this.pluginImportRefs.set(task.id, { ref: nodeRef, label: nodeLabel, family })
         this.sendJson(res, 200, {
@@ -3003,6 +3810,17 @@ export class WorkBuddyRouter {
       const agent = this.store.getAgent(decodeURIComponent(previewMatch[1]))
       if (!agent) {
         this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
+        return true
+      }
+      // §11：预览返回 systemPrompt/executionPrompt 原文（私有配置），与管理动作同权
+      // ——能 @ 但非归属人的成员走 maskAgentForViewer 脱敏视图，不走本接口读提示词；
+      // 不可见的智能体统一 404 防枚举，可见但非归属人 403
+      if (!canViewAgent(this.session, agent, this.permContext())) {
+        this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
+        return true
+      }
+      if (!canManageAgent(this.session, agent)) {
+        this.sendJson(res, 403, { ok: false, error: '仅归属人或管理员可预览该智能体的提示词' })
         return true
       }
       try {
@@ -3059,7 +3877,9 @@ export class WorkBuddyRouter {
       }> = []
 
       // 0. 项目：@项目名 → 对该项目发起任务（未绑定项目的任务自动绑定，节点/工作区/项目指令/技能全继承）
+      // §11：仅列出本人可见的项目（成员/宽容模式），防止实体泄露
       for (const pr of this.store.getProjects()) {
+        if (!this.canSeeProject(pr)) continue
         candidates.push({
           type: 'project',
           id: pr.id,
@@ -3083,10 +3903,10 @@ export class WorkBuddyRouter {
         })
       }
 
-      // 1. 子智能体
+      // 1. 子智能体（§11：仅列出本人可见可 @ 的条目，与 /api/agents 列表同口径）
       const agents = this.store.getAgents()
       for (const a of agents) {
-        if (a.enabled !== false) {
+        if (a.enabled !== false && canViewAgent(this.session, a, this.permContext())) {
           candidates.push({
             type: 'agent',
             id: a.id,
@@ -3113,9 +3933,10 @@ export class WorkBuddyRouter {
         })
       }
 
-      // 3. 本地 SSH 资源池
+      // 3. 本地 SSH 资源池（§11：仅列出本人可见条目，与 /api/ssh-resources 同口径）
       const sshs = this.sshStore.list()
       for (const s of sshs) {
+        if (!canViewResource(this.session, s, this.permContext())) continue
         if (!candidates.some(c => c.id === s.id || c.name === s.name)) {
           candidates.push({
             type: 'resource',
@@ -3150,13 +3971,45 @@ export class WorkBuddyRouter {
       return true
     }
 
+    // ---------- 活动态与按用户阅读位置 ----------
+    const readActivity = p.match(/^\/api\/tasks\/([^/]+)\/read$/)
+    if (p === '/api/activity' && method === 'GET' || readActivity && method === 'POST') {
+      try {
+        const activity = new TaskActivity(this.store, id => this.engine.isRunning(id))
+        const data = readActivity
+          ? activity.read(decodeURIComponent(readActivity[1]), await this.parseBody(req), this.session)
+          : activity.list(new URL(req.url || '/', 'http://localhost').searchParams, this.session)
+        res.setHeader('Cache-Control', 'no-store')
+        this.sendJson(res, 200, { ok: true, data })
+      } catch (err) {
+        if (!(err instanceof TaskHistoryError)) throw err
+        this.sendJson(res, err.status, { ok: false, code: err.code, error: err.message })
+      }
+      return true
+    }
+
     // ---------- 任务会话 ----------
+    if (p === '/api/tasks/history' && method === 'GET') {
+      try {
+        this.historyIndex ||= new TaskHistory(this.store)
+        const data = this.historyIndex.list(new URL(req.url || '/', 'http://localhost').searchParams, this.session)
+        res.setHeader('Cache-Control', 'no-store')
+        this.sendJson(res, 200, { ok: true, data })
+      } catch (err) {
+        if (!(err instanceof TaskHistoryError)) throw err
+        this.sendJson(res, err.status, { ok: false, code: err.code, error: err.message })
+      }
+      return true
+    }
     if (p === '/api/tasks' && method === 'GET') {
       // 可选 ?projectId= 过滤（项目工作台只看本项目任务）
       const urlTasks = new URL(req.url || '/', 'http://localhost')
       const projectFilter = urlTasks.searchParams.get('projectId') || ''
       const allTasks = this.store.getTasks()
-      const tasks = projectFilter ? allTasks.filter((t) => t.projectId === projectFilter) : allTasks
+      // §11：列表按可见性过滤（归属人/admin/项目成员；存量与 AI 通道任务=全员）
+      const ctxTasks = this.permContext()
+      const scoped = visibleTasks(allTasks, this.session, ctxTasks)
+      const tasks = projectFilter ? scoped.filter((t) => t.projectId === projectFilter) : scoped
       // 列表只返回摘要（完整 turns/taskLogs 随任务增长可达数 MB，且 SSE 每个事件都会刷新列表，
       // 全量返回会占满浏览器并发连接，导致切换会话时单任务请求长时间排队）
       this.sendJson(res, 200, { ok: true, data: tasks.map((t) => this.taskSummary(t)) })
@@ -3172,7 +4025,21 @@ export class WorkBuddyRouter {
       // 未指定成员时不在此处兜底：默认成员的唯一权威是 engine.createTask → defaultMemberAgentIds（主智能体）。
       // 历史实现曾在此填「全部可用子智能体」，导致无 @ 新建的任务变成全员编排，附件随之上传扇出到所有节点。
       try {
-        const task = await this.engine.createTask({ ...body, creator: body.creator || 'tool' })
+        // §11：归属=当前会话用户（服务端权威，忽略 body 注入）；AI 工具通道无会话 → 缺省宽容模式
+        const routeArgs = taskRouteArgs(body, 'create')
+        if (routeArgs.chatAgentId) {
+          const agent = this.store.getAgent(String(routeArgs.chatAgentId))
+          if (!agent || !canUseAgent(this.session, agent, this.permContext())) {
+            this.sendJson(res, 404, { ok: false, code: 'AGENT_NOT_FOUND', error: 'BOT 不存在或无权使用' })
+            return true
+          }
+        }
+        const task = await this.engine.createTask({
+          ...body,
+          ...routeArgs,
+          ownerUserId: this.session?.userId,
+          creator: body.creator || 'tool',
+        })
         this.sendJson(res, 201, { ok: true, data: task })
       } catch (err: any) {
         this.sendJson(res, 400, { ok: false, error: err?.message || String(err) })
@@ -3187,8 +4054,11 @@ export class WorkBuddyRouter {
       const hasProjectScope = body !== null && typeof body === 'object' && Object.prototype.hasOwnProperty.call(body, 'projectId')
       const projectId = hasProjectScope ? (body.projectId || null) : undefined
       const ids = Array.isArray(body?.ids) ? new Set(body.ids.map(String)) : null
+      // §11：批量恢复/删除逐条校验管理权（仅归属人+admin；存量=仅 admin），无权条目静默跳过
       const scoped = (t: WorkTask) =>
-        (!hasProjectScope || (projectId ? t.projectId === projectId : !t.projectId)) && (!ids || ids.has(t.id))
+        (!hasProjectScope || (projectId ? t.projectId === projectId : !t.projectId))
+        && (!ids || ids.has(t.id))
+        && canManageTask(this.session, t)
       if (op === 'restore') {
         const restored = this.store.bulkUnarchive(scoped)
         this.sendJson(res, 200, { ok: true, data: { restored } })
@@ -3196,6 +4066,7 @@ export class WorkBuddyRouter {
       }
       if (op === 'delete') {
         const deleted = await this.engine.bulkDeleteArchived(scoped)
+        this.audit('task.bulk_delete', 'task', projectId || 'unassigned', `批量删除已归档任务 ${deleted} 条`)
         this.sendJson(res, 200, { ok: true, data: { deleted } })
         return true
       }
@@ -3206,7 +4077,8 @@ export class WorkBuddyRouter {
     if (taskMatch) {
       const taskId = decodeURIComponent(taskMatch[1])
       if (method === 'GET') {
-        const task = this.store.getTask(taskId)
+        // §11：不可见按 404 处理（防枚举；归属人/admin/项目成员可见）
+        const task = this.taskForView(taskId)
         if (!task) {
           this.sendJson(res, 404, { ok: false, error: 'Task not found' })
           return true
@@ -3225,15 +4097,29 @@ export class WorkBuddyRouter {
         return true
       }
       if (method === 'DELETE') {
+        const m = this.taskForManage(taskId)
+        if (!m.task) {
+          this.sendJson(res, m.forbidden ? 403 : 404, { ok: false, error: m.forbidden ? '仅任务归属人或管理员可删除任务' : 'Task not found' })
+          return true
+        }
         const ok = await this.engine.deleteTask(taskId)
+        if (ok) this.audit('task.delete', 'task', taskId, m.task.title)
         this.sendJson(res, 200, { ok: true, data: { deleted: ok } })
         return true
       }
       if (method === 'PATCH' || method === 'PUT') {
+        const m = this.taskForManage(taskId)
+        if (!m.task) {
+          this.sendJson(res, m.forbidden ? 403 : 404, { ok: false, error: m.forbidden ? '仅任务归属人或管理员可编辑任务' : 'Task not found' })
+          return true
+        }
         const body = await this.parseBody(req)
         try {
-          if (Array.isArray(body.memberAgentIds)) {
-            this.engine.updateMembers(taskId, body.memberAgentIds)
+          const route = taskRouteArgs({ ...body, message: 'validate task update' }, 'send', taskId)
+          if (route.teamId !== undefined) throw Object.assign(new Error('任务更新不支持修改 teamId；请创建新任务'), { code: 'INVALID_PARAM' })
+          this.engine.validateChatBinding(route, undefined, m.task)
+          if (route.memberAgentIds !== undefined) {
+            this.engine.updateMembers(taskId, route.memberAgentIds)
           }
           if (typeof body.title === 'string') {
             this.store.mutateTask(taskId, (t) => {
@@ -3242,7 +4128,7 @@ export class WorkBuddyRouter {
           }
           this.sendJson(res, 200, { ok: true, data: this.store.getTask(taskId) })
         } catch (err: any) {
-          this.sendJson(res, 400, { ok: false, error: err?.message })
+          this.sendJson(res, 400, { ok: false, code: err?.code || 'INVALID_PARAM', error: err?.message })
         }
         return true
       }
@@ -3250,22 +4136,36 @@ export class WorkBuddyRouter {
     const msgMatch = /^\/api\/tasks\/([^/]+)\/messages$/.exec(p)
     if (msgMatch && method === 'POST') {
       const taskId = decodeURIComponent(msgMatch[1])
+      // §11：发消息 = view 级协作动作（可见即可聊）
+      if (!this.taskForView(taskId)) {
+        this.sendJson(res, 404, { ok: false, error: 'Task not found' })
+        return true
+      }
       const body = await this.parseBody(req)
-      // teamId = composer 专家团选择器显式指定的本轮团队意图（@团队名 提及在引擎内解析）
-      const teamId = String(body?.teamId || '').trim()
-      const out = await this.engine.sendUserMessage(taskId, String(body.message || ''), teamId ? { teamId } : undefined)
-      this.sendJson(res, out.ok ? 202 : 400, out)
+      try {
+        const opts = taskRouteArgs(body, 'send', taskId)
+        const out = await this.engine.sendUserMessage(taskId, String(body.message || ''), opts)
+        this.sendJson(res, out.ok ? 202 : 400, out)
+      } catch (err: any) {
+        this.sendJson(res, 400, { ok: false, code: err?.code || 'INVALID_PARAM', error: err?.message || String(err) })
+      }
       return true
     }
     // 跨节点续接（P4-1）：新任务带最近对话原文草稿（不调用 LLM），双向链接原任务
     const forkMatch = /^\/api\/tasks\/([^/]+)\/fork$/.exec(p)
     if (forkMatch && method === 'POST') {
       const taskId = decodeURIComponent(forkMatch[1])
+      // §11：fork = view 级动作；新任务归属 fork 人
+      if (!this.taskForView(taskId)) {
+        this.sendJson(res, 404, { ok: false, error: 'Task not found' })
+        return true
+      }
       const body = await this.parseBody(req)
       try {
         const out = await this.engine.forkTask(taskId, {
           nodeRef: body?.nodeRef && typeof body.nodeRef === 'object' ? (body.nodeRef as DshRef) : undefined,
-          projectId: body?.projectId ? String(body.projectId) : undefined,
+          projectId: body?.projectId === null ? null : body?.projectId ? String(body.projectId) : undefined,
+          ownerUserId: this.session?.userId,
         })
         this.sendJson(res, 200, { ok: true, data: out })
       } catch (err: any) {
@@ -3277,6 +4177,7 @@ export class WorkBuddyRouter {
     const statsMatch = /^\/api\/tasks\/([^/]+)\/stats$/.exec(p)
     if (statsMatch && method === 'GET') {
       const taskId = decodeURIComponent(statsMatch[1])
+      if (!this.taskForView(taskId)) { this.sendJson(res, 404, { ok: false, error: 'Task not found' }); return true }
       const out = await this.getTaskStats(taskId)
       this.sendJson(res, out.httpStatus, out.payload)
       return true
@@ -3285,6 +4186,7 @@ export class WorkBuddyRouter {
     const todosMatch = /^\/api\/tasks\/([^/]+)\/todos$/.exec(p)
     if (todosMatch && method === 'GET') {
       const taskId = decodeURIComponent(todosMatch[1])
+      if (!this.taskForView(taskId)) { this.sendJson(res, 404, { ok: false, error: 'Task not found' }); return true }
       const out = await this.getTaskTodos(taskId)
       this.sendJson(res, out.httpStatus, out.payload)
       return true
@@ -3293,6 +4195,7 @@ export class WorkBuddyRouter {
     const taskSkillsMatch = /^\/api\/tasks\/([^/]+)\/skills$/.exec(p)
     if (taskSkillsMatch && method === 'GET') {
       const taskId = decodeURIComponent(taskSkillsMatch[1])
+      if (!this.taskForView(taskId)) { this.sendJson(res, 404, { ok: false, error: 'Task not found' }); return true }
       const q = (urlObj.searchParams.get('q') || '').trim()
       const out = await this.getTaskSkills(taskId, q)
       this.sendJson(res, out.httpStatus, out.payload)
@@ -3303,7 +4206,8 @@ export class WorkBuddyRouter {
     if (askAnswerMatch && method === 'POST') {
       const taskId = decodeURIComponent(askAnswerMatch[1])
       const body = await this.parseBody(req)
-      const task = this.store.getTask(taskId)
+      // §11：答复挂起问题 = view 级协作动作
+      const task = this.taskForView(taskId)
       if (!task) {
         this.sendJson(res, 404, { ok: false, error: 'Task not found' })
         return true
@@ -3317,10 +4221,7 @@ export class WorkBuddyRouter {
         return true
       }
       // 节点主会话（__node__）无 store 记录：按任务节点解析答复目标
-      const agent = this.store.getAgent(agentId)
-      const target = agent
-        ? await this.resolver.resolve(agent)
-        : await this.engine.resolveExecTarget(task, agentId)
+      const target = await this.engine.resolveExecTarget(task, agentId)
       if (!target || !target.online || !target.baseUrl) {
         this.sendJson(res, 502, { ok: false, error: (target as any)?.error || '成员节点当前不可达' })
         return true
@@ -3382,23 +4283,26 @@ export class WorkBuddyRouter {
     if (sessionModelMatch && method === 'PUT') {
       const taskId = decodeURIComponent(sessionModelMatch[1])
       const body = await this.parseBody(req)
-      const task = this.store.getTask(taskId)
+      // 会话模型/预设 = 任务可见即可选（用户决策 2026-11-04：选模型/沙箱全员放开，仅按任务可见性；
+      // 不再走 taskForManage——存量/无归属任务曾因此对普通用户误报 404 Task not found）
+      const task = this.taskForView(taskId)
       if (!task) {
         this.sendJson(res, 404, { ok: false, error: 'Task not found' })
         return true
       }
       // 未指定 agentId 时：优先任务的主会话（__node__），否则当前主智能体（与聊天窗模型切换语义一致）
-      const agentId = String(body?.agentId || '') || (task.sessions?.['__node__']?.remoteSessionId ? '__node__' : this.planner.pickMainAgent()?.id || '')
+      if (task.chatAgentId && body?.agentId !== undefined && body.agentId !== task.chatAgentId) {
+        this.sendJson(res, 400, { ok: false, code: 'INVALID_PARAM', error: 'agentId 与任务直聊绑定冲突' })
+        return true
+      }
+      const agentId = task.chatAgentId || String(body?.agentId || '') || (task.sessions?.['__node__']?.remoteSessionId ? '__node__' : this.planner.pickMainAgent()?.id || '')
       const binding = task.sessions?.[agentId]
       if (!agentId || !binding?.remoteSessionId) {
         this.sendJson(res, 400, { ok: false, error: '该成员在任务中没有远端会话绑定', code: 'NO_SESSION' })
         return true
       }
-      // 节点主会话（__node__）无 store 记录：按任务节点解析
-      const agent = this.store.getAgent(agentId)
-      const target = agent
-        ? await this.resolver.resolve(agent)
-        : await this.engine.resolveExecTarget(task, agentId)
+      // 主/子会话均按绑定的稳定节点身份实时解析，不使用旧公网地址。
+      const target = await this.engine.resolveExecTarget(task, agentId)
       if (!target || !target.online || !target.baseUrl) {
         this.sendJson(res, 502, { ok: false, error: (target as any)?.error || '成员节点当前不可达' })
         return true
@@ -3455,6 +4359,16 @@ export class WorkBuddyRouter {
         this.sendJson(res, 502, { ok: false, error: r.error || '更新会话模型失败' })
         return true
       }
+      if (task.chatAgentId) this.store.mutateTask(taskId, t => {
+        if (provider && model) t.model = `${provider}/${model}`
+        const effort = typeof body?.reasoningEffort === 'string' ? body.reasoningEffort : defaultModel?.reasoningEffort
+        if (effort) t.reasoningEffort = effort
+        else if (body?.reasoningEffort !== undefined || provider && model) delete t.reasoningEffort
+        if (typeof body?.agentPreset === 'string') {
+          if (body.agentPreset) t.agentPreset = body.agentPreset
+          else delete t.agentPreset
+        }
+      })
       this.sendJson(res, 200, {
         ok: true,
         data: { selected: r.selected, presetApplied: r.preset ? r.preset.applied : undefined, defaultModel },
@@ -3467,9 +4381,14 @@ export class WorkBuddyRouter {
     if (sessionPresetMatch && method === 'PUT') {
       const taskId = decodeURIComponent(sessionPresetMatch[1])
       const body = await this.parseBody(req)
-      const task = this.store.getTask(taskId)
+      // 会话预设同 session-model：任务可见即可选（全员放开，仅按可见性）
+      const task = this.taskForView(taskId)
       if (!task) {
         this.sendJson(res, 404, { ok: false, error: 'Task not found' })
+        return true
+      }
+      if (task.chatAgentId && body?.agentId !== undefined && body.agentId !== task.chatAgentId) {
+        this.sendJson(res, 400, { ok: false, code: 'INVALID_PARAM', error: 'agentId 与任务直聊绑定冲突' })
         return true
       }
       const preset = String(body?.preset || '').trim()
@@ -3479,16 +4398,13 @@ export class WorkBuddyRouter {
         return t
       })
       // 尽力即时生效：主会话（__node__）优先，否则主智能体（与 session-model 语义一致）
-      const agentId = task.sessions?.['__node__']?.remoteSessionId ? '__node__' : this.planner.pickMainAgent()?.id || ''
+      const agentId = task.chatAgentId || (task.sessions?.['__node__']?.remoteSessionId ? '__node__' : this.planner.pickMainAgent()?.id || '')
       const binding = agentId ? task.sessions?.[agentId] : undefined
       if (!binding?.remoteSessionId) {
         this.sendJson(res, 200, { ok: true, data: { applied: false, reason: 'no-session', saved: true } })
         return true
       }
-      const agent = this.store.getAgent(agentId)
-      const target = agent
-        ? await this.resolver.resolve(agent)
-        : await this.engine.resolveExecTarget(task, agentId)
+      const target = await this.engine.resolveExecTarget(task, agentId)
       if (!target || !target.online || !target.baseUrl) {
         this.sendJson(res, 200, { ok: true, data: { applied: false, reason: 'node-offline', saved: true } })
         return true
@@ -3504,12 +4420,12 @@ export class WorkBuddyRouter {
     const sessionModelGetMatch = /^\/api\/tasks\/([^/]+)\/session-model$/.exec(p)
     if (sessionModelGetMatch && method === 'GET') {
       const taskId = decodeURIComponent(sessionModelGetMatch[1])
-      const task = this.store.getTask(taskId)
+      const task = this.taskForView(taskId)
       if (!task) {
         this.sendJson(res, 404, { ok: false, error: 'Task not found' })
         return true
       }
-      const agentId = task.sessions?.['__node__']?.remoteSessionId ? '__node__' : this.planner.pickMainAgent()?.id || ''
+      const agentId = task.chatAgentId || (task.sessions?.['__node__']?.remoteSessionId ? '__node__' : this.planner.pickMainAgent()?.id || '')
       const binding = agentId ? task.sessions?.[agentId] : undefined
       if (!binding?.remoteSessionId) {
         this.sendJson(res, 200, {
@@ -3518,10 +4434,7 @@ export class WorkBuddyRouter {
         })
         return true
       }
-      const agent = this.store.getAgent(agentId)
-      const target = agent
-        ? await this.resolver.resolve(agent)
-        : await this.engine.resolveExecTarget(task, agentId)
+      const target = await this.engine.resolveExecTarget(task, agentId)
       if (!target || !target.online || !target.baseUrl) {
         this.sendJson(res, 200, {
           ok: true,
@@ -3544,12 +4457,12 @@ export class WorkBuddyRouter {
     // 任务节点的模式预设候选（聊天窗预设切换的数据源）：与 tasks/:id/models 同语义
     const taskPresetsMatch = /^\/api\/tasks\/([^/]+)\/presets$/.exec(p)
     if (taskPresetsMatch && method === 'GET') {
-      const task = this.store.getTask(decodeURIComponent(taskPresetsMatch[1]))
+      const task = this.taskForView(decodeURIComponent(taskPresetsMatch[1]))
       if (!task) {
         this.sendJson(res, 404, { ok: false, error: 'Task not found' })
         return true
       }
-      const target = await this.engine.resolveExecTarget(task, '__node__').catch(() => undefined)
+      const target = await this.engine.resolveExecTarget(task, task.chatAgentId || '__node__').catch(() => undefined)
       if (!target?.online || !target?.baseUrl) {
         this.sendJson(res, 200, { ok: false, error: (target as any)?.error || '任务节点不可达', data: { presets: [] } })
         return true
@@ -3563,6 +4476,9 @@ export class WorkBuddyRouter {
     const taskModelMatch = /^\/api\/tasks\/([^/]+)\/model$/.exec(p)
     if (taskModelMatch && method === 'PUT') {
       const body = await this.parseBody(req)
+      // §11：任务级模型/推理强度 = manage 级
+      const mm = this.taskForManage(decodeURIComponent(taskModelMatch[1]))
+      if (!mm.task) { this.sendJson(res, mm.forbidden ? 403 : 404, { ok: false, error: mm.forbidden ? '仅任务归属人或管理员可切换模型' : 'Task not found' }); return true }
       const updated = this.store.mutateTask(decodeURIComponent(taskModelMatch[1]), (t): WorkTask => {
         const m = String(body?.model || '').trim()
         if (m) t.model = m
@@ -3584,6 +4500,9 @@ export class WorkBuddyRouter {
     if (taskPermissionMatch && method === 'PUT') {
       const body = await this.parseBody(req)
       const taskId = decodeURIComponent(taskPermissionMatch[1])
+      // §11：运行权限（沙箱/审批策略）= manage 级
+      const pm = this.taskForManage(taskId)
+      if (!pm.task) { this.sendJson(res, pm.forbidden ? 403 : 404, { ok: false, error: pm.forbidden ? '仅任务归属人或管理员可修改运行权限' : 'Task not found' }); return true }
       const updated = this.store.mutateTask(taskId, (t): WorkTask => {
         const perm = String(body?.permission || '').trim()
         if (perm) t.permission = perm
@@ -3603,7 +4522,7 @@ export class WorkBuddyRouter {
     // 供聊天窗「🔒 权限」入口展示与选择；旧节点无该路由 → supported=false，前端隐藏入口。
     if (taskPermissionMatch && method === 'GET') {
       const taskId = decodeURIComponent(taskPermissionMatch[1])
-      const task = this.store.getTask(taskId)
+      const task = this.taskForView(taskId)
       if (!task) {
         this.sendJson(res, 404, { ok: false, error: 'Task not found' })
         return true
@@ -3653,6 +4572,9 @@ export class WorkBuddyRouter {
     // 队列「立即发送」：按 turnId 取出排队消息 → 运行中 steer 插话，否则立即派发
     const queueSendMatch = /^\/api\/tasks\/([^/]+)\/queue\/send$/.exec(p)
     if (queueSendMatch && method === 'POST') {
+      // §11：队列管理 = manage 级
+      const qm = this.taskForManage(decodeURIComponent(queueSendMatch[1]))
+      if (!qm.task) { this.sendJson(res, qm.forbidden ? 403 : 404, { ok: false, error: qm.forbidden ? '仅任务归属人或管理员可操作消息队列' : 'Task not found' }); return true }
       const body = await this.parseBody(req)
       const out = await this.engine.sendQueuedNow(decodeURIComponent(queueSendMatch[1]), String(body?.turnId || ''))
       this.sendJson(res, out.ok ? 200 : 400, out)
@@ -3661,6 +4583,8 @@ export class WorkBuddyRouter {
     // 队列「编辑」：更新排队消息文本（排队条目 + 对应排队轮次）
     const queueUpdateMatch = /^\/api\/tasks\/([^/]+)\/queue\/update$/.exec(p)
     if (queueUpdateMatch && method === 'POST') {
+      const qm = this.taskForManage(decodeURIComponent(queueUpdateMatch[1]))
+      if (!qm.task) { this.sendJson(res, qm.forbidden ? 403 : 404, { ok: false, error: qm.forbidden ? '仅任务归属人或管理员可操作消息队列' : 'Task not found' }); return true }
       const body = await this.parseBody(req)
       const out = this.engine.updateQueuedMessage(decodeURIComponent(queueUpdateMatch[1]), String(body?.turnId || ''), String(body?.text || ''))
       this.sendJson(res, out.ok ? 200 : 400, out)
@@ -3669,6 +4593,8 @@ export class WorkBuddyRouter {
     // 队列「删除」：移出队列并删除该排队轮次
     const queueDeleteMatch = /^\/api\/tasks\/([^/]+)\/queue\/delete$/.exec(p)
     if (queueDeleteMatch && method === 'POST') {
+      const qm = this.taskForManage(decodeURIComponent(queueDeleteMatch[1]))
+      if (!qm.task) { this.sendJson(res, qm.forbidden ? 403 : 404, { ok: false, error: qm.forbidden ? '仅任务归属人或管理员可操作消息队列' : 'Task not found' }); return true }
       const body = await this.parseBody(req)
       const out = this.engine.deleteQueuedMessage(decodeURIComponent(queueDeleteMatch[1]), String(body?.turnId || ''))
       this.sendJson(res, out.ok ? 200 : 400, out)
@@ -3678,6 +4604,9 @@ export class WorkBuddyRouter {
     const renameMatch = /^\/api\/tasks\/([^/]+)\/rename$/.exec(p)
     if (renameMatch && method === 'POST') {
       const taskId = decodeURIComponent(renameMatch[1])
+      // §11：改名 = manage 级
+      const rm = this.taskForManage(taskId)
+      if (!rm.task) { this.sendJson(res, rm.forbidden ? 403 : 404, { ok: false, error: rm.forbidden ? '仅任务归属人或管理员可重命名任务' : 'Task not found' }); return true }
       const body = await this.parseBody(req)
       const title = String(body?.title || '').trim()
       if (!title) {
@@ -3696,12 +4625,16 @@ export class WorkBuddyRouter {
     const archiveMatch = /^\/api\/tasks\/([^/]+)\/archive$/.exec(p)
     if (archiveMatch && method === 'POST') {
       const taskId = decodeURIComponent(archiveMatch[1])
+      // §11：归档/恢复 = manage 级
+      const am = this.taskForManage(taskId)
+      if (!am.task) { this.sendJson(res, am.forbidden ? 403 : 404, { ok: false, error: am.forbidden ? '仅任务归属人或管理员可归档任务' : 'Task not found' }); return true }
       const body = await this.parseBody(req)
       const archived = Boolean(body?.archived)
       const updated = this.store.mutateTask(taskId, (t) => {
         t.archivedAt = archived ? (t.archivedAt || Date.now()) : undefined
         return t
       })
+      if (updated) this.audit(archived ? 'task.archive' : 'task.restore', 'task', taskId, updated.title)
       if (!updated) this.sendJson(res, 404, { ok: false, error: 'Task not found' })
       else this.sendJson(res, 200, { ok: true, data: updated })
       return true
@@ -3710,6 +4643,10 @@ export class WorkBuddyRouter {
     const attachMatch = /^\/api\/tasks\/([^/]+)\/attachments$/.exec(p)
     if (attachMatch && method === 'POST') {
       const taskId = decodeURIComponent(attachMatch[1])
+      const task = this.taskForView(taskId)
+      if (!task) { this.sendJson(res, 404, { ok: false, error: 'Task not found' }); return true }
+      if (task.projectId) requireProjectFiles(this.session, this.store.getProject(task.projectId), true)
+      else requireNodeFiles(this.session)
       const contentType = String(req.headers['content-type'] || '')
       const raw = await readRawBuffer(req, UPLOAD_MAX_BYTES)
       if (raw.length === 0) {
@@ -3728,6 +4665,20 @@ export class WorkBuddyRouter {
         const rawName = (url.searchParams.get('filename') || String(req.headers['x-filename'] || '')).trim()
         files = [{ filename: sanitizeUploadName(rawName || `upload-${Date.now()}`), data: raw, mimeType: contentType }]
       }
+      if (task.projectId) {
+        const url = new URL(req.url || '/', 'http://localhost')
+        url.searchParams.set('projectId', task.projectId)
+        const scope = await this.resolveFsTarget(url, undefined, 'write')
+        if (!scope.ok) { this.sendJson(res, scope.status, { ok: false, error: scope.error }); return true }
+        const out = await this.saveProjectUploads({ target: scope.target, project: scope.project! }, projectFilePath(scope.project!), files, url.searchParams.get('expectedSha256') || undefined)
+        if (out.body.files.length) {
+          this.store.mutateTask(taskId, t => { t.attachments = [...(t.attachments || []), ...out.body.files.map(f => ({ name: f.name, path: f.path, size: f.size, agentId: '__node__', agentName: '项目文件', remoteSessionId: '', nodeBaseUrl: scope.target.baseUrl, source: 'relay' as const, uploadedAt: Date.now() }))] })
+        }
+        if (out.body.ok) {
+          this.sendJson(res, 200, { ok: true, data: { ok: true, results: [{ agentId: '__node__', agentName: '项目文件', ok: true, files: out.body.files }] } })
+        } else this.sendJson(res, out.status, out.body)
+        return true
+      }
       try {
         const result = await this.engine.uploadAttachments(taskId, files)
         if (!result.ok) this.sendJson(res, 404, { ok: false, error: result.error })
@@ -3742,6 +4693,10 @@ export class WorkBuddyRouter {
     const directInitMatch = /^\/api\/tasks\/([^/]+)\/attachments\/direct\/init$/.exec(p)
     if (directInitMatch && method === 'POST') {
       const taskId = decodeURIComponent(directInitMatch[1])
+      const task = this.taskForView(taskId)
+      if (!task) { this.sendJson(res, 404, { ok: false, error: 'Task not found' }); return true }
+      if (task.projectId) requireProjectFiles(this.session, this.store.getProject(task.projectId), true)
+      requireNodeFiles(this.session)
       const body = await this.parseBody(req)
       const result = await this.engine.directUploadInit(taskId, String(body?.name || ''), Number(body?.size) || 0, body?.mimeType ? String(body.mimeType) : undefined)
       this.sendJson(res, result.ok ? 200 : 400, { ok: result.ok, data: result.ok ? result : undefined, error: result.error })
@@ -3750,6 +4705,10 @@ export class WorkBuddyRouter {
     const directRegMatch = /^\/api\/tasks\/([^/]+)\/attachments\/direct\/register$/.exec(p)
     if (directRegMatch && method === 'POST') {
       const taskId = decodeURIComponent(directRegMatch[1])
+      const task = this.taskForView(taskId)
+      if (!task) { this.sendJson(res, 404, { ok: false, error: 'Task not found' }); return true }
+      if (task.projectId) requireProjectFiles(this.session, this.store.getProject(task.projectId), true)
+      requireNodeFiles(this.session)
       const body = await this.parseBody(req)
       const result = await this.engine.directUploadRegister(
         taskId,
@@ -3767,6 +4726,10 @@ export class WorkBuddyRouter {
     const directRelayMatch = /^\/api\/tasks\/([^/]+)\/attachments\/direct\/relay$/.exec(p)
     if (directRelayMatch && method === 'POST') {
       const taskId = decodeURIComponent(directRelayMatch[1])
+      const task = this.taskForView(taskId)
+      if (!task) { this.sendJson(res, 404, { ok: false, error: 'Task not found' }); return true }
+      if (task.projectId) requireProjectFiles(this.session, this.store.getProject(task.projectId), true)
+      requireNodeFiles(this.session)
       const url = new URL(req.url || '/', 'http://localhost')
       const uploadId = String(url.searchParams.get('uploadId') || '')
       try {
@@ -3781,11 +4744,22 @@ export class WorkBuddyRouter {
     const dlMatch = /^\/api\/tasks\/([^/]+)\/files\/download$/.exec(p)
     if (dlMatch && method === 'GET') {
       const taskId = decodeURIComponent(dlMatch[1])
+      // §11：任务工作区文件下载随任务可见性
+      const task = this.taskForView(taskId)
+      if (!task) { this.sendJson(res, 404, { ok: false, error: 'Task not found' }); return true }
       const url = new URL(req.url || '/', 'http://localhost')
       const agent = url.searchParams.get('agent') || undefined
       const filePath = url.searchParams.get('path') || ''
+      let projectDownload: Awaited<ReturnType<DshClient['fsDownload']>> | undefined
+      if (task.projectId) {
+        url.searchParams.set('projectId', task.projectId)
+        const scope = await this.resolveFsTarget(url, undefined, 'read')
+        if (!scope.ok) { this.sendJson(res, scope.status, { ok: false, error: scope.error }); return true }
+        const checked = await this.projectFsPath(scope, filePath)
+        projectDownload = await this.client.fsDownload(scope.target, checked.path)
+      } else requireNodeFiles(this.session)
       try {
-        const dl = await this.engine.prepareFileDownload(taskId, agent, filePath)
+        const dl = projectDownload || await this.engine.prepareFileDownload(taskId, agent, filePath)
         if (!dl.ok || !dl.res?.body) {
           this.sendJson(res, 404, { ok: false, error: dl.error || '下载失败' })
           return true
@@ -3809,6 +4783,11 @@ export class WorkBuddyRouter {
     const streamMatch = /^\/api\/tasks\/([^/]+)\/stream$/.exec(p)
     if (streamMatch && method === 'GET') {
       const taskId = decodeURIComponent(streamMatch[1])
+      // §11：SSE 事件流随任务可见性（此前仅登录门禁，任何用户可订阅任意任务流）
+      if (!this.taskForView(taskId)) {
+        this.sendJson(res, 404, { ok: false, error: 'Task not found' })
+        return true
+      }
       this.startSse(res)
       res.write(`event: connected\ndata: ${JSON.stringify({ taskId, at: Date.now() })}\n\n`)
       const heartbeat = setInterval(() => {
@@ -3830,6 +4809,9 @@ export class WorkBuddyRouter {
     }
     const cancelMatch = /^\/api\/tasks\/([^/]+)\/cancel$/.exec(p)
     if (cancelMatch && method === 'POST') {
+      // §11：取消 = view 级 —— 前端「⏹ 停止生成」按钮走本路由，属会话协作动作
+      //（停止当前轮 ≠ 删除任务；任务本体仍在），可见即可停，与发消息同权
+      if (!this.taskForView(decodeURIComponent(cancelMatch[1]))) { this.sendJson(res, 404, { ok: false, error: 'Task not found' }); return true }
       const out = await this.engine.cancelTask(decodeURIComponent(cancelMatch[1]))
       // warnings = 远端中断未确认项（节点不可达/会话消失/旧版无 cancel）：本地已停，但如实告知
       this.sendJson(res, 200, {
@@ -3844,6 +4826,8 @@ export class WorkBuddyRouter {
     if (collabMatch) {
       const taskId = decodeURIComponent(collabMatch[1])
       const kind = collabMatch[2]
+      // §11：协作状态读写 = view 级（可见即可读写 goal/plan/compact）
+      if (!this.taskForView(taskId)) { this.sendJson(res, 404, { ok: false, error: 'Task not found' }); return true }
       const allowed = (kind === 'goal' && (method === 'GET' || method === 'POST' || method === 'PUT'))
         || (kind === 'plan' && (method === 'GET' || method === 'PUT'))
         || (kind === 'compact' && method === 'POST')
@@ -3858,36 +4842,71 @@ export class WorkBuddyRouter {
     if (p === '/api/planner/options' && method === 'GET') {
       const settings = this.store.getSettings()
       const picked = await this.planner.plannerTarget()
-      let models: Array<{ provider: string; id: string; name?: string; isDefault: boolean }> = []
+      let models: RemoteModelEntry[] = []
+      let defaultModel: { provider?: string; model?: string; reasoningEffort?: string } | undefined
       const providers: string[] = []
       let modelError: string | undefined
       // 调度模型作用于「任务节点的主会话」（engine.ensureSession isMain 分支）——
       // 模型目录应跟随所选任务节点（?node=<mappingId>），而不是主智能体所在节点：
       // 两个节点是不同引擎时注册表互不相通（DSH 的 zai-coding-cn 在 ZCode 节点不存在）
       const url = new URL(req.url || '/', 'http://localhost')
-      const nodeMappingId = (url.searchParams.get('node') || '').trim()
+      let nodeMappingId = (url.searchParams.get('node') || '').trim()
       let nodeSource: string | undefined
       let nodeError: string | undefined
-      let modelsBaseUrl = picked.baseUrl
-      let modelsApiKey = picked.apiKey
-      if (nodeMappingId) {
-        const ep = this.directory.resolveMapping(nodeMappingId)
-        if (!ep || !ep.online || !ep.baseUrl) {
-          nodeError = ep ? `映射「${ep.appName || ep.tunnelName || nodeMappingId}」当前离线` : `映射 ${nodeMappingId} 已不存在`
+      // 显式节点/任务解析失败时不得回退到规划器节点，否则会把其他 DSH 的目录冒充当前节点。
+      const hasCatalogTarget = Boolean(nodeMappingId || url.searchParams.get('taskId')?.trim())
+      let modelsBaseUrl = hasCatalogTarget ? undefined : picked.baseUrl
+      let modelsApiKey = hasCatalogTarget ? undefined : picked.apiKey
+      // taskId 权威模式：任务内的模型目录由服务端按任务/项目绑定节点解析（项目 dshRef 优先，
+      // 与 engine.taskExec 同口径）。前端自己猜节点（node=）会因项目清单未加载/权限过滤而回退到
+      // 所选执行位置，导致目录显示成另一个节点的引擎注册表（真实缺陷 2026-11-06：brain 项目
+      // 任务里弹出了公司笔记本的模型目录）。带 taskId 时 node= 仅作展示回显，不再作为数据源。
+      const taskIdQ = (url.searchParams.get('taskId') || '').trim()
+      if (taskIdQ) {
+        if (!this.taskForView(taskIdQ)) { this.sendJson(res, 404, { ok: false, error: 'Task not found' }); return true }
+        const task = this.store.getTask(taskIdQ)
+        const taskRef = task ? this.engine.taskExec(task).dshRef : undefined
+        nodeMappingId = taskRef?.kind === 'mapping' ? taskRef.mappingId : ''
+        const target = task
+          ? await this.engine.resolveExecTarget(task, '__node__').catch(() => undefined)
+          : undefined
+        if (target?.online && target.baseUrl) {
+          modelsBaseUrl = target.baseUrl
+          modelsApiKey = target.apiKey
+          nodeMappingId = (target as any).mappingId || nodeMappingId
+          const ep = nodeMappingId ? this.directory.resolveMapping(nodeMappingId) : undefined
+          nodeSource = ep?.appName || ep?.tunnelName || nodeMappingId || '直连节点'
+        } else if (task && !this.engine.taskExec(task).dshRef) {
+          // 存量未绑定任务实际由规划器执行（engine.executeTask 同口径），这不是离线节点回退。
+          modelsBaseUrl = picked.baseUrl
+          modelsApiKey = picked.apiKey
+          nodeMappingId = ''
+          nodeSource = picked.source
+          if (!modelsBaseUrl) modelError = picked.error || '任务执行节点不可达'
+        } else {
+          nodeError = (target as any)?.error || '任务节点不可达'
+          modelError = nodeError
+        }
+      }
+      if (nodeMappingId && !taskIdQ) {
+        // 与 Android 的 /agents/models 使用同一解析器：刷新映射入口并只取本节点凭证。
+        const target = await this.resolver.resolveRef({ kind: 'mapping', mappingId: nodeMappingId }, undefined, 'model-catalog').catch(() => undefined)
+        if (!target?.online || !target.baseUrl) {
+          nodeError = target?.error || '节点不可达'
           modelError = nodeError
         } else {
-          // 远程节点 /models 需要鉴权：映射实例凭证优先（限速保护内），失败回应用默认
-          const cred = await this.directory.fetchMappingCredentials(ep.mappingId)
-          modelsBaseUrl = ep.baseUrl
-          modelsApiKey = cred.ok ? cred.apiKey || cred.token : picked.apiKey
-          nodeSource = ep.appName || ep.tunnelName || nodeMappingId
+          modelsBaseUrl = target.baseUrl
+          modelsApiKey = target.apiKey
+          const ep = this.directory.resolveMapping(nodeMappingId)
+          nodeSource = ep?.appName || ep?.tunnelName || nodeMappingId
         }
       }
       if (modelsBaseUrl) {
         // 必须带上解析出的 apiKey：远程 DSH 节点的 /models 需要鉴权，无 key 会 401 → 列表静默变空
         const target = { baseUrl: modelsBaseUrl, online: true, resolvedAt: new Date().toISOString(), mappingId: nodeMappingId || '', apiKey: modelsApiKey }
         const mr = await this.client.getModels(target as any)
-        models = (mr.models || []).map((m) => ({ provider: m.provider, id: m.id, name: m.name, isDefault: Boolean(m.isDefault) }))
+        models = mr.ok ? mr.models || [] : []
+        defaultModel = mr.ok ? mr.defaultModel : undefined
         if (!mr.ok && !modelError) modelError = mr.error || '模型目录获取失败'
         for (const m of models) if (m.provider && !providers.includes(m.provider)) providers.push(m.provider)
       }
@@ -3895,7 +4914,8 @@ export class WorkBuddyRouter {
         ok: true,
         data: {
           agents: this.store.getAgents().map(a => ({ id: a.id, name: a.name })),
-          models: models.map(m => ({ provider: m.provider, id: m.id, name: m.name, isDefault: m.isDefault })),
+          models,
+          defaultModel,
           providers,
           current: { agentId: picked.agentId, auto: picked.auto !== false, model: settings.planner.model },
           source: picked.source,
@@ -3910,6 +4930,9 @@ export class WorkBuddyRouter {
     }
     if (p === '/api/planner/config' && method === 'POST') {
       const body = await this.parseBody(req)
+      // §11 分流：带 taskId = 任务会话内主智能体切换/成员账本同步（全员日常操作）；
+      // 不带 taskId = 全局规划器/默认模型配置（设置页入口），仅平台管理员
+      if (!body?.taskId && !this.isAdminOrServiceChannel()) { this.denyNotAdmin(res, '修改全局规划器配置'); return true }
       const hasAgent = body && typeof body.agentId === 'string'
       const hasModel = body && typeof body.model === 'string'
       const agentId = hasAgent ? (String(body.agentId).trim() || undefined) : undefined
@@ -3971,12 +4994,15 @@ export class WorkBuddyRouter {
     }
     const retryMatch = /^\/api\/tasks\/([^/]+)\/subtasks\/([^/]+)\/retry$/.exec(p)
     if (retryMatch && method === 'POST') {
+      // §11：子任务重试/追问/会话查看 = view 级（可见即可协作）
+      if (!this.taskForView(decodeURIComponent(retryMatch[1]))) { this.sendJson(res, 404, { ok: false, error: 'Task not found' }); return true }
       const out = await this.engine.retrySubtask(decodeURIComponent(retryMatch[1]), decodeURIComponent(retryMatch[2]))
       this.sendJson(res, out.ok ? 200 : 400, out)
       return true
     }
     const chatMatch = /^\/api\/tasks\/([^/]+)\/subtasks\/([^/]+)\/chat$/.exec(p)
     if (chatMatch && method === 'GET') {
+      if (!this.taskForView(decodeURIComponent(chatMatch[1]))) { this.sendJson(res, 404, { ok: false, error: 'Task not found' }); return true }
       const out = await this.subtaskChat(decodeURIComponent(chatMatch[1]), decodeURIComponent(chatMatch[2]))
       this.sendJson(res, 200, { ok: out.ok, data: out })
       return true
@@ -3984,6 +5010,7 @@ export class WorkBuddyRouter {
     const followupMatch = /^\/api\/tasks\/([^/]+)\/subtasks\/([^/]+)\/followup$/.exec(p)
     if (followupMatch && method === 'POST') {
       const taskId = decodeURIComponent(followupMatch[1])
+      if (!this.taskForView(taskId)) { this.sendJson(res, 404, { ok: false, error: 'Task not found' }); return true }
       const subtaskId = decodeURIComponent(followupMatch[2])
       const body = await this.parseBody(req)
       if (!body.message) {
@@ -3997,7 +5024,7 @@ export class WorkBuddyRouter {
     const summaryMatch = /^\/api\/tasks\/([^/]+)\/summary$/.exec(p)
     if (summaryMatch && method === 'POST') {
       const taskId = decodeURIComponent(summaryMatch[1])
-      const task = this.store.getTask(taskId)
+      const task = this.taskForView(taskId)
       if (!task?.plan) {
         this.sendJson(res, 404, { ok: false, error: '任务不存在或无编排计划' })
         return true
@@ -4014,16 +5041,185 @@ export class WorkBuddyRouter {
       return true
     }
 
+    // ---------- 协作群（契约 docs/groups-web-sync-plan-2026-11-11.md §2；每用户 scope 隔离，v1 无共享群） ----------
+    // 身份只取 session.userId（review P13：调用方身份绝不可来自请求体）；无登录身份一律 401，不落共享桶（review P5）
+    const groupUser = (): string | undefined => {
+      const uid = this.session?.userId
+      if (!uid) this.sendJson(res, 401, { ok: false, code: 'UNAUTHORIZED', error: '群功能需要登录身份' })
+      return uid
+    }
+    // 存储错误码 → HTTP：SECTION_CONFLICT→409；INVALID_PARAM→400；STORE_*/意外异常→500 不得压 400（W1-6/契约 §2 写口严格口径）
+    const groupFail = (err: unknown): void => {
+      const e = err as any
+      const code = e instanceof GroupStoreError ? e.code : 'INTERNAL_ERROR'
+      const status = code === 'SECTION_CONFLICT' ? 409 : code === 'INVALID_PARAM' ? 400 : 500
+      this.sendJson(res, status, { ok: false, code, error: e?.message || String(err) })
+    }
+    if (p === '/api/groups' && method === 'GET') {
+      const uid = groupUser()
+      if (!uid) return true
+      this.sendJson(res, 200, { ok: true, data: this.groupStore.list(uid) })
+      return true
+    }
+    if (p === '/api/groups' && method === 'POST') {
+      const uid = groupUser()
+      if (!uid) return true
+      const body = await this.parseBody(req)
+      try {
+        // POST = 整实体 create/upsert（缺 id 服务端生成）；同 id 覆盖时保 createdAt/createdBy（服务端权威，review P10）
+        const bodyId = typeof body?.id === 'string' ? body.id.trim() : ''
+        const existing = bodyId ? this.groupStore.get(uid, bodyId) : undefined
+        const id = existing?.id ?? bodyId ?? ''
+        const room = normalizeGroupRoom(body, undefined, {
+          id: id || randomUUID(),
+          now: Date.now(),
+          createdAt: existing?.createdAt,
+          createdBy: existing?.createdBy ?? (this.session?.username || uid),
+          prevLastReadSeq: existing?.lastReadSeq,
+        })
+        this.sendJson(res, 200, { ok: true, data: this.groupStore.upsert(uid, room) })
+      } catch (err) {
+        groupFail(err)
+      }
+      return true
+    }
+    const groupMatch = /^\/api\/groups\/([^/]+)$/.exec(p)
+    if (groupMatch) {
+      const uid = groupUser()
+      if (!uid) return true
+      const roomId = decodeURIComponent(groupMatch[1])
+      const existing = this.groupStore.get(uid, roomId)
+      if (method === 'GET') {
+        if (!existing) { this.sendJson(res, 404, { ok: false, code: 'NOT_FOUND', error: '群不存在' }); return true }
+        this.sendJson(res, 200, { ok: true, data: existing })
+        return true
+      }
+      if (method === 'PUT') {
+        // PUT = 部分字段更新：mergeBase=existing 后走 upsert 幂等语义；不存在 → 404（lead 裁定②）
+        if (!existing) { this.sendJson(res, 404, { ok: false, code: 'NOT_FOUND', error: '群不存在' }); return true }
+        const body = await this.parseBody(req)
+        try {
+          const room = normalizeGroupRoom(body, existing, {
+            id: existing.id,
+            now: Date.now(),
+            createdAt: existing.createdAt,
+            createdBy: existing.createdBy,
+            prevLastReadSeq: existing.lastReadSeq,
+          })
+          this.sendJson(res, 200, { ok: true, data: this.groupStore.upsert(uid, room) })
+        } catch (err) {
+          groupFail(err)
+        }
+        return true
+      }
+      if (method === 'DELETE') {
+        // 不存在静默幂等（200 deleted:false）；级联清 rounds 孤儿键（契约 §1）
+        const deleted = this.groupStore.delete(uid, roomId)
+        if (deleted) this.audit('group.delete', 'group', roomId, existing?.name)
+        this.sendJson(res, 200, { ok: true, data: { deleted } })
+        return true
+      }
+    }
+    if (p === '/api/group-sections' && method === 'GET') {
+      const uid = groupUser()
+      if (!uid) return true
+      this.sendJson(res, 200, { ok: true, data: this.groupStore.sections(uid) })
+      return true
+    }
+    if (p === '/api/group-sections' && method === 'POST') {
+      const uid = groupUser()
+      if (!uid) return true
+      const body = await this.parseBody(req)
+      try {
+        this.sendJson(res, 200, { ok: true, data: this.groupStore.addSection(uid, body?.name) })
+      } catch (err) {
+        groupFail(err)
+      }
+      return true
+    }
+    const groupSectionMatch = /^\/api\/group-sections\/([^/]+)$/.exec(p)
+    if (groupSectionMatch) {
+      const uid = groupUser()
+      if (!uid) return true
+      const name = decodeURIComponent(groupSectionMatch[1])
+      if (method === 'PUT') {
+        const body = await this.parseBody(req)
+        try {
+          const r = this.groupStore.renameSection(uid, name, body?.to)
+          this.sendJson(res, 200, { ok: true, data: r })
+        } catch (err) {
+          groupFail(err)
+        }
+        return true
+      }
+      if (method === 'DELETE') {
+        // 空白名 400（lead 裁定③）；不存在有效名静默幂等；级联 rooms.section 置 ""
+        try {
+          this.sendJson(res, 200, { ok: true, data: this.groupStore.removeSection(uid, name) })
+        } catch (err) {
+          groupFail(err)
+        }
+        return true
+      }
+    }
+    const groupRoundsMatch = /^\/api\/groups\/([^/]+)\/rounds$/.exec(p)
+    if (groupRoundsMatch) {
+      const uid = groupUser()
+      if (!uid) return true
+      const roomId = decodeURIComponent(groupRoundsMatch[1])
+      if (method === 'GET') {
+        if (!this.groupStore.get(uid, roomId)) { this.sendJson(res, 404, { ok: false, code: 'NOT_FOUND', error: '群不存在' }); return true }
+        this.sendJson(res, 200, { ok: true, data: this.groupStore.rounds(uid, roomId) })
+        return true
+      }
+      if (method === 'POST') {
+        if (!this.groupStore.get(uid, roomId)) { this.sendJson(res, 404, { ok: false, code: 'NOT_FOUND', error: '群不存在' }); return true }
+        const body = await this.parseBody(req)
+        const taskId = typeof body?.taskId === 'string' ? body.taskId.trim() : ''
+        if (!taskId) { this.sendJson(res, 400, { ok: false, code: 'INVALID_PARAM', error: 'taskId 必须是非空字符串' }); return true }
+        this.sendJson(res, 200, { ok: true, data: this.groupStore.addRound(uid, roomId, taskId) })
+        return true
+      }
+    }
+    const groupReadMatch = /^\/api\/groups\/([^/]+)\/read$/.exec(p)
+    if (groupReadMatch && method === 'POST') {
+      const uid = groupUser()
+      if (!uid) return true
+      const roomId = decodeURIComponent(groupReadMatch[1])
+      if (!this.groupStore.get(uid, roomId)) { this.sendJson(res, 404, { ok: false, code: 'NOT_FOUND', error: '群不存在' }); return true }
+      const body = await this.parseBody(req)
+      const seq = body?.lastReadSeq
+      if (typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq < 0) {
+        this.sendJson(res, 400, { ok: false, code: 'INVALID_PARAM', error: 'lastReadSeq 必须是非负整数' })
+        return true
+      }
+      // markRead 存储层同步读-改-写，单调不回退（契约 §1；review P8）
+      this.sendJson(res, 200, { ok: true, data: this.groupStore.markRead(uid, roomId, seq) })
+      return true
+    }
+
     // ---------- SSH 资源池（本地补充资源，沿袭 orchestrator） ----------
+    // 权限（§10.3）：归属人/平台 admin/项目绑定成员可见可用；取明文与改删仅归属人+admin
     if (p === '/api/ssh-resources' && method === 'GET') {
-      this.sendJson(res, 200, { ok: true, data: this.sshStore.list().map(maskSshResource) })
+      const ctx = this.permContext()
+      const list = this.sshStore.list().filter((r) => canViewResource(this.session, r, ctx))
+      this.sendJson(res, 200, { ok: true, data: list.map(maskSshResource) })
       return true
     }
     if (p === '/api/ssh-resources' && method === 'POST') {
       const body = await this.parseBody(req)
       try {
-        const existing = body.id ? this.sshStore.get(body.id) : undefined
-        const saved = this.sshStore.upsert(normalizeSshResource(body, existing))
+        const existing = body.id ? this.sshStore.get(String(body.id)) : undefined
+        if (existing && !canManageResource(this.session, existing)) {
+          this.sendJson(res, 403, { ok: false, error: '无权修改该 SSH 资源（仅归属人或管理员可改）' })
+          return true
+        }
+        // 归属人由服务端权威写入：新建 = 当前用户；更新 = 保持原归属（不接受客户端传入）。
+        // 存量资源（无归属）保持无归属 —— 管理员编辑一次不得把它变成个人私有资产。
+        const ownerUserId = existing
+          ? existing.ownerUserId
+          : this.session?.userId
+        const saved = this.sshStore.upsert(normalizeSshResource({ ...body, ownerUserId }, existing))
         this.sendJson(res, 200, { ok: true, data: maskSshResource(saved) })
       } catch (err: any) {
         this.sendJson(res, 400, { ok: false, error: err instanceof SshInputError ? err.message : err?.message })
@@ -4033,12 +5229,27 @@ export class WorkBuddyRouter {
     const sshMatch = /^\/api\/ssh-resources\/([^/]+)$/.exec(p)
     if (sshMatch) {
       const sshId = decodeURIComponent(sshMatch[1])
+      const r = this.sshStore.get(sshId)
       if (method === 'GET') {
-        const r = this.sshStore.get(sshId)
-        this.sendJson(res, r ? 200 : 404, r ? { ok: true, data: r } : { ok: false, error: 'not found' })
+        if (!r || !canViewResource(this.session, r, this.permContext())) {
+          this.sendJson(res, 404, { ok: false, error: 'not found' })
+          return true
+        }
+        // 明文凭据仅归属人/管理员可见；其余成员拿到脱敏视图
+        const canManage = canManageResource(this.session, r)
+        this.sendJson(res, 200, { ok: true, data: canManage ? r : maskSshResource(r) })
         return true
       }
       if (method === 'DELETE') {
+        if (!r) {
+          this.sendJson(res, 404, { ok: false, error: 'not found' })
+          return true
+        }
+        if (!canManageResource(this.session, r)) {
+          this.sendJson(res, 403, { ok: false, error: '无权删除该 SSH 资源（仅归属人或管理员可删）' })
+          return true
+        }
+        this.audit('ssh-resource.delete', 'ssh-resource', sshId, r.name)
         this.sendJson(res, 200, { ok: true, data: { deleted: this.sshStore.delete(sshId) } })
         return true
       }
@@ -4048,6 +5259,10 @@ export class WorkBuddyRouter {
       const r = this.sshStore.get(decodeURIComponent(sshTestMatch[1]))
       if (!r) {
         this.sendJson(res, 404, { ok: false, error: 'not found' })
+        return true
+      }
+      if (!canUseResource(this.session, r, this.permContext())) {
+        this.sendJson(res, 403, { ok: false, error: '无权使用该 SSH 资源' })
         return true
       }
       const result = await testSshResource(r, 8000)
@@ -4064,6 +5279,10 @@ export class WorkBuddyRouter {
       const r = this.sshStore.get(decodeURIComponent(sshExecMatch[1]))
       if (!r) {
         this.sendJson(res, 404, { ok: false, error: 'not found' })
+        return true
+      }
+      if (!canUseResource(this.session, r, this.permContext())) {
+        this.sendJson(res, 403, { ok: false, error: '无权使用该 SSH 资源' })
         return true
       }
       const body = await this.parseBody(req)
@@ -4085,12 +5304,12 @@ export class WorkBuddyRouter {
     // 兜底视图：远端不可达/记录缺失时，用本地缓存的指令与产出还原对话
     const localFallback = (note: string): { ok: boolean; source: string; note: string; messages: any[] } => {
       const messages: any[] = [{ role: 'user', content: sub.prompt, time: sub.startedAt || task.createdAt }]
-      if (sub.result?.content) messages.push({ role: 'assistant', content: sub.result.content, time: sub.completedAt, local: true })
+      if (sub.result?.content) messages.push({ role: 'assistant', content: sub.result.content, time: sub.completedAt, model: sub.model, local: true })
       return { ok: true, source: 'local', note, messages }
     }
-    // 会话绑定存在 task.sessions[agentId]（引擎写入），sub.remoteSessionId 仅作旧数据兜底
-    const remoteSessionId = task.sessions?.[sub.agentId]?.remoteSessionId || sub.remoteSessionId
-    if (!remoteSessionId) return localFallback('该子任务尚未创建远程会话，以下为本地缓存记录')
+    // A legacy subtask session ID alone cannot identify the physical node that created it.
+    const remoteSessionId = task.sessions?.[sub.agentId]?.remoteSessionId
+    if (!remoteSessionId) return localFallback('缺少远程会话节点绑定，以下为本地缓存记录')
     // 子任务执行者：子智能体实体或任务节点主会话伪成员（__node__，主智能体自留子任务）；
     // resolveExecTarget 两者通吃（实体成员回自身绑定节点，__node__ 走任务节点）
     const isNodeMain = sub.agentId === NODE_AGENT_ID
@@ -4105,10 +5324,16 @@ export class WorkBuddyRouter {
       return c.startsWith('<system-reminder>') || c.startsWith('Current runtime context.') || c.startsWith('<system>')
     }
     const messages = (hist.messages || []).filter((m: any) => !isNoise(m))
+    // 远端 history 不带模型标注：子任务记录有实际模型时按会话粒度补齐（子任务会话内模型通常一致；缺记录时不编造）
+    if (sub.model) {
+      for (const m of messages) {
+        if (m?.role === 'assistant' && !m.model) m.model = sub.model
+      }
+    }
     // 旧版远端 dsh-web-service 的 history 可能缺 assistant 消息 —— 用本地缓存产出补齐
     const hasAssistant = messages.some((m) => m?.role === 'assistant' && String(m?.content || '').trim())
     if (!hasAssistant && sub.result?.content) {
-      messages.push({ role: 'assistant', content: sub.result.content, time: sub.completedAt, local: true })
+      messages.push({ role: 'assistant', content: sub.result.content, time: sub.completedAt, model: sub.model, local: true })
     }
     if (!messages.some((m) => m?.role === 'user')) {
       messages.unshift({ role: 'user', content: sub.prompt, time: sub.startedAt || task.createdAt })
@@ -4126,8 +5351,8 @@ export class WorkBuddyRouter {
     const sub = task?.plan?.subtasks.find((s) => s.id === subtaskId)
     if (!task || !sub) return { ok: false, error: '子任务不存在' }
     const session = task.sessions?.[sub.agentId]
-    const remoteSessionId = session?.remoteSessionId || sub.remoteSessionId
-    if (!remoteSessionId) return { ok: false, error: '子任务尚未创建远程会话' }
+    const remoteSessionId = session?.remoteSessionId
+    if (!remoteSessionId) return { ok: false, error: '子任务缺少远程会话节点绑定，不能向当前节点发送旧会话 ID' }
     // 执行者：子智能体实体或任务节点主会话伪成员（__node__，主智能体自留子任务）；
     // resolveExecTarget 两者通吃（实体成员回自身绑定节点，__node__ 走任务节点）
     const isNodeMain = sub.agentId === NODE_AGENT_ID
@@ -4214,10 +5439,14 @@ function parseUsageRange(url: URL): { from: number; to: number } {
   return { from, to }
 }
 
-export function normalizeDshRef(input: any): DshRef | { error: string } {  if (!input || typeof input !== 'object') return { error: '缺少 dshRef（DSH 实体引用）' }
-  if (input.kind === 'mapping' && input.mappingId) return { kind: 'mapping', mappingId: String(input.mappingId) }
-  if (input.kind === 'app' && input.appId) return { kind: 'app', appId: String(input.appId) }
-  if (input.kind === 'direct' && input.apiBaseUrl) return { kind: 'direct', apiBaseUrl: String(input.apiBaseUrl) }
+export function normalizeDshRef(input: any): DshRef | { error: string } {
+  if (!input || typeof input !== 'object') return { error: '缺少 dshRef（DSH 实体引用）' }
+  const mappingId = String(input.mappingId || '').trim()
+  const appId = String(input.appId || '').trim()
+  const apiBaseUrl = String(input.apiBaseUrl || '').trim()
+  if (input.kind === 'mapping' && mappingId) return { kind: 'mapping', mappingId }
+  if (input.kind === 'app' && appId) return { kind: 'app', appId }
+  if (input.kind === 'direct' && apiBaseUrl) return { kind: 'direct', apiBaseUrl }
   return { error: 'dshRef 不合法: 需要 {kind: mapping|app|direct, ...}' }
 }
 

@@ -1,0 +1,10 @@
+{
+  "at": "2026-11-06T17:47:52.467Z",
+  "originalFailure": {
+    "path": "artifacts/task58/mock/browser-run-second.log",
+    "sha256": "a54edb0f5dd3172880abd8e7dbb9bc47854146f62b619fb25a592b123db77778",
+    "preserved": true
+  },
+  "productUiSha256": "4136b35444cc38bdaa878c37132f419f081cff4c4cfab2f709ef8ac28fbe08f5",
+  "productSourceChanged": false
+}

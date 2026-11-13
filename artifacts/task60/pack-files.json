@@ -1,0 +1,5456 @@
+[
+  {
+    "id": "onenat-workbuddy-web@2026.11.1",
+    "name": "onenat-workbuddy-web",
+    "version": "2026.11.1",
+    "size": 7045870,
+    "unpackedSize": 23413371,
+    "shasum": "a11c49c57b3879ec89d8ce99a0d7d1381f182da5",
+    "integrity": "sha512-0vruTVp4LCAXJqrE30QspiM7HAgPoaTq55y8f485KRfpSD5u+qMLzK8Vz1lvaoD3BqdOFDjsjrld3NlAyNe3rA==",
+    "filename": "onenat-workbuddy-web-2026.11.1.tgz",
+    "files": [
+      {
+        "path": "README.md",
+        "size": 38646,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/academic/academic-anthropologist.md",
+        "size": 8056,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/academic/academic-geographer.md",
+        "size": 7918,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/academic/academic-historian.md",
+        "size": 7432,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/academic/academic-narratologist.md",
+        "size": 6951,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/academic/academic-psychologist.md",
+        "size": 7990,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/academic/academic-statistician.md",
+        "size": 11668,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/academic/academic-study-planner.md",
+        "size": 3044,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/company/chief-executive-officer.md",
+        "size": 1619,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/company/chief-marketing-officer.md",
+        "size": 1399,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/company/chief-of-staff.md",
+        "size": 1290,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/company/chief-operating-officer.md",
+        "size": 1293,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/company/chief-product-officer.md",
+        "size": 1289,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/company/chief-technology-officer.md",
+        "size": 1389,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/design/design-brand-guardian.md",
+        "size": 11789,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/design/design-image-prompt-engineer.md",
+        "size": 11303,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/design/design-inclusive-visuals-specialist.md",
+        "size": 6942,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/design/design-persona-walkthrough.md",
+        "size": 16904,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/design/design-ui-designer.md",
+        "size": 13469,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/design/design-ui-finish-gate-reviewer.md",
+        "size": 9121,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/design/design-ux-architect.md",
+        "size": 15896,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/design/design-ux-researcher.md",
+        "size": 13157,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/design/design-video-prompt-engineer.md",
+        "size": 3017,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/design/design-visual-storyteller.md",
+        "size": 7564,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/design/design-whimsy-injector.md",
+        "size": 15990,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-ai-data-remediation-engineer.md",
+        "size": 10846,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-ai-engineer.md",
+        "size": 7523,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-api-platform-engineer.md",
+        "size": 13753,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-autonomous-optimization-architect.md",
+        "size": 8082,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-backend-architect.md",
+        "size": 11071,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-cms-developer.md",
+        "size": 19653,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-code-reviewer.md",
+        "size": 3215,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-codebase-onboarding-engineer.md",
+        "size": 9699,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-data-engineer.md",
+        "size": 14827,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-data-visualization-engineer.md",
+        "size": 13959,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-database-optimizer.md",
+        "size": 5653,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-database-reliability-engineer.md",
+        "size": 14545,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-desktop-app-engineer.md",
+        "size": 14695,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-developer-tooling-engineer.md",
+        "size": 13190,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-devops-automator.md",
+        "size": 12995,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-dingtalk-integration-developer.md",
+        "size": 3030,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-drupal-performance.md",
+        "size": 23659,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-drupal-shopping-cart.md",
+        "size": 21611,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-email-intelligence-engineer.md",
+        "size": 16684,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-embedded-firmware-engineer.md",
+        "size": 6704,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-embedded-linux-driver-engineer.md",
+        "size": 2945,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-feishu-integration-developer.md",
+        "size": 21284,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-filament-optimization-specialist.md",
+        "size": 14406,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-finops-engineer.md",
+        "size": 13060,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-fpga-digital-design-engineer.md",
+        "size": 2903,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-frontend-developer.md",
+        "size": 9407,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-gaussdb-expert.md",
+        "size": 15756,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-git-workflow-master.md",
+        "size": 3489,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-i18n-engineer.md",
+        "size": 12848,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-identity-access-engineer.md",
+        "size": 14998,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-incident-response-commander.md",
+        "size": 21254,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-iot-fleet-engineer.md",
+        "size": 13750,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-iot-solution-architect.md",
+        "size": 2875,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-it-service-manager.md",
+        "size": 27829,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-knowledge-graph-engineer.md",
+        "size": 23440,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-llm-post-training-engineer.md",
+        "size": 11093,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-mechanical-design-engineer.md",
+        "size": 3028,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-minimal-change-engineer.md",
+        "size": 11384,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-mobile-app-builder.md",
+        "size": 17159,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-mobile-release-engineer.md",
+        "size": 13784,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-multi-agent-systems-architect.md",
+        "size": 29476,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-network-engineer-china.md",
+        "size": 3051,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-network-engineer.md",
+        "size": 13509,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-orgscript-engineer.md",
+        "size": 5759,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-payments-billing-engineer.md",
+        "size": 12726,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-pc-host-engineer.md",
+        "size": 2982,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-privacy-engineer.md",
+        "size": 14374,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-prompt-engineer.md",
+        "size": 9425,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-rag-pipeline-engineer.md",
+        "size": 18394,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-rapid-prototyper.md",
+        "size": 15602,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-realtime-collaboration-engineer.md",
+        "size": 14397,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-rust-refactoring-specialist.md",
+        "size": 15025,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-search-relevance-engineer.md",
+        "size": 15177,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-section-508-specialist.md",
+        "size": 26773,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-security-engineer.md",
+        "size": 2938,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-senior-developer.md",
+        "size": 6381,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-software-architect.md",
+        "size": 6636,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-solidity-smart-contract-engineer.md",
+        "size": 21867,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-sre.md",
+        "size": 4029,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-technical-writer.md",
+        "size": 14344,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-threat-detection-engineer.md",
+        "size": 2894,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-uswds-developer.md",
+        "size": 24360,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-video-streaming-engineer.md",
+        "size": 13003,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-voice-ai-integration-engineer.md",
+        "size": 27444,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-webassembly-engineer.md",
+        "size": 13251,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-wechat-mini-program-developer.md",
+        "size": 14909,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-wordpress-performance.md",
+        "size": 24451,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/engineering/engineering-wordpress-shopping-cart.md",
+        "size": 22335,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/finance/finance-bookkeeper-controller.md",
+        "size": 15416,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/finance/finance-financial-analyst.md",
+        "size": 13590,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/finance/finance-financial-forecaster.md",
+        "size": 2944,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/finance/finance-fpa-analyst.md",
+        "size": 16750,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/finance/finance-fraud-detector.md",
+        "size": 3014,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/finance/finance-hk-stock-compliance-reviewer.md",
+        "size": 3036,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/finance/finance-investment-researcher.md",
+        "size": 15811,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/finance/finance-invoice-manager.md",
+        "size": 3009,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/finance/finance-tax-strategist.md",
+        "size": 13858,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/game-development/blender-addon-engineer.md",
+        "size": 11133,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/game-development/economy-designer.md",
+        "size": 9010,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/game-development/game-audio-engineer.md",
+        "size": 12461,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/game-development/game-designer.md",
+        "size": 8599,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/game-development/godot-gameplay-scripter.md",
+        "size": 15694,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/game-development/godot-multiplayer-engineer.md",
+        "size": 14074,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/game-development/godot-shader-developer.md",
+        "size": 13545,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/game-development/level-designer.md",
+        "size": 10491,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/game-development/narrative-designer.md",
+        "size": 13314,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/game-development/roblox-avatar-creator.md",
+        "size": 14271,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/game-development/roblox-experience-designer.md",
+        "size": 15016,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/game-development/roblox-systems-scripter.md",
+        "size": 15367,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/game-development/technical-artist.md",
+        "size": 11376,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/game-development/unity-architect.md",
+        "size": 12405,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/game-development/unity-editor-tool-developer.md",
+        "size": 15047,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/game-development/unity-multiplayer-engineer.md",
+        "size": 15109,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/game-development/unity-shader-graph-artist.md",
+        "size": 13219,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/game-development/unreal-multiplayer-architect.md",
+        "size": 14193,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/game-development/unreal-systems-engineer.md",
+        "size": 15648,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/game-development/unreal-technical-artist.md",
+        "size": 12007,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/game-development/unreal-world-builder.md",
+        "size": 14164,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/gis/gis-3d-scene-developer.md",
+        "size": 5793,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/gis/gis-analyst.md",
+        "size": 4613,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/gis/gis-bim-specialist.md",
+        "size": 5743,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/gis/gis-cartography-designer.md",
+        "size": 7100,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/gis/gis-drone-reality-mapping.md",
+        "size": 6155,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/gis/gis-geoai-ml-engineer.md",
+        "size": 5095,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/gis/gis-geoprocessing-specialist.md",
+        "size": 4968,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/gis/gis-qa-engineer.md",
+        "size": 5548,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/gis/gis-solution-engineer.md",
+        "size": 4736,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/gis/gis-spatial-data-engineer.md",
+        "size": 5103,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/gis/gis-spatial-data-scientist.md",
+        "size": 5988,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/gis/gis-technical-consultant.md",
+        "size": 4675,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/gis/gis-web-gis-developer.md",
+        "size": 5475,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/healthcare/healthcare-clinical-evidence-agent.md",
+        "size": 10427,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/healthcare/healthcare-innovation-strategist.md",
+        "size": 20520,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/healthcare/healthcare-sovereign-health-systems-agent.md",
+        "size": 15045,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/hr/hr-performance-reviewer.md",
+        "size": 1471,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/hr/hr-recruiter.md",
+        "size": 1576,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/legal/legal-contract-reviewer.md",
+        "size": 1498,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/legal/legal-policy-writer.md",
+        "size": 1515,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/LICENSE",
+        "size": 1079,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-aeo-foundations.md",
+        "size": 15737,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-agentic-search-optimizer.md",
+        "size": 15880,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-ai-citation-strategist.md",
+        "size": 9603,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-app-store-optimizer.md",
+        "size": 13246,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-baidu-seo-specialist.md",
+        "size": 12992,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-bilibili-content-strategist.md",
+        "size": 11886,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-bilibili-strategist.md",
+        "size": 2990,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-book-co-author.md",
+        "size": 5246,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-carousel-growth-engine.md",
+        "size": 15001,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-china-ecommerce-operator.md",
+        "size": 16644,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-china-market-localization-strategist.md",
+        "size": 17356,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-content-creator.md",
+        "size": 3291,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-cross-border-ecommerce.md",
+        "size": 17569,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-daily-news-briefing.md",
+        "size": 2968,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-douyin-strategist.md",
+        "size": 7111,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-ecommerce-operator.md",
+        "size": 3014,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-email-strategist.md",
+        "size": 16361,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-global-podcast-strategist.md",
+        "size": 22016,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-growth-hacker.md",
+        "size": 3203,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-instagram-curator.md",
+        "size": 6710,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-knowledge-commerce-strategist.md",
+        "size": 3065,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-kuaishou-strategist.md",
+        "size": 14196,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-linkedin-content-creator.md",
+        "size": 13519,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-livestream-commerce-coach.md",
+        "size": 17320,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-multi-platform-publisher.md",
+        "size": 14021,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-podcast-strategist.md",
+        "size": 18198,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-pr-communications-manager.md",
+        "size": 24831,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-private-domain-operator.md",
+        "size": 16330,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-reddit-community-builder.md",
+        "size": 7639,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-seo-specialist.md",
+        "size": 21448,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-short-video-editing-coach.md",
+        "size": 30932,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-social-media-strategist.md",
+        "size": 7555,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-tiktok-strategist.md",
+        "size": 7709,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-twitter-engager.md",
+        "size": 7896,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-video-optimization-specialist.md",
+        "size": 6390,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-wechat-official-account.md",
+        "size": 9974,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-wechat-operator.md",
+        "size": 2889,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-weibo-strategist.md",
+        "size": 15839,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-weixin-channels-strategist.md",
+        "size": 3038,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-x-twitter-intelligence-analyst.md",
+        "size": 9877,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-xiaohongshu-operator.md",
+        "size": 2924,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-xiaohongshu-specialist.md",
+        "size": 9759,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/marketing/marketing-zhihu-strategist.md",
+        "size": 12148,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/paid-media/paid-media-auditor.md",
+        "size": 5727,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/paid-media/paid-media-creative-strategist.md",
+        "size": 5328,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/paid-media/paid-media-paid-social-strategist.md",
+        "size": 5613,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/paid-media/paid-media-ppc-strategist.md",
+        "size": 5174,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/paid-media/paid-media-programmatic-buyer.md",
+        "size": 5448,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/paid-media/paid-media-search-query-analyst.md",
+        "size": 5092,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/paid-media/paid-media-tracking-specialist.md",
+        "size": 5497,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/product/product-behavioral-nudge-engine.md",
+        "size": 5513,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/product/product-feedback-synthesizer.md",
+        "size": 7428,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/product/product-manager.md",
+        "size": 22865,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/product/product-sprint-prioritizer.md",
+        "size": 9624,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/product/product-trend-researcher.md",
+        "size": 10650,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/project-management/project-management-experiment-tracker.md",
+        "size": 9620,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/project-management/project-management-jira-workflow-steward.md",
+        "size": 13663,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/project-management/project-management-meeting-notes-specialist.md",
+        "size": 5767,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/project-management/project-management-project-shepherd.md",
+        "size": 9997,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/project-management/project-management-studio-operations.md",
+        "size": 10089,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/project-management/project-management-studio-producer.md",
+        "size": 11083,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/project-management/project-manager-senior.md",
+        "size": 5471,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/research/research-synthesist.md",
+        "size": 10739,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/sales/sales-account-strategist.md",
+        "size": 15034,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/sales/sales-coach.md",
+        "size": 21205,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/sales/sales-deal-strategist.md",
+        "size": 13885,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/sales/sales-discovery-coach.md",
+        "size": 13766,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/sales/sales-engineer.md",
+        "size": 14140,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/sales/sales-offer-lead-gen-strategist.md",
+        "size": 16313,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/sales/sales-outbound-strategist.md",
+        "size": 10928,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/sales/sales-pipeline-analyst.md",
+        "size": 18951,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/sales/sales-proposal-strategist.md",
+        "size": 14493,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/security/security-ai-generated-code-auditor.md",
+        "size": 17310,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/security/security-appsec-engineer.md",
+        "size": 25963,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/security/security-architect.md",
+        "size": 18201,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/security/security-blockchain-security-auditor.md",
+        "size": 21278,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/security/security-cloud-security-architect.md",
+        "size": 23188,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/security/security-compliance-auditor.md",
+        "size": 7360,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/security/security-incident-responder.md",
+        "size": 24446,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/security/security-penetration-tester.md",
+        "size": 21576,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/security/security-secrets-credential-engineer.md",
+        "size": 13433,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/security/security-senior-secops.md",
+        "size": 31516,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/security/security-threat-detection-engineer.md",
+        "size": 25020,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/security/security-threat-intelligence-analyst.md",
+        "size": 28509,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/spatial-computing/macos-spatial-metal-engineer.md",
+        "size": 12317,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/spatial-computing/terminal-integration-specialist.md",
+        "size": 4263,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/spatial-computing/visionos-spatial-engineer.md",
+        "size": 3562,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/spatial-computing/xr-cockpit-interaction-specialist.md",
+        "size": 1938,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/spatial-computing/xr-immersive-developer.md",
+        "size": 1968,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/spatial-computing/xr-interface-architect.md",
+        "size": 1833,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/accounts-payable-agent.md",
+        "size": 6943,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/agentic-identity-trust.md",
+        "size": 18537,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/agents-orchestrator.md",
+        "size": 15837,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/authenticity-appraiser.md",
+        "size": 1473,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/automation-governance-architect.md",
+        "size": 5952,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/business-strategist.md",
+        "size": 25432,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/change-management-consultant.md",
+        "size": 27504,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/chief-financial-officer.md",
+        "size": 18758,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/corporate-training-designer.md",
+        "size": 15800,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/customer-service.md",
+        "size": 19302,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/customer-success-manager.md",
+        "size": 23443,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/data-consolidation-agent.md",
+        "size": 2508,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/data-privacy-officer.md",
+        "size": 22560,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/esg-sustainability-officer.md",
+        "size": 20962,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/gaokao-college-advisor.md",
+        "size": 3086,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/government-digital-presales-consultant.md",
+        "size": 22894,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/grant-writer.md",
+        "size": 27166,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/healthcare-aging-parent-care-companion.md",
+        "size": 25366,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/healthcare-customer-service.md",
+        "size": 22224,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/healthcare-marketing-compliance.md",
+        "size": 35452,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/hospitality-guest-services.md",
+        "size": 27897,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/hr-onboarding.md",
+        "size": 24050,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/identity-graph-operator.md",
+        "size": 14249,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/language-translator.md",
+        "size": 16213,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/legal-billing-time-tracking.md",
+        "size": 27404,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/legal-client-intake.md",
+        "size": 25754,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/legal-document-review.md",
+        "size": 24849,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/livestock-archive-auditor.md",
+        "size": 1421,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/loan-officer-assistant.md",
+        "size": 28633,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/lsp-index-engineer.md",
+        "size": 11311,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/ma-integration-manager.md",
+        "size": 21562,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/medical-billing-coding-specialist.md",
+        "size": 24758,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/operations-manager.md",
+        "size": 19336,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/organizational-psychologist.md",
+        "size": 22700,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/personal-growth-mentor.md",
+        "size": 7951,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/prompt-engineer.md",
+        "size": 2895,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/real-estate-buyer-seller.md",
+        "size": 31239,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/recruitment-specialist.md",
+        "size": 28642,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/report-distribution-agent.md",
+        "size": 2783,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/resume-tailor.md",
+        "size": 11335,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/retail-customer-returns.md",
+        "size": 27830,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/sales-data-extraction-agent.md",
+        "size": 2816,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/sales-outreach.md",
+        "size": 20768,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/specialized-ai-policy-writer.md",
+        "size": 3033,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/specialized-chief-of-staff.md",
+        "size": 18314,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/specialized-civil-engineer.md",
+        "size": 17198,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/specialized-codebase-archaeologist.md",
+        "size": 26299,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/specialized-cultural-intelligence-strategist.md",
+        "size": 6779,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/specialized-developer-advocate.md",
+        "size": 14953,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/specialized-document-generator.md",
+        "size": 2551,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/specialized-fedramp-rmf-compliance.md",
+        "size": 32710,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/specialized-french-consulting-market.md",
+        "size": 11332,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/specialized-korean-business-navigator.md",
+        "size": 14197,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/specialized-master-plan-architect.md",
+        "size": 10622,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/specialized-mcp-builder.md",
+        "size": 12188,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/specialized-meeting-assistant.md",
+        "size": 3046,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/specialized-model-qa.md",
+        "size": 20291,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/specialized-pricing-analyst.md",
+        "size": 12888,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/specialized-pricing-optimizer.md",
+        "size": 3026,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/specialized-risk-assessor.md",
+        "size": 3058,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/specialized-salesforce-architect.md",
+        "size": 10070,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/specialized-strategy-duel-agent.md",
+        "size": 6061,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/specialized-workflow-architect.md",
+        "size": 26615,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/study-abroad-advisor.md",
+        "size": 17114,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/supply-chain-strategist.md",
+        "size": 30251,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/technical-translator-agent.md",
+        "size": 2856,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/travel-planner.md",
+        "size": 2931,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/specialized/zk-steward.md",
+        "size": 11026,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/supply-chain/supply-chain-garment-factory-planning-engineer.md",
+        "size": 1569,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/supply-chain/supply-chain-inventory-forecaster.md",
+        "size": 1475,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/supply-chain/supply-chain-route-optimizer.md",
+        "size": 1437,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/supply-chain/supply-chain-vendor-evaluator.md",
+        "size": 1530,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/support/support-analytics-reporter.md",
+        "size": 15935,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/support/support-executive-summary-generator.md",
+        "size": 9128,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/support/support-finance-tracker.md",
+        "size": 19376,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/support/support-infrastructure-maintainer.md",
+        "size": 22498,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/support/support-legal-compliance-checker.md",
+        "size": 26681,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/support/support-recruitment-specialist.md",
+        "size": 2972,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/support/support-support-responder.md",
+        "size": 24822,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/testing/testing-accessibility-auditor.md",
+        "size": 15453,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/testing/testing-api-tester.md",
+        "size": 12699,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/testing/testing-embedded-qa-engineer.md",
+        "size": 2927,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/testing/testing-evidence-collector.md",
+        "size": 8514,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/testing/testing-performance-benchmarker.md",
+        "size": 12375,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/testing/testing-reality-checker.md",
+        "size": 10996,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/testing/testing-test-automation-engineer.md",
+        "size": 12419,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/testing/testing-test-results-analyzer.md",
+        "size": 14747,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/testing/testing-tool-evaluator.md",
+        "size": 17678,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/testing/testing-workflow-optimizer.md",
+        "size": 22198,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/en/UPSTREAM.md",
+        "size": 681,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/NOTICE",
+        "size": 647,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/academic/academic-anthropologist.md",
+        "size": 7170,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/academic/academic-geographer.md",
+        "size": 6791,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/academic/academic-historian.md",
+        "size": 6628,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/academic/academic-narratologist.md",
+        "size": 6187,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/academic/academic-psychologist.md",
+        "size": 6843,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/academic/academic-statistician.md",
+        "size": 2428,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/academic/academic-study-planner.md",
+        "size": 17272,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/company/chief-executive-officer.md",
+        "size": 7230,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/company/chief-marketing-officer.md",
+        "size": 6587,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/company/chief-of-staff.md",
+        "size": 16584,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/company/chief-operating-officer.md",
+        "size": 6003,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/company/chief-product-officer.md",
+        "size": 6437,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/company/chief-technology-officer.md",
+        "size": 7113,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/design/design-brand-guardian.md",
+        "size": 9543,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/design/design-image-prompt-engineer.md",
+        "size": 8854,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/design/design-inclusive-visuals-specialist.md",
+        "size": 9836,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/design/design-persona-walkthrough.md",
+        "size": 16707,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/design/design-ui-designer.md",
+        "size": 11748,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/design/design-ui-finish-gate-reviewer.md",
+        "size": 2388,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/design/design-ux-architect.md",
+        "size": 13678,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/design/design-ux-researcher.md",
+        "size": 10707,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/design/design-video-prompt-engineer.md",
+        "size": 8335,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/design/design-visual-storyteller.md",
+        "size": 5424,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/design/design-whimsy-injector.md",
+        "size": 13754,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-ai-data-remediation-engineer.md",
+        "size": 10351,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-ai-engineer.md",
+        "size": 5668,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-api-platform-engineer.md",
+        "size": 2503,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-autonomous-optimization-architect.md",
+        "size": 6702,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-backend-architect.md",
+        "size": 8185,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-cms-developer.md",
+        "size": 18879,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-code-reviewer.md",
+        "size": 6648,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-codebase-onboarding-engineer.md",
+        "size": 8418,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-data-engineer.md",
+        "size": 13687,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-data-visualization-engineer.md",
+        "size": 2500,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-database-optimizer.md",
+        "size": 5117,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-database-reliability-engineer.md",
+        "size": 2505,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-desktop-app-engineer.md",
+        "size": 2433,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-developer-tooling-engineer.md",
+        "size": 2499,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-devops-automator.md",
+        "size": 10908,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-dingtalk-integration-developer.md",
+        "size": 20347,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-drupal-performance.md",
+        "size": 2793,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-drupal-shopping-cart.md",
+        "size": 20063,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-email-intelligence-engineer.md",
+        "size": 14953,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-embedded-firmware-engineer.md",
+        "size": 6180,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-embedded-linux-driver-engineer.md",
+        "size": 9093,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-feishu-integration-developer.md",
+        "size": 19088,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-filament-optimization-specialist.md",
+        "size": 13399,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-finops-engineer.md",
+        "size": 2465,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-fpga-digital-design-engineer.md",
+        "size": 8960,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-frontend-developer.md",
+        "size": 7821,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-gaussdb-expert.md",
+        "size": 2480,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-git-workflow-master.md",
+        "size": 7662,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-i18n-engineer.md",
+        "size": 2451,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-identity-access-engineer.md",
+        "size": 2462,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-incident-response-commander.md",
+        "size": 18181,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-iot-fleet-engineer.md",
+        "size": 2538,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-iot-solution-architect.md",
+        "size": 8212,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-it-service-manager.md",
+        "size": 26125,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-knowledge-graph-engineer.md",
+        "size": 2511,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-llm-post-training-engineer.md",
+        "size": 2500,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-mechanical-design-engineer.md",
+        "size": 21900,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-minimal-change-engineer.md",
+        "size": 10286,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-mobile-app-builder.md",
+        "size": 13170,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-mobile-release-engineer.md",
+        "size": 2474,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-multi-agent-systems-architect.md",
+        "size": 28222,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-network-engineer-china.md",
+        "size": 7251,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-network-engineer.md",
+        "size": 2409,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-orgscript-engineer.md",
+        "size": 5097,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-payments-billing-engineer.md",
+        "size": 2453,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-pc-host-engineer.md",
+        "size": 11633,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-privacy-engineer.md",
+        "size": 2430,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-prompt-engineer.md",
+        "size": 9012,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-rag-pipeline-engineer.md",
+        "size": 2424,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-rapid-prototyper.md",
+        "size": 13983,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-realtime-collaboration-engineer.md",
+        "size": 2453,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-rust-refactoring-specialist.md",
+        "size": 2454,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-search-relevance-engineer.md",
+        "size": 2487,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-section-508-specialist.md",
+        "size": 2955,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-security-engineer.md",
+        "size": 15827,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-senior-developer.md",
+        "size": 5635,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-software-architect.md",
+        "size": 8188,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-solidity-smart-contract-engineer.md",
+        "size": 20278,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-sre.md",
+        "size": 8735,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-technical-writer.md",
+        "size": 12983,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-threat-detection-engineer.md",
+        "size": 21902,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-uswds-developer.md",
+        "size": 2837,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-video-streaming-engineer.md",
+        "size": 2420,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-voice-ai-integration-engineer.md",
+        "size": 25252,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-webassembly-engineer.md",
+        "size": 2448,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-wechat-mini-program-developer.md",
+        "size": 9187,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-wordpress-performance.md",
+        "size": 2949,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/engineering/engineering-wordpress-shopping-cart.md",
+        "size": 21289,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/finance/finance-bookkeeper-controller.md",
+        "size": 12538,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/finance/finance-financial-analyst.md",
+        "size": 11669,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/finance/finance-financial-forecaster.md",
+        "size": 9837,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/finance/finance-fpa-analyst.md",
+        "size": 15149,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/finance/finance-fraud-detector.md",
+        "size": 12307,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/finance/finance-hk-stock-compliance-reviewer.md",
+        "size": 17013,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/finance/finance-investment-researcher.md",
+        "size": 13676,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/finance/finance-invoice-manager.md",
+        "size": 12058,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/finance/finance-tax-strategist.md",
+        "size": 11477,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/game-development/blender-addon-engineer.md",
+        "size": 10191,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/game-development/economy-designer.md",
+        "size": 2462,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/game-development/game-audio-engineer.md",
+        "size": 11574,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/game-development/game-designer.md",
+        "size": 7575,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/game-development/godot-gameplay-scripter.md",
+        "size": 14410,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/game-development/godot-multiplayer-engineer.md",
+        "size": 12883,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/game-development/godot-shader-developer.md",
+        "size": 12630,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/game-development/level-designer.md",
+        "size": 9125,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/game-development/narrative-designer.md",
+        "size": 11751,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/game-development/roblox-avatar-creator.md",
+        "size": 12727,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/game-development/roblox-experience-designer.md",
+        "size": 13352,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/game-development/roblox-systems-scripter.md",
+        "size": 14221,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/game-development/technical-artist.md",
+        "size": 10300,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/game-development/unity-architect.md",
+        "size": 11287,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/game-development/unity-editor-tool-developer.md",
+        "size": 13907,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/game-development/unity-multiplayer-engineer.md",
+        "size": 11128,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/game-development/unity-shader-graph-artist.md",
+        "size": 12366,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/game-development/unreal-multiplayer-architect.md",
+        "size": 12962,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/game-development/unreal-systems-engineer.md",
+        "size": 14270,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/game-development/unreal-technical-artist.md",
+        "size": 10717,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/game-development/unreal-world-builder.md",
+        "size": 12615,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/gis/gis-3d-scene-developer.md",
+        "size": 5549,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/gis/gis-analyst.md",
+        "size": 4274,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/gis/gis-bim-specialist.md",
+        "size": 5300,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/gis/gis-cartography-designer.md",
+        "size": 6703,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/gis/gis-drone-reality-mapping.md",
+        "size": 5737,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/gis/gis-geoai-ml-engineer.md",
+        "size": 4742,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/gis/gis-geoprocessing-specialist.md",
+        "size": 4654,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/gis/gis-qa-engineer.md",
+        "size": 5398,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/gis/gis-solution-engineer.md",
+        "size": 4388,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/gis/gis-spatial-data-engineer.md",
+        "size": 4663,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/gis/gis-spatial-data-scientist.md",
+        "size": 5122,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/gis/gis-technical-consultant.md",
+        "size": 4158,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/gis/gis-web-gis-developer.md",
+        "size": 5093,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/healthcare/healthcare-clinical-evidence-agent.md",
+        "size": 2430,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/healthcare/healthcare-innovation-strategist.md",
+        "size": 2431,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/healthcare/healthcare-sovereign-health-systems-agent.md",
+        "size": 2443,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/hr/hr-performance-reviewer.md",
+        "size": 11489,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/hr/hr-recruiter.md",
+        "size": 10512,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/legal/legal-contract-reviewer.md",
+        "size": 11311,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/legal/legal-policy-writer.md",
+        "size": 13779,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/LICENSE",
+        "size": 1172,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-aeo-foundations.md",
+        "size": 14989,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-agentic-search-optimizer.md",
+        "size": 14812,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-ai-citation-strategist.md",
+        "size": 8381,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-app-store-optimizer.md",
+        "size": 10761,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-baidu-seo-specialist.md",
+        "size": 8238,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-bilibili-content-strategist.md",
+        "size": 2415,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-bilibili-strategist.md",
+        "size": 7573,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-book-co-author.md",
+        "size": 4268,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-carousel-growth-engine.md",
+        "size": 13134,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-china-ecommerce-operator.md",
+        "size": 13166,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-china-market-localization-strategist.md",
+        "size": 14021,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-content-creator.md",
+        "size": 5374,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-cross-border-ecommerce.md",
+        "size": 14596,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-daily-news-briefing.md",
+        "size": 10874,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-douyin-strategist.md",
+        "size": 5719,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-ecommerce-operator.md",
+        "size": 9051,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-email-strategist.md",
+        "size": 15470,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-global-podcast-strategist.md",
+        "size": 19341,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-growth-hacker.md",
+        "size": 5037,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-instagram-curator.md",
+        "size": 7175,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-knowledge-commerce-strategist.md",
+        "size": 17028,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-kuaishou-strategist.md",
+        "size": 8149,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-linkedin-content-creator.md",
+        "size": 12396,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-livestream-commerce-coach.md",
+        "size": 14495,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-multi-platform-publisher.md",
+        "size": 13923,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-podcast-strategist.md",
+        "size": 15231,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-pr-communications-manager.md",
+        "size": 23713,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-private-domain-operator.md",
+        "size": 13627,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-reddit-community-builder.md",
+        "size": 5345,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-seo-specialist.md",
+        "size": 12809,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-short-video-editing-coach.md",
+        "size": 27372,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-social-media-strategist.md",
+        "size": 4763,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-tiktok-strategist.md",
+        "size": 5228,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-twitter-engager.md",
+        "size": 5433,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-video-optimization-specialist.md",
+        "size": 5254,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-wechat-official-account.md",
+        "size": 7345,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-wechat-operator.md",
+        "size": 5784,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-weibo-strategist.md",
+        "size": 12708,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-weixin-channels-strategist.md",
+        "size": 14515,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-x-twitter-intelligence-analyst.md",
+        "size": 8806,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-xiaohongshu-operator.md",
+        "size": 5545,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-xiaohongshu-specialist.md",
+        "size": 6956,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/marketing/marketing-zhihu-strategist.md",
+        "size": 8511,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/paid-media/paid-media-auditor.md",
+        "size": 7208,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/paid-media/paid-media-creative-strategist.md",
+        "size": 6363,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/paid-media/paid-media-paid-social-strategist.md",
+        "size": 6819,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/paid-media/paid-media-ppc-strategist.md",
+        "size": 6939,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/paid-media/paid-media-programmatic-buyer.md",
+        "size": 6658,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/paid-media/paid-media-search-query-analyst.md",
+        "size": 7010,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/paid-media/paid-media-tracking-specialist.md",
+        "size": 7276,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/product/product-behavioral-nudge-engine.md",
+        "size": 10884,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/product/product-feedback-synthesizer.md",
+        "size": 6073,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/product/product-manager.md",
+        "size": 23581,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/product/product-sprint-prioritizer.md",
+        "size": 4865,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/product/product-trend-researcher.md",
+        "size": 5342,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/project-management/project-management-experiment-tracker.md",
+        "size": 7188,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/project-management/project-management-jira-workflow-steward.md",
+        "size": 11896,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/project-management/project-management-meeting-notes-specialist.md",
+        "size": 5499,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/project-management/project-management-project-shepherd.md",
+        "size": 7170,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/project-management/project-management-studio-operations.md",
+        "size": 7249,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/project-management/project-management-studio-producer.md",
+        "size": 7633,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/project-management/project-manager-senior.md",
+        "size": 4443,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/research/research-synthesist.md",
+        "size": 2448,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/sales/sales-account-strategist.md",
+        "size": 13473,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/sales/sales-coach.md",
+        "size": 18637,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/sales/sales-deal-strategist.md",
+        "size": 13103,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/sales/sales-discovery-coach.md",
+        "size": 13155,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/sales/sales-engineer.md",
+        "size": 12620,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/sales/sales-offer-lead-gen-strategist.md",
+        "size": 16342,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/sales/sales-outbound-strategist.md",
+        "size": 10543,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/sales/sales-pipeline-analyst.md",
+        "size": 15468,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/sales/sales-proposal-strategist.md",
+        "size": 11793,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/security/security-ai-generated-code-auditor.md",
+        "size": 2547,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/security/security-appsec-engineer.md",
+        "size": 24460,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/security/security-architect.md",
+        "size": 17108,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/security/security-blockchain-security-auditor.md",
+        "size": 20272,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/security/security-cloud-security-architect.md",
+        "size": 21517,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/security/security-compliance-auditor.md",
+        "size": 6646,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/security/security-incident-responder.md",
+        "size": 23451,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/security/security-penetration-tester.md",
+        "size": 20149,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/security/security-secrets-credential-engineer.md",
+        "size": 2522,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/security/security-senior-secops.md",
+        "size": 30906,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/security/security-threat-detection-engineer.md",
+        "size": 23517,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/security/security-threat-intelligence-analyst.md",
+        "size": 27150,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/spatial-computing/macos-spatial-metal-engineer.md",
+        "size": 10984,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/spatial-computing/terminal-integration-specialist.md",
+        "size": 9163,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/spatial-computing/visionos-spatial-engineer.md",
+        "size": 10734,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/spatial-computing/xr-cockpit-interaction-specialist.md",
+        "size": 8818,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/spatial-computing/xr-immersive-developer.md",
+        "size": 9031,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/spatial-computing/xr-interface-architect.md",
+        "size": 10096,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/accounts-payable-agent.md",
+        "size": 6694,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/agentic-identity-trust.md",
+        "size": 15391,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/agents-orchestrator.md",
+        "size": 13947,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/authenticity-appraiser.md",
+        "size": 3813,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/automation-governance-architect.md",
+        "size": 5285,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/business-strategist.md",
+        "size": 23242,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/change-management-consultant.md",
+        "size": 25275,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/chief-financial-officer.md",
+        "size": 18281,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/corporate-training-designer.md",
+        "size": 12230,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/customer-service.md",
+        "size": 2374,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/customer-success-manager.md",
+        "size": 22046,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/data-consolidation-agent.md",
+        "size": 12668,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/data-privacy-officer.md",
+        "size": 20314,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/esg-sustainability-officer.md",
+        "size": 20253,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/gaokao-college-advisor.md",
+        "size": 14794,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/government-digital-presales-consultant.md",
+        "size": 17225,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/grant-writer.md",
+        "size": 25193,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/healthcare-aging-parent-care-companion.md",
+        "size": 2471,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/healthcare-customer-service.md",
+        "size": 18276,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/healthcare-marketing-compliance.md",
+        "size": 25646,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/hospitality-guest-services.md",
+        "size": 24400,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/hr-onboarding.md",
+        "size": 20252,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/identity-graph-operator.md",
+        "size": 13013,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/language-translator.md",
+        "size": 14483,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/legal-billing-time-tracking.md",
+        "size": 23614,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/legal-client-intake.md",
+        "size": 22512,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/legal-document-review.md",
+        "size": 21329,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/livestock-archive-auditor.md",
+        "size": 9345,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/loan-officer-assistant.md",
+        "size": 25556,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/lsp-index-engineer.md",
+        "size": 10166,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/ma-integration-manager.md",
+        "size": 19960,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/medical-billing-coding-specialist.md",
+        "size": 22817,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/operations-manager.md",
+        "size": 18673,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/organizational-psychologist.md",
+        "size": 21613,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/personal-growth-mentor.md",
+        "size": 7268,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/prompt-engineer.md",
+        "size": 6347,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/real-estate-buyer-seller.md",
+        "size": 27655,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/recruitment-specialist.md",
+        "size": 3494,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/report-distribution-agent.md",
+        "size": 13199,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/resume-tailor.md",
+        "size": 2337,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/retail-customer-returns.md",
+        "size": 24299,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/sales-data-extraction-agent.md",
+        "size": 7020,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/sales-outreach.md",
+        "size": 2373,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/specialized-ai-policy-writer.md",
+        "size": 12264,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/specialized-chief-of-staff.md",
+        "size": 2322,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/specialized-civil-engineer.md",
+        "size": 15039,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/specialized-codebase-archaeologist.md",
+        "size": 2472,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/specialized-cultural-intelligence-strategist.md",
+        "size": 8758,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/specialized-developer-advocate.md",
+        "size": 13395,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/specialized-document-generator.md",
+        "size": 12291,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/specialized-fedramp-rmf-compliance.md",
+        "size": 3129,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/specialized-french-consulting-market.md",
+        "size": 3183,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/specialized-korean-business-navigator.md",
+        "size": 3151,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/specialized-master-plan-architect.md",
+        "size": 2503,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/specialized-mcp-builder.md",
+        "size": 12625,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/specialized-meeting-assistant.md",
+        "size": 13233,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/specialized-model-qa.md",
+        "size": 17797,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/specialized-pricing-analyst.md",
+        "size": 12404,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/specialized-pricing-optimizer.md",
+        "size": 12049,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/specialized-risk-assessor.md",
+        "size": 13997,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/specialized-salesforce-architect.md",
+        "size": 9319,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/specialized-strategy-duel-agent.md",
+        "size": 5671,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/specialized-workflow-architect.md",
+        "size": 26006,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/study-abroad-advisor.md",
+        "size": 13372,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/supply-chain-strategist.md",
+        "size": 25885,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/technical-translator-agent.md",
+        "size": 6521,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/travel-planner.md",
+        "size": 3950,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/specialized/zk-steward.md",
+        "size": 10210,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/supply-chain/supply-chain-garment-factory-planning-engineer.md",
+        "size": 14973,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/supply-chain/supply-chain-inventory-forecaster.md",
+        "size": 9914,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/supply-chain/supply-chain-route-optimizer.md",
+        "size": 10568,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/supply-chain/supply-chain-vendor-evaluator.md",
+        "size": 10465,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/support/support-analytics-reporter.md",
+        "size": 13638,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/support/support-executive-summary-generator.md",
+        "size": 7679,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/support/support-finance-tracker.md",
+        "size": 16409,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/support/support-infrastructure-maintainer.md",
+        "size": 19461,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/support/support-legal-compliance-checker.md",
+        "size": 22549,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/support/support-recruitment-specialist.md",
+        "size": 22556,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/support/support-support-responder.md",
+        "size": 21373,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/testing/testing-accessibility-auditor.md",
+        "size": 13376,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/testing/testing-api-tester.md",
+        "size": 10815,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/testing/testing-embedded-qa-engineer.md",
+        "size": 9313,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/testing/testing-evidence-collector.md",
+        "size": 4965,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/testing/testing-performance-benchmarker.md",
+        "size": 6543,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/testing/testing-reality-checker.md",
+        "size": 8731,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/testing/testing-test-automation-engineer.md",
+        "size": 2491,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/testing/testing-test-results-analyzer.md",
+        "size": 12140,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/testing/testing-tool-evaluator.md",
+        "size": 14581,
+        "mode": 420
+      },
+      {
+        "path": "assets/expert-roster/zh/testing/testing-workflow-optimizer.md",
+        "size": 18878,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/index.json",
+        "size": 196515,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/NOTICE",
+        "size": 862,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/academic-anthropologist.json",
+        "size": 22082,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/academic-geographer.json",
+        "size": 21060,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/academic-historian.json",
+        "size": 20335,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/academic-narratologist.json",
+        "size": 18998,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/academic-psychologist.json",
+        "size": 21407,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/academic-statistician.json",
+        "size": 15792,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/academic-study-planner.json",
+        "size": 37073,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/accounts-payable-agent.json",
+        "size": 20193,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/agentic-identity-trust.json",
+        "size": 50153,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/agents-orchestrator.json",
+        "size": 44398,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/authenticity-appraiser.json",
+        "size": 8305,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/automation-governance-architect.json",
+        "size": 16582,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/blender-addon-engineer.json",
+        "size": 31658,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/business-strategist.json",
+        "size": 72295,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/change-management-consultant.json",
+        "size": 78539,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/chief-executive-officer.json",
+        "size": 15478,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/chief-financial-officer.json",
+        "size": 55467,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/chief-marketing-officer.json",
+        "size": 14025,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/chief-of-staff.json",
+        "size": 34366,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/chief-operating-officer.json",
+        "size": 12761,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/chief-product-officer.json",
+        "size": 13627,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/chief-technology-officer.json",
+        "size": 15085,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/corporate-training-designer.json",
+        "size": 39812,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/customer-service.json",
+        "size": 23620,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/customer-success-manager.json",
+        "size": 67790,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/data-consolidation-agent.json",
+        "size": 28491,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/data-privacy-officer.json",
+        "size": 63436,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/design-brand-guardian.json",
+        "size": 31262,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/design-image-prompt-engineer.json",
+        "size": 28953,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/design-inclusive-visuals-specialist.json",
+        "size": 26469,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/design-persona-walkthrough.json",
+        "size": 50261,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/design-ui-designer.json",
+        "size": 37350,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/design-ui-finish-gate-reviewer.json",
+        "size": 13271,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/design-ux-architect.json",
+        "size": 44202,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/design-ux-researcher.json",
+        "size": 34807,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/design-video-prompt-engineer.json",
+        "size": 18997,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/design-visual-storyteller.json",
+        "size": 18113,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/design-whimsy-injector.json",
+        "size": 44304,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/economy-designer.json",
+        "size": 13214,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-ai-data-remediation-engineer.json",
+        "size": 30942,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-ai-engineer.json",
+        "size": 18620,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-api-platform-engineer.json",
+        "size": 17883,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-autonomous-optimization-architect.json",
+        "size": 21173,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-backend-architect.json",
+        "size": 27399,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-cms-developer.json",
+        "size": 58863,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-code-reviewer.json",
+        "size": 16289,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-codebase-onboarding-engineer.json",
+        "size": 26294,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-data-engineer.json",
+        "size": 42852,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-data-visualization-engineer.json",
+        "size": 18044,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-database-optimizer.json",
+        "size": 15651,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-database-reliability-engineer.json",
+        "size": 18601,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-desktop-app-engineer.json",
+        "size": 18886,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-developer-tooling-engineer.json",
+        "size": 17254,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-devops-automator.json",
+        "size": 35672,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-dingtalk-integration-developer.json",
+        "size": 43835,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-drupal-performance.json",
+        "size": 27508,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-drupal-shopping-cart.json",
+        "size": 61553,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-email-intelligence-engineer.json",
+        "size": 47610,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-embedded-firmware-engineer.json",
+        "size": 18872,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-embedded-linux-driver-engineer.json",
+        "size": 20900,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-feishu-integration-developer.json",
+        "size": 60048,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-filament-optimization-specialist.json",
+        "size": 41445,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-finops-engineer.json",
+        "size": 17088,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-fpga-digital-design-engineer.json",
+        "size": 20521,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-frontend-developer.json",
+        "size": 25229,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-gaussdb-expert.json",
+        "size": 19903,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-git-workflow-master.json",
+        "size": 18674,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-i18n-engineer.json",
+        "size": 17093,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-identity-access-engineer.json",
+        "size": 19195,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-incident-response-commander.json",
+        "size": 58410,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-iot-fleet-engineer.json",
+        "size": 17809,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-iot-solution-architect.json",
+        "size": 18994,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-it-service-manager.json",
+        "size": 80478,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-knowledge-graph-engineer.json",
+        "size": 28027,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-llm-post-training-engineer.json",
+        "size": 15214,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-mechanical-design-engineer.json",
+        "size": 46530,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-minimal-change-engineer.json",
+        "size": 31890,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-mobile-app-builder.json",
+        "size": 44301,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-mobile-release-engineer.json",
+        "size": 17894,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-multi-agent-systems-architect.json",
+        "size": 86862,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-network-engineer-china.json",
+        "size": 16848,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-network-engineer.json",
+        "size": 17762,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-orgscript-engineer.json",
+        "size": 15780,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-payments-billing-engineer.json",
+        "size": 16896,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-pc-host-engineer.json",
+        "size": 25812,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-privacy-engineer.json",
+        "size": 18390,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-prompt-engineer.json",
+        "size": 27756,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-rag-pipeline-engineer.json",
+        "size": 22950,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-rapid-prototyper.json",
+        "size": 44808,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-realtime-collaboration-engineer.json",
+        "size": 18575,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-rust-refactoring-specialist.json",
+        "size": 19361,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-search-relevance-engineer.json",
+        "size": 19722,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-section-508-specialist.json",
+        "size": 30326,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-security-engineer.json",
+        "size": 34548,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-senior-developer.json",
+        "size": 17619,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-software-architect.json",
+        "size": 22893,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-solidity-smart-contract-engineer.json",
+        "size": 63425,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-sre.json",
+        "size": 21406,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-technical-writer.json",
+        "size": 40854,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-threat-detection-engineer.json",
+        "size": 47537,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-uswds-developer.json",
+        "size": 28141,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-video-streaming-engineer.json",
+        "size": 17166,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-voice-ai-integration-engineer.json",
+        "size": 79707,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-webassembly-engineer.json",
+        "size": 17372,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-wechat-mini-program-developer.json",
+        "size": 33443,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-wordpress-performance.json",
+        "size": 28196,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/engineering-wordpress-shopping-cart.json",
+        "size": 64616,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/esg-sustainability-officer.json",
+        "size": 61451,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/expert-implementer.json",
+        "size": 1621,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/expert-integrator.json",
+        "size": 1573,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/expert-repairer.json",
+        "size": 1440,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/expert-requirements.json",
+        "size": 1674,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/expert-researcher.json",
+        "size": 1643,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/expert-reviewer.json",
+        "size": 1599,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/expert-verifier.json",
+        "size": 1692,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/finance-bookkeeper-controller.json",
+        "size": 40301,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/finance-financial-analyst.json",
+        "size": 36725,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/finance-financial-forecaster.json",
+        "size": 22169,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/finance-fpa-analyst.json",
+        "size": 46953,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/finance-fraud-detector.json",
+        "size": 27094,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/finance-hk-stock-compliance-reviewer.json",
+        "size": 36737,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/finance-investment-researcher.json",
+        "size": 42922,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/finance-invoice-manager.json",
+        "size": 26608,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/finance-tax-strategist.json",
+        "size": 36573,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/game-audio-engineer.json",
+        "size": 35742,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/game-designer.json",
+        "size": 23628,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/gaokao-college-advisor.json",
+        "size": 32367,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/gis-3d-scene-developer.json",
+        "size": 16380,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/gis-analyst.json",
+        "size": 12778,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/gis-bim-specialist.json",
+        "size": 15841,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/gis-cartography-designer.json",
+        "size": 20349,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/gis-drone-reality-mapping.json",
+        "size": 17084,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/gis-geoai-ml-engineer.json",
+        "size": 14192,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/gis-geoprocessing-specialist.json",
+        "size": 13685,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/gis-qa-engineer.json",
+        "size": 16095,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/gis-solution-engineer.json",
+        "size": 13001,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/gis-spatial-data-engineer.json",
+        "size": 13834,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/gis-spatial-data-scientist.json",
+        "size": 15774,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/gis-technical-consultant.json",
+        "size": 12417,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/gis-web-gis-developer.json",
+        "size": 15182,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/godot-gameplay-scripter.json",
+        "size": 44850,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/godot-multiplayer-engineer.json",
+        "size": 40173,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/godot-shader-developer.json",
+        "size": 38782,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/government-digital-presales-consultant.json",
+        "size": 57355,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/grant-writer.json",
+        "size": 77828,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/healthcare-aging-parent-care-companion.json",
+        "size": 29641,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/healthcare-clinical-evidence-agent.json",
+        "size": 14485,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/healthcare-customer-service.json",
+        "size": 59237,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/healthcare-innovation-strategist.json",
+        "size": 24669,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/healthcare-marketing-compliance.json",
+        "size": 86889,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/healthcare-sovereign-health-systems-agent.json",
+        "size": 19074,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/hospitality-guest-services.json",
+        "size": 77518,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/hr-onboarding.json",
+        "size": 64952,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/hr-performance-reviewer.json",
+        "size": 24100,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/hr-recruiter.json",
+        "size": 22037,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/identity-graph-operator.json",
+        "size": 40706,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/language-translator.json",
+        "size": 45599,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/legal-billing-time-tracking.json",
+        "size": 75265,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/legal-client-intake.json",
+        "size": 71270,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/legal-contract-reviewer.json",
+        "size": 23650,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/legal-document-review.json",
+        "size": 67950,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/legal-policy-writer.json",
+        "size": 28615,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/level-designer.json",
+        "size": 28737,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/livestock-archive-auditor.json",
+        "size": 19630,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/loan-officer-assistant.json",
+        "size": 80465,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/lsp-index-engineer.json",
+        "size": 32382,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/ma-integration-manager.json",
+        "size": 61692,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/macos-spatial-metal-engineer.json",
+        "size": 34620,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-aeo-foundations.json",
+        "size": 45311,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-agentic-search-optimizer.json",
+        "size": 45874,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-ai-citation-strategist.json",
+        "size": 25974,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-app-store-optimizer.json",
+        "size": 35190,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-baidu-seo-specialist.json",
+        "size": 29269,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-bilibili-content-strategist.json",
+        "size": 16127,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-bilibili-strategist.json",
+        "size": 17708,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-book-co-author.json",
+        "size": 13309,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-carousel-growth-engine.json",
+        "size": 40719,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-china-ecommerce-operator.json",
+        "size": 42968,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-china-market-localization-strategist.json",
+        "size": 45456,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-content-creator.json",
+        "size": 13562,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-cross-border-ecommerce.json",
+        "size": 46525,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-daily-news-briefing.json",
+        "size": 24427,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-douyin-strategist.json",
+        "size": 18202,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-ecommerce-operator.json",
+        "size": 20708,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-email-strategist.json",
+        "size": 46926,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-global-podcast-strategist.json",
+        "size": 60364,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-growth-hacker.json",
+        "size": 12842,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-instagram-curator.json",
+        "size": 20790,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-knowledge-commerce-strategist.json",
+        "size": 36892,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-kuaishou-strategist.json",
+        "size": 30391,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-linkedin-content-creator.json",
+        "size": 38168,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-livestream-commerce-coach.json",
+        "size": 46299,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-multi-platform-publisher.json",
+        "size": 40595,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-podcast-strategist.json",
+        "size": 48486,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-pr-communications-manager.json",
+        "size": 72516,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-private-domain-operator.json",
+        "size": 44500,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-reddit-community-builder.json",
+        "size": 17978,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-seo-specialist.json",
+        "size": 47230,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-short-video-editing-coach.json",
+        "size": 85781,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-social-media-strategist.json",
+        "size": 16678,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-tiktok-strategist.json",
+        "size": 17787,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-twitter-engager.json",
+        "size": 18377,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-video-optimization-specialist.json",
+        "size": 16676,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-wechat-official-account.json",
+        "size": 24284,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-wechat-operator.json",
+        "size": 14123,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-weibo-strategist.json",
+        "size": 41110,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-weixin-channels-strategist.json",
+        "size": 31739,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-x-twitter-intelligence-analyst.json",
+        "size": 27060,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-xiaohongshu-operator.json",
+        "size": 13511,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-xiaohongshu-specialist.json",
+        "size": 23348,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/marketing-zhihu-strategist.json",
+        "size": 28941,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/medical-billing-coding-specialist.json",
+        "size": 70593,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/narrative-designer.json",
+        "size": 37009,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/operations-manager.json",
+        "size": 56794,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/organizational-psychologist.json",
+        "size": 66156,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/paid-media-auditor.json",
+        "size": 19462,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/paid-media-creative-strategist.json",
+        "size": 17572,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/paid-media-paid-social-strategist.json",
+        "size": 18674,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/paid-media-ppc-strategist.json",
+        "size": 18434,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/paid-media-programmatic-buyer.json",
+        "size": 18227,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/paid-media-search-query-analyst.json",
+        "size": 18695,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/paid-media-tracking-specialist.json",
+        "size": 19498,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/personal-growth-mentor.json",
+        "size": 22329,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/product-behavioral-nudge-engine.json",
+        "size": 27358,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/product-feedback-synthesizer.json",
+        "size": 19385,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/product-manager.json",
+        "size": 70251,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/product-sprint-prioritizer.json",
+        "size": 18988,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/product-trend-researcher.json",
+        "size": 21012,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/project-management-experiment-tracker.json",
+        "size": 23780,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/project-management-jira-workflow-steward.json",
+        "size": 37587,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/project-management-meeting-notes-specialist.json",
+        "size": 16389,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/project-management-project-shepherd.json",
+        "size": 24095,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/project-management-studio-operations.json",
+        "size": 24366,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/project-management-studio-producer.json",
+        "size": 26052,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/project-manager-senior.json",
+        "size": 14076,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/prompt-engineer.json",
+        "size": 15235,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/real-estate-buyer-seller.json",
+        "size": 87219,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/recruitment-specialist.json",
+        "size": 35307,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/report-distribution-agent.json",
+        "size": 29774,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/research-synthesist.json",
+        "size": 14976,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/resume-tailor.json",
+        "size": 15532,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/retail-customer-returns.json",
+        "size": 77109,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/roblox-avatar-creator.json",
+        "size": 39851,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/roblox-experience-designer.json",
+        "size": 41908,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/roblox-systems-scripter.json",
+        "size": 44082,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/sales-account-strategist.json",
+        "size": 41690,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/sales-coach.json",
+        "size": 58468,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/sales-data-extraction-agent.json",
+        "size": 16900,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/sales-deal-strategist.json",
+        "size": 39933,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/sales-discovery-coach.json",
+        "size": 40315,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/sales-engineer.json",
+        "size": 39242,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/sales-offer-lead-gen-strategist.json",
+        "size": 48500,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/sales-outbound-strategist.json",
+        "size": 31936,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/sales-outreach.json",
+        "size": 25106,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/sales-pipeline-analyst.json",
+        "size": 49737,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/sales-proposal-strategist.json",
+        "size": 37837,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/security-ai-generated-code-auditor.json",
+        "size": 21559,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/security-appsec-engineer.json",
+        "size": 76007,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/security-architect.json",
+        "size": 52119,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/security-blockchain-security-auditor.json",
+        "size": 62648,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/security-cloud-security-architect.json",
+        "size": 67500,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/security-compliance-auditor.json",
+        "size": 20401,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/security-incident-responder.json",
+        "size": 72640,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/security-penetration-tester.json",
+        "size": 63107,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/security-secrets-credential-engineer.json",
+        "size": 17579,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/security-senior-secops.json",
+        "size": 94909,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/security-threat-detection-engineer.json",
+        "size": 73436,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/security-threat-intelligence-analyst.json",
+        "size": 84733,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/specialized-ai-policy-writer.json",
+        "size": 26951,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/specialized-chief-of-staff.json",
+        "size": 22578,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/specialized-civil-engineer.json",
+        "size": 47268,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/specialized-codebase-archaeologist.json",
+        "size": 30579,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/specialized-cultural-intelligence-strategist.json",
+        "size": 24108,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/specialized-developer-advocate.json",
+        "size": 41849,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/specialized-document-generator.json",
+        "size": 27396,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/specialized-fedramp-rmf-compliance.json",
+        "size": 36014,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/specialized-french-consulting-market.json",
+        "size": 17196,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/specialized-korean-business-navigator.json",
+        "size": 20076,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/specialized-master-plan-architect.json",
+        "size": 14814,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/specialized-mcp-builder.json",
+        "size": 38232,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/specialized-meeting-assistant.json",
+        "size": 28997,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/specialized-model-qa.json",
+        "size": 56970,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/specialized-pricing-analyst.json",
+        "size": 37442,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/specialized-pricing-optimizer.json",
+        "size": 26650,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/specialized-risk-assessor.json",
+        "size": 30481,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/specialized-salesforce-architect.json",
+        "size": 28507,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/specialized-strategy-duel-agent.json",
+        "size": 17294,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/specialized-workflow-architect.json",
+        "size": 79726,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/study-abroad-advisor.json",
+        "size": 43523,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/supply-chain-garment-factory-planning-engineer.json",
+        "size": 31119,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/supply-chain-inventory-forecaster.json",
+        "size": 20790,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/supply-chain-route-optimizer.json",
+        "size": 22160,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/supply-chain-strategist.json",
+        "size": 82882,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/supply-chain-vendor-evaluator.json",
+        "size": 22049,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/support-analytics-reporter.json",
+        "size": 43503,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/support-executive-summary-generator.json",
+        "size": 24196,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/support-finance-tracker.json",
+        "size": 52855,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/support-infrastructure-maintainer.json",
+        "size": 63349,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/support-legal-compliance-checker.json",
+        "size": 73219,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/support-recruitment-specialist.json",
+        "size": 48265,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/support-support-responder.json",
+        "size": 68719,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/technical-artist.json",
+        "size": 32195,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/technical-translator-agent.json",
+        "size": 15674,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/terminal-integration-specialist.json",
+        "size": 22662,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/testing-accessibility-auditor.json",
+        "size": 42315,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/testing-api-tester.json",
+        "size": 34657,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/testing-embedded-qa-engineer.json",
+        "size": 21391,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/testing-evidence-collector.json",
+        "size": 18380,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/testing-performance-benchmarker.json",
+        "size": 25479,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/testing-reality-checker.json",
+        "size": 28711,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/testing-test-automation-engineer.json",
+        "size": 16622,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/testing-test-results-analyzer.json",
+        "size": 39386,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/testing-tool-evaluator.json",
+        "size": 47861,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/testing-workflow-optimizer.json",
+        "size": 61426,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/travel-planner.json",
+        "size": 10023,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/unity-architect.json",
+        "size": 35181,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/unity-editor-tool-developer.json",
+        "size": 43132,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/unity-multiplayer-engineer.json",
+        "size": 37461,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/unity-shader-graph-artist.json",
+        "size": 38100,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/unreal-multiplayer-architect.json",
+        "size": 40338,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/unreal-systems-engineer.json",
+        "size": 44502,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/unreal-technical-artist.json",
+        "size": 33524,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/unreal-world-builder.json",
+        "size": 39452,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/visionos-spatial-engineer.json",
+        "size": 25191,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/xr-cockpit-interaction-specialist.json",
+        "size": 19741,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/xr-immersive-developer.json",
+        "size": 20087,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/xr-interface-architect.json",
+        "size": 22076,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/profiles/zk-steward.json",
+        "size": 31042,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/schema/index.schema.json",
+        "size": 1346,
+        "mode": 420
+      },
+      {
+        "path": "assets/experts/schema/profile.schema.json",
+        "size": 762,
+        "mode": 420
+      },
+      {
+        "path": "dist/.page-check-console.js",
+        "size": 766807,
+        "mode": 420
+      },
+      {
+        "path": "dist/.page-check-login.js",
+        "size": 2910,
+        "mode": 420
+      },
+      {
+        "path": "dist/.page-check-monitor.js",
+        "size": 25850,
+        "mode": 420
+      },
+      {
+        "path": "dist/ai-install.js",
+        "size": 5322,
+        "mode": 420
+      },
+      {
+        "path": "dist/ai-install.js.map",
+        "size": 1984,
+        "mode": 420
+      },
+      {
+        "path": "dist/audit.js",
+        "size": 1700,
+        "mode": 420
+      },
+      {
+        "path": "dist/audit.js.map",
+        "size": 1717,
+        "mode": 420
+      },
+      {
+        "path": "dist/auth.js",
+        "size": 32072,
+        "mode": 420
+      },
+      {
+        "path": "dist/auth.js.map",
+        "size": 30721,
+        "mode": 420
+      },
+      {
+        "path": "dist/backlog-collect.js",
+        "size": 19350,
+        "mode": 420
+      },
+      {
+        "path": "dist/backlog-collect.js.map",
+        "size": 17394,
+        "mode": 420
+      },
+      {
+        "path": "dist/backlog-query.js",
+        "size": 24783,
+        "mode": 420
+      },
+      {
+        "path": "dist/backlog-query.js.map",
+        "size": 23902,
+        "mode": 420
+      },
+      {
+        "path": "dist/backlog-service.js",
+        "size": 16080,
+        "mode": 420
+      },
+      {
+        "path": "dist/backlog-service.js.map",
+        "size": 14463,
+        "mode": 420
+      },
+      {
+        "path": "dist/backlog-tool.js",
+        "size": 44581,
+        "mode": 420
+      },
+      {
+        "path": "dist/backlog-tool.js.map",
+        "size": 31401,
+        "mode": 420
+      },
+      {
+        "path": "dist/backlog.js",
+        "size": 41011,
+        "mode": 420
+      },
+      {
+        "path": "dist/backlog.js.map",
+        "size": 38573,
+        "mode": 420
+      },
+      {
+        "path": "dist/date-version.js",
+        "size": 4983,
+        "mode": 420
+      },
+      {
+        "path": "dist/date-version.js.map",
+        "size": 4997,
+        "mode": 420
+      },
+      {
+        "path": "dist/engine.js",
+        "size": 253394,
+        "mode": 420
+      },
+      {
+        "path": "dist/engine.js.map",
+        "size": 204159,
+        "mode": 420
+      },
+      {
+        "path": "dist/expert-registry.js",
+        "size": 12124,
+        "mode": 420
+      },
+      {
+        "path": "dist/expert-registry.js.map",
+        "size": 8994,
+        "mode": 420
+      },
+      {
+        "path": "dist/expert-store.js",
+        "size": 4702,
+        "mode": 420
+      },
+      {
+        "path": "dist/expert-store.js.map",
+        "size": 3806,
+        "mode": 420
+      },
+      {
+        "path": "dist/expert-teams.js",
+        "size": 25387,
+        "mode": 420
+      },
+      {
+        "path": "dist/expert-teams.js.map",
+        "size": 11294,
+        "mode": 420
+      },
+      {
+        "path": "dist/fs-perms.js",
+        "size": 1853,
+        "mode": 420
+      },
+      {
+        "path": "dist/fs-perms.js.map",
+        "size": 1336,
+        "mode": 420
+      },
+      {
+        "path": "dist/header-safe.js",
+        "size": 2786,
+        "mode": 420
+      },
+      {
+        "path": "dist/header-safe.js.map",
+        "size": 1135,
+        "mode": 420
+      },
+      {
+        "path": "dist/invite-ui.js",
+        "size": 21570,
+        "mode": 420
+      },
+      {
+        "path": "dist/invite-ui.js.map",
+        "size": 1232,
+        "mode": 420
+      },
+      {
+        "path": "dist/library.js",
+        "size": 22790,
+        "mode": 420
+      },
+      {
+        "path": "dist/library.js.map",
+        "size": 16199,
+        "mode": 420
+      },
+      {
+        "path": "dist/login-ui.js",
+        "size": 7541,
+        "mode": 420
+      },
+      {
+        "path": "dist/login-ui.js.map",
+        "size": 467,
+        "mode": 420
+      },
+      {
+        "path": "dist/mail.js",
+        "size": 18726,
+        "mode": 420
+      },
+      {
+        "path": "dist/mail.js.map",
+        "size": 16503,
+        "mode": 420
+      },
+      {
+        "path": "dist/mcp-server.js",
+        "size": 19621,
+        "mode": 420
+      },
+      {
+        "path": "dist/mcp-server.js.map",
+        "size": 16112,
+        "mode": 420
+      },
+      {
+        "path": "dist/mcp/expert-mcp.js",
+        "size": 13251,
+        "mode": 420
+      },
+      {
+        "path": "dist/mcp/expert-mcp.js.map",
+        "size": 11900,
+        "mode": 420
+      },
+      {
+        "path": "dist/monitor-ui.js",
+        "size": 44020,
+        "mode": 420
+      },
+      {
+        "path": "dist/monitor-ui.js.map",
+        "size": 1090,
+        "mode": 420
+      },
+      {
+        "path": "dist/monitor.js",
+        "size": 45271,
+        "mode": 420
+      },
+      {
+        "path": "dist/monitor.js.map",
+        "size": 46239,
+        "mode": 420
+      },
+      {
+        "path": "dist/onenat.js",
+        "size": 29362,
+        "mode": 420
+      },
+      {
+        "path": "dist/onenat.js.map",
+        "size": 23897,
+        "mode": 420
+      },
+      {
+        "path": "dist/orchestrator.js",
+        "size": 48100,
+        "mode": 420
+      },
+      {
+        "path": "dist/orchestrator.js.map",
+        "size": 33387,
+        "mode": 420
+      },
+      {
+        "path": "dist/perm.js",
+        "size": 12555,
+        "mode": 420
+      },
+      {
+        "path": "dist/perm.js.map",
+        "size": 7453,
+        "mode": 420
+      },
+      {
+        "path": "dist/prompt-composer.js",
+        "size": 15298,
+        "mode": 420
+      },
+      {
+        "path": "dist/prompt-composer.js.map",
+        "size": 9155,
+        "mode": 420
+      },
+      {
+        "path": "dist/remote-client.js",
+        "size": 77671,
+        "mode": 420
+      },
+      {
+        "path": "dist/remote-client.js.map",
+        "size": 69408,
+        "mode": 420
+      },
+      {
+        "path": "dist/resolver.js",
+        "size": 5716,
+        "mode": 420
+      },
+      {
+        "path": "dist/resolver.js.map",
+        "size": 4356,
+        "mode": 420
+      },
+      {
+        "path": "dist/router.js",
+        "size": 320854,
+        "mode": 420
+      },
+      {
+        "path": "dist/router.js.map",
+        "size": 297207,
+        "mode": 420
+      },
+      {
+        "path": "dist/schedule-templates.js",
+        "size": 3508,
+        "mode": 420
+      },
+      {
+        "path": "dist/schedule-templates.js.map",
+        "size": 1171,
+        "mode": 420
+      },
+      {
+        "path": "dist/scheduler.js",
+        "size": 18377,
+        "mode": 420
+      },
+      {
+        "path": "dist/scheduler.js.map",
+        "size": 18192,
+        "mode": 420
+      },
+      {
+        "path": "dist/server.js",
+        "size": 49073,
+        "mode": 420
+      },
+      {
+        "path": "dist/server.js.map",
+        "size": 41132,
+        "mode": 420
+      },
+      {
+        "path": "dist/ssh-resources.js",
+        "size": 10148,
+        "mode": 420
+      },
+      {
+        "path": "dist/ssh-resources.js.map",
+        "size": 9660,
+        "mode": 420
+      },
+      {
+        "path": "dist/ssh-store.js",
+        "size": 3205,
+        "mode": 420
+      },
+      {
+        "path": "dist/ssh-store.js.map",
+        "size": 3313,
+        "mode": 420
+      },
+      {
+        "path": "dist/ssrf-guard.js",
+        "size": 5508,
+        "mode": 420
+      },
+      {
+        "path": "dist/ssrf-guard.js.map",
+        "size": 4587,
+        "mode": 420
+      },
+      {
+        "path": "dist/store.js",
+        "size": 38701,
+        "mode": 420
+      },
+      {
+        "path": "dist/store.js.map",
+        "size": 34632,
+        "mode": 420
+      },
+      {
+        "path": "dist/token-stats.js",
+        "size": 2340,
+        "mode": 420
+      },
+      {
+        "path": "dist/token-stats.js.map",
+        "size": 1647,
+        "mode": 420
+      },
+      {
+        "path": "dist/tool-ops.js",
+        "size": 118320,
+        "mode": 420
+      },
+      {
+        "path": "dist/tool-ops.js.map",
+        "size": 92074,
+        "mode": 420
+      },
+      {
+        "path": "dist/types.js",
+        "size": 3280,
+        "mode": 420
+      },
+      {
+        "path": "dist/types.js.map",
+        "size": 1694,
+        "mode": 420
+      },
+      {
+        "path": "dist/usage.js",
+        "size": 6323,
+        "mode": 420
+      },
+      {
+        "path": "dist/usage.js.map",
+        "size": 6688,
+        "mode": 420
+      },
+      {
+        "path": "dist/web-ui.js",
+        "size": 971147,
+        "mode": 420
+      },
+      {
+        "path": "dist/web-ui.js.map",
+        "size": 17606,
+        "mode": 420
+      },
+      {
+        "path": "dist/workspace-access.js",
+        "size": 5053,
+        "mode": 420
+      },
+      {
+        "path": "dist/workspace-access.js.map",
+        "size": 3139,
+        "mode": 420
+      },
+      {
+        "path": "dist/workspace-files.js",
+        "size": 9143,
+        "mode": 420
+      },
+      {
+        "path": "dist/workspace-files.js.map",
+        "size": 9276,
+        "mode": 420
+      },
+      {
+        "path": "dist/workspace.js",
+        "size": 2983,
+        "mode": 420
+      },
+      {
+        "path": "dist/workspace.js.map",
+        "size": 2911,
+        "mode": 420
+      },
+      {
+        "path": "dist/xiaozhi-mcp.js",
+        "size": 18890,
+        "mode": 420
+      },
+      {
+        "path": "dist/xiaozhi-mcp.js.map",
+        "size": 16511,
+        "mode": 420
+      },
+      {
+        "path": "package.json",
+        "size": 3348,
+        "mode": 420
+      },
+      {
+        "path": "scripts/install-skill.sh",
+        "size": 9642,
+        "mode": 493
+      },
+      {
+        "path": "scripts/workspace-remote.mjs",
+        "size": 31158,
+        "mode": 384
+      },
+      {
+        "path": "skills/onenat-workbuddy/scripts/wb.mjs",
+        "size": 15113,
+        "mode": 420
+      },
+      {
+        "path": "skills/onenat-workbuddy/SKILL.md",
+        "size": 6745,
+        "mode": 420
+      },
+      {
+        "path": "skills/onenat-workbuddy/skills/agents-projects.md",
+        "size": 2557,
+        "mode": 420
+      },
+      {
+        "path": "skills/onenat-workbuddy/skills/backlog.md",
+        "size": 8626,
+        "mode": 384
+      },
+      {
+        "path": "skills/onenat-workbuddy/skills/cli.md",
+        "size": 1591,
+        "mode": 420
+      },
+      {
+        "path": "skills/onenat-workbuddy/skills/experts.md",
+        "size": 2444,
+        "mode": 420
+      },
+      {
+        "path": "skills/onenat-workbuddy/skills/files-resources.md",
+        "size": 1213,
+        "mode": 420
+      },
+      {
+        "path": "skills/onenat-workbuddy/skills/ops-monitoring.md",
+        "size": 1605,
+        "mode": 420
+      },
+      {
+        "path": "skills/onenat-workbuddy/skills/tasks.md",
+        "size": 6453,
+        "mode": 420
+      },
+      {
+        "path": "skills/workbuddy-mcp/scripts/wbmcp.sh",
+        "size": 13696,
+        "mode": 420
+      },
+      {
+        "path": "skills/workbuddy-mcp/SKILL.md",
+        "size": 14673,
+        "mode": 420
+      }
+    ],
+    "entryCount": 1088,
+    "bundled": []
+  }
+]

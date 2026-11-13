@@ -1,0 +1,1 @@
+burst: n=48 ok=48 err=0 avg=241ms

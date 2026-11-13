@@ -1,0 +1,15 @@
+{
+  "users": [
+    {
+      "id": "usr-95dbf63f6834b546",
+      "username": "workbuddy",
+      "salt": "f3014212cb496891a6cdd1471130d46b",
+      "hash": "084fa63007eb090b5b5f08214271c21807df555748c0befdad78e957db7246a4418a3f07f11bd931fe68fcf4d5742aea0bc270db1d5f20ed158e4ec4419b495a",
+      "role": "admin",
+      "status": "active",
+      "createdAt": 1794008101941,
+      "lastLoginAt": 1794008102051
+    }
+  ],
+  "invites": []
+}

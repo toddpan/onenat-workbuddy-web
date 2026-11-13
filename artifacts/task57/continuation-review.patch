@@ -1,0 +1,356 @@
+--- continuation-before/src/engine.ts
++++ after/src/engine.ts
+@@ -13,7 +13,7 @@
+ import type { PromptResult, DshTarget } from './remote-client.js'
+ import { DshClient } from './remote-client.js'
+ import { sameDshRef, dshRefKey } from './workspace.js'
+-import { buildWorkspaceAccessSection, installWorkspaceAccessCli, workspaceShellQuote, WORKSPACE_ACCESS_CLI_NAME } from './workspace-access.js'
++import { buildWorkspaceAccessSection, installWorkspaceAccessCli, isWorkspaceAccessCliPath, workspaceShellQuote } from './workspace-access.js'
+ import type { AgentResolver } from './resolver.js'
+ import type { PromptComposer } from './prompt-composer.js'
+ import { Orchestrator, buildCompletionRequirement, buildTaskContract, buildUpstreamDigests, buildUpstreamSection, extractUpstreamFilePaths, sanitizeEngineInstruction, type PlanDraft } from './orchestrator.js'
+@@ -1655,9 +1655,9 @@
+         extraSections.push(`[项目工作区]\n工作区 ${JSON.stringify(ws)} 位于当前执行节点，可直接在该目录读取、修改并运行授权命令。`)
+       } else if (ws && base) {
+         let cliPath = binding?.workspaceAccessCliPath
+-        // Existing long-lived sessions may still contain v1 (--base-only). Reinstall
+-        // under a versioned name once; never silently reuse the obsolete helper.
+-        if (cliPath && !cliPath.endsWith('/' + WORKSPACE_ACCESS_CLI_NAME)) cliPath = undefined
++        // Reinstall v1 (--base-only) and v2 (unbounded result reads) once;
++        // numbered uploads of the current version are safe to reuse.
++        if (cliPath && !isWorkspaceAccessCliPath(cliPath)) cliPath = undefined
+         if (!cliPath && binding?.remoteSessionId) {
+           const target = await this.resolveExecTarget(task, targetAgent.id).catch(() => undefined)
+           if (target?.online) {
+--- continuation-before/src/engine.test.ts
++++ after/src/engine.test.ts
+@@ -1131,17 +1131,20 @@
+       return { ok: true, files: [{ name: files[0].filename, path: '/session/' + files[0].filename }] }
+     }
+     for (const id of ['__node__', 'child']) {
+-      f.store.mutateTask(task.id, t => { t.sessions[id] = { remoteSessionId: 'session-' + id, baseUrl: 'http://executor', nodeRefKey: 'mapping:exec-node', workspaceAccessCliPath: '/session/.workbuddy-workspace-remote.mjs', createdAt: 0 } })
+-      const agent = { id, name: id, dshRef: executor } as SubAgent
+-      const result = await f.engine.transformFileMentionsForAgent('读取项目', undefined, agent, f.store.getTask(task.id)!)
+-      const prefix = result.extraSections.join('\n').split('\n').find(s => s.includes('使用前缀:'))!
+-      assert.ok(prefix.includes("--node-ref 'mapping:file-node'"))
+-      assert.ok(prefix.includes("--onenat-base 'https://directory'"))
+-      assert.ok(prefix.includes("WORKBUDDY_ONENAT_API_KEY='catalog-key'"))
+-      assert.ok(!prefix.includes('--base '))
+-      await f.engine.transformFileMentionsForAgent('再次读取', undefined, agent, f.store.getTask(task.id)!)
++      for (const oldName of ['.workbuddy-workspace-remote.mjs', '.workbuddy-workspace-remote-v2.mjs', '.workbuddy-workspace-remote-v2-1.mjs']) {
++        f.store.mutateTask(task.id, t => { t.sessions[id] = { remoteSessionId: 'session-' + id, baseUrl: 'http://executor', nodeRefKey: 'mapping:exec-node', workspaceAccessCliPath: '/session/' + oldName, createdAt: 0 } })
++        const agent = { id, name: id, dshRef: executor } as SubAgent
++        const result = await f.engine.transformFileMentionsForAgent('读取项目', undefined, agent, f.store.getTask(task.id)!)
++        const prefix = result.extraSections.join('\n').split('\n').find(s => s.includes('使用前缀:'))!
++        assert.ok(prefix.includes("--node-ref 'mapping:file-node'"))
++        assert.ok(prefix.includes("--onenat-base 'https://directory'"))
++        assert.ok(prefix.includes("WORKBUDDY_ONENAT_API_KEY='catalog-key'"))
++        assert.ok(prefix.includes('.workbuddy-workspace-remote-v3.mjs'))
++        assert.ok(!prefix.includes('--base '))
++        await f.engine.transformFileMentionsForAgent('再次读取', undefined, agent, f.store.getTask(task.id)!)
++      }
+     }
+-    assert.deepEqual(uploads, ['.workbuddy-workspace-remote-v2.mjs', '.workbuddy-workspace-remote-v2.mjs'], '只升级一次')
++    assert.deepEqual(uploads, Array(6).fill('.workbuddy-workspace-remote-v3.mjs'), '主/子旧版本各升级一次，新版本再次访问不上传')
+     f.store.mutateTask(task.id, t => { t.sessions.child.nodeRefKey = 'mapping:file-node' })
+     const local = await f.engine.transformFileMentionsForAgent('读取', undefined, { id: 'child', name: 'child', dshRef: executor } as SubAgent, f.store.getTask(task.id)!)
+     assert.ok(local.extraSections[0].includes('[项目工作区]'), '子智能体回退文件节点时直接访问')
+@@ -1150,6 +1153,39 @@
+     f.store.mutateTask(appTask.id, t => { t.sessions.__node__ = { remoteSessionId: 'app-session', baseUrl: 'http://executor', nodeRefKey: 'mapping:exec-node', createdAt: 0 } })
+     const appResult = await f.engine.transformFileMentionsForAgent('读取', undefined, { id: '__node__', name: 'main', dshRef: executor } as SubAgent, f.store.getTask(appTask.id)!)
+     assert.ok(appResult.extraSections.join('\n').includes("--node-ref 'mapping:file-node'"), '共享 app 按本轮已解析 mapping 固定文件节点')
++  } finally { f.store.flush(); rmSync(f.dir, { recursive: true, force: true }) }
++})
++
++test('task-57: 实际子任务派发接受同目录重名 helper 并复用稳定引用注入', async () => {
++  const f = makeFixture()
++  try {
++    const owner = { kind: 'mapping' as const, mappingId: 'file-node' }
++    const executor = { kind: 'mapping' as const, mappingId: 'exec-node' }
++    const project = f.store.upsertProject({ name: '共享执行目录', dshRef: owner, workspace: '/owner/repo', defaultExecutionNodeRef: executor })
++    seedAgent(f.store, 'child', { dshRef: executor })
++    const task = await f.engine.createTask({ projectId: project.id, memberAgentIds: ['child'], workDir: '/executor/scratch' })
++    f.store.mutateTask(task.id, t => {
++      t.plan = { objective: '验证子任务自动注入', strategy: 'parallel', createdAt: Date.now(), subtasks: [{ id: 'sub', agentId: 'child', title: '验证', prompt: '读取归属项目', dependsOn: [], status: 'pending', logs: [] }] }
++    })
++    const engine = f.engine as any
++    engine.directory = { ...RESOURCE_DIR_STUB, endpoint: 'https://directory', key: 'catalog-key' }
++    engine.resolver.resolveRef = async (ref: DshRef) => ({ online: true, baseUrl: ref.kind === 'mapping' && ref.mappingId === 'file-node' ? 'http://owner:100' : 'http://executor:200', apiKey: 'owner-key' })
++    const uploads: string[] = []
++    f.client.uploadFiles = async (_target?: any, id?: any, files?: any) => {
++      uploads.push(id)
++      assert.equal(files[0].filename, '.workbuddy-workspace-remote-v3.mjs')
++      return { ok: true, files: [{ name: '.workbuddy-workspace-remote-v3-1.mjs', path: '/executor/scratch/.workbuddy-workspace-remote-v3-1.mjs' }] }
++    }
++    for (let i = 0; i < 2; i++) {
++      assert.equal((await f.engine.retrySubtask(task.id, 'sub')).ok, true)
++      const prompt = f.client.prompts.at(-1)!
++      assert.ok(prompt.includes("--node-ref 'mapping:file-node'"), '真正发往子会话的 prompt 必须有稳定 owner')
++      assert.ok(prompt.includes('.workbuddy-workspace-remote-v3-1.mjs'))
++      assert.ok(prompt.includes("WORKBUDDY_ONENAT_API_KEY='catalog-key'"))
++      assert.ok(!prompt.includes('远程操作工具未能安装'))
++      assert.equal(f.store.getTask(task.id)!.sessions.child.workspaceAccessCliPath, '/executor/scratch/.workbuddy-workspace-remote-v3-1.mjs')
++    }
++    assert.deepEqual(uploads, ['sess-1'], '有效编号文件名续用，不每轮重新上传')
+   } finally { f.store.flush(); rmSync(f.dir, { recursive: true, force: true }) }
+ })
+ 
+--- continuation-before/src/workspace-access.ts
++++ after/src/workspace-access.ts
+@@ -1,8 +1,16 @@
+ import { readFileSync } from 'node:fs'
++import { posix, win32 } from 'node:path'
+ import type { DshClient, DshTarget } from './remote-client.js'
+ import type { DshRef } from './types.js'
+ 
+-export const WORKSPACE_ACCESS_CLI_NAME = '.workbuddy-workspace-remote-v2.mjs'
++export const WORKSPACE_ACCESS_CLI_NAME = '.workbuddy-workspace-remote-v3.mjs'
++const WORKSPACE_ACCESS_CLI_BASENAME = /^\.workbuddy-workspace-remote-v3(?:-[1-9]\d*)?\.mjs$/
++
++/** DSH numbers a repeated upload in a shared cwd instead of overwriting it. */
++export function isWorkspaceAccessCliPath(value: string): boolean {
++  const paths = /^[a-z]:[\\/]/i.test(value) || /^\\\\/.test(value) ? win32 : posix
++  return paths.isAbsolute(value) && !value.includes('\0') && WORKSPACE_ACCESS_CLI_BASENAME.test(paths.basename(value))
++}
+ 
+ /** Quote one literal POSIX shell argument, including credentials and paths. */
+ export function workspaceShellQuote(value: string): string {
+@@ -25,7 +33,7 @@
+   try {
+     const data = readFileSync(new URL('../scripts/workspace-remote.mjs', import.meta.url))
+     const out = await client.uploadFiles(target, sessionId, [{ filename: WORKSPACE_ACCESS_CLI_NAME, data, mimeType: 'text/javascript' }])
+-    return out.ok ? out.files?.find((file) => file.name === WORKSPACE_ACCESS_CLI_NAME)?.path : undefined
++    return out.ok ? out.files?.find((file) => WORKSPACE_ACCESS_CLI_BASENAME.test(file.name) && isWorkspaceAccessCliPath(file.path) && (file.path.replace(/\\/g, '/').split('/').pop() === file.name))?.path : undefined
+   } catch {
+     return undefined
+   }
+--- continuation-before/scripts/workspace-remote.mjs
++++ after/scripts/workspace-remote.mjs
+@@ -252,7 +252,7 @@
+     const multipart = body instanceof FormData;
+     if (method === 'POST' && route.endsWith('/prompt')) promptDispatched = true;
+     const response = await fetch(target.base + route, { method, headers: multipart ? (apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) : headers, ...(body ? { body: multipart ? body : JSON.stringify(body) } : {}), signal: AbortSignal.timeout(requestTimeoutMs), redirect: 'error' });
+-    if (mode === 'result' && response.ok) return JSON.parse(await response.text());
++    if (mode === 'result' && response.ok) return readResult(response);
+     const value = await response.json();
+     if (!response.ok || value.ok !== true) throw Object.assign(new Error(`DSH ${method} ${route}: ${response.status} ${JSON.stringify(value.error ?? 'request failed')}`), { status: response.status });
+     return value.data;
+@@ -349,7 +349,9 @@
+ without a valid result OUTCOME_UNCERTAIN means the operation may have happened.
+ Output: one JSON object; reads include contentBase64, exec includes stdout/stderr.
+ Read/CAS inputs are limited to 8 MiB (OUTPUT_LIMIT on excess); exec stdout/stderr
+-combined are limited to 4 MiB. Remote results carry executionEvidence:
++combined are limited to 4 MiB. Result downloads are capped at 32 MiB by both the
++Content-Length header and streamed byte count (RESULT_LIMIT on excess).
++Remote results carry executionEvidence:
+ 'http-read-worker-result', not a cryptographic proof; the owning node is trusted.
+ Worker mode accepts the same request fields (operation,root,path,nonce,etc.) and
+ prints the nonce-bound sentinel. It is intended for local tests.
+--- continuation-before/scripts/workspace-remote-test.mjs
++++ after/scripts/workspace-remote-test.mjs
+@@ -155,6 +155,19 @@
+         const target = new URL(route, 'http://mock').searchParams.get('path');
+         try {
+           let value = JSON.parse(await readFile(target, 'utf8'));
++          if (mode === 'result-bad-json') { await writeFile(target + '.tmp', 'sensitive incomplete result'); response.writeHead(200); return response.end('{"nonce":'); }
++          if (mode === 'result-header-limit') { response.writeHead(200, { 'Content-Length': String(32 * 1024 * 1024 + 1) }); response.flushHeaders(); return; }
++          if (mode === 'result-stream-limit') {
++            response.writeHead(200, { 'Content-Type': 'application/json' });
++            const chunk = Buffer.alloc(1024 * 1024, 32);
++            for (let i = 0; i < 33 && !response.destroyed; i++) {
++              if (!response.write(chunk)) await new Promise(resolve => {
++                const complete = () => { response.off('drain', complete); response.off('close', complete); resolve(); };
++                response.once('drain', complete); response.once('close', complete);
++              });
++            }
++            return response.end();
++          }
+           if (mode.startsWith('tamper-')) value[mode.slice(7)] = 'forged';
+           return send(200, value);
+         } catch (e) { if (e.code === 'ENOENT') return send(404, { ok: false, error: 'missing result' }); throw e; }
+@@ -162,7 +175,9 @@
+       if (route.startsWith('/api/v1/fs/remove?')) {
+         const target = new URL(route, 'http://mock').searchParams.get('path');
+         assert.ok(path.isAbsolute(target) && /^workbuddy-workspace-(?:worker-[a-f0-9]+\.mjs|result-[a-f0-9]+\.json(?:\.tmp)?)$/.test(path.basename(target)));
+-        await unlink(target).catch(e => { if (e.code !== 'ENOENT') throw e; });
++        if (mode === 'file-cleanup-unauthorized') return send(401, { ok: false, error: 'mock cleanup authentication failure' });
++        try { await unlink(target); }
++        catch (e) { if (e.code === 'ENOENT') return send(404, { ok: false, error: 'already absent' }); throw e; }
+         return send(200, { ok: true, data: {} });
+       }
+       const match = route.match(/^\/api\/v1\/sessions\/([^/]+)(\/(?:prompt|files))?$/);
+@@ -196,6 +211,7 @@
+         response.destroy(); return;
+       }
+       let content = output.stdout.trim();
++      if (mode === 'timeout-after-exec') await new Promise(resolve => setTimeout(resolve, 300));
+       if (mode === 'extra-text') content += '\nI succeeded';
+       return send(200, { ok: true, data: { content } });
+     } catch (e) { send(500, { ok: false, error: e.message }); }
+@@ -244,6 +260,42 @@
+   node.mode('extra-text');
+   assert.equal((await remote(req(root, 'read', { path: 'input.txt' }), { base: node.base })).sha256, sha('write once'));
+   assert.ok(!(await readdir(root)).some(n => n.startsWith('workbuddy-workspace-')));
++});
++
++test('prompt timeout after worker completion reads its result without replay; cleanup 404 is idempotent but 401 fails', async t => {
++  const { root } = await fixture(t), node = await mockDSH(t);
++  node.mode('timeout-after-exec');
++  const value = await remote(req(root, 'write', { path: 'input.txt', expectedSha256: sha('original'), contentBase64: b64('timeout committed') }), { base: node.base, requestTimeoutMs: 180 });
++  assert.equal(value.sha256, sha('timeout committed'));
++  assert.equal(node.requests.filter(r => r.route.endsWith('/prompt')).length, 1);
++  assert.equal(node.sessions.size, 0);
++  assert.ok(!(await readdir(root)).some(n => n.startsWith('workbuddy-workspace-')));
++  node.mode('file-cleanup-unauthorized');
++  await assert.rejects(remote(req(root, 'read', { path: 'input.txt' }), { base: node.base }), e => e.code === 'CLEANUP_FAILED' && /401.*authentication failure/.test(e.message));
++  assert.equal(node.sessions.size, 0, 'session deletion still attempted after temporary-file cleanup failed');
++  assert.ok((await readdir(root)).some(n => n.startsWith('workbuddy-workspace-result-')), 'must report cleanup failure instead of pretending sensitive result is gone');
++});
++
++test('result header and chunked stream limits reject over 32 MiB and clean exact temporary paths', async t => {
++  const { root } = await fixture(t), node = await mockDSH(t);
++  for (const mode of ['result-header-limit', 'result-stream-limit']) {
++    node.mode(mode);
++    const before = node.requests.filter(r => r.route.endsWith('/prompt')).length;
++    await assert.rejects(remote(req(root, 'read', { path: 'input.txt' }), { base: node.base, requestTimeoutMs: 1000 }), e => e.code === 'OUTCOME_UNCERTAIN' && /RESULT_LIMIT.*32 MiB/.test(e.message));
++    assert.equal(node.requests.filter(r => r.route.endsWith('/prompt')).length, before + 1, 'no replay');
++    assert.equal(node.sessions.size, 0);
++    assert.ok(!(await readdir(root)).some(n => n.startsWith('workbuddy-workspace-')));
++  }
++});
++
++test('invalid JSON and mismatched nonce, operation or digest reject results and clean sensitive files', async t => {
++  const { root } = await fixture(t), node = await mockDSH(t);
++  for (const mode of ['result-bad-json', 'tamper-nonce', 'tamper-operation', 'tamper-requestHash']) {
++    node.mode(mode);
++    await assert.rejects(remote(req(root, 'read', { path: 'input.txt' }), { base: node.base }), e => e.code === 'OUTCOME_UNCERTAIN' && (mode === 'result-bad-json' ? /RESULT_INVALID.*not valid JSON/.test(e.message) : /nonce, operation or request digest mismatch/.test(e.message)));
++    assert.equal(node.sessions.size, 0);
++    assert.ok(!(await readdir(root)).some(n => n.startsWith('workbuddy-workspace-')));
++  }
+ });
+ 
+ test('unsupported prompt cleans upload without running it, including payload, and valid CAS failure self-cleans', async t => {
+--- continuation-before/scripts/project-workspace-live.mjs
++++ after/scripts/project-workspace-live.mjs
+@@ -21,7 +21,8 @@
+ const dataDir = await mkdtemp(join(tmpdir(), 'wb-task57-live-'))
+ const reportPath = process.env.WORKBUDDY_LIVE_REPORT || 'artifacts/task57/live-acceptance.json'
+ await mkdir('artifacts/task57', { recursive: true })
+-const report = { at: new Date().toISOString(), tag, ownerId, executorId, ownerRoot, executorRoot, checks: [], requests: [], toolCalls: [], cleanup: [] }
++const expectedHelperSha256 = createHash('sha256').update(await readFile(new URL('./workspace-remote.mjs', import.meta.url))).digest('hex')
++const report = { at: new Date().toISOString(), tag, ownerId, executorId, ownerRoot, executorRoot, expectedHelperSha256, checks: [], requests: [], toolCalls: [], helperUploads: [], cleanup: [] }
+ const nativeStreamPrompt = DshClient.prototype.streamPrompt
+ DshClient.prototype.streamPrompt = function (t, id, prompt, handlers, options) {
+   return nativeStreamPrompt.call(this, t, id, prompt, { ...handlers, onToolCall(info) { report.toolCalls.push({ sessionId: id, name: info.name }); handlers?.onToolCall?.(info) } }, options)
+@@ -30,9 +31,9 @@
+ const redact = text => {
+   let value = String(text)
+   for (const secret of knownSecrets) if (secret) value = value.split(secret).join('[redacted]')
+-  return value.replace(/(?:wba_|dsh_|onk-)[A-Za-z0-9_-]+/g, '[redacted]')
+-}
+-const save = () => writeFile(reportPath, JSON.stringify(report, null, 2))
++  return value.replace(/Bearer [A-Za-z0-9._-]+/g, 'Bearer [redacted]').replace(/(?:wba_|dsh_|onk-)[A-Za-z0-9_-]+/g, '[redacted]')
++}
++const save = () => writeFile(reportPath, redact(JSON.stringify(report, null, 2)))
+ const sha = bytes => createHash('sha256').update(bytes).digest('hex')
+ const before = new Map(), created = [], beforeWorkspaces = new Map()
+ let app, base, cookie = '', projectId
+@@ -46,9 +47,13 @@
+   }
+   if (u.pathname.endsWith('/prompt-stream') && typeof init.body === 'string') {
+     const b = JSON.parse(init.body)
+-    report.requests.push({ url: String(url), promptSha256: sha(b.prompt || ''), workspaceSection: b.prompt?.includes('[项目工作区跨机访问]'), stableOwner: b.prompt?.includes("--node-ref 'mapping:" + ownerId + "'"), helperV2: b.prompt?.includes('.workbuddy-workspace-remote-v2.mjs') })
++    report.requests.push({ url: String(url), promptSha256: sha(b.prompt || ''), workspaceSection: b.prompt?.includes('[项目工作区跨机访问]'), stableOwner: b.prompt?.includes("--node-ref 'mapping:" + ownerId + "'"), helperCurrent: /\.workbuddy-workspace-remote-v3(?:-[1-9]\d*)?\.mjs/.test(b.prompt || '') })
+   }
+   const res = await nativeFetch(url, init)
++  if (/\/sessions\/[^/]+\/files$/.test(u.pathname) && init.body instanceof FormData && init.body.get('files')?.name === '.workbuddy-workspace-remote-v3.mjs') {
++    const j = await res.clone().json().catch(() => ({}))
++    report.helperUploads.push({ sessionId: u.pathname.split('/').at(-2), status: res.status, ok: j.ok === true, files: j.data?.files?.map(f => ({ name: f.name, path: f.path, size: f.size })) })
++  }
+   if (u.pathname.endsWith('/api/v1/sessions') && init.method === 'POST' && res.ok) {
+     const j = await res.clone().json().catch(() => ({}))
+     if (j.data?.sessionId) created.push({ base: String(url).replace(/\/sessions$/, ''), id: j.data.sessionId })
+@@ -70,6 +75,17 @@
+   assert.ok(res.ok && j.ok, `${method} ${path}: HTTP ${res.status} ${redact(j.error || '')}`)
+   return j.data
+ }
++async function assertAbsent(id, root) {
++  assert.match(root, /^\/tmp\/wb-task57-[a-f0-9]{16}-(owner|executor)$/)
++  const t = await target(id)
++  const res = await fetch(t.baseUrl + '/fs/list?all=1&path=' + encodeURIComponent(root), { headers: { Authorization: 'Bearer ' + t.apiKey }, signal: AbortSignal.timeout(15000) })
++  const value = await res.json()
++  // DSH 0.6.1 returns 400 with an explicit missing-directory error; auth/network
++  // errors and truncated parent listings cannot prove a path is absent.
++  assert.ok([400, 404].includes(res.status) && value.ok === false && typeof value.error === 'string' && value.error.includes(root) && /目录不存在|\bENOENT\b/.test(value.error), 'Expected explicit missing path, received HTTP ' + res.status + ': ' + redact(value.error || ''))
++  ;(report.absenceChecks ||= []).push({ node: id, path: root, status: res.status, error: redact(value.error) })
++  return true
++}
+ const array = (value, key) => Array.isArray(value) ? value : value?.[key] || []
+ async function download(id, path) {
+   const t = await target(id), d = await client.fsDownload(t, path)
+@@ -99,7 +115,7 @@
+ }
+ const seed = { main: randomBytes(24).toString('hex'), child: randomBytes(24).toString('hex') }
+ async function verifyLane(lane, final, binding) {
+-  const diagnosis = { status: final.status, error: final.error, systemTurns: final.turns.filter(t => t.role === 'system').map(t => t.text), lastTurns: final.turns.slice(-2).map(t => ({ role: t.role, text: String(t.text || '').slice(-1500) })), logs: final.taskLogs?.slice(-12) }
++  const diagnosis = { status: final.status, error: final.error, systemTurns: final.turns.filter(t => t.role === 'system').map(t => t.text), lastTurns: final.turns.slice(-2).map(t => ({ role: t.role, text: String(t.text || '').slice(-1500) })), logs: final.taskLogs?.slice(-12).map(log => log.level === 'tool' ? { ts: log.ts, level: log.level, tool: /^工具调用: ([^ ·]+)/.exec(log.msg)?.[1] || 'unknown' } : log) }
+   report[lane + 'TaskDiagnosis'] = JSON.parse(redact(JSON.stringify(diagnosis)))
+   await save()
+   assert.ok(binding?.remoteSessionId, 'No actual executor session: ' + redact(JSON.stringify(diagnosis)))
+@@ -114,15 +130,23 @@
+   assert.equal(observed.checks.find(c => c.code === 'CAS_MISMATCH')?.ok, false)
+   assert.ok(observed.checks.every(c => c.temporarySessionId && c.sessionCleanup === 'deleted'))
+   const ownerBytes = await download(ownerId, ownerRoot + '/' + lane + '.txt')
+-  assert.equal(sha(ownerBytes), observed.finalSha256, 'Independent owner HTTP read confirms model-relayed write')
++  assert.equal(sha(ownerBytes), observed.finalSha256, 'Independent owner HTTP read confirms remote write')
+   assert.equal(observed.exec.cwd, ownerRoot)
+   const built = await download(ownerId, ownerRoot + '/' + lane + '.built')
+   assert.equal(sha(built), observed.exec.builtSha256)
+   assert.equal(built.toString(), ownerBytes.toString().toUpperCase())
++  report[lane + 'Independent'] = { ownerSha256: sha(ownerBytes), builtSha256: sha(built), ownerRootAbsentOnExecutor: await assertAbsent(executorId, ownerRoot) }
++  await save() // Preserve independent evidence even when a later injection assertion fails.
++  assert.equal(report[lane + 'Independent'].ownerRootAbsentOnExecutor, true)
++  const helperPath = binding.workspaceAccessCliPath
++  assert.ok(helperPath?.startsWith(executorRoot + '/') && /\/\.workbuddy-workspace-remote-v3(?:-[1-9]\d*)?\.mjs$/.test(helperPath), 'Bound helper must be current and inside isolated executor cwd')
++  const helperSha256 = sha(await download(executorId, helperPath))
++  assert.equal(helperSha256, expectedHelperSha256, 'Independently downloaded installed helper matches local source')
++  assert.ok(report.helperUploads.some(u => u.sessionId === binding.remoteSessionId && u.ok && u.files.some(f => f.path === helperPath)))
+   const tools = report.toolCalls.filter(t => t.sessionId === binding.remoteSessionId)
+   assert.ok(tools.length, 'Actual command tool event required')
+-  assert.ok(report.requests.some(r => r.url.includes(binding.remoteSessionId) && r.workspaceSection && r.stableOwner && r.helperV2), 'Automatic stable-reference injection required for this session')
+-  return { taskId: final.id, sessionId: binding.remoteSessionId, cwd: info.cwd, tools, ...observed, independentOwnerSha256: sha(ownerBytes), independentBuiltSha256: sha(built) }
++  assert.ok(report.requests.some(r => r.url.includes(binding.remoteSessionId) && r.workspaceSection && r.stableOwner && r.helperCurrent), 'Automatic stable-reference injection required for this session')
++  return { taskId: final.id, sessionId: binding.remoteSessionId, cwd: info.cwd, helperPath, helperSha256, tools, ...observed, independentOwnerSha256: sha(ownerBytes), independentBuiltSha256: sha(built) }
+ }
+ function prompt(lane) {
+   // Secrets and the helper path are deliberately absent: the model must use its automatically injected workspace context.
+@@ -147,7 +171,7 @@
+     assert.equal((await client.fsMkdir(executor, '/tmp', tag + '-executor')).ok, true)
+     assert.equal((await client.fsUpload(owner, ownerRoot, Object.entries(seed).map(([lane, bytes]) => ({ filename: lane + '.txt', data: Buffer.from(bytes) })))).ok, true)
+     assert.equal((await client.fsUpload(executor, executorRoot, [{ filename: 'workspace-roundtrip-live.mjs', data: await readFile(new URL('./workspace-roundtrip-live.mjs', import.meta.url)) }])).ok, true)
+-    assert.equal((await client.fsList(executor, ownerRoot, true)).ok, false)
++    await assertAbsent(executorId, ownerRoot)
+     return { ownerRoot, executorRoot, initialHashes: Object.fromEntries(Object.entries(seed).map(([k, v]) => [k, sha(v)])), ownerRootAbsentOnExecutor: true }
+   })
+   await new Promise(r => app.server.listen(0, '127.0.0.1', r))
+@@ -178,7 +202,7 @@
+     return verifyLane('child', final, final.sessions[agent.id])
+   })
+   await check('files remain only on owner, no leaked helper sessions or coordination files', async () => {
+-    assert.equal((await client.fsList(await target(executorId), ownerRoot, true)).ok, false)
++    await assertAbsent(executorId, ownerRoot)
+     const owner = await target(ownerId), listing = await client.fsList(owner, ownerRoot, true)
+     assert.equal(listing.ok, true)
+     assert.ok(!listing.data.entries.some(e => e.name.startsWith('.workspace-remote.') || e.name.startsWith('workbuddy-workspace-worker-') || e.name.startsWith('workbuddy-workspace-result-')))
+@@ -211,8 +235,9 @@
+       }
+       const removed = await client.fsRemove(t, root)
+       report.cleanup.push({ node: id, directory: root, removed: removed.ok, ...(removed.error ? { error: redact(removed.error) } : {}) })
+-      const absent = !(await client.fsList(t, root, true)).ok
+-      assert.equal(absent, true, 'Fixture must be absent after cleanup')
++      assert.equal(removed.ok, true, removed.error)
++      const absent = await assertAbsent(id, root)
++      report.cleanup.push({ node: id, directory: root, absentWithExplicitHttpError: absent })
+       for (const w of array(await request(t, '/workspaces'), 'workspaces')) {
+         if ([ownerRoot, executorRoot].includes(w.path) && !beforeWorkspaces.get(id)?.has(w.id)) {
+           await request(t, '/workspaces/' + w.id, undefined, 'DELETE')

@@ -18,6 +18,8 @@
  */
 
 import http from 'node:http'
+import { timingSafeEqual } from 'node:crypto'
+import { structuredToolResult } from './tool-output.js'
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -36,7 +38,9 @@ import { XiaozhiMcpClient } from './xiaozhi-mcp.js'
 import { WorkBuddyMcpServer, requestPublicBase } from './mcp-server.js'
 import { ExpertMcpServer } from './mcp/expert-mcp.js'
 import { SshResourceStore } from './ssh-store.js'
+import { GroupStore } from './groups.js'
 import { createWorkBuddyToolDefs, HTTP_TOOL_CTX, type WorkBuddyToolDef } from './tool-ops.js'
+import { normalizeToolResult } from './tool-errors.js'
 import { AuthService, SESSION_COOKIE } from './auth.js'
 import { renderLoginUi } from './login-ui.js'
 import { renderInviteUi, renderResetUi, renderProjectInviteUi } from './invite-ui.js'
@@ -204,6 +208,8 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
   const sshStorePath = join(cfg.dataDir, 'ssh-resources.json')
   const store = new WorkStore(storePath)
   const sshStore = new SshResourceStore(sshStorePath)
+  // 协作群存储单例（裁定 A）：同一实例同时注入 Router 与 tool defs，防双实例内存快照互相覆盖
+  const groupsStore = new GroupStore(join(cfg.dataDir, 'groups.json'))
 
   // 优先级: 命令行/env > 存储中的设置
   const settings = store.getSettings()
@@ -236,6 +242,8 @@ export function createApp(cfg: StandaloneConfig): StandaloneApp {
   // 启动自愈：重启导致中断的 running 任务标记失败（僵尸任务清理）
   const recovered = engine.recoverInterruptedTasks()
 engine.startPendingAskSweeper()
+  // backlog 回写失败后台补偿器（TASK-2）：指数退避自动重试，退避计数随 store 持久化（重启不清零）
+  engine.startBacklogWritebackRetrySweeper()
   if (recovered > 0) log(`启动自愈：${recovered} 个中断任务已标记失败`)
 
   const scheduler = new ScheduleRunner(store, engine, log, directory)
@@ -243,12 +251,19 @@ engine.startPendingAskSweeper()
   const monitor = new MonitorService(store, directory, resolver, engine, scheduler, sshStore, planner, cfg.dataDir, log)
   monitor.start()
   const auth = new AuthService(cfg.dataDir, cfg.adminUsername, cfg.adminPassword)
+  const readOnlyToken = String(process.env.WORKBUDDY_READONLY_TOKEN || '')
+  const isReadOnlyToken = (token: string) => {
+    const supplied = Buffer.from(token), expected = Buffer.from(readOnlyToken)
+    return expected.length > 0 && supplied.length === expected.length && timingSafeEqual(supplied, expected)
+  }
   // --token / WORKBUDDY_TOKEN 作为种子：存储为空时写入，此后以设置页「AI APIKEY」为唯一权威
   auth.seedAiToken(cfg.apiToken)
+  if (readOnlyToken && auth.validateAiToken(readOnlyToken)) throw new Error('WORKBUDDY_READONLY_TOKEN must differ from the AI token')
   // SMTP 邮件服务（用户邀请自动发信；未配置时开发模式，邀请链接仍可手动复制）
   const mail = new MailService(cfg.dataDir)
   // 审计日志（B-03）与邮件接口限流（B-04）
   const auditLog = new AuditLog(cfg.dataDir)
+  engine.attachAuditLog(auditLog) // 回写重试成功的审计落账（TASK-2）
   const mailLimiter = new RateLimiter()
 
   // 小智平台 MCP 桥接：接入点优先级 命令行/env > 存储设置（存储为空时种子）；语音助手页可随时增删改（免重启）
@@ -268,7 +283,7 @@ engine.startPendingAskSweeper()
     xiaozhi.configureAll(endpoints)
   }
   const library = new SkillPluginLibrary(cfg.dataDir, store, log)
-  const router = new WorkBuddyRouter(store, directory, resolver, composer, planner, engine, sshStore, scheduler, monitor, auth, xiaozhi, library, mail, auditLog, mailLimiter)
+  const router = new WorkBuddyRouter(store, directory, resolver, composer, planner, engine, sshStore, scheduler, monitor, auth, xiaozhi, library, mail, auditLog, mailLimiter, groupsStore)
   // 专家团专家成员的 persona 来源：引擎与路由共用同一份 ExpertRegistry（构造顺序晚于引擎，此处回填）
   engine.attachExperts(router.expertRegistry)
 
@@ -276,6 +291,8 @@ engine.startPendingAskSweeper()
   const mcpServer = new WorkBuddyMcpServer({
     serverName: 'onenat-workbuddy',
     serverVersion: pkgVersion(),
+    dataDir: cfg.dataDir,
+    sessionMax: Number(process.env.WORKBUDDY_MCP_SESSION_MAX),
     prefix: cfg.prefix || '',
     getTools: () => tools,
     log,
@@ -286,7 +303,7 @@ engine.startPendingAskSweeper()
 
   const { port } = cfg
   const consoleUrl = `http://${cfg.host === '0.0.0.0' ? '127.0.0.1' : cfg.host}:${port}${cfg.prefix || '/'}`
-  const tools = createWorkBuddyToolDefs({ store, directory, resolver, composer, engine, sshStore, consoleUrl, monitor, scheduler, planner, expertRegistry: router.expertRegistry })
+  const tools = createWorkBuddyToolDefs({ store, directory, resolver, composer, engine, sshStore, groupsStore, consoleUrl, monitor, scheduler, planner, expertRegistry: router.expertRegistry, downloadTokens: library, serverVersion: pkgVersion() })
   const toolMap = new Map(tools.map((t) => [t.name, t]))
 
   const server = http.createServer(async (req, res) => {
@@ -298,7 +315,13 @@ engine.startPendingAskSweeper()
       console.log(`[onenat-workbuddy] ${method} ${url.pathname}${url.search} → ${res.statusCode} ${Date.now() - startedAt}ms`)
     })
 
+    const readOnly = isReadOnlyToken(extractAiToken(req, url))
     try {
+      // Observational credentials cannot reach alternate REST or auth mutation paths, even with a cookie.
+      if (readOnly && !((url.pathname === `${cfg.prefix}/mcp` || url.pathname === `${cfg.prefix}/mcp/`) || url.pathname === `${cfg.prefix}/api/tools` || url.pathname.startsWith(`${cfg.prefix}/api/tools/`))) {
+        sendJson(res, 403, { ok: false, code: 'PERMISSION_DENIED', error: '只读体验凭证仅允许工具与 MCP 能力查询通道' })
+        return
+      }
       // ---------- 健康检查（永远在根路径，无需登录） ----------
       if (url.pathname === '/healthz' || (cfg.prefix && url.pathname === `${cfg.prefix}/healthz`)) {
         sendJson(res, 200, {
@@ -325,7 +348,9 @@ engine.startPendingAskSweeper()
       const prefix = cfg.prefix
       const underPrefix = prefix ? url.pathname === prefix || url.pathname.startsWith(prefix + '/') : true
       const sessionToken = AuthService.parseCookies(req.headers.cookie)[SESSION_COOKIE]
-      const sessionUser = auth.validate(sessionToken)
+      // Keep the authenticated identity for this request; revalidation after an await must never turn a user into service scope.
+      const requestSession = auth.validateSession(sessionToken)
+      const sessionUser = requestSession?.username
       const isSecure = url.protocol === 'https:' || String(req.headers['x-forwarded-proto'] || '') === 'https'
       const clientIp = String(req.headers['x-real-ip'] || req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim()
 
@@ -567,8 +592,52 @@ engine.startPendingAskSweeper()
         return
       }
 
+      // ---------- 任务聊天内容导出（task-54：超大任务详情的下载端点） ----------
+      // 鉴权三通道任一即可：签名 token（task_status full 超阈值时下发，10 分钟有效）/ 控制台会话 / AI 令牌。
+      // 必须位于登录门禁之前（签名 token 调用方如远端 DSH 无平台登录态），与上方 library/file 同约定。
+      const chatExportMatch = prefix ? new RegExp(`^${prefix}/api/tasks/([^/]+)/chat-export$`) : /^\/api\/tasks\/([^/]+)\/chat-export$/
+      if (underPrefix && method === 'GET' && chatExportMatch.exec(url.pathname)) {
+        const taskId = decodeURIComponent(chatExportMatch.exec(url.pathname)![1])
+        const token = url.searchParams.get('token') || ''
+        const tokenOk = token ? library.verifyDownloadToken(`chat-export:${taskId}`, token) : false
+        const aiTokenOkExport = auth.validateAiToken(extractAiToken(req, url))
+        if (!tokenOk && !sessionUser && !aiTokenOkExport) {
+          sendJson(res, 403, { ok: false, error: '下载链接无效或已过期（token 有效期 10 分钟，请重新调 workbuddy_task_status detail:"full" 取新 URL），或携带登录会话/AI 令牌访问' })
+          return
+        }
+        const task = store.getTask(taskId)
+        if (!task) {
+          sendJson(res, 404, { ok: false, error: 'Task not found' })
+          return
+        }
+        const format = (url.searchParams.get('format') || 'json').toLowerCase()
+        if (format === 'markdown') {
+          const lines: string[] = [`# ${task.title}`, '', `- 任务 ID: ${task.id}`, `- 状态: ${task.status}`, `- 模式: ${task.mode}`, `- 更新时间: ${new Date(task.updatedAt).toISOString()}`, '']
+          for (const t of task.turns) {
+            const who = t.role === 'user' ? '👤 用户' : t.agentName ? `🤖 ${t.agentName} (${t.agentId || ''})` : '🤖 智能体'
+            lines.push(`## ${who}`, '', t.text, '')
+          }
+          const md = lines.join('\n')
+          res.statusCode = 200
+          res.setHeader('Content-Type', 'text/markdown; charset=utf-8')
+          res.setHeader('Content-Length', String(Buffer.byteLength(md)))
+          res.setHeader('Content-Disposition', `attachment; filename="chat-export-${task.id}.md"`)
+          res.setHeader('Cache-Control', 'no-store')
+          res.end(md)
+          return
+        }
+        const json = JSON.stringify({ ok: true, exportedAt: Date.now(), task }, null, 2)
+        res.statusCode = 200
+        res.setHeader('Content-Type', 'application/json; charset=utf-8')
+        res.setHeader('Content-Length', String(Buffer.byteLength(json)))
+        res.setHeader('Content-Disposition', `attachment; filename="chat-export-${task.id}.json"`)
+        res.setHeader('Cache-Control', 'no-store')
+        res.end(json)
+        return
+      }
+
       // ---------- 访问控制：控制台与业务 API 均需登录；AI 令牌可访问开放面（工具通道/监控/定时任务/规划器/文件） ----------
-      const aiTokenOk = auth.validateAiToken(extractAiToken(req, url))
+      const aiTokenOk = readOnly || auth.validateAiToken(extractAiToken(req, url))
       // 项目导入建项目：公开但必须携带一次性 token（远端 DSH 节点无平台登录态；令牌在发起导入时下发到任务提示词）
       const projectImportUpload = underPrefix && method === 'POST'
         && url.pathname === `${prefix}/api/projects/import-create`
@@ -588,7 +657,7 @@ engine.startPendingAskSweeper()
         return
       }
       // 令牌已放行但路径不在 AI 开放面内（如设置、智能体写接口）→ 一律拒绝
-      if (!sessionUser && aiTokenOk && !isAiTokenAllowedPath(url.pathname, cfg.prefix)) {
+      if (!sessionUser && aiTokenOk && !isAiTokenAllowedPath(url.pathname, cfg.prefix, method)) {
         sendJson(res, 403, { ok: false, error: 'AI 令牌无权访问该接口（仅开放工具通道/监控/定时任务/规划器/文件/资源目录）' })
         return
       }
@@ -602,7 +671,7 @@ engine.startPendingAskSweeper()
             sendJson(res, 200, {
               ok: true,
               consoleUrl,
-              tools: tools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })),
+              tools: tools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters, inputSchema: t.inputSchema, outputSchema: t.outputSchema, annotations: t.annotations })),
             })
             return
           }
@@ -611,17 +680,17 @@ engine.startPendingAskSweeper()
         }
         const def = toolMap.get(name)
         if (!def) {
-          sendJson(res, 404, { ok: false, error: `工具不存在: ${name}`, available: [...toolMap.keys()] })
+          sendJson(res, 404, { ok: false, code: 'TOOL_NOT_FOUND', error: `工具不存在: ${name}`, available: [...toolMap.keys()] })
           return
         }
         const args = method === 'GET' ? Object.fromEntries(url.searchParams.entries()) : await readJsonBody(req)
         try {
           // HTTP 工具通道：调用方（AI 技能 / wb.mjs / 三方系统）可承受长阻塞，按既有语义放行；
           // requestBase 按本次请求头推导（反代优先 x-forwarded-*），工具回传的绝对端点对调用方可达
-          const raw = await def.execute(args || {}, { ...HTTP_TOOL_CTX, requestBase: requestPublicBase(req, cfg.prefix || '') })
-          sendJson(res, 200, { ok: true, tool: name, result: tryParse(raw) })
+          const raw = await def.execute(args || {}, { ...HTTP_TOOL_CTX, requestBase: requestPublicBase(req, cfg.prefix || ''), session: readOnly ? undefined : requestSession, readOnly, ...(sessionUser && !readOnly ? {} : { aiTokenOnly: true }) })
+          sendJson(res, 200, { ok: true, tool: name, result: tryParse(raw), structuredContent: structuredToolResult(raw) })
         } catch (err: any) {
-          sendJson(res, 500, { ok: false, tool: name, error: err?.message || String(err) })
+          sendJson(res, 500, { ok: false, code: 'EXECUTION_FAILED', tool: name, error: '工具执行失败' })
         }
         return
       }
@@ -629,7 +698,7 @@ engine.startPendingAskSweeper()
       // ---------- 对外 MCP Server（Streamable HTTP；登录会话或 AI 令牌，门禁已在上方统一完成） ----------
       const mcpPath = `${prefix}/mcp`
       if (underPrefix && (url.pathname === mcpPath || url.pathname === `${mcpPath}/`)) {
-        await mcpServer.handleRequest(req, res, method)
+        await mcpServer.handleRequest(req, res, method, { session: readOnly ? undefined : requestSession, readOnly, ...(sessionUser && !readOnly ? {} : { aiTokenOnly: true }) })
         return
       }
       // MCP 运行状态（诊断 / 冒烟）
@@ -646,7 +715,7 @@ engine.startPendingAskSweeper()
       }
 
       // ---------- 业务路由（控制台 + REST + SSE） ----------
-      const handled = await router.dispatch(req, res, prefix, { auth: true, session: auth.validateSession(sessionToken) })
+      const handled = await router.dispatch(req, res, prefix, { auth: true, session: requestSession })
       if (!handled && !res.headersSent) {
         sendJson(res, 404, { ok: false, error: `Endpoint not found: ${req.url}`, consoleUrl })
       }
@@ -671,8 +740,16 @@ engine.startPendingAskSweeper()
       monitor.stop()
       xiaozhi.stop()
       scheduler.stop()
+      engine.stopBacklogWritebackRetrySweeper()
       directory.stopAutoRefresh()
       await new Promise<void>((done) => server.close(() => done()))
+      // 优雅退出兜底：同步落盘，消除 TRAILING_SAVE_MS 尾随合并/异步写盘未完成窗口的丢尾
+      // （SIGKILL 无此机会，属已知权衡：原子 rename 保证 store.json 不损坏，只丢尾）
+      try {
+        store.flush()
+      } catch (err) {
+        console.error('[onenat-workbuddy] Failed to flush store on shutdown:', err)
+      }
     },
   }
 }
@@ -687,8 +764,15 @@ function extractAiToken(req: http.IncomingMessage, url: URL): string {
 }
 
 /** AI 令牌可访问的开放面：工具通道 / 监控 / 定时任务 / 规划器 / 远端文件 / 资源目录只读 */
-function isAiTokenAllowedPath(pathname: string, prefix: string): boolean {
+function isAiTokenAllowedPath(pathname: string, prefix: string, method = 'GET'): boolean {
   const p = prefix && pathname.startsWith(prefix) ? pathname.slice(prefix.length) || '/' : pathname
+  // AI 令牌只读面（M6）：团队/专家/提及候选 GET 放行——AI 发任务前可自查「有哪些团/哪些专家」，
+  // 不再靠猜名字；写面（POST/PUT/DELETE）仍走控制台会话，工具通道的 team_manage 另行守卫
+  if (method === 'GET') {
+    if (p === '/api/mentions/candidates') return true
+    if (p === '/api/teams' || /^\/api\/teams\/[^/]+$/.test(p)) return true
+    if (p === '/api/experts' || /^\/api\/experts\/[^/]+$/.test(p)) return true
+  }
   if (p === '/api/tools' || p.startsWith('/api/tools/')) return true
   // 对外 MCP Server（Streamable HTTP）与运行状态
   if (p === '/mcp' || p === '/mcp/') return true
@@ -701,9 +785,11 @@ function isAiTokenAllowedPath(pathname: string, prefix: string): boolean {
   if (p === '/api/resources' || p.startsWith('/api/resources/')) return true
   if (p === '/api/dsh-models') return true
   // 任务级文件面：下载成员工作区文件 / 附件上传（最大 2GB）/ 任务清单与统计（读）；messages 为多轮追问
-  if (/^\/api\/tasks\/[^/]+\/(files\/download|attachments|todos|stats|messages)$/.test(p)) return true
+  if (/^\/api\/tasks\/[^/]+\/(files\/download|attachments|todos|stats|messages|chat-export)$/.test(p)) return true
   // 附件 P2P 直传控制面：init 下发节点直连配方（地址+密钥，文件字节不经本服务），register 登记落盘结果
   if (/^\/api\/tasks\/[^/]+\/attachments\/direct\/(init|register|relay)$/.test(p)) return true
+  // History is user-scoped; generic task-id allowlisting must not admit the index.
+  if (p === '/api/tasks/history') return false
   // 任务只读面（状态/详情/流）：AI 令牌跟踪自己派发的任务用
   if (/^\/api\/tasks\/[^/]+$/.test(p)) return true
   if (p === '/api/tasks') return true
@@ -773,7 +859,10 @@ function sendJson(res: http.ServerResponse, status: number, data: unknown): void
   res.statusCode = status
   res.setHeader('Content-Type', 'application/json; charset=utf-8')
   res.setHeader('Cache-Control', 'no-store')
-  res.end(JSON.stringify(data))
+  const payload = data && typeof data === 'object' && (data as any).ok === false
+    ? normalizeToolResult({ ...(data as Record<string, any>), status: (data as any).status ?? status })
+    : data
+  res.end(JSON.stringify(payload))
 }
 
 // ---------------------------------------------------------------- 启动

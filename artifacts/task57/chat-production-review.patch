@@ -1,0 +1,17 @@
+--- previous-final/src/engine.ts
++++ current/src/engine.ts
+@@ -1799,9 +1799,12 @@
+     this.store.appendTurn(taskId, turn)
+     this.emit(taskId, { type: 'turn_start', turn })
+ 
+-    const transformed = await this.transformFileMentionsForAgent(text, mentions, agent, task)
++    // ensureSession may have created a binding after an async task replacement;
++    // read the current task rather than relying on WorkStore's in-place mutation.
++    const currentTask = this.store.getTask(taskId) || task
++    const transformed = await this.transformFileMentionsForAgent(text, mentions, agent, currentTask)
+     // 运行权限：已在 ensureSession 经 PUT /sessions/:id/permission 原生生效；仅旧版节点才降级写进提示词
+-    const permLine = this.permissionPromptLine(this.store.getTask(taskId) || task, agent)
++    const permLine = this.permissionPromptLine(this.store.getTask(taskId) || currentTask, agent)
+     // 项目指令 + 专家人格（角色声明/职责约束/执行指导，见 expert-templates）+ 项目 SSH 连接器：注入本轮提示词最前（项目上下文）
+     // 主会话（__node__）是远端节点本体，不是团队成员：不注入成员人格（否则会被要求"不做转派"而禁用自身的子智能体/团队能力）。
+     // 其余智能体在聊天直发路径是与用户直接对话（direct），不是被主调度派工的成员。

@@ -34,7 +34,8 @@ const suites = [
 const results = []
 for (const [name, [script, args]] of suites) {
   console.log(`\n════════ ${name} ════════`)
-  const r = spawnSync(process.execPath, [join(root, script), ...args], { stdio: 'inherit', cwd: root })
+  // mock 套件指向本机回环 mock server，按 ssrf-guard 约定放行内网直连（元数据段仍拒绝）；显式传入的环境变量优先
+  const r = spawnSync(process.execPath, [join(root, script), ...args], { stdio: 'inherit', cwd: root, env: { ...process.env, WORKBUDDY_ALLOW_PRIVATE_DIRECT: process.env.WORKBUDDY_ALLOW_PRIVATE_DIRECT || '1' } })
   results.push([name, r.status === 0])
 }
 

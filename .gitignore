@@ -17,3 +17,7 @@ qa-accept-*/
 qa-screenshots-*/
 e2e-artifacts/ego-*/
 .DS_Store
+
+# tsc 编译产物（构建脚本生成并复制到 dist/，不入库）
+src/*.js
+dist-test-bl/

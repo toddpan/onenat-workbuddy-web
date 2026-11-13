@@ -1,0 +1,10 @@
+{
+  "at": "2026-11-06T16:30:04.473Z",
+  "mappingId": "6be407b8",
+  "name": "家笔记本电脑",
+  "online": false,
+  "code": "NODE_OFFLINE",
+  "error": "NODE_OFFLINE: mapping:6be407b8 is offline or has no public endpoint",
+  "result": "PASS",
+  "scope": "real directory resolution; no request sent to offline DSH"
+}

@@ -1,0 +1,44 @@
+{
+  "at": "2026-11-06T17:15:15.734Z",
+  "root": "/tmp/wb-task57-f5dfde45cf59e54c-executor",
+  "uploads": [
+    {
+      "sessionId": "session-bb184c17-72cc-4865-8c24-b64eb05fd0c1",
+      "files": [
+        {
+          "name": ".workbuddy-workspace-remote-v2.mjs",
+          "path": "/tmp/wb-task57-f5dfde45cf59e54c-executor/.workbuddy-workspace-remote-v2.mjs",
+          "size": 31049,
+          "mimeType": "text/javascript"
+        }
+      ],
+      "exactOriginalName": true
+    },
+    {
+      "sessionId": "session-0d930990-5943-4a22-86d7-56824a4f67a0",
+      "files": [
+        {
+          "name": ".workbuddy-workspace-remote-v2-1.mjs",
+          "path": "/tmp/wb-task57-f5dfde45cf59e54c-executor/.workbuddy-workspace-remote-v2-1.mjs",
+          "size": 31049,
+          "mimeType": "text/javascript"
+        }
+      ],
+      "exactOriginalName": false
+    }
+  ],
+  "cleanup": [
+    {
+      "sessionId": "session-bb184c17-72cc-4865-8c24-b64eb05fd0c1",
+      "archived": true
+    },
+    {
+      "sessionId": "session-0d930990-5943-4a22-86d7-56824a4f67a0",
+      "archived": true
+    },
+    {
+      "directory": "/tmp/wb-task57-f5dfde45cf59e54c-executor",
+      "removed": true
+    }
+  ]
+}

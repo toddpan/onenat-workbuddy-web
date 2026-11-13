@@ -1,0 +1,30 @@
+{
+  "at": "2026-11-06T18:35:47.681Z",
+  "productionEngineRestoredExactly": true,
+  "restoredEngineSha256": "29d3bc55a9d82e2255b91af1f9431482cdebb5367bee89d72ac05fc2dc659951",
+  "storeSemanticsUnchanged": true,
+  "currentUiSha256": "4136b35444cc38bdaa878c37132f419f081cff4c4cfab2f709ef8ac28fbe08f5",
+  "uiEditedBySupplement": false,
+  "sourceScopes": [
+    "src/engine.test.ts",
+    "scripts/project-workspace-live.mjs"
+  ],
+  "withdrawn": [
+    "runChatTurn currentTask refresh",
+    "artificial upsert object replacement regression"
+  ],
+  "testsKept": [
+    "normal complete-method first-child runChatTurn with in-place identity",
+    "public sendUserMessage single @ with real routing and numbered upload response"
+  ],
+  "codeCauseBoundary": "Old exact-name upload predicate rejects successful numbered response; original failed session upload response was not captured",
+  "originalArchive": "artifacts/task57/causal-original-archive.json",
+  "publicLiveReport": "artifacts/task57/public-live-acceptance.json",
+  "realPlannerFallbackDisclosed": true,
+  "oldPredicateRedWasIsolatedCompiledCopy": true,
+  "docsLinked": [
+    "docs/task-57-acceptance.md",
+    "docs/project-workspace-nodes.md",
+    "backlog/tasks/task-57 - 工作区解耦：远程文件访问与命令通道.md"
+  ]
+}

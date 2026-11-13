@@ -85,6 +85,16 @@ jsdom 回归证据（修复前）：C2 场景只显示 117/526 字符，结尾�
 
 `prompt-stream` 是**会话级**订阅。若订阅时该会话上一轮尚未收尾（prompt 被排队 / steer 到运行中回合），
 旧轮次的 `turn/end` 会被误判为本次结束 → 流提前关闭，调用方拿到半截内容却认为 `complete`。
+### R6（显示层，2026-11-05 补）流式快照未渲染 markdown + `ensureLiveBlock` 崩溃冻结 —— `web-ui.ts`
+
+中途加入/回源重建（`buildTurnElement` 流式分支）的快照正文走 `textContent` 直灌——`**`、反引号等语法字符原样裸露；
+且这类块没有 `__blockMap`，后续第一个 delta 在 `ensureLiveBlock` 读取 `el.blocks.__blockMap[kind]` 时抛 TypeError，
+**RAF 冲刷循环被整批打断**，流式更新从此冻结在快照上。旧回归 C2「快照后无后续 delta」恰好绕开了该分支，未被发现。
+
+### R7（显示层，2026-11-05 补）停止/取消无逐轮 turn_end，气泡永不收敛
+
+`cancelTask` 直接置 `turn.streaming=false` 并只补发 `task_status` + `task_end`；前端 `task_end` 只移除光标不收敛块——
+被中止的回复永远停在未渲染的流式半截（用户截图实证）。详见 `docs/fix-streaming-markdown-render-20261105.md`。
 
 ## 4. 修复
 
@@ -95,7 +105,8 @@ jsdom 回归证据（修复前）：C2 场景只显示 117/526 字符，结尾�
 | `onenat-workbuddy-web/src/store.ts` | 新增 `appendTurnText` + `scheduleSave()`：流式增量只改内存（内存态权威），磁盘按 250ms 尾随合并；`save()`/`flush()` 仍即时落盘，进程 `exit` 前兜底落盘 |
 | `onenat-workbuddy-web/src/engine.ts` | `onDelta` 改走 `appendTurnText`（内存即时可见 + 磁盘合并），回合边界由既有 `updateTurn` 触发 `flush()` |
 | `onenat-workbuddy-web/src/remote-client.ts` | 新增 `parseSseFrame`/`SSE_FRAME_SEP`：容忍 CRLF，按规范逐行解析并支持多行 `data:`，忽略心跳注释 |
-| `dsh-web-service/src/streaming.ts` | `prompt-stream` 与 OpenAI 流式路径锚定本轮 turn：订阅前旧轮次的 `turn/end` 忽略，已认领 turn 后其它 turn 的事件不转发（steer 模式保持旧行为） |
+| `dsh-web-service/src/streaming.ts` | `prompt-stream` 与 OpenAI 流式路径锚定本轮 turn：订阅前旧轮次的 `turn/end` 忽略，已认领 turn 后其它 turn 的事件不转发（steer 模式保持旧行为） || 同上 `web-ui.ts`（2026-11-05） | R6：快照改走 markdown 渲染 + 登记 `__blockMap`；`ensureLiveBlock` 容错；R7：`task_end` 经 `finalizeStaleStreamTurns` 兜底收敛；流式 paint 增加 `balanceStreamingMd` 未闭合语法补全（详见 `docs/fix-streaming-markdown-render-20261105.md`） |
+| `e2e-artifacts/mock-remote-robustness-test.mjs`（2026-11-05） | 修复 Phase-3 遗留的失效 import（`dist/planner.js` → `dist/orchestrator.js`）；回环 mock 按 ssrf-guard 约定放行（`run-streaming-tests.mjs` 默认注入 `WORKBUDDY_ALLOW_PRIVATE_DIRECT=1`） |
 
 ## 5. 验证结果
 
@@ -105,7 +116,8 @@ jsdom 回归证据（修复前）：C2 场景只显示 117/526 字符，结尾�
 | 客户端渲染回归 C2 中途加入 | ❌ 117/526 | ✅ 524/526 |
 | 客户端渲染回归 C3 断线丢帧 | ✅ | ✅ |
 | 客户端渲染回归 C4 断线且丢 turn_end | ❌ 115/526 | ✅ 524/526 |
-| 客户端渲染回归 C5 折叠旧轮次 + 重连 | — | ✅ 气泡数不变（不重复补插被折叠轮次） |
+| 客户端渲染回归 C5 折叠旧轮次 + 重连 | — | ✅ 气泡数不变（不重复补插被折叠轮次） || 客户端渲染回归 C6 中途加入 + delta 续写（快照渲染 MD、不冻结、未闭合语法补全） | ❌ TypeError 冻结 + 原文裸露 | ✅（2026-11-05 新增场景） |
+| 客户端渲染回归 C7 停止/取消（无逐轮 turn_end，task_end 兜底） | ❌ 115/526 | ✅（2026-11-05 新增场景） |
 | mock 远端健壮性（CRLF/多行/心跳/掐断/兜底/落盘） | 12/14 | **14/14** |
 | markdown 渲染无损（代码块/表格/超长） | ✅ | ✅ |
 | 真机端到端（本地 DSH） | — | L1=L2=L3=2317 字符，与远端 history 完全一致 |

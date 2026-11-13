@@ -1,6 +1,7 @@
 ---
 name: workbuddy-mcp
-description: 调用 OneNat WorkBuddy 多智能体工作台：任务创建/管理/查询/答复提问、监控态势、定时任务、项目管理、文件管理、专家库、SSH 资源、子智能体管理等 14 个工具。支持两种通道——MCP Server（Streamable HTTP，供 MCP 原生宿主注册）与 wbmcp.sh 脚本直连（无 MCP 宿主时的等价通道）。当用户要派任务给 WorkBuddy/子智能体/专家、查任务进度、看监控大屏、管项目或定时任务、传大文件时使用。
+service-contract: '2026-11-08.1'
+description: 调用 OneNat WorkBuddy 多智能体工作台：任务创建/管理/查询/答复提问、监控态势、定时任务、项目管理、文件管理、专家库、SSH 资源、子智能体管理、项目待办（backlog/todo/看板）等工具及只读能力发现。支持两种通道——MCP Server（Streamable HTTP，供 MCP 原生宿主注册）与 wbmcp.sh 脚本直连（无 MCP 宿主时的等价通道）。当用户要派任务给 WorkBuddy/子智能体/专家、查任务进度、看监控大屏、管项目或定时任务、传大文件、管理待办/backlog/todo/看板时使用。
 ---
 
 # OneNat WorkBuddy MCP Skill
@@ -17,7 +18,7 @@ WorkBuddy 工作台的 **MCP 通道技能**：宿主支持 MCP 时把服务注�
 
 ## 为什么接了 MCP 还要这份 SKILL
 
-- **MCP 只管传输与工具发现**：`tools/list` 只有工具签名；「何时用、按什么顺序组合」的操作知识（下面的三步流程、@ 派活、轮询约定）都在本文件里。
+- **先发现当前契约**：调用 `workbuddy_capabilities {}` 读取身份、action 权限上限、风险和等待语义；服务契约版本应为 `2026-11-08.1`。任务、大文件和提问恢复流程通过 `resources/list` → `resources/read` 读取；旧宿主用 `workbuddy_capabilities {resource:uri}`。版本不一致时以服务返回的流程为准。只读体验须使用独立配置的 `WORKBUDDY_READONLY_TOKEN`，提示词中的“不写文件”不构成权限控制。
 - **触发靠 SKILL**：宿主靠 description/whenToUse 决定什么需求该想起工作台——没有它，接上了也不会主动用。
 - **复杂逻辑在脚本端**：断点续传、直连通道优选（内网自证/公网回退）、幂等对账这些状态机由 `wbmcp.sh` 承载，MCP 工具调用表达不了。
 
@@ -35,7 +36,19 @@ bash $WB call workbuddy_task_status '{}'
 bash $WB call workbuddy_monitor_read '{"action":"overview"}'
 ```
 
-工具名与入参见 `bash $WB tools`。长任务用 `workbuddy_task_status`（默认 summary 小回包，`detail:"full"` 才是大回包）轮询。
+工具名与入参见 `bash $WB tools`。长任务用 `workbuddy_task_status`（默认 summary 小回包）轮询；`task_manage list` 可带 `keyword` 按任务 ID/标题过滤，缩小回包。
+
+## 大任务内容下载（task_status detail:"full" 超阈值自动降级）
+
+MCP 单帧上限 64KB；`task_status {detail:"full"}` 序列化超过 32KB 时不再回全文（也绝不会报「结果过大」丢失内容），而是返回：
+
+```json
+{ "ok": true, "oversized": true, "bytes": 123348, "summary": "…", "lastReply": "…",
+  "chatDownloadUrl": "<BASE>/api/tasks/<taskId>/chat-export?token=<签名>&format=json",
+  "chatDownloadUrlMarkdown": "…format=markdown", "downloadTokenTtlMs": 600000 }
+```
+
+直接 `curl -o chat.md "<chatDownloadUrl>"` 下载完整任务聊天内容（无需任何鉴权头，token 10 分钟内有效）；过期重调 `task_status {detail:"full"}` 取新 URL 即可。≤32KB 的小任务仍直接回全文（向后兼容）。
 
 ## 带大文件的任务：标准三步流程（顺序不能反！）
 
@@ -62,17 +75,17 @@ bash $WB call workbuddy_task_manage '{"action":"send","taskId":"task-xxxx","mess
 
 `putfile` 会在 init 时回显任务状态；任务非 draft 时服务端返回 warning（说明附件很可能传了也读不到），看到 warning 应停手改走三步流程。
 
-## 工具清单（14 个）
+## 工具清单（17 个）
 
 | 工具 | 用途 |
 |---|---|
-| workbuddy_task_manage | 任务会话：list / create（立即回执不等待）/ send（多轮）/ wait / delete / members / cancel |
-| workbuddy_task_status | 查任务进度：状态、编排计划子任务、汇总结论（默认摘要，detail:"full" 全量） |
+| workbuddy_task_manage | 任务会话：list（可 keyword 按 ID/标题过滤）/ create（立即回执不等待）/ send（多轮）/ wait / delete / members / cancel |
+| workbuddy_task_status | 查任务进度：状态、编排计划子任务、汇总结论（默认摘要，detail:"full" 全量；超大任务 >32KB 自动降级为「摘要 + chatDownloadUrl」，见下方「大任务内容下载」） |
 | workbuddy_task_chat | 看子任务/成员在远端 DSH 的聊天记录，可带 followupMessage 追问 |
 | workbuddy_task_ask_answer | 答复任务里挂起的 ask_user_question 提问卡 |
 | workbuddy_task_evaluate | 重新评估编排任务并生成/刷新汇总报告 |
 | workbuddy_monitor_read | 监控大屏：overview / events / history / task |
-| workbuddy_project_manage | 项目：list / get / upsert / delete（项目捆绑执行节点+工作目录+指令+可@成员） |
+| workbuddy_project_manage | 项目：list / get / upsert / delete（dshRef 为文件节点，defaultExecutionNodeRef 为默认执行节点；create 的 nodeRef 可选本次执行节点） |
 | workbuddy_schedule_manage | 定时任务：list / get / upsert / delete / toggle / run |
 | workbuddy_file_manage | 远端工作区文件：list / mkdir / upload / download / delete / **upload_resumable_init + upload_register（大文件 P2P 分片直传 ≤2GB，断点续传）** |
 | workbuddy_expert_manage | 专家库：list / get / search / create / update / delete |
@@ -80,6 +93,62 @@ bash $WB call workbuddy_task_manage '{"action":"send","taskId":"task-xxxx","mess
 | workbuddy_planner_manage | 主调度：get / set / options（拆解器兜底 + 调度模型） |
 | workbuddy_resource_manage | ONENAT 隧道资源：list / dsh / resolve / refresh |
 | workbuddy_ssh_resource_manage | SSH 连接资源池：list / get / upsert / delete / test / exec |
+| workbuddy_team_manage | 专家团（合同式多成员协作单元）：list / get / upsert / delete / toggle（内置团只读） |
+| workbuddy_backlog_manage | 项目待办 backlog（Backlog.md 兼容）：projects / config / init / list / search / view / create / edit / delete / dispatch / overview / retry-writeback |
+| workbuddy_group_manage | 协作群（每用户隔离）：list / get / create / update / delete / sections / add_section / rename_section / remove_section / rounds / add_round / mark_read，最小示例 `workbuddy_group_manage {"action":"list"}`。**仅控制台登录会话可用；AI 令牌通道（wbmcp.sh）全部 action 返回 AI_TOKEN_DENIED**——频道内容可按普通任务只读旁观（group 的 channelRef 即任务 id） |
+
+## Backlog 待办管理
+
+**backlog 是什么**：项目工作区 `<workspace>/backlog/tasks/*.md` 里的待办清单文件（Backlog.md 兼容：frontmatter 存 id/title/status/labels/dependencies/assignee/priority/due_date/ordinal，正文含 Description / Acceptance Criteria / 执行记录段）。唯一事实源是节点上的 md 文件——人在终端改、agent 在会话里改、Web 看板改，改的都是同一批文件；WorkBuddy 不复制数据。**别把它和任务内的执行清单混淆**：backlog 是项目的待办池，派发后变成普通 WorkBuddy 任务。
+
+工具 `workbuddy_backlog_manage` 的 12 个 action：
+
+- `projects` 列可管项目（id/name/节点/workspace/archived/initialized；会探测各项目 backlog 初始化状态，是拿 `projectId` 的入口）
+- `config` 读项目配置（statuses / defaultStatus / taskPrefix / projectName）
+- `init` 初始化 backlog 目录（幂等；`sample:"true"` 附带示例待办，`updateInstruction:"true"` 把协作约定写进项目指令）
+- `list` 待办列表（元数据 + 验收进度 + 关联任务）；`search` 全文检索（**必须**带 `filter.search`）；`view` 单条详情（字段 + 完整 Markdown + 关联任务）
+- `create` / `edit` / `delete`（物理删除必须 `force:"true"`）
+- `dispatch` 派发为任务；`overview` 跨项目「我的待办」；`retry-writeback` 回写失败重试
+
+**三个典型配方**
+
+① AI 接到需求 → 先查重 → 再登记
+
+```
+workbuddy_backlog_manage {"action":"projects"}
+workbuddy_backlog_manage {"action":"search","projectId":"proj-x","filter":{"search":"支付回调"}}
+workbuddy_backlog_manage {"action":"create","projectId":"proj-x","item":{"title":"接入支付回调","labels":["backend"],"acceptance":["回调签名校验通过"]}}
+```
+
+② 挑可开工项 → 派发 → 用任务工具跟进
+
+```
+workbuddy_backlog_manage {"action":"list","projectId":"proj-x","filter":{"ready":true,"status":"To Do"}}
+workbuddy_backlog_manage {"action":"dispatch","projectId":"proj-x","itemId":"TASK-3"}
+workbuddy_task_status {"taskId":"<dispatch 返回的 taskId>"}
+```
+
+**查询/筛选（与 `backlog task list` 对齐，契约见 `docs/design-backlog-query-filters.md`）**：`filter` 支持
+`status`/`excludeStatus`（多值）、`assignee`/`unassigned`、`priority`/`type`/`labels`+`labelMatch`、`milestone`、
+`taskProject`、`parent`、`search`（正文全文）、`ready`/`blocked`（依赖就绪判定，fail-closed）、
+`sort`(priority|id|ordinal|createdAt|updatedAt|status)+`order`、`limit`（硬截断）、`maxCount`+`skip`（分页窗口）、
+`count`。回包带 `total/matched/counts/window/facets`，条目带 `isReady/blocked/blockingDependencies/missingDependencies`。
+
+③ 看跨项目我的待办
+
+```
+workbuddy_backlog_manage {"action":"overview","filter":{"includeDone":false,"assignee":"alice"}}
+```
+
+**dispatch 的语义（重要）**：派发建出来的**就是普通 WorkBuddy 任务**——继承项目节点/工作区/成员/技能，可继续对话、看进度、取产出；验收清单原文直达编排拆解。任务终态由服务端自动回写待办状态（success → Done、failed → 回默认状态、partial_success → 保持）并追加执行记录。**不要手工 `edit` 待办状态冒充完成**；回写失败用 `retry-writeback` 补写。
+
+**dispatch 回包形状**：单条派发是**扁平**的（顶层 `taskId` / `itemId` / `itemStatus` / `mode`；`itemIds` 只有 1 条时也走这个形状）；批量派发回 `{results:[{ok,itemId,taskId?|code,error?}…], succeeded, failed}`，跟进用 `results[i].taskId`——**别在批量回包里找顶层 `taskId`**。依赖未完成的条目默认拒绝派发（`code:"DEPS_BLOCKED"` + `blocked`），确认可忽略才 `force:"true"`。
+
+**`taskCreated:"true"` = 任务已建但待办没写回（`code:"WRITEBACK_FAILED"`）**：这是「看起来失败、其实已经派发成功」的状态，**绝不能重新 dispatch**（会造出重复任务）；改用 `edit` 把状态置为进行中，或等任务跑完用 `retry-writeback` 补写。
+
+**参数类型**：工具参数只有 `string` / `json` 两种。数组与对象一律放进 JSON 参数（`item` / `filter` / `itemIds`），布尔用字符串 `"true"` / `"false"`（如 `force`）。
+
+**与上游 Backlog.md MCP 的差距（勿幻想不存在的 action）**：archive/restore（本仓库用状态迁移表达归档）、documents、milestones、DoD 默认值均未集成，原因见 `docs/design-backlog-mcp-tool.md` §8；每个 action 的必填项、item/filter 字段与错误码以该契约为准。
 
 ## 大文件上传（分片直传，≤2GB）
 

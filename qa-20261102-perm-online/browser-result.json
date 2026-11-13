@@ -1,0 +1,148 @@
+{
+  "at": "2026-11-02T22:15:11.319Z",
+  "base": "https://natpass.yikaihui.com/onenat-workbuddy",
+  "total": 23,
+  "failures": 0,
+  "results": [
+    {
+      "id": "A1",
+      "name": "登录页渲染（用户名/密码/登录按钮）",
+      "pass": true,
+      "detail": "{\"hasUser\":true,\"hasPass\":true,\"hasBtn\":true,\"title\":\"登录 · OneNat WorkBuddy\"}"
+    },
+    {
+      "id": "A2",
+      "name": "管理员登录后进入控制台（工作台视图）",
+      "pass": true,
+      "detail": "views=view-work"
+    },
+    {
+      "id": "A3",
+      "name": "版本号与线上部署一致",
+      "pass": true,
+      "detail": "version=v2026.11.1"
+    },
+    {
+      "id": "A4",
+      "name": "ONENAT 资源目录已连接",
+      "pass": true,
+      "detail": "chip=ONENAT · 10 资源 / 8 DSH 节点"
+    },
+    {
+      "id": "A5",
+      "name": "导航页签齐全",
+      "pass": true,
+      "detail": "nav buttons=14"
+    },
+    {
+      "id": "A6",
+      "name": "子智能体列表在线渲染",
+      "pass": true,
+      "detail": "cards=20"
+    },
+    {
+      "id": "A7",
+      "name": "归属=管理员的 QA 子智能体可见",
+      "pass": true,
+      "detail": "shared=true"
+    },
+    {
+      "id": "A8",
+      "name": "管理员对归属实体保留写面（删除按钮可见）",
+      "pass": true,
+      "detail": "delBtn=true"
+    },
+    {
+      "id": "A9",
+      "name": "项目列表在线渲染且含 QA 项目",
+      "pass": true,
+      "detail": "cards=23"
+    },
+    {
+      "id": "A10",
+      "name": "设置页 SSH 资源池管理员卡可见",
+      "pass": true,
+      "detail": "visible=true"
+    },
+    {
+      "id": "A11",
+      "name": "SSH 资源池含 QA 资源行",
+      "pass": true,
+      "detail": "rows=3"
+    },
+    {
+      "id": "A12",
+      "name": "监控大屏在线渲染",
+      "pass": true,
+      "detail": "textLen=5360 agents=28"
+    },
+    {
+      "id": "A13",
+      "name": "ONENAT 资源目录在线渲染",
+      "pass": true,
+      "detail": "textLen=1027"
+    },
+    {
+      "id": "B1",
+      "name": "普通用户登录成功并进入控制台（角色=user，控制台非登录页）",
+      "pass": true,
+      "detail": "views=view-work me={\"username\":\"qa-ego-ze5vr3@example.com\",\"userId\":\"usr-2f605d7c993d5255\",\"displayName\":\"QA-EGO 普通用户\",\"role\":\"user\"}"
+    },
+    {
+      "id": "B2",
+      "name": "普通用户可见项目显式共享的子智能体",
+      "pass": true,
+      "detail": "shared=true"
+    },
+    {
+      "id": "B3",
+      "name": "普通用户对他人归属子智能体无写面（无删除按钮）",
+      "pass": true,
+      "detail": "delBtn=false"
+    },
+    {
+      "id": "B4",
+      "name": "普通用户看不到未绑定的子智能体",
+      "pass": true,
+      "detail": "unboundVisible=false"
+    },
+    {
+      "id": "B5",
+      "name": "普通用户可见存量智能体（宽容模式）但无写面",
+      "pass": true,
+      "detail": "cards=19 withDelBtn=0"
+    },
+    {
+      "id": "B6",
+      "name": "普通用户看不到 SSH 资源池管理员卡",
+      "pass": true,
+      "detail": "visible=false"
+    },
+    {
+      "id": "C1",
+      "name": "移动端 375×812 无横向溢出",
+      "pass": true,
+      "detail": "overflow=0"
+    },
+    {
+      "id": "C2",
+      "name": "移动端子智能体页可用（卡片渲染）",
+      "pass": true,
+      "detail": "cards=20"
+    },
+    {
+      "id": "D1",
+      "name": "管理员流程无 JS 错误",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "id": "D2",
+      "name": "普通用户流程无 JS 错误",
+      "pass": true,
+      "detail": ""
+    }
+  ],
+  "adminErrors": [],
+  "memberErrors": []
+}

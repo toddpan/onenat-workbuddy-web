@@ -7,6 +7,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { ensurePrivateDir, hardenFile, PRIVATE_FILE_MODE } from './fs-perms.js'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import type { SshResource } from './types.js'
@@ -18,6 +19,8 @@ export class SshResourceStore {
   constructor(customPath?: string) {
     const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh')
     this.filePath = customPath || join(dshHome, 'dsh-orchestrator-ssh.json')
+    // task-54 V2：SSH 明文凭据文件启动时收紧为 0600
+    hardenFile(this.filePath)
     this.load()
   }
 
@@ -36,8 +39,8 @@ export class SshResourceStore {
   private save(): void {
     try {
       const dir = dirname(this.filePath)
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-      writeFileSync(this.filePath, JSON.stringify({ resources: this.resources }, null, 2), 'utf-8')
+      ensurePrivateDir(dir)
+      writeFileSync(this.filePath, JSON.stringify({ resources: this.resources }, null, 2), { encoding: 'utf-8', mode: PRIVATE_FILE_MODE })
     } catch (err) {
       console.error('[dsh-remote-orchestrator] Failed to save ssh resource store:', err)
     }

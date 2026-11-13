@@ -1,0 +1,92 @@
+{
+  "at": "2026-11-06T16:27:29.631Z",
+  "tag": "wb-task57-5f239b539aaa901a",
+  "ownerId": "6cc2987d",
+  "executorId": "5602f2c2",
+  "ownerRoot": "/tmp/wb-task57-5f239b539aaa901a-owner",
+  "executorRoot": "/tmp/wb-task57-5f239b539aaa901a-executor",
+  "checks": [
+    {
+      "name": "real owner/executor isolated fixtures and independent filesystems",
+      "result": "PASS",
+      "evidence": {
+        "ownerRoot": "/tmp/wb-task57-5f239b539aaa901a-owner",
+        "executorRoot": "/tmp/wb-task57-5f239b539aaa901a-executor",
+        "initialHashes": {
+          "main": "3dc1878757a0b1a16ecc4c6066cdf3422344d042df254e383ff14c0ba44ef179",
+          "child": "829d9eb352ca5b5b47192d3a2c63c511accdf47c768d36c011f40eda17b13e26"
+        },
+        "ownerRootAbsentOnExecutor": true
+      }
+    },
+    {
+      "name": "AC1/2/3 main without mentions actually runs list/read/write/CAS/exec on owner",
+      "result": "FAIL",
+      "error": "{\"ok\":false,\"code\":\"UNVERIFIED_OR_UNSUPPORTED\",\"error\":\"UNVERIFIED: missing or malformed worker sentinel; remote execution unsupported or not verified\"}\n\nfalse !== true\n\n\nfalse !== true\n"
+    }
+  ],
+  "requests": [
+    {
+      "url": "http://natpass.yikaihui.com:31847/api/v1/sessions",
+      "title": "[WorkBuddy] 这是 task-57 的隔离运行验收，只执行这个检查，不实现",
+      "provider": "deepseek-official",
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "url": "http://natpass.yikaihui.com:31847/api/v1/sessions/session-6aa0a850-7ec3-42d2-b9e8-d36f2c230019/prompt-stream",
+      "promptSha256": "fdb279e7b3d49157ae5cc4281762149e53bb8c243ac2438514369cd4923f9ec1",
+      "workspaceSection": true,
+      "stableOwner": true,
+      "helperV2": true
+    }
+  ],
+  "toolCalls": [
+    {
+      "sessionId": "session-6aa0a850-7ec3-42d2-b9e8-d36f2c230019",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-6aa0a850-7ec3-42d2-b9e8-d36f2c230019",
+      "name": "bash"
+    }
+  ],
+  "cleanup": [
+    {
+      "node": "6cc2987d",
+      "sessionId": "session-8c4e21b9-b81b-4b42-b04d-0324cc330c1b",
+      "removed": true
+    },
+    {
+      "node": "6cc2987d",
+      "directory": "/tmp/wb-task57-5f239b539aaa901a-owner",
+      "removed": true
+    },
+    {
+      "node": "5602f2c2",
+      "sessionId": "session-6aa0a850-7ec3-42d2-b9e8-d36f2c230019",
+      "removed": true
+    },
+    {
+      "node": "5602f2c2",
+      "directory": "/tmp/wb-task57-5f239b539aaa901a-executor",
+      "removed": true
+    },
+    {
+      "node": "5602f2c2",
+      "workspaceId": "cc65b2c9-dfeb-4933-8668-f76001ddfb1a",
+      "removed": true
+    }
+  ],
+  "mainStatus": "completed",
+  "mainObserved": {
+    "lane": "main",
+    "executorCwd": "/tmp/wb-task57-5f239b539aaa901a-executor",
+    "ownerRef": "mapping:6cc2987d",
+    "root": "/tmp/wb-task57-5f239b539aaa901a-owner",
+    "checks": [],
+    "ok": false,
+    "error": "{\"ok\":false,\"code\":\"UNVERIFIED_OR_UNSUPPORTED\",\"error\":\"UNVERIFIED: missing or malformed worker sentinel; remote execution unsupported or not verified\"}\n\nfalse !== true\n"
+  },
+  "error": "{\"ok\":false,\"code\":\"UNVERIFIED_OR_UNSUPPORTED\",\"error\":\"UNVERIFIED: missing or malformed worker sentinel; remote execution unsupported or not verified\"}\n\nfalse !== true\n\n\nfalse !== true\n",
+  "finishedAt": "2026-11-06T16:30:02.600Z"
+}

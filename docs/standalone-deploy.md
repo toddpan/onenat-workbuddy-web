@@ -43,6 +43,8 @@ SSHPASS='服务器密码' scripts/deploy-standalone.sh root@<host> [--port 22] [
 2. 按 `tsconfig.server.json` 编译（只收 `src/server.ts` 及其 DSH 无关的依赖图）；
 3. 校验 `dist/server.js` 存在，且产物里**没有** `cordis` / `@deepseek-ai/*` 引用，否则构建失败。
 
+跨节点项目会话还会从服务包的 `scripts/workspace-remote.mjs` 读取远程工作区 helper。发布时须把该文件放在 `dist/` 的同级 `scripts/` 中；标准部署脚本会随技能资源比较哈希并同步它。只复制 `dist/*.js` 会使 helper 安装失败，降级为明确的只读 HTTP 指引；不会声称支持写回/命令。
+
 ---
 
 ## 2. 启动
@@ -86,6 +88,16 @@ node dist/server.js --port 3081 \
 `HOST`、`PORT`、`WORKBUDDY_PREFIX`、`WORKBUDDY_HOME`、`ONENAT_BASE_URL`、`ONENAT_API_KEY`、
 `WORKBUDDY_AUTO_REFRESH_MS`、`WORKBUDDY_TOKEN`、`WORKBUDDY_ADMIN_USERNAME`、`WORKBUDDY_ADMIN_PASSWORD`。
 命令行参数优先于环境变量，环境变量优先于存储中的设置。
+
+### MCP 会话恢复与幂等
+
+MCP 的 transport session 与 AI 令牌相互独立：AI 令牌没有 TTL，仅显式重置时轮换。MCP 会话空闲 30 分钟回收；旧客户端的已鉴权请求会透明恢复同一 id，携带旧 id 的 `initialize` 也能成功，返回新 `Mcp-Session-Id`，过期时附 `sessionReset:true` 和旧 id 的 SHA-256 摘要。
+
+会话 `id/createdAt/lastAt` 原子保存到数据目录 `mcp-sessions.json`（权限 0600）。服务重启可识别已有会话；未知或 LRU 淘汰的 id 按需重建。`WORKBUDDY_MCP_SESSION_MAX` 可设置正整数会话上限，默认 200，淘汰与恢复记录入日志。
+
+写调用在 10 分钟内按「已鉴权调用者身份 + 工具名 + 规范化参数摘要」回放，不受 transport session 或 RPC id 变化影响；并发相同调用合并执行。这个窗口内有意提交完全相同的写命令也会复用结果。读取另含 RPC id，新的轮询 id 会获取新结果。回放仍检查当前权限和工具的对象授权钩子；所有工具结果仅保留内存，不随会话元数据落盘，避免凭证副本和业务提交顺序不一致。回放缓存最多 300 条，超出窗口/容量或进程重启后仍需业务层幂等或操作回执协助判断，不能把 transport 回放视为永久 exactly-once 保证。
+
+验证：构建后运行 `npm run test:mcp-sessions` 和 `npm run smoke:mcp`。
 
 ### 登录鉴权（默认开启）
 
@@ -239,6 +251,11 @@ server {
 ```
 
 ---
+
+### 停机与信号语义
+
+- **优雅停机（SIGTERM / Ctrl+C）**：服务关闭 HTTP、停后台组件后会**同步调用 `store.flush()`** 兜底落盘，停机前最后一段窗口的变更（任务状态流转、项目增删）不会丢失。
+- **强杀（`kill -9` / SIGKILL / 断电）**：无机会执行任何清理。落盘采用「临时文件 + 原子 rename」，`store.json` **不会损坏**；但常规路径写盘是异步尾随合并（含约 300ms~3s 的 TRAILING_SAVE_MS 合并窗口），强杀可能**丢失停机前最后几秒的尾部变更**（如刚删除的项目重启后"复活"）。属已知权衡，不要用 `kill -9` 作为常规停机手段。
 
 ## 6. 安全边界
 

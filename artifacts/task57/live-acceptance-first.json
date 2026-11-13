@@ -1,0 +1,106 @@
+{
+  "at": "2026-11-06T16:17:56.468Z",
+  "tag": "wb-task57-d2d7719915ed2852",
+  "ownerId": "6cc2987d",
+  "executorId": "5602f2c2",
+  "ownerRoot": "/tmp/wb-task57-d2d7719915ed2852-owner",
+  "executorRoot": "/tmp/wb-task57-d2d7719915ed2852-executor",
+  "checks": [
+    {
+      "name": "real owner/executor isolated fixtures and independent filesystems",
+      "result": "PASS",
+      "evidence": {
+        "ownerRoot": "/tmp/wb-task57-d2d7719915ed2852-owner",
+        "executorRoot": "/tmp/wb-task57-d2d7719915ed2852-executor",
+        "initialHashes": {
+          "main": "2da61b03852986d0c3861022d3b9e6bb716d3f6c6f7052f974ebb3ff2d0c75a6",
+          "child": "a680646c46c026857b96b2aa8042b5b4d1c92811cde0f6d5325747f164f83650"
+        },
+        "ownerRootAbsentOnExecutor": true
+      }
+    },
+    {
+      "name": "AC1/2/3 main without mentions actually runs list/read/write/CAS/exec on owner",
+      "result": "FAIL",
+      "error": "Expected values to be strictly equal:\n+ actual - expected\n\n+ 'UNVERIFIED_OR_UNSUPPORTED'\n- 'CAS_MISMATCH'\n\n\nfalse !== true\n"
+    }
+  ],
+  "requests": [
+    {
+      "url": "http://natpass.yikaihui.com:31847/api/v1/sessions",
+      "title": "[WorkBuddy] 这是 task-57 的隔离运行验收，只执行这个检查，不实现",
+      "provider": "deepseek-official",
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "url": "http://natpass.yikaihui.com:31847/api/v1/sessions/session-7acfc5ce-4e68-4fbb-a10a-7969d3cb6798/prompt-stream",
+      "promptSha256": "0fdd8d0008dfd7ef2aaea4265413cb2cea1fe0234fdef4204959057d2c699195",
+      "workspaceSection": true,
+      "stableOwner": true,
+      "helperV2": true
+    }
+  ],
+  "toolCalls": [
+    {
+      "sessionId": "session-7acfc5ce-4e68-4fbb-a10a-7969d3cb6798",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-7acfc5ce-4e68-4fbb-a10a-7969d3cb6798",
+      "name": "bash"
+    },
+    {
+      "sessionId": "session-7acfc5ce-4e68-4fbb-a10a-7969d3cb6798",
+      "name": "job_output"
+    },
+    {
+      "sessionId": "session-7acfc5ce-4e68-4fbb-a10a-7969d3cb6798",
+      "name": "bash"
+    }
+  ],
+  "cleanup": [
+    {
+      "node": "6cc2987d",
+      "sessionId": "session-70a1fcb7-e657-44b1-9a1f-6edb2549cc28",
+      "removed": true
+    },
+    {
+      "node": "6cc2987d",
+      "sessionId": "session-d54a6218-4088-4308-8fa8-4057a26cf4d6",
+      "removed": true
+    },
+    {
+      "node": "6cc2987d",
+      "sessionId": "session-a6963e77-e80c-46f4-95ba-c524a2d86e26",
+      "removed": true
+    },
+    {
+      "node": "6cc2987d",
+      "sessionId": "session-bdd6afe8-d4ab-4929-bc5e-7bc4abce1241",
+      "removed": true
+    },
+    {
+      "node": "6cc2987d",
+      "directory": "/tmp/wb-task57-d2d7719915ed2852-owner",
+      "removed": true
+    },
+    {
+      "node": "5602f2c2",
+      "sessionId": "session-7acfc5ce-4e68-4fbb-a10a-7969d3cb6798",
+      "removed": true
+    },
+    {
+      "node": "5602f2c2",
+      "directory": "/tmp/wb-task57-d2d7719915ed2852-executor",
+      "removed": true
+    },
+    {
+      "node": "5602f2c2",
+      "workspaceId": "ed77c74b-1939-4919-8e2a-1875c45ff9e5",
+      "removed": true
+    }
+  ],
+  "mainStatus": "completed",
+  "error": "Expected values to be strictly equal:\n+ actual - expected\n\n+ 'UNVERIFIED_OR_UNSUPPORTED'\n- 'CAS_MISMATCH'\n\n\nfalse !== true\n",
+  "finishedAt": "2026-11-06T16:22:39.057Z"
+}

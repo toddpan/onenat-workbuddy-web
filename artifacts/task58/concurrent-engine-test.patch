@@ -1,0 +1,58 @@
+--- baseline a/src/engine.test.ts b/src/engine.test.ts
++++ current a/src/engine.test.ts b/src/engine.test.ts
+@@ -1,5 +1,5 @@
+ a/src/engine.test.ts b/src/engine.test.ts
+-index 5931f1f..43eee0d 100644
++index 5931f1f..815196d 100644
+ --- a/src/engine.test.ts
+ +++ b/src/engine.test.ts
+ @@ -65,6 +65,8 @@ class StubComposer {
+@@ -167,7 +167,7 @@
+    } finally {
+      f.store.flush()
+      rmSync(f.dir, { recursive: true, force: true })
+-@@ -919,3 +1015,179 @@ test('backlog 回写补偿器：非终态/无汇总/backlogRef 缺失的任务
++@@ -919,3 +1015,212 @@ test('backlog 回写补偿器：非终态/无汇总/backlogRef 缺失的任务
+      rmSync(f.dir, { recursive: true, force: true })
+    }
+  })
+@@ -309,6 +309,39 @@
+ +  } finally { f.store.flush(); rmSync(f.dir, { recursive: true, force: true }) }
+ +})
+ +
+++test('task-57: 实际子任务派发接受同目录重名 helper 并复用稳定引用注入', async () => {
+++  const f = makeFixture()
+++  try {
+++    const owner = { kind: 'mapping' as const, mappingId: 'file-node' }
+++    const executor = { kind: 'mapping' as const, mappingId: 'exec-node' }
+++    const project = f.store.upsertProject({ name: '共享执行目录', dshRef: owner, workspace: '/owner/repo', defaultExecutionNodeRef: executor })
+++    seedAgent(f.store, 'child', { dshRef: executor })
+++    const task = await f.engine.createTask({ projectId: project.id, memberAgentIds: ['child'], workDir: '/executor/scratch' })
+++    f.store.mutateTask(task.id, t => {
+++      t.plan = { objective: '验证子任务自动注入', strategy: 'parallel', createdAt: Date.now(), subtasks: [{ id: 'sub', agentId: 'child', title: '验证', prompt: '读取归属项目', dependsOn: [], status: 'pending', logs: [] }] }
+++    })
+++    const engine = f.engine as any
+++    engine.directory = { ...RESOURCE_DIR_STUB, endpoint: 'https://directory', key: 'catalog-key' }
+++    engine.resolver.resolveRef = async (ref: DshRef) => ({ online: true, baseUrl: ref.kind === 'mapping' && ref.mappingId === 'file-node' ? 'http://owner:100' : 'http://executor:200', apiKey: 'owner-key' })
+++    const uploads: string[] = []
+++    f.client.uploadFiles = async (_target?: any, id?: any, files?: any) => {
+++      uploads.push(id)
+++      assert.equal(files[0].filename, '.workbuddy-workspace-remote-v2.mjs')
+++      return { ok: true, files: [{ name: '.workbuddy-workspace-remote-v2-1.mjs', path: '/executor/scratch/.workbuddy-workspace-remote-v2-1.mjs' }] }
+++    }
+++    for (let i = 0; i < 2; i++) {
+++      assert.equal((await f.engine.retrySubtask(task.id, 'sub')).ok, true)
+++      const prompt = f.client.prompts.at(-1)!
+++      assert.ok(prompt.includes("--node-ref 'mapping:file-node'"), '真正发往子会话的 prompt 必须有稳定 owner')
+++      assert.ok(prompt.includes('.workbuddy-workspace-remote-v2-1.mjs'))
+++      assert.ok(prompt.includes("WORKBUDDY_ONENAT_API_KEY='catalog-key'"))
+++      assert.ok(!prompt.includes('远程操作工具未能安装'))
+++      assert.equal(f.store.getTask(task.id)!.sessions.child.workspaceAccessCliPath, '/executor/scratch/.workbuddy-workspace-remote-v2-1.mjs')
+++    }
+++    assert.deepEqual(uploads, ['sess-1'], '有效编号文件名续用，不每轮重新上传')
+++  } finally { f.store.flush(); rmSync(f.dir, { recursive: true, force: true }) }
+++})
+++
+ +test('主会话跨节点不使用归属路径，稳定映射端口漂移复用会话', async () => {
+ +  const f = makeFixture()
+ +  try {

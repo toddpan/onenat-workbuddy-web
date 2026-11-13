@@ -106,6 +106,10 @@ export interface SshResource {
   passphrase?: string
   description?: string
   tags?: string[]
+  /** 归属用户（创建者 userId）；缺省 = 宽容模式（全员可用，存量数据零迁移） */
+  ownerUserId?: string
+  /** 可见性：private=仅归属人/项目绑定成员；shared=额外对全部登录用户只读可见（不可使用/取明文） */
+  visibility?: 'private' | 'shared'
   lastTestedAt?: number
   lastTestOk?: boolean
   lastTestError?: string
@@ -165,6 +169,10 @@ export interface SubAgent {
   id: string
   name: string
   dshRef: DshRef
+  /** 归属用户（创建者 userId）；缺省 = 宽容模式（全员可见可用，存量数据零迁移） */
+  ownerUserId?: string
+  /** 显式共享的项目（成员可在项目任务里 @ 它，但不可查看 apiKey/systemPrompt） */
+  sharedProjectIds?: string[]
   /** direct 引用时的 API Key；mapping/app 引用时优先经 ONENAT 映射凭证接口解析 */
   apiKey?: string
   agentPreset?: string
@@ -186,6 +194,8 @@ export interface SubAgent {
   skills?: string[]
   tags?: string[]
   description?: string
+  /** Public display copy; independent of prompts, credentials and installed skills. */
+  display?: import('./agent-display.js').AgentDisplayConfig
   enabled: boolean
   createdAt: number
   updatedAt: number
@@ -226,6 +236,8 @@ export interface ExtractedFileMention {
   agentName: string
   path: string
   filename: string
+  /** 裸路径提及属于项目文件归属节点，而非默认成员执行节点 */
+  workspaceOwned?: boolean
 }
 
 export interface ExtractedMentions {
@@ -267,8 +279,12 @@ export interface Project {
   projectMembers?: ProjectMember[]
   /** 可见性：private=仅成员，team=登录用户可见（预留），public=所有人；缺省按 team 处理 */
   visibility?: 'private' | 'team' | 'public'
-  /** 项目 DSH 节点 */
+  /** 成员邀请开关：true=普通 member 也可邀请他人入项（缺省 = 仅 owner/admin 可邀请） */
+  allowMemberInvite?: boolean
+  /** 文件归属 DSH 节点；切换默认执行节点不改变工作区身份 */
   dshRef: DshRef
+  /** 默认执行节点；缺省使用文件归属节点，创建任务时快照到 task.nodeRef */
+  defaultExecutionNodeRef?: DshRef
   /** 节点鉴权（direct 直连时可填） */
   apiKey?: string
   /** 项目工作目录（会话 cwd 与工作区） */
@@ -277,6 +293,8 @@ export interface Project {
   instruction?: string
   /** 默认协作子智能体：任务创建时继承，不限制后续 @，也不自动全员派工。 */
   defaultAgentIds?: string[]
+  /** Legacy project-based BOT grants, frozen during migration. New associations grant no access. */
+  legacyAgentAccessIds?: string[]
   /** @deprecated defaultAgentIds 的兼容别名，引用 SubAgent.id，不是专家库 ID。 */
   expertIds: string[]
   /** 连接器：'ssh:<资源id>' | 'map:<mappingId>' | 'app:<appId>' */
@@ -313,10 +331,18 @@ export type TaskStatus = 'draft' | 'running' | 'completed' | 'failed' | 'partial
 export interface TaskSessionBinding {
   remoteSessionId: string
   baseUrl: string
+  /** 稳定执行节点身份；隧道公网端口漂移不重建会话 */
+  nodeRefKey?: string
+  /** app 引用实际落到的 mapping；已有会话不能随 app 改绑迁往另一台节点 */
+  resolvedMappingId?: string
+  /** 注入执行会话的远程工作区工具（文件归属仍在项目节点） */
+  workspaceAccessCliPath?: string
   /** 建会话时使用的工作目录（用于检测 agent.workDir 变更后重建会话） */
   cwd?: string
   /** 主智能体最后一次对齐到会话的主调度模型（planner.model，空串=默认）；用于检测切换后重新对齐 */
   plannerModel?: string
+  /** 直聊会话的显式模型/预设配置，用于拒绝复用不匹配身份。 */
+  chatConfigKey?: string
   /** 最后一次经 PUT /sessions/:id/permission 原生下发成功的运行权限 preset；与期望不一致时重新下发 */
   permission?: string
   createdAt: number
@@ -333,6 +359,8 @@ export interface TaskTurn {
   /** 执行中的排队消息：当前轮结束后自动补发（立即发送/插话后清除） */
   queued?: boolean
   reasoning?: string
+  /** 本轮实际使用的模型（provider/model，如 deepseek/deepseek-v3）：回合结束时从远端会话详情 best-effort 回填；历史消息可能缺失 */
+  model?: string
   /** 本轮工具调用过程（对齐 DSH ui-chat 的 turn-process 展示） */
   tools?: TurnToolCall[]
   /** 本轮远端返回的真实 token 账本（含缓存命中），供前端展示缓存率 */
@@ -373,11 +401,33 @@ export interface PlanSubtask {
   acceptance?: string[]
   status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
   remoteSessionId?: string
+  /** 实际执行使用的模型（provider/model）：完成后 best-effort 回填；历史数据可能缺失 */
+  model?: string
   result?: { content: string; reasoning?: string }
   error?: string
   logs: SubtaskLogEntry[]
   startedAt?: number
   completedAt?: number
+  /**
+   * 本子任务产出的文件索引（完成时从结果文本登记）：
+   * 任务级协作的事实源 —— 同轮其它子任务（含无依赖边的并行兄弟）据此发现、下载、覆盖写。
+   * 只有路径 + 产出节点身份，不含文件内容。
+   */
+  files?: PlanSubtaskFile[]
+}
+
+/** 子任务产出文件登记项（跨节点协作寻址单元） */
+export interface PlanSubtaskFile {
+  /** 绝对路径（产出节点上的路径） */
+  path: string
+  /** 产出时所在节点（dshRefKey 归一键，如 mapping:xxx / direct:https://…） */
+  nodeKey: string
+  /** 写入者子任务 id（同轮可反查标题与成员） */
+  subtaskId: string
+  /** 写入者成员 id */
+  agentId: string
+  /** 登记时间 */
+  at: number
 }
 
 export interface TaskPlan {
@@ -420,7 +470,8 @@ export interface TaskCoverage {
   status: 'complete' | 'partial' | 'failed'
   completed: number
   total: number
-  missing: Array<{ id: string; name: string; duty?: string; error?: string }>
+  /** 缺口三分类：unassigned=规划未分配（团队轮名册成员无子任务）；failed/skipped=已分配但未成功 */
+  missing: Array<{ id: string; name: string; duty?: string; error?: string; reason?: 'unassigned' | 'failed' | 'skipped' }>
 }
 
 export interface WorkTask {
@@ -429,8 +480,16 @@ export interface WorkTask {
   mode: TaskMode
   status: TaskStatus
   memberAgentIds: string[]
+  /** 显式一对一 BOT 硬绑定；旧成员账本绝不推断为绑定，创建后不可更换。 */
+  chatAgentId?: string
   /** 创建者（'tool' = AI 工具通道 / 'console' = 控制台人工）。工具通道显式指定的成员受保护，不被主智能体改写 */
   creator?: 'tool' | 'console'
+  /**
+   * 归属用户（创建时服务端权威写入，客户端传入不采信；缺省 = 宽容模式）：
+   * - 有归属：归属人 / admin /（绑定项目且项目隔离时的项目成员）可见；改名/删除/归档等管理仅归属人+admin
+   * - 缺省（存量任务 / AI 工具通道创建）：全员可见，管理仅 admin（docs/design-user-project-management.md §11）
+   */
+  ownerUserId?: string
   /** 最近一轮的路由模式：明确 @ 单人时为 direct（定向直通），无 @ 主会话为 chat+source=node（节点直发） */
   lastRoute?: { kind: 'direct' | 'orchestrate' | 'chat'; agentId?: string; agentName?: string; source?: 'member' | 'main' | 'project' | 'node' }
   turns: TaskTurn[]
@@ -454,6 +513,15 @@ export interface WorkTask {
   forkedFrom?: { taskId: string; at: number }
   /** 被续接记录（P4-1）：本任务被 fork 到其它节点/项目时，原任务上追加的新任务清单 */
   forks?: Array<{ taskId: string; at: number }>
+  /** backlog 派发来源（docs/design-backlog-integration.md §4.3）：本任务由项目 backlog 待办一键派发 */
+  backlogRef?: { projectId: string; itemId: string; itemTitle: string; dispatchedAt: number }
+  /** backlog 回写失败标记（§6.3）：终态钩子写节点失败（节点不可达等）；UI 显「回写未确认」并经重试清除 */
+  backlogWritebackFailed?: { at: number; error: string }
+  /**
+   * backlog 回写自动重试退避状态（TASK-2 补偿器）：count=已自动重试次数，nextAt=下次重试时间。
+   * 随 store 落盘持久化，重启不重置；达上限后补偿器不再触碰（保留失败标记，交回人工重试）。
+   */
+  backlogWritebackRetry?: { count: number; nextAt: number }
   /** 会话附件（上传到各成员远端工作区后的登记） */
   attachments?: TaskAttachment[]
   /** 由定时任务派生时记录来源（调度删除/滚动出窗口后类型标识仍可恢复） */
@@ -461,7 +529,9 @@ export interface WorkTask {
   scheduleName?: string
   /** 所属项目：任务继承项目的节点/工作区/指令/专家/连接器/技能 */
   projectId?: string
-  /** 单独任务直接指定的执行节点（项目任务走项目节点） */
+  /** 首次观察到正式项目归属时的历史展示快照；不参与授权或项目关联。 */
+  projectSnapshot?: { projectId: string; name: string; capturedAt: number }
+  /** 创建时快照的执行节点；项目任务可显式覆盖默认节点，文件仍归属 project.dshRef */
   nodeRef?: DshRef
   /** 任务级模型（provider/model）：定时任务实例配置；主会话（__node__）优先于全局调度模型 */
   model?: string
@@ -472,7 +542,7 @@ export interface WorkTask {
   /** 任务级运行权限（如 danger-full-access / workspace-write / ask）：派发时注入提示词，优先于智能体实体默认 */
   permission?: string
   /** 执行中的排队消息（轮次结束自动补发；「立即发送」= steer 插话到运行中回合）；teamId = 排队消息携带的专家团意图 */
-  queue?: Array<{ text: string; at: number; turnId: string; teamId?: string }>
+  queue?: Array<{ text: string; at: number; turnId: string; teamId?: string; memberAgentIds?: string[] }>
   /** 任务级连接器覆盖（单独任务临时加挂） */
   connectorIds?: string[]
   /** 任务级技能覆盖（单独任务临时加挂） */
@@ -583,6 +653,13 @@ export interface ScheduledTask {
   /** 固定任务文本（触发时原样派发） */
   message: string
   rule: ScheduleRule
+  /**
+   * 归属用户（创建时服务端权威写入，客户端传入不采信；缺省 = 宽容模式）：
+   * - 有归属：归属人 / admin 可见；编辑/删除/toggle/手动 run 仅归属人+admin
+   * - 缺省（存量定时任务）：全员可见，管理仅 admin（docs/design-user-project-management.md §11）
+   * 定时触发派生的任务继承此归属（无归属则派生任务同为宽容模式）。
+   */
+  ownerUserId?: string
   enabled: boolean
   createdAt: number
   updatedAt: number
@@ -668,6 +745,10 @@ export interface StorageData {
   projects: Project[]
   teams: ExpertTeam[]
   settings: WorkBuddySettings
+  /** Server-owned activity revisions and per-user reading positions (task-91). */
+  taskActivities?: Array<{ taskId: string; signature: string; version: number }>
+  taskReadPositions?: Array<{ userId: string; taskId: string; version: number }>
+  activityClock?: number
 }
 
 // ---------- 专家团（合同式团队配置，移植 dsh-agency-agents ExpertTeam） ----------
@@ -749,6 +830,8 @@ export interface ExpertTeam {
   templateId?: TeamTemplateId
   /** 内置团（随版本种子提供，只读，可复制为自定义） */
   builtin?: boolean
+  /** 归属用户（创建者 userId）；缺省 = 宽容模式（全员可见可用） */
+  ownerUserId?: string
   enabled: boolean
   createdAt: number
   updatedAt: number
@@ -756,3 +839,49 @@ export interface ExpertTeam {
 
 /** 领域主理人模板标识（general = 通用兜底） */
 export type TeamTemplateId = 'general' | 'product' | 'technical' | 'content' | 'data' | 'research'
+
+// ---------- 协作群（Group；契约 docs/groups-web-sync-plan-2026-11-11.md §1） ----------
+
+/**
+ * 协作群实体：字段名与 Android GroupRoom JSON 逐字一致（上游 onenat-workbuddy-android GroupRoom.kt）。
+ * 每用户隔离：按登录身份（session userId）scope，跨用户不可见、不可改；v1 无共享群。
+ */
+export interface GroupRoom {
+  id: string
+  /** 空 = 成员名拼接（渲染期语义） */
+  name: string
+  /** ≤2000 字（按码点计），超长 INVALID_PARAM */
+  notice: string
+  /** "" = 无管理员 */
+  adminAgentId: string
+  /** 默认 admin（新建群 = 管理员主持） */
+  mode: 'admin' | 'everyone'
+  /** 保序去重 */
+  memberAgentIds: string[]
+  /** 当前频道 = orchestrate taskId；"" = 无进行中频道 */
+  channelRef: string
+  /** 绑定项目 0..N，保序去重 */
+  projectIds: string[]
+  /** 必须 ∈ projectIds，否则服务端归一化为 ""（不报错，对齐 Android 宽松解析） */
+  activeProjectId: string
+  /** 首页分组名；分组删除/重命名时服务端级联维护，"" = 未分组 */
+  section: string
+  /** 登录用户名（服务端填充，客户端值被覆盖） */
+  createdBy: string
+  /** 默认 false */
+  archived: boolean
+  /** 默认 mention */
+  notifyLevel: 'all' | 'mention' | 'mute'
+  /** 默认 0；允许客户端本地覆盖上报 */
+  unreadCount: number
+  /** 默认 0；markRead 单调不回退 */
+  lastReadSeq: number
+  /** "" = 关（沿用各成员权限档）；非空 = 群内统一权限档 */
+  permissionOverride: string
+  /** 服务端维护（毫秒） */
+  createdAt: number
+  updatedAt: number
+}
+
+/** 首页分组内的群默认排序键（列表渲染顺序 = 存储索引序，不随更新抖动） */
+export type GroupRoomOrder = 'index'

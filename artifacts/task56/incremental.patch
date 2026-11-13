@@ -1,0 +1,352 @@
+--- baseline/src/engine.test.ts
++++ current/src/engine.test.ts
+@@ -65,6 +65,8 @@
+ /** 远端 HTTP stub：会话即时成功 + 流式回写固定文本（engine 只会走 createSession/streamPrompt 主干） */
+ class StubDshClient {
+   created = 0
++  sessionCreates: Array<{ target: DshTarget; options: any }> = []
++  mkdirs: string[] = []
+   /** 收到的派发 prompt（按序），供断言上下文段注入 */
+   prompts: string[] = []
+   /** 流式正文（默认 stub-output）；丢尾回归用它构造「流式短、历史长」 */
+@@ -76,6 +78,7 @@
+   /** reconcileTurn 调用次数（断言复核只发一次历史请求） */
+   reconcileCalls = 0
+   async createSession(_target: DshTarget, _title: string, _options?: any) {
++    this.sessionCreates.push({ target: { ..._target }, options: { ..._options } })
+     this.created++
+     return { ok: true, sessionId: `sess-${this.created}` }
+   }
+@@ -134,6 +137,10 @@
+   async ensureWorkspace() {
+     return { ok: false } as any
+   }
++  async fsMkdir(_target: DshTarget, parent: string, name: string) {
++    this.mkdirs.push(parent.replace(/\/$/, '') + '/' + name)
++    return { ok: true }
++  }
+   async uploadFiles() {
+     return { ok: true } as any
+   }
+@@ -155,11 +162,13 @@
+ /** 规划器 stub：可注入本轮计划；summarize 固定按 subtasks 生成（不走 LLM） */
+ class StubPlanner {
+   private created = 0
++  planOptions: any[] = []
+   constructor(private factory?: (objective: string, members: PlannerMember[]) => PlanDraft, private summary?: TaskSummary) {}
+   async pickTarget() {
+     return { error: 'stub: no planner target' } as const
+   }
+-  async planTask(objective: string, members: PlannerMember[]): Promise<any> {
++  async planTask(objective: string, members: PlannerMember[], _targets?: unknown, options?: unknown): Promise<any> {
++    this.planOptions.push(options)
+     const draft = this.factory
+       ? this.factory(objective, members)
+       : { strategy: 'parallel' as const, subtasks: members.map((m) => ({ title: `t-${m.agent.id}`, prompt: `为 ${m.agent.name} 澄清环节 stub-${++this.created}`, agentId: m.agent.id, dependsOn: [] })) }
+@@ -335,6 +344,83 @@
+     f.store.flush()
+     rmSync(f.dir, { recursive: true, force: true })
+   }
++})
++
++test('task-56: @项目 首次绑定快照默认执行节点，显式节点保留且后续不随默认修改', async () => {
++  const f = makeFixture()
++  try {
++    const owner: DshRef = { kind: 'mapping', mappingId: 'owner' }
++    const executor: DshRef = { kind: 'mapping', mappingId: 'executor' }
++    const project = f.store.upsertProject({ name: '节点快照项目', dshRef: owner, defaultExecutionNodeRef: executor })
++    const inherited = await f.engine.createTask({ title: 'late project binding' })
++    await f.engine.sendUserMessage(inherited.id, '@节点快照项目 检查会话节点')
++    await settle(f.engine, f.store, inherited.id)
++    assert.deepEqual(f.store.getTask(inherited.id)?.nodeRef, executor)
++    f.store.upsertProject({ id: project.id, defaultExecutionNodeRef: owner })
++    assert.deepEqual(f.engine.taskExec(f.store.getTask(inherited.id)!).dshRef, executor)
++    const explicit = await f.engine.createTask({ nodeRef: executor })
++    await f.engine.sendUserMessage(explicit.id, '@节点快照项目 检查显式节点')
++    await settle(f.engine, f.store, explicit.id)
++    assert.deepEqual(f.store.getTask(explicit.id)?.nodeRef, executor)
++  } finally { f.store.flush(); rmSync(f.dir, { recursive: true, force: true }) }
++})
++
++test('task-56: 项目编排规划与主/子会话不在异机 mkdir 或使用文件归属路径', async () => {
++  const f = makeFixture({ plannerFactory: (_objective, members) => ({
++    strategy: 'parallel', subtasks: members.filter(m => m.agent.id !== '__node__').map(m => ({ title: '检查', prompt: '验证工作区隔离', agentId: m.agent.id, dependsOn: [] })),
++  }) })
++  try {
++    const owner: DshRef = { kind: 'mapping', mappingId: 'owner' }
++    const executor: DshRef = { kind: 'mapping', mappingId: 'executor' }
++    seedAgent(f.store, 'remote-worker', { name: '异机成员', dshRef: executor })
++    const project = f.store.upsertProject({ name: '异机规划', dshRef: owner, workspace: '/owner/project', defaultExecutionNodeRef: executor })
++    const task = await f.engine.createTask({ projectId: project.id })
++    await f.engine.sendUserMessage(task.id, '@异机成员 检查项目')
++    const final = await settle(f.engine, f.store, task.id)
++    assert.equal(final.status, 'success')
++    assert.equal(f.planners.planOptions.length, 1)
++    assert.equal(f.planners.planOptions[0].plannerCwd, undefined, '规划器不能把归属路径作为执行节点 cwd')
++    assert.deepEqual(f.client.mkdirs, [], '规划器不能在异机补建同路径空目录')
++    assert.ok(f.client.sessionCreates.length > 0)
++    for (const created of f.client.sessionCreates) assert.equal(created.options.cwd, undefined)
++    assert.ok(f.client.prompts.some(p => p.includes('[项目工作区跨机访问]')))
++  } finally { f.store.flush(); rmSync(f.dir, { recursive: true, force: true }) }
++})
++
++test('task-56: 子智能体保留自身节点目录，回退异机不沿用旧 workDir', async () => {
++  const f = makeFixture()
++  try {
++    const owner: DshRef = { kind: 'mapping', mappingId: 'owner' }
++    const executor: DshRef = { kind: 'mapping', mappingId: 'executor' }
++    const own: DshRef = { kind: 'mapping', mappingId: 'worker' }
++    const project = f.store.upsertProject({ name: 'cwd', dshRef: owner, workspace: '/owner/project', defaultExecutionNodeRef: executor })
++    const task = await f.engine.createTask({ projectId: project.id })
++    const agent = { id: 'worker', name: 'worker', dshRef: own, workDir: '/worker/scratch' } as SubAgent
++    const target = { online: true, baseUrl: 'http://worker', mappingId: 'worker', executionDshRef: own }
++    assert.ok((await (f.engine as any).ensureSession(task.id, agent, target)).ok)
++    assert.equal(f.client.sessionCreates.at(-1)?.options.cwd, '/worker/scratch')
++    assert.ok((await (f.engine as any).ensureSession(task.id, agent, { ...target, executionDshRef: executor, mappingId: 'executor' })).ok)
++    assert.equal(f.client.sessionCreates.at(-1)?.options.cwd, undefined)
++    assert.ok((await (f.engine as any).ensureSession(task.id, agent, { ...target, executionDshRef: owner, mappingId: 'owner' })).ok)
++    assert.equal(f.client.sessionCreates.at(-1)?.options.cwd, '/owner/project', '仅文件归属节点可用项目路径')
++  } finally { f.store.flush(); rmSync(f.dir, { recursive: true, force: true }) }
++})
++
++test('task-56: legacy 项目任务无 nodeRef 的默认 fork 保留原有效节点，显式改节点或项目仍生效', async () => {
++  const f = makeFixture()
++  try {
++    const owner: DshRef = { kind: 'mapping', mappingId: 'legacy-owner' }
++    const executor: DshRef = { kind: 'mapping', mappingId: 'new-default' }
++    const project = f.store.upsertProject({ name: '旧项目', dshRef: owner, defaultExecutionNodeRef: executor })
++    const origin = await f.engine.createTask({ projectId: project.id })
++    f.store.mutateTask(origin.id, t => { delete t.nodeRef })
++    const fork = await f.engine.forkTask(origin.id)
++    assert.deepEqual(fork.task.nodeRef, owner, '同项目默认续接快照旧任务有效节点，不改用当前项目默认值')
++    assert.equal(f.store.getTask(origin.id)?.nodeRef, undefined, '不迁移旧任务记录')
++    assert.deepEqual((await f.engine.forkTask(origin.id, { nodeRef: executor })).task.nodeRef, executor)
++    const other = f.store.upsertProject({ name: '新项目', dshRef: owner, defaultExecutionNodeRef: executor })
++    assert.deepEqual((await f.engine.forkTask(origin.id, { projectId: other.id })).task.nodeRef, executor, '显式切项目采用目标项目默认节点')
++  } finally { f.store.flush(); rmSync(f.dir, { recursive: true, force: true }) }
+ })
+ 
+ test('本轮变更：extractToolPaths 只取写入/编辑类工具的路径参数，不含内容', () => {
+--- baseline/src/engine.ts
++++ current/src/engine.ts
+@@ -872,7 +872,8 @@
+     const origin = this.store.getTask(taskId)
+     if (!origin) throw new Error(`任务不存在: ${taskId}`)
+     const projectId = opts.projectId === null ? undefined : opts.projectId || origin.projectId || undefined
+-    const nodeRef = opts.nodeRef || (projectId === origin.projectId ? origin.nodeRef : undefined)
++    // 同项目默认续接继承原有效执行节点；旧任务没有 nodeRef 时仍固定原文件节点。
++    const nodeRef = opts.nodeRef || (projectId === origin.projectId ? this.taskExec(origin).dshRef : undefined)
+     const draft = this.forkDraftOf(origin)
+     const created = await this.createTask({
+       title: `↪ ${origin.title}`,
+@@ -1255,6 +1256,8 @@
+       } else {
+         this.store.mutateTask(taskId, (t) => {
+           t.projectId = mentioned.id
++          // 显式任务节点优先；首次绑定也快照项目默认值，后续改默认节点不迁移会话。
++          t.nodeRef ||= { ...(mentioned.defaultExecutionNodeRef || mentioned.dshRef) }
+           // 首次 @ 绑定项目与 create 带 projectId 同语义：默认协作成员一并继承（已停用成员跳过；有团队绑定时以团队名册为准不动）
+           if (!t.teamId) {
+             const def = this.projectDefaultMemberIds(mentioned)
+@@ -2583,11 +2586,11 @@
+           }
+         }
+       }
+-      // 规划会话对齐任务工作目录（定时任务 workDir / 项目 workspace）：先 mkdir -p 确保存在，
+-      // 失败不阻断（规划会话创建端还有 ENOENT 降级默认目录的兜底）
++      // 只有目录归属与规划节点一致才对齐 cwd；异机项目不能补建同路径目录。
+       let plannerCwd: string | undefined
+       const wsForPlan = execForPlan.workspace
+-      if (wsForPlan && wsForPlan.startsWith('/') && planNodeTarget?.online && planNodeTarget.baseUrl) {
++      const workspaceRef = task.workDir ? execForPlan.dshRef : execForPlan.workspaceDshRef
++      if (wsForPlan && wsForPlan.startsWith('/') && sameDshRef(workspaceRef, execForPlan.dshRef) && planNodeTarget?.online && planNodeTarget.baseUrl) {
+         const dirOk = await this.ensureRemoteDir(planNodeTarget, wsForPlan).catch(() => false)
+         if (dirOk) plannerCwd = wsForPlan
+         else this.taskLog(taskId, 'warn', `任务工作目录 ${wsForPlan} 无法在规划节点创建，规划会话将使用节点默认目录`)
+--- baseline/src/router.ts
++++ current/src/router.ts
+@@ -513,10 +513,10 @@
+ 
+   /** 创建/更新项目（校验名称与节点；默认协作成员必须存在；defaultAgentIds 为 canonical，expertIds 兼容别名） */
+   private upsertProjectFromInput(body: any): Project {
+-    const name = String(body?.name || '').trim()
++    const existing = body?.id ? this.store.getProject(String(body.id)) : undefined
++    const name = String(body?.name ?? existing?.name ?? '').trim()
+     if (!name) throw new Error('缺少项目名称')
+     const dshRef = body?.dshRef ? (body.dshRef as DshRef) : undefined
+-    const existing = body?.id ? this.store.getProject(String(body.id)) : undefined
+     if (existing && !this.canSeeProject(existing)) throw Object.assign(new Error('项目不存在'), { status: 404 })
+     if (existing && !this.isProjectOwner(existing)) throw Object.assign(new Error('仅项目 owner 或平台管理员可编辑项目'), { status: 403 })
+     if (existing && WorkBuddyRouter.archivedBlocked(existing)) throw new Error('项目已归档（只读），请先恢复再编辑')
+--- baseline/src/tool-ops.test.ts
++++ current/src/tool-ops.test.ts
+@@ -45,7 +45,7 @@
+   } as WorkTask
+ }
+ 
+-function setup(tasks: WorkTask[]) {
++function setup(tasks: WorkTask[], engine: any = engineStub) {
+   const dataDir = mkdtempSync(join(tmpdir(), 'wb-toolops-test-'))
+   const store = new WorkStore(join(dataDir, 'store.json'))
+   for (const t of tasks) store.upsertTask(t)
+@@ -56,7 +56,7 @@
+     resolver: {} as any,
+     composer: {} as any,
+     planner: {} as any,
+-    engine: engineStub,
++    engine,
+     sshStore: {} as any,
+     consoleUrl: 'http://127.0.0.1:1/wb',
+     downloadTokens: library,
+@@ -154,6 +154,46 @@
+     assert.equal(library.verifyDownloadToken('chat-export:task-other', token), false)
+     assert.equal(library.verifyDownloadToken('chat-export:task-big', '123.badsig'), false)
+   } finally { await cleanup() }
++})
++
++test('task-56: 工具创建支持 mapping/app/direct，精确与近似去重均按项目与执行节点区分', async () => {
++  let fixture: ReturnType<typeof setup>
++  const calls: any[] = []
++  const engine = { ...engineStub, createTask: async (input: any) => {
++    calls.push(input)
++    const project = fixture.store.getProject(input.projectId)
++    const task = makeTask({ ...input, status: 'draft', nodeRef: input.nodeRef || project?.defaultExecutionNodeRef || project?.dshRef, turns: input.message ? [{ id: 'user', seq: 1, role: 'user', text: input.message, at: Date.now() }] : [] })
++    fixture.store.upsertTask(task)
++    return task
++  } }
++  fixture = setup([], engine)
++  try {
++    const owner = { kind: 'mapping' as const, mappingId: 'tool-owner' }
++    const a = fixture.store.upsertProject({ name: 'A', dshRef: owner })
++    const b = fixture.store.upsertProject({ name: 'B', dshRef: owner })
++    const tool = fixture.byName('workbuddy_task_manage')
++    const title = 'task56-' + a.id
++    const message = '验证不同节点执行相同项目指令。后续验收'
++    const refs = [owner, { kind: 'app', appId: 'tool-executor' }, { kind: 'direct', apiBaseUrl: 'http://tool-executor' }]
++    const ids = []
++    for (const nodeRef of refs) {
++      const out = JSON.parse(await tool.execute({ action: 'create', title, message, projectId: a.id, nodeRef }))
++      assert.equal(out.ok, true)
++      assert.equal(out.deduped, undefined, '不同执行节点必须创建独立任务')
++      assert.deepEqual(calls.at(-1)?.nodeRef, nodeRef)
++      ids.push(out.taskId)
++    }
++    assert.equal(new Set(ids).size, refs.length)
++    const retry = JSON.parse(await tool.execute({ action: 'create', title, message, projectId: a.id, nodeRef: refs[1] }))
++    assert.equal(retry.taskId, ids[1])
++    assert.equal(retry.deduped, true)
++    const fuzzy = JSON.parse(await tool.execute({ action: 'create', title: title + '-retry', message: message.replace('后续验收', '改写后续说明'), projectId: a.id, nodeRef: refs[1] }))
++    assert.equal(fuzzy.taskId, ids[1])
++    const otherProject = JSON.parse(await tool.execute({ action: 'create', title, message, projectId: b.id, nodeRef: refs[1] }))
++    assert.equal(otherProject.deduped, undefined, '另一个项目不得被首句去重合并')
++    const invalid = JSON.parse(await tool.execute({ action: 'create', title: title + '-invalid', projectId: a.id, nodeRef: { kind: 'app' } }))
++    assert.equal(invalid.ok, false, '无效 nodeRef 不得静默落回项目默认节点')
++  } finally { await fixture.cleanup() }
+ })
+ 
+ test('task-55: MCP 项目新建/编辑共享唯一性约束，冲突仅返回通用信息且保留权限', async () => {
+--- baseline/src/tool-ops.ts
++++ current/src/tool-ops.ts
+@@ -21,7 +21,7 @@
+ import { normalizeRule, nextRun, ruleText } from './scheduler.js'
+ import { execOnSshResource, maskSshResource, normalizeSshResource, testSshResource } from './ssh-resources.js'
+ import { normalizeDshRef } from './router.js'
+-import { ProjectWorkspaceConflictError, ProjectWorkspacePathError } from './workspace.js'
++import { dshRefKey, sameDshRef, ProjectWorkspaceConflictError, ProjectWorkspacePathError } from './workspace.js'
+ import { canAccessProject, type PermSession } from './perm.js'
+ import type { ExpertRegistry } from './expert-registry.js'
+ import { BUILTIN_TEAMS, parseTeamInput } from './expert-teams.js'
+@@ -96,7 +96,7 @@
+   return s.length > max ? `${s.slice(0, max)}…（共 ${s.length} 字，已截断）` : s
+ }
+ 
+-/** create 幂等指纹：同内容（标题+正文+成员+模式）在窗口内重复到达 → 复用既有任务 */
++/** create 幂等指纹：同项目/执行节点下，同内容（标题+正文+成员+模式）在窗口内重复到达 → 复用既有任务 */
+ const CREATE_DEDUP_WINDOW_MS = 120_000
+ const createDedupe = new Map<string, { at: number; taskId: string }>()
+ 
+@@ -115,8 +115,8 @@
+   }
+ }
+ 
+-function createFingerprint(title: unknown, message: unknown, memberIds: string[], mode: unknown, projectId?: unknown): string {
+-  const material = [String(title ?? '').trim(), String(message ?? '').trim(), [...memberIds].sort().join(','), String(mode ?? ''), String(projectId ?? '')].join('\u0001')
++function createFingerprint(title: unknown, message: unknown, memberIds: string[], mode: unknown, projectId: string | undefined, nodeKey: string | undefined): string {
++  const material = [String(title ?? '').trim(), String(message ?? '').trim(), [...memberIds].sort().join(','), String(mode ?? ''), projectId || '', nodeKey || ''].join('\u0001')
+   return createHash('sha1').update(material).digest('hex')
+ }
+ 
+@@ -331,7 +331,7 @@
+       memberAgentIds: { type: 'json', description: '成员子智能体 ID 数组（create 可省略：推荐改在 message 里 @子智能体名/@专家团名 指派；members 必填且非空）' },
+       mode: { type: 'string', description: '模式: chat（单成员直通）或 orchestrate（多成员编排），缺省按成员数推断；@ 多个成员或 @专家团时自动编排' },
+       message: { type: 'string', description: '消息内容（create 可选首条消息；send 必填）。派活写法：@子智能体名 / @专家名 / @专家团名 / @项目名 / @资源名（名称须与列表完全一致）；指令要自包含：目标、路径参数、验收标准——执行者拿不到你们的对话上下文' },
+-      nodeRef: { type: 'json', description: 'create 可选，任务节点（主 DSH）: {kind:"mapping", mappingId:"<DSH 映射 ID>"}。无 @ 的主会话在该节点上执行；不传则用上次所选/默认节点' },
++      nodeRef: { type: 'json', description: 'create 可选，主会话执行节点：{kind:"mapping",mappingId:"…"}、{kind:"app",appId:"…"} 或 {kind:"direct",apiBaseUrl:"…"}。不传则快照项目默认执行节点，再回退文件归属节点；子智能体使用自身绑定节点' },
+       projectId: { type: 'string', description: 'create 可选，归属项目 ID（workbuddy_project_manage list 取得）。发起前先判项目归属：能定项目必带此参——项目任务继承文件归属工作区/指令/默认协作成员及默认执行节点；nodeRef 可覆盖执行节点，创建时快照' },
+       creatorAgentId: { type: 'string', description: 'create 可选，调用方自身在 WorkBuddy 的子智能体 ID（workbuddy_agent_manage list 取得）。传入后新任务自动继承你绑定的技能（/技能名 手势注入到派发提示词），否则创建者的技能不会进入新任务的提示词' },
+       timeoutMs: { type: 'string', description: 'wait 最长同步等待毫秒（HTTP 通道默认 120000 上限 600000；MCP 通道默认 0=立即回执，最多 20000）' },
+@@ -361,12 +361,16 @@
+         const explicit = Array.isArray(memberIds) ? memberIds.filter(Boolean) : []
+         const projectId = args.projectId ? String(args.projectId) : undefined
+         // 归属项目校验（提前失败，避免建出无节点上下文的任务）
+-        if (projectId && !store.getProject(projectId)) {
++        const project = projectId ? store.getProject(projectId) : undefined
++        if (projectId && !project) {
+           return JSON.stringify({ ok: false, error: `项目不存在: ${projectId}（用 workbuddy_project_manage {action:"list"} 查看可用项目）` }, null, 2)
+         }
++        const nodeRef = args.nodeRef == null ? undefined : normalizeDshRef(asJson(args.nodeRef))
++        if (nodeRef && 'error' in nodeRef) return JSON.stringify({ ok: false, error: nodeRef.error })
++        const executionRef = nodeRef || project?.defaultExecutionNodeRef || project?.dshRef
+ 
+         // ① 业务级幂等：同内容重复到达（平台重投/整轮重跑、AI 误重发）→ 复用既有任务，不再建第二个
+-        const fp = createFingerprint(args.title, args.message, explicit, args.mode, projectId)
++        const fp = createFingerprint(args.title, args.message, explicit, args.mode, projectId, dshRefKey(executionRef))
+         const hit = createDedupe.get(fp)
+         if (hit) {
+           const existing = store.getTask(hit.taskId)
+@@ -397,7 +401,11 @@
+           if (sentKey) {
+             const now = Date.now()
+             const fuzzy = store.getTasks().find((t) => {
+-              if (now - t.createdAt > CREATE_FUZZY_WINDOW_MS) return false
++              if (now - t.createdAt > CREATE_FUZZY_WINDOW_MS || t.projectId !== projectId) return false
++              const existingRef = t.nodeRef || (t.projectId ? store.getProject(t.projectId)?.dshRef : undefined)
++              if (executionRef || existingRef) {
++                if (!sameDshRef(executionRef, existingRef)) return false
++              }
+               const fu = (t.turns || []).find((x) => x.role === 'user')
+               return fu ? firstSentenceKey(fu.text) === sentKey : false
+             })
+@@ -420,7 +428,6 @@
+           }
+         }
+ 
+-        const nodeRef = asJson(args.nodeRef)
+         // 创建者身份：AI 通过工具通道创建任务时声明自身子智能体 ID → 继承其绑定技能（/手势注入派发提示词）。
+         // 没有这层继承，工具创建的任务若无 @ 成员会落到节点主会话（skills: []），创建者技能完全丢失。
+         const creatorAgentId = args.creatorAgentId ? String(args.creatorAgentId).trim() : ''
+@@ -439,11 +446,7 @@
+           creator: 'tool',
+           ...(projectId ? { projectId } : {}),
+           ...(inheritedSkills.length ? { skillNames: inheritedSkills } : {}),
+-          ...(nodeRef && typeof nodeRef === 'object' && nodeRef.mappingId
+-            ? { nodeRef: { kind: 'mapping', mappingId: String(nodeRef.mappingId) } }
+-            : (nodeRef && typeof nodeRef === 'object' && nodeRef.apiBaseUrl
+-              ? { nodeRef: { kind: 'direct', apiBaseUrl: String(nodeRef.apiBaseUrl) } }
+-              : {})),
++          ...(nodeRef ? { nodeRef } : {}),
+         })
+         createDedupe.set(fp, { at: Date.now(), taskId: task.id })
+         // ② 立即回执：执行是异步的（流式进度走 SSE / 轮询），这里绝不等待首轮跑完
+@@ -1351,9 +1354,9 @@
+       if (action === 'upsert') {
+         const body = asJson(args.project)
+         if (!body || typeof body !== 'object') return JSON.stringify({ ok: false, error: 'upsert 需要 project 参数（JSON）' }, null, 2)
+-        const name = String(body.name || '').trim()
++        const existing = body.id ? store.getProject(String(body.id)) : undefined
++        const name = String(body.name ?? existing?.name ?? '').trim()
+         if (!name) return JSON.stringify({ ok: false, error: '缺少项目名称 name' }, null, 2)
+-        const existing = body.id ? store.getProject(String(body.id)) : undefined
+         if (existing && !canView(existing)) return JSON.stringify({ ok: false, error: '项目不存在', status: 404 })
+         if (existing && !canEdit(existing)) return JSON.stringify({ ok: false, error: '仅项目 owner 或平台管理员可编辑项目', status: 403 })
+         if (existing?.archivedAt) return JSON.stringify({ ok: false, error: '项目已归档（只读），请先恢复再编辑', status: 400 })

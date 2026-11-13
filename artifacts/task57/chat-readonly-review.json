@@ -1,0 +1,13 @@
+{
+  "scope": "task57 first-new-child runChatTurn supplement",
+  "result": "no blocking finding",
+  "storeSemantics": "getTask returns stored object; mutateTask edits same object; ordinary first-child passed before repair",
+  "conditionalFailure": "actual upsertTask replacement during createSession left stale task without new child binding; red helper upload count zero",
+  "repair": "fresh currentTask before workspace transform",
+  "limits": [
+    "No observed production upsertTask replacement caller during ensureSession",
+    "Complete method called directly because public single@ currently routes to planner",
+    "Live does not inject object replacement or cover public queue/activeJobs path",
+    "Permission fallback latest read inspected but not separately tested with changed permission"
+  ]
+}

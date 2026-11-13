@@ -1,0 +1,11 @@
+{
+  "priorFinalEngineRestoresExactly": true,
+  "productionChangedLines": "current task read before runChatTurn transformer and permission fallback",
+  "uiEditedByThisSupplement": false,
+  "currentUiSha256": "4136b35444cc38bdaa878c37132f419f081cff4c4cfab2f709ef8ac28fbe08f5",
+  "changedSourceFiles": [
+    "src/engine.ts",
+    "src/engine.test.ts",
+    "scripts/project-workspace-live.mjs"
+  ]
+}

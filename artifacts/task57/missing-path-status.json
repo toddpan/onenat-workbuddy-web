@@ -1,0 +1,16 @@
+[
+  {
+    "node": "6cc2987d",
+    "root": "/tmp/wb-task57-ad03a6c262ff379a-owner",
+    "status": 400,
+    "ok": false,
+    "error": "cannot list \"/tmp/wb-task57-ad03a6c262ff379a-owner\": 目录不存在"
+  },
+  {
+    "node": "5602f2c2",
+    "root": "/tmp/wb-task57-ad03a6c262ff379a-executor",
+    "status": 400,
+    "ok": false,
+    "error": "cannot list \"/tmp/wb-task57-ad03a6c262ff379a-executor\": 目录不存在"
+  }
+]

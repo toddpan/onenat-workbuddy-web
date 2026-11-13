@@ -1,0 +1,68 @@
+{
+  "at": "2026-11-06T16:48:56.616Z",
+  "tag": "wb-task57-eda955ca9ee742af",
+  "ownerId": "6cc2987d",
+  "executorId": "5602f2c2",
+  "ownerRoot": "/tmp/wb-task57-eda955ca9ee742af-owner",
+  "executorRoot": "/tmp/wb-task57-eda955ca9ee742af-executor",
+  "checks": [
+    {
+      "name": "real owner/executor isolated fixtures and independent filesystems",
+      "result": "PASS",
+      "evidence": {
+        "ownerRoot": "/tmp/wb-task57-eda955ca9ee742af-owner",
+        "executorRoot": "/tmp/wb-task57-eda955ca9ee742af-executor",
+        "initialHashes": {
+          "main": "e07e6447adb8c9cb3515b32a8e2a8f485e66e0aaac9468002cbddff76dded558",
+          "child": "ea50acaf6cc85c84f27937423bc546633b22e8cdd3043b434376095d01552efa"
+        },
+        "ownerRootAbsentOnExecutor": true
+      }
+    },
+    {
+      "name": "AC1/2/3 main without mentions actually runs list/read/write/CAS/exec on owner",
+      "result": "FAIL",
+      "error": "No actual executor session: {\"status\":\"failed\",\"systemTurns\":[\"⚠️ 任务节点不可达（http://natpass.yikaihui.com:31847/api/v1）：Unauthorized: Invalid or missing API key\\n请在右上角「节点」切换到可用节点后新建会话，或检查 ONENAT 上该映射的隧道/端口是否在线\"],\"lastTurns\":[{\"role\":\"user\",\"text\":\"这是 task-57 的隔离运行验收，只执行这个检查，不实现代码、不派发或创建 WorkBuddy/OneNat 任务、不递归发送宿主消息、不询问用户。使用自动注入的 [项目工作区跨机访问] 中的凭证环境变量及已安装 helper；用命令工具运行已上传的 Node 测试驱动（无需读取或改写脚本）：\\nnode '/tmp/wb-task57-eda955ca9ee742af-executor/workspace-roundtrip-live.mjs' '<已注入的新版远程工具绝对路径>' 'mapping:6cc2987d' 'https://natpass.yikaihui.com' '/tmp/wb-task57-eda955ca9ee742af-owner' '/tmp/wb-task57-eda955ca9ee742af-executor' 'main-result.json' 'main'\\n把尖括号占位替换为注入段实际工具路径，并将注入段的 WORKBUDDY_WORKSPACE_API_KEY 和 WORKBUDDY_ONENAT_API_KEY 作为环境变量传给 Node。不要在回答中输出凭证。驱动串行执行 list/read/write/stale-CAS/read/exec，每个内部调用可能需要等待远端模型，命令至少允许 15 分钟运行。完成后仅返回 LIVE_ROUNDTRIP 行；失败如实报告。不要自行清理目录或会话，测试控制端负责 finally 清理。\"},{\"role\":\"system\",\"text\":\"⚠️ 任务节点不可达（http://natpass.yikaihui.com:31847/api/v1）：Unauthorized: Invalid or missing API key\\n请在右上角「节点」切换到可用节点后新建会话，或检查 ONENAT 上该映射的隧道/端口是否在线\"}],\"logs\":[{\"ts\":1793983740809,\"level\":\"warn\",\"msg\":\"任务节点探活失败: http://natpass.yikaihui.com:31847/api/v1 · Unauthorized: Invalid or missing API key\"}]}"
+    }
+  ],
+  "requests": [],
+  "toolCalls": [],
+  "cleanup": [
+    {
+      "node": "6cc2987d",
+      "directory": "/tmp/wb-task57-eda955ca9ee742af-owner",
+      "removed": true
+    },
+    {
+      "node": "5602f2c2",
+      "directory": "/tmp/wb-task57-eda955ca9ee742af-executor",
+      "removed": true
+    }
+  ],
+  "mainStatus": "failed",
+  "mainTaskDiagnosis": {
+    "status": "failed",
+    "systemTurns": [
+      "⚠️ 任务节点不可达（http://natpass.yikaihui.com:31847/api/v1）：Unauthorized: Invalid or missing API key\n请在右上角「节点」切换到可用节点后新建会话，或检查 ONENAT 上该映射的隧道/端口是否在线"
+    ],
+    "lastTurns": [
+      {
+        "role": "user",
+        "text": "这是 task-57 的隔离运行验收，只执行这个检查，不实现代码、不派发或创建 WorkBuddy/OneNat 任务、不递归发送宿主消息、不询问用户。使用自动注入的 [项目工作区跨机访问] 中的凭证环境变量及已安装 helper；用命令工具运行已上传的 Node 测试驱动（无需读取或改写脚本）：\nnode '/tmp/wb-task57-eda955ca9ee742af-executor/workspace-roundtrip-live.mjs' '<已注入的新版远程工具绝对路径>' 'mapping:6cc2987d' 'https://natpass.yikaihui.com' '/tmp/wb-task57-eda955ca9ee742af-owner' '/tmp/wb-task57-eda955ca9ee742af-executor' 'main-result.json' 'main'\n把尖括号占位替换为注入段实际工具路径，并将注入段的 WORKBUDDY_WORKSPACE_API_KEY 和 WORKBUDDY_ONENAT_API_KEY 作为环境变量传给 Node。不要在回答中输出凭证。驱动串行执行 list/read/write/stale-CAS/read/exec，每个内部调用可能需要等待远端模型，命令至少允许 15 分钟运行。完成后仅返回 LIVE_ROUNDTRIP 行；失败如实报告。不要自行清理目录或会话，测试控制端负责 finally 清理。"
+      },
+      {
+        "role": "system",
+        "text": "⚠️ 任务节点不可达（http://natpass.yikaihui.com:31847/api/v1）：Unauthorized: Invalid or missing API key\n请在右上角「节点」切换到可用节点后新建会话，或检查 ONENAT 上该映射的隧道/端口是否在线"
+      }
+    ],
+    "logs": [
+      {
+        "ts": 1793983740809,
+        "level": "warn",
+        "msg": "任务节点探活失败: http://natpass.yikaihui.com:31847/api/v1 · Unauthorized: Invalid or missing API key"
+      }
+    ]
+  },
+  "error": "No actual executor session: {\"status\":\"failed\",\"systemTurns\":[\"⚠️ 任务节点不可达（http://natpass.yikaihui.com:31847/api/v1）：Unauthorized: Invalid or missing API key\\n请在右上角「节点」切换到可用节点后新建会话，或检查 ONENAT 上该映射的隧道/端口是否在线\"],\"lastTurns\":[{\"role\":\"user\",\"text\":\"这是 task-57 的隔离运行验收，只执行这个检查，不实现代码、不派发或创建 WorkBuddy/OneNat 任务、不递归发送宿主消息、不询问用户。使用自动注入的 [项目工作区跨机访问] 中的凭证环境变量及已安装 helper；用命令工具运行已上传的 Node 测试驱动（无需读取或改写脚本）：\\nnode '/tmp/wb-task57-eda955ca9ee742af-executor/workspace-roundtrip-live.mjs' '<已注入的新版远程工具绝对路径>' 'mapping:6cc2987d' 'https://natpass.yikaihui.com' '/tmp/wb-task57-eda955ca9ee742af-owner' '/tmp/wb-task57-eda955ca9ee742af-executor' 'main-result.json' 'main'\\n把尖括号占位替换为注入段实际工具路径，并将注入段的 WORKBUDDY_WORKSPACE_API_KEY 和 WORKBUDDY_ONENAT_API_KEY 作为环境变量传给 Node。不要在回答中输出凭证。驱动串行执行 list/read/write/stale-CAS/read/exec，每个内部调用可能需要等待远端模型，命令至少允许 15 分钟运行。完成后仅返回 LIVE_ROUNDTRIP 行；失败如实报告。不要自行清理目录或会话，测试控制端负责 finally 清理。\"},{\"role\":\"system\",\"text\":\"⚠️ 任务节点不可达（http://natpass.yikaihui.com:31847/api/v1）：Unauthorized: Invalid or missing API key\\n请在右上角「节点」切换到可用节点后新建会话，或检查 ONENAT 上该映射的隧道/端口是否在线\"}],\"logs\":[{\"ts\":1793983740809,\"level\":\"warn\",\"msg\":\"任务节点探活失败: http://natpass.yikaihui.com:31847/api/v1 · Unauthorized: Invalid or missing API key\"}]}",
+  "finishedAt": "2026-11-06T16:49:03.078Z"
+}

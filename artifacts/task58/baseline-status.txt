@@ -1,0 +1,62 @@
+ M docs/qa-feature-inventory.md
+ M docs/standalone-deploy.md
+ M docs/streaming-integrity.md
+ M e2e-artifacts/client-streaming-test.mjs
+ M e2e-artifacts/mock-remote-robustness-test.mjs
+ M e2e-artifacts/run-streaming-tests.mjs
+ M package.json
+ M pnpm-lock.yaml
+ M scripts/deploy-standalone.sh
+ M scripts/smoke-standalone.mjs
+ M scripts/workspace-inject-e2e.mjs
+ M skills/onenat-workbuddy/SKILL.md
+ M skills/onenat-workbuddy/skills/agents-projects.md
+ M skills/onenat-workbuddy/skills/tasks.md
+ M skills/workbuddy-mcp/SKILL.md
+ M src/engine.test.ts
+ M src/engine.ts
+ M src/mcp-server.ts
+ M src/orchestrator.test.ts
+ M src/orchestrator.ts
+ M src/router.ts
+ M src/server.ts
+ M src/store.test.ts
+ M src/store.ts
+ M src/tool-ops.test.ts
+ M src/tool-ops.ts
+ M src/types.ts
+ M src/web-ui.ts
+?? .dsh-vision-router/
+?? artifacts/
+?? "backlog/tasks/task-53 - MCP-workbuddy_task_manage-list-\346\224\257\346\214\201\345\205\263\351\224\256\350\257\215\350\277\207\346\273\244.md"
+?? "backlog/tasks/task-54 - task_status-detail:full-\350\266\205\345\244\247\344\273\273\345\212\241\350\277\224\345\233\236\350\201\212\345\244\251\345\206\205\345\256\271\344\270\213\350\275\275-URL\357\274\210>32KB-\350\277\275\345\212\240-downloadUrl\357\274\211.md"
+?? "backlog/tasks/task-55 - \345\267\245\344\275\234\345\214\272\350\247\243\350\200\246\357\274\232\347\273\237\344\270\200\350\272\253\344\273\275\344\270\216\351\241\271\347\233\256\345\224\257\344\270\200\346\200\247.md"
+?? "backlog/tasks/task-56 - \345\267\245\344\275\234\345\214\272\350\247\243\350\200\246\357\274\232\351\241\271\347\233\256\344\273\273\345\212\241\351\200\211\346\213\251\344\273\273\346\204\217\346\211\247\350\241\214\350\212\202\347\202\271.md"
+?? "backlog/tasks/task-57 - \345\267\245\344\275\234\345\214\272\350\247\243\350\200\246\357\274\232\350\277\234\347\250\213\346\226\207\344\273\266\350\256\277\351\227\256\344\270\216\345\221\275\344\273\244\351\200\232\351\201\223.md"
+?? "backlog/tasks/task-58 - \345\267\245\344\275\234\345\214\272\350\247\243\350\200\246\357\274\232\346\216\247\345\210\266\345\217\260\351\241\271\347\233\256\350\212\202\347\202\271\351\200\211\346\213\251.md"
+?? "backlog/tasks/task-59 - \345\267\245\344\275\234\345\214\272\350\247\243\350\200\246\357\274\232\346\235\203\351\231\220\344\270\216\345\205\261\344\272\253\345\267\245\344\275\234\345\214\272\345\271\266\345\217\221.md"
+?? "backlog/tasks/task-60 - \345\267\245\344\275\234\345\214\272\350\247\243\350\200\246\357\274\232\345\233\236\345\275\222\351\252\214\350\257\201\344\270\216\344\275\277\347\224\250\346\226\207\346\241\243.md"
+?? docs/design-cross-node-file-passing.md
+?? docs/fix-streaming-markdown-render-20261105.md
+?? docs/project-workspace-nodes.md
+?? docs/task-55-acceptance.md
+?? docs/task-56-acceptance.md
+?? image-1.png
+?? image-2.png
+?? image-3.png
+?? image-4.png
+?? image.png
+?? scripts/model-catalog-regression.mjs
+?? scripts/orch-upstream-file-e2e.mjs
+?? scripts/project-execution-e2e.mjs
+?? scripts/project-execution-live.mjs
+?? scripts/project-identity-e2e.mjs
+?? scripts/project-node-ui-test.mjs
+?? scripts/project-workspace-e2e.mjs
+?? scripts/project-workspace-live.mjs
+?? scripts/workspace-access-test.mjs
+?? scripts/workspace-remote-test.mjs
+?? scripts/workspace-remote.mjs
+?? scripts/workspace-roundtrip-live.mjs
+?? src/workspace-access.ts
+?? src/workspace.ts

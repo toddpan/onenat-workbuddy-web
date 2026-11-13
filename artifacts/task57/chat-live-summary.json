@@ -1,0 +1,83 @@
+{
+  "at": "2026-11-06T17:57:03.033Z",
+  "finishedAt": "2026-11-06T18:01:42.321Z",
+  "tag": "wb-task57-0aefdfe258846542",
+  "checks": [
+    {
+      "name": "real owner/executor isolated fixtures and independent filesystems",
+      "result": "PASS"
+    },
+    {
+      "name": "AC1/2/3 child via chat actually uses the injected remote file and command channel",
+      "result": "PASS"
+    },
+    {
+      "name": "AC1/2/3 main without mentions actually runs list/read/write/CAS/exec on owner",
+      "result": "PASS"
+    },
+    {
+      "name": "files remain only on owner, no leaked helper sessions or coordination files",
+      "result": "PASS"
+    }
+  ],
+  "firstChild": {
+    "route": "chat",
+    "sessionsBefore": [],
+    "attachmentsBefore": 0,
+    "entry": "TaskEngine.runChatTurn (complete method, actual DSH HTTP)",
+    "sessionsAfter": [
+      "agent-4oqf8pll"
+    ],
+    "planPresent": false
+  },
+  "lanes": [
+    {
+      "lane": "child",
+      "taskId": "task-0cad6d78",
+      "sessionId": "session-021b3146-02f9-4880-8f94-f6601485de63",
+      "helperPath": "/tmp/wb-task57-0aefdfe258846542-executor/.workbuddy-workspace-remote-v3.mjs",
+      "helperSha256": "6c561494101a81de7b50a82b9cb63eb38b351b27cb206edb9ec4e1720a31b4cc",
+      "ownerSha256": "44ac772d8cc30d029e2c639e9f2f44290254ef97b4073d647e3686954623fd67",
+      "builtSha256": "9806eefff86513f9f97387ac2c40ea3cf64903041a38cea7790a1dba948a9f90",
+      "ownerCwd": "/tmp/wb-task57-0aefdfe258846542-owner",
+      "operationCount": 6,
+      "operationsCleaned": true
+    },
+    {
+      "lane": "main",
+      "taskId": "task-7cbe4d58",
+      "sessionId": "session-6e23da5c-6a95-48ea-94d0-637d56be69c0",
+      "helperPath": "/tmp/wb-task57-0aefdfe258846542-executor/.workbuddy-workspace-remote-v3-1.mjs",
+      "helperSha256": "6c561494101a81de7b50a82b9cb63eb38b351b27cb206edb9ec4e1720a31b4cc",
+      "ownerSha256": "6d3014949df58cff04611a05ed727449eba4bf666c6cdcd704eef99217869aa6",
+      "builtSha256": "dcc50fe31f8bb56e10ba36a022a371e72ff3647f544046203ff209d78a0a3e39",
+      "ownerCwd": "/tmp/wb-task57-0aefdfe258846542-owner",
+      "operationCount": 6,
+      "operationsCleaned": true
+    }
+  ],
+  "injection": [
+    {
+      "sessionId": "session-021b3146-02f9-4880-8f94-f6601485de63",
+      "promptSha256": "f1b0b5e5df4ee5c1fb7c4e10a12124d62fa3ff90fdd6b517111f5285ee05620a",
+      "workspaceSection": true,
+      "stableOwner": true,
+      "helperCurrent": true
+    },
+    {
+      "sessionId": "session-6e23da5c-6a95-48ea-94d0-637d56be69c0",
+      "promptSha256": "0be55844cec6ee9679a46efb5a4cda9419e2d81fb17c39fff33bbfd5964ef968",
+      "workspaceSection": true,
+      "stableOwner": true,
+      "helperCurrent": true
+    }
+  ],
+  "cleanup": {
+    "records": 19,
+    "errors": [],
+    "sessionDeletes": 14,
+    "directoryDeletes": 2,
+    "workspaceDeletes": 1,
+    "explicitAbsenceChecks": 6
+  }
+}

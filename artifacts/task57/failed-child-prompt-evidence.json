@@ -1,0 +1,181 @@
+[
+  {
+    "role": "assistant",
+    "seq": 5642,
+    "length": 0,
+    "stableOwner": false,
+    "helperV2": false,
+    "workspaceSection": false,
+    "assistantExcerpt": ""
+  },
+  {
+    "role": "assistant",
+    "seq": 5885,
+    "length": 0,
+    "stableOwner": false,
+    "helperV2": false,
+    "workspaceSection": false,
+    "assistantExcerpt": ""
+  },
+  {
+    "role": "assistant",
+    "seq": 6101,
+    "length": 0,
+    "stableOwner": false,
+    "helperV2": false,
+    "workspaceSection": false,
+    "assistantExcerpt": ""
+  },
+  {
+    "role": "assistant",
+    "seq": 6266,
+    "length": 0,
+    "stableOwner": false,
+    "helperV2": false,
+    "workspaceSection": false,
+    "assistantExcerpt": ""
+  },
+  {
+    "role": "assistant",
+    "seq": 6405,
+    "length": 0,
+    "stableOwner": false,
+    "helperV2": false,
+    "workspaceSection": false,
+    "assistantExcerpt": ""
+  },
+  {
+    "role": "assistant",
+    "seq": 6575,
+    "length": 0,
+    "stableOwner": false,
+    "helperV2": false,
+    "workspaceSection": false,
+    "assistantExcerpt": ""
+  },
+  {
+    "role": "assistant",
+    "seq": 6881,
+    "length": 0,
+    "stableOwner": false,
+    "helperV2": false,
+    "workspaceSection": false,
+    "assistantExcerpt": ""
+  },
+  {
+    "role": "assistant",
+    "seq": 7430,
+    "length": 0,
+    "stableOwner": false,
+    "helperV2": false,
+    "workspaceSection": false,
+    "assistantExcerpt": ""
+  },
+  {
+    "role": "assistant",
+    "seq": 8012,
+    "length": 0,
+    "stableOwner": false,
+    "helperV2": false,
+    "workspaceSection": false,
+    "assistantExcerpt": ""
+  },
+  {
+    "role": "assistant",
+    "seq": 8365,
+    "length": 0,
+    "stableOwner": false,
+    "helperV2": false,
+    "workspaceSection": false,
+    "assistantExcerpt": ""
+  },
+  {
+    "role": "assistant",
+    "seq": 8689,
+    "length": 0,
+    "stableOwner": false,
+    "helperV2": false,
+    "workspaceSection": false,
+    "assistantExcerpt": ""
+  },
+  {
+    "role": "assistant",
+    "seq": 8971,
+    "length": 0,
+    "stableOwner": false,
+    "helperV2": false,
+    "workspaceSection": false,
+    "assistantExcerpt": ""
+  },
+  {
+    "role": "assistant",
+    "seq": 9051,
+    "length": 0,
+    "stableOwner": false,
+    "helperV2": false,
+    "workspaceSection": false,
+    "assistantExcerpt": ""
+  },
+  {
+    "role": "user",
+    "seq": 9057,
+    "length": 322,
+    "stableOwner": false,
+    "helperV2": false,
+    "workspaceSection": false
+  },
+  {
+    "role": "assistant",
+    "seq": 9319,
+    "length": 0,
+    "stableOwner": false,
+    "helperV2": false,
+    "workspaceSection": false,
+    "assistantExcerpt": ""
+  },
+  {
+    "role": "assistant",
+    "seq": 9443,
+    "length": 0,
+    "stableOwner": false,
+    "helperV2": false,
+    "workspaceSection": false,
+    "assistantExcerpt": ""
+  },
+  {
+    "role": "assistant",
+    "seq": 9729,
+    "length": 0,
+    "stableOwner": false,
+    "helperV2": false,
+    "workspaceSection": false,
+    "assistantExcerpt": ""
+  },
+  {
+    "role": "assistant",
+    "seq": 9991,
+    "length": 0,
+    "stableOwner": false,
+    "helperV2": false,
+    "workspaceSection": false,
+    "assistantExcerpt": ""
+  },
+  {
+    "role": "assistant",
+    "seq": 10332,
+    "length": 0,
+    "stableOwner": false,
+    "helperV2": false,
+    "workspaceSection": false,
+    "assistantExcerpt": ""
+  },
+  {
+    "role": "assistant",
+    "seq": 13025,
+    "length": 4564,
+    "stableOwner": false,
+    "helperV2": false,
+    "workspaceSection": false,
+    "assistantExcerpt": "## 结论摘要\n\n1. task-57 的隔离运行验收 **全部通过**：child 车道按顺序执行了 list → read → write → stale-CAS 冲突 → read 回读 → exec，6 个步骤全部符合预期，驱动以退出码 0 结束（耗时 1m48s）。\n2. 写入与回读一端的 SHA256 一致：initial `61bc9ab9…` → final `ff14e877…`；拒绝覆盖的写入正确返回 `CAS_MISMATCH`；exec 在远端根目录 `/tmp/wb-task57-37e2ba6368bb09f1-owner` 内取到的文件哈希与写入端相同。\n3. 使用新版 helper `.workbuddy-workspace-remote-v2-1.mjs`，其语义是：先通过文件 HTTP 获取 worker 结果，再与 nonce 和摘要逐一校验；每次使用临时 DSH 会话，且均记录为 `sessionCleanup=deleted`。\n4. 有两项需记录的假设：本轮执行环境未注入 `WORKBUDDY_*` 环境变量，凭证取自本节点同一任务 main 车道注入段记录；我以“最新版 helper”作为占位替换值。\n5. 未做任何跨任务广播或会话创建，未清理测试目录/远端会话，交由测试控制端 finally 清理。\n\n## 执行结果与证据\n\n**执行方式**（cwd = `/tmp/wb-task57-37e2ba6368bb09f1-executor`）：\n\n```\nnode './workspace-roundtrip-live.mjs' \\"
+  }
+]

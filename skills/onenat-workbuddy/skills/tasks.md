@@ -14,6 +14,15 @@
 
 用 @ 时 `create` 的 `memberAgentIds` 可省略；两者同给也行。
 
+### 稳定 ID 与只读预检
+
+监控 overview 的智能体含 `id/name/online/busy/nodeId`；优先按稳定 ID 选择，`nodeId` 为带类型的绑定节点身份（如 `mapping:…`），不依赖漂移端口。重名提及返回 `AMBIGUOUS_AGENT` 和候选，不会静默选择第一个。
+
+`task_manage {action:"preflight", projectId:"proj-x", memberAgentIds:["agent-xxx"], message:"完整任务指令"}` 在创建前预览；已有任务可传 `taskId` 预览下一轮。返回角色、执行节点、文件归属节点/工作区、权限边界及在线/忙闲警告，不创建任务、不执行远端命令。在线/忙闲来自监控快照，不是资源预留；编排的最终子任务分配要等实际规划，预检会标明未规划。
+
+确认预检结果后，以相同参数改 `action:"create"`（下一轮用 `send`）。非空 `memberAgentIds` 是本轮显式定向意图，角色按 ID 唯一选择；也可用 `@agent-xxx`。ID 指派与名称提及走同一规划规则，不保证将整段任务直接交给单一角色。`members` 仅修改任务成员账本；项目继承的默认成员不是本轮显式派工。
+
+
 ## 发起任务前：先理清需求与项目，再用 @ 派对执行者
 
 子智能体一律**无人值守执行**（禁止 `ask_user_question`，提问会让远程 DSH 会话停等且不透传 UI），
@@ -56,7 +65,7 @@ task_manage {action:"create", projectId:"proj-x",
   message:"收集流程编排用户提交工单的情况，生成报告让 @飞书消息 发飞书消息给潘祖继"}
 ```
 
-带 `projectId` 后**不用再传** `nodeRef`/`workspace`/`memberAgentIds`——节点、工作目录、项目指令、可@ sub agent 集合全部自动继承；主会话在项目节点执行，@ 的 sub agent 回各自绑定节点。节点与项目冲突时以项目为准。
+带 `projectId` 后自动继承项目指令、工作区、技能和默认协作成员。省略 `nodeRef` 使用项目默认执行节点；传 `nodeRef` 可选择本次主会话节点，并保存为任务快照。@ 的 sub agent 仍回各自绑定节点。文件始终保留在项目 `dshRef` 指向的归属节点；跨节点会话使用自动注入的远程工作区工具，具体方法见 `agents-projects.md`。
 
 ## 典型流程：发任务并等结果（最常用）
 
@@ -75,8 +84,8 @@ task_manage {action:"create", projectId:"proj-x",
 
 ## 跟踪与追问工具
 
-- `task_manage`：list / create / **send**（多轮发言）/ **wait**（进度快照；HTTP 通道同步等结果，MCP 通道不阻塞）/ members / cancel / delete。
-- `task_status`：任务进度与汇总（默认摘要；`detail:"full"` 回全量）——轮询用。
+- `task_manage`：list（可带 `keyword` 按任务 ID/标题大小写不敏感过滤，任务多时先用它缩小范围）/ create / **send**（多轮发言）/ **wait**（进度快照；HTTP 通道同步等结果，MCP 通道不阻塞）/ members / cancel / delete。
+- `task_status`：任务进度与汇总（默认摘要；`detail:"full"` 回全量）——轮询用。超大任务（>32KB）`full` 会自动降级为「摘要 + chatDownloadUrl 聊天内容下载 URL」：token 10 分钟内有效，`curl "<chatDownloadUrl>"` 直接下载完整任务聊天内容（`format=markdown` 换 Markdown），过期重调 task_status 取新 URL 即可。
 - `task_chat`：看子任务远端聊天记录 / 向远端会话追问（`followupMessage`）。
 - `task_ask_answer`：答复任务里挂起的 ask_user_question 提问（agentId 缺省自动探测提问成员）。
 - `task_evaluate`：任务汇总报告。

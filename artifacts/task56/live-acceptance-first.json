@@ -1,0 +1,128 @@
+{
+  "at": "2026-11-06T15:43:25.302Z",
+  "tag": "wb-task56-7a1c51843baf1bfe",
+  "nodes": {
+    "owner": "6cc2987d",
+    "execution": "5602f2c2"
+  },
+  "checks": [
+    {
+      "name": "real owner fixture and different executor filesystem",
+      "result": "PASS",
+      "evidence": {
+        "ownerRoot": "/tmp/wb-task56-7a1c51843baf1bfe-owner",
+        "executionRoot": "/tmp/wb-task56-7a1c51843baf1bfe-executor",
+        "markerSha": "7262f7123dfe566ada515e74a0daa81a4a7f9d14cf5b0719b0435a25c75310ab",
+        "ownerPathAbsentOnExecutor": true
+      }
+    },
+    {
+      "name": "real main session on selected execution node reads owner file",
+      "result": "PASS",
+      "evidence": {
+        "taskId": "task-d9df7b7a",
+        "sessionId": "session-7b8d658e-11ec-42ff-ad86-9019e10e65a5",
+        "cwd": "/tmp/wb-task56-7a1c51843baf1bfe-executor",
+        "tools": [
+          {
+            "name": "bash",
+            "status": "done"
+          },
+          {
+            "name": "bash",
+            "status": "done"
+          },
+          {
+            "name": "bash",
+            "status": "done"
+          },
+          {
+            "name": "bash",
+            "status": "done"
+          }
+        ],
+        "markerSha": "7262f7123dfe566ada515e74a0daa81a4a7f9d14cf5b0719b0435a25c75310ab"
+      }
+    },
+    {
+      "name": "default edit keeps old remote session while new task uses new default",
+      "result": "PASS",
+      "evidence": {
+        "oldTaskId": "task-d9df7b7a",
+        "oldSessionId": "session-7b8d658e-11ec-42ff-ad86-9019e10e65a5",
+        "oldNode": {
+          "kind": "mapping",
+          "mappingId": "5602f2c2"
+        },
+        "newTaskId": "task-dcf5bfc8",
+        "newNode": {
+          "kind": "mapping",
+          "mappingId": "6cc2987d"
+        }
+      }
+    },
+    {
+      "name": "real child session keeps its own node cwd and reads owner file",
+      "result": "FAIL",
+      "error": "远程节点返回空回答（Provider/Model 可能不可用）（(默认)/deepseek-official/deepseek-v4-flash 与节点默认模型均无产出）\n+ actual - expected\n\n+ 'failed'\n- 'completed'\n"
+    }
+  ],
+  "requests": [
+    {
+      "url": "http://natpass.yikaihui.com:31399/api/v1/sessions",
+      "cwd": "/tmp/wb-task56-7a1c51843baf1bfe-owner",
+      "title": "[task56 fixture] wb-task56-7a1c51843baf1bfe"
+    },
+    {
+      "url": "http://natpass.yikaihui.com:31847/api/v1/sessions",
+      "workspaceId": "2da7f1a8-aa77-418b-afc8-7f873e104eae",
+      "title": "[WorkBuddy] 这是 task-56 验收，仅执行只读检查，不修改文件、不派"
+    },
+    {
+      "url": "http://natpass.yikaihui.com:31847/api/v1/sessions",
+      "workspaceId": "2da7f1a8-aa77-418b-afc8-7f873e104eae",
+      "title": "[WorkBuddy] 新任务"
+    },
+    {
+      "url": "http://natpass.yikaihui.com:31847/api/v1/sessions",
+      "workspaceId": "2da7f1a8-aa77-418b-afc8-7f873e104eae",
+      "title": "[WorkBuddy] 新任务"
+    }
+  ],
+  "cleanup": [
+    {
+      "sessionId": "session-2acf053b-bf1f-45e1-abb4-ff4b11b32091",
+      "deleted": true
+    },
+    {
+      "node": "6cc2987d",
+      "testDirectory": "/tmp/wb-task56-7a1c51843baf1bfe-owner",
+      "removed": true
+    },
+    {
+      "sessionId": "session-7b8d658e-11ec-42ff-ad86-9019e10e65a5",
+      "deleted": true
+    },
+    {
+      "sessionId": "session-20db38e2-8e8f-40ce-840e-78d50fcc775b",
+      "deleted": true
+    },
+    {
+      "sessionId": "session-16d8dc4c-f2da-41f3-91d2-8ab9de219521",
+      "deleted": true
+    },
+    {
+      "node": "5602f2c2",
+      "testDirectory": "/tmp/wb-task56-7a1c51843baf1bfe-executor",
+      "removed": true
+    },
+    {
+      "workspaceId": "2da7f1a8-aa77-418b-afc8-7f873e104eae",
+      "removed": true
+    }
+  ],
+  "mainTaskStatus": "completed",
+  "mainReply": "I'll run the Node.js command for cwd, and download marker.txt from the file-owner node via HTTP.```json\n{\"cwd\": \"/tmp/wb-task56-7a1c51843baf1bfe-executor\", \"marker\": \"owner-only-3193bc434dfa2a207729e85c047998554ff2\", \"sha256\": \"7262f7123dfe566ada515e74a0daa81a4a7f9d14cf5b0719b0435a25c75310ab\"}\n```",
+  "childResult": "远程节点返回空回答（Provider/Model 可能不可用）（(默认)/deepseek-official/deepseek-v4-flash 与节点默认模型均无产出）",
+  "error": "远程节点返回空回答（Provider/Model 可能不可用）（(默认)/deepseek-official/deepseek-v4-flash 与节点默认模型均无产出）\n+ actual - expected\n\n+ 'failed'\n- 'completed'\n"
+}

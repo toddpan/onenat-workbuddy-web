@@ -1,0 +1,25 @@
+{
+  "width": 768,
+  "drawerClass": "drawer",
+  "drawer": {
+    "x": 580,
+    "y": 0,
+    "width": 768,
+    "height": 844,
+    "top": 0,
+    "right": 1348,
+    "bottom": 844,
+    "left": 580
+  },
+  "send": {
+    "x": 694,
+    "y": 427.7734375,
+    "width": 40,
+    "height": 40,
+    "top": 427.7734375,
+    "right": 734,
+    "bottom": 467.7734375,
+    "left": 694
+  },
+  "hit": "drawer-body"
+}

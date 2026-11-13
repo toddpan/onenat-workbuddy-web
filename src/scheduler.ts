@@ -139,6 +139,8 @@ export class ScheduleRunner {
               skillNames: s.skills,
               scheduleId: scheduleId,
               scheduleName: s.name,
+              // §11：派生任务继承定时任务的归属（无归属 = 宽容模式），归属人与创建者同视角可见
+              ...(s.ownerUserId ? { ownerUserId: s.ownerUserId } : {}),
             })
             if (validAgents.length) {
               for (const a of validAgents) {

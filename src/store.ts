@@ -4,11 +4,14 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync } from 'node:fs'
 import { writeFile as fspWriteFile, rename as fspRename, mkdir as fspMkdir } from 'node:fs/promises'
+import { ensurePrivateDir, hardenDirFiles, hardenFile, PRIVATE_FILE_MODE } from './fs-perms.js'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import type { AgentResourceBinding, DshRef, ExpertTeam, Project, StorageData, SubAgent, WorkBuddySettings, WorkTask, PlanSubtask, TaskTurn, ScheduledTask, TeamTemplateId } from './types.js'
-import { projectDefaultAgentIdsFromInput } from './types.js'
+import { projectDefaultAgentIds, projectDefaultAgentIdsFromInput } from './types.js'
+import { sameDshRef, sameWorkspace, normalizeWorkspacePath, validateWorkspacePath, ProjectWorkspaceConflictError } from './workspace.js'
 import { BUILTIN_TEAMS } from './expert-teams.js'
+import { mergeAgentDisplay } from './agent-display.js'
 
 function defaultSettings(): WorkBuddySettings {
   return {
@@ -21,19 +24,6 @@ function defaultSettings(): WorkBuddySettings {
     // 环境变量仅作首启动默认值（升级老部署时沿用原 WORKBUDDY_ARCHIVE_DAYS 语义）；此后设置页配置为唯一权威
     archive: { taskArchiveDays: Number(process.env.WORKBUDDY_ARCHIVE_DAYS) || 7 },
   }
-}
-
-/** 判断两个 DSH 实体引用是否指向同一个目标（用于同实体去重防重复新增） */
-function sameDshRef(a: DshRef | undefined, b: DshRef): boolean {
-  if (!a) return false
-  if (a.kind === 'direct' && b.kind === 'direct') return normalizeUrl(a.apiBaseUrl || '') === normalizeUrl(b.apiBaseUrl || '')
-  if (a.kind === 'mapping' && b.kind === 'mapping') return a.mappingId === b.mappingId
-  if (a.kind === 'app' && b.kind === 'app') return a.appId === b.appId
-  return false
-}
-
-function normalizeUrl(u: string): string {
-  return u.trim().replace(/\/+$/, '').toLowerCase()
 }
 
 export class WorkStore {
@@ -63,6 +53,9 @@ export class WorkStore {
     const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh')
     this.filePath = customPath || join(dshHome, 'onenat-workbuddy', 'store.json')
     this.data = { agents: [], tasks: [], schedules: [], projects: [], teams: [], settings: { ...defaultSettings(), xiaozhi: {} } }
+    // task-54 V2：存量数据文件（store.json + archive/）启动时收紧为 0600
+    hardenFile(this.filePath)
+    hardenDirFiles(join(dirname(this.filePath), 'archive'), 1)
     this.load()
     // 进程退出前把未落盘变更同步写盘（SIGKILL 除外）：覆盖尾随窗口内与仍在途的异步写。
     // 只挂 'exit'：SIGINT/SIGTERM 走默认终止路径同样会触发 exit，且不会劫持 Ctrl-C 语义。
@@ -95,6 +88,9 @@ export class WorkStore {
           schedules: Array.isArray(parsed.schedules) ? parsed.schedules : [],
           projects: Array.isArray(parsed.projects) ? parsed.projects : [],
           teams: Array.isArray(parsed.teams) ? parsed.teams : [],
+          taskActivities: Array.isArray(parsed.taskActivities) ? parsed.taskActivities : [],
+          taskReadPositions: Array.isArray(parsed.taskReadPositions) ? parsed.taskReadPositions : [],
+          activityClock: Number.isSafeInteger(parsed.activityClock) ? parsed.activityClock : 0,
           settings: {
             onenat: { ...defaultSettings().onenat, ...(parsed.settings?.onenat || {}) },
             planner: { ...defaultSettings().planner, ...(parsed.settings?.planner || {}) },
@@ -102,6 +98,12 @@ export class WorkStore {
             archive: { ...defaultSettings().archive, ...(parsed.settings?.archive || {}) },
           },
         }
+      }
+      // Freeze legacy implicit BOT grants before any relationship edits. Historical tasks never migrate.
+      for (const p of this.data.projects) {
+        if (p.legacyAgentAccessIds === undefined) p.legacyAgentAccessIds = projectDefaultAgentIds(p)
+        p.defaultAgentIds = projectDefaultAgentIds(p)
+        p.expertIds = [...p.defaultAgentIds]
       }
       this.rehydrateArchived()
       this.save()
@@ -175,7 +177,7 @@ export class WorkStore {
           await fspMkdir(dir, { recursive: true })
           const target = this.archivePath(t.id)
           const tmp = target + '.tmp'
-          await fspWriteFile(tmp, JSON.stringify({ id: t.id, archivedAt: Date.now(), turns, taskLogs: logs }), 'utf-8')
+          await fspWriteFile(tmp, JSON.stringify({ id: t.id, archivedAt: Date.now(), turns, taskLogs: logs }), { encoding: 'utf-8', mode: PRIVATE_FILE_MODE })
           await fspRename(tmp, target)
           if (t.updatedAt !== updatedAtBefore) continue
           t.bulkArchived = { at: Date.now(), turns: turns.length, logs: logs.length }
@@ -252,12 +254,12 @@ export class WorkStore {
   private async doWrite(): Promise<void> {
     try {
       const dir = dirname(this.filePath)
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+      ensurePrivateDir(dir)
       const json = JSON.stringify(this.serializeForDisk(), null, 2)
       const atSnapshot = this.dirtyGen
       const epoch = this.writeEpoch
       const tmp = this.filePath + '.tmp'
-      await fspWriteFile(tmp, json, 'utf-8')
+      await fspWriteFile(tmp, json, { encoding: 'utf-8', mode: PRIVATE_FILE_MODE })
       if (epoch !== this.writeEpoch) return // 期间发生过同步 flush（如进程退出），放弃旧快照防止回写覆盖
       await fspRename(tmp, this.filePath)
       if (atSnapshot >= this.dirtyGen) this.dirty = false // 快照后无新变更才清脏；有则留给下一轮补写
@@ -288,9 +290,9 @@ export class WorkStore {
     this.dirty = false
     try {
       const dir = dirname(this.filePath)
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+      ensurePrivateDir(dir)
       const tmp = this.filePath + '.tmp'
-      writeFileSync(tmp, JSON.stringify(this.serializeForDisk(), null, 2), 'utf-8')
+      writeFileSync(tmp, JSON.stringify(this.serializeForDisk(), null, 2), { encoding: 'utf-8', mode: PRIVATE_FILE_MODE })
       renameSync(tmp, this.filePath)
     } catch (err) {
       console.error('[onenat-workbuddy] Failed to save store:', err)
@@ -337,6 +339,14 @@ export class WorkStore {
     return this.data.agents.find((a) => a.id === id)
   }
 
+  /**
+   * 查找「同名 + 同 DSH 实体」的既有智能体 —— 新建时的复用目标（upsertAgent 的复用规则）。
+   * 供路由层做归属判定：复用他人归属的智能体等于改他人资产，必须先过权限。
+   */
+  public findAgentByNameAndRef(name: string, dshRef: DshRef): SubAgent | undefined {
+    return this.data.agents.find((a) => a.name === name && sameDshRef(a.dshRef, dshRef))
+  }
+
   public mutateAgent(id: string, fn: (a: SubAgent) => void): void {
     const agent = this.data.agents.find((a) => a.id === id)
     if (!agent) return
@@ -345,9 +355,12 @@ export class WorkStore {
     this.save()
   }
 
-  public upsertAgent(input: Partial<SubAgent>): SubAgent {
+  public upsertAgent(input: Omit<Partial<SubAgent>, 'display'> & { display?: SubAgent['display'] | null }): SubAgent {
     const now = Date.now()
     const existing = input.id ? this.data.agents.find((a) => a.id === input.id) : undefined
+    if ((!existing || Object.prototype.hasOwnProperty.call(input, 'name')) && (typeof input.name !== 'string' || !input.name.trim())) {
+      throw Object.assign(new Error('name 必须是非空字符串'), { code: 'INVALID_PARAM', field: 'name' })
+    }
     const dshRef: DshRef = (input.dshRef as DshRef) || existing?.dshRef || { kind: 'direct', apiBaseUrl: '' }
     const resources: AgentResourceBinding[] = (input.resources as AgentResourceBinding[]) || existing?.resources || []
     // 防重复兜底：无 id 新建时，若已存在「同名 + 相同 DSH 实体」的智能体，则复用该条目（更新而非新增），
@@ -370,10 +383,13 @@ export class WorkStore {
       role: input.role !== undefined ? String(input.role).trim() || undefined : target?.role,
       executionPrompt: input.executionPrompt !== undefined ? String(input.executionPrompt).trim() || undefined : target?.executionPrompt,
       workDir: input.workDir !== undefined ? normalizeWorkDir(input.workDir) : target?.workDir,
+      ...(input.ownerUserId !== undefined ? { ownerUserId: input.ownerUserId } : target?.ownerUserId ? { ownerUserId: target.ownerUserId } : {}),
+      ...(input.sharedProjectIds !== undefined ? { sharedProjectIds: input.sharedProjectIds } : target?.sharedProjectIds ? { sharedProjectIds: target.sharedProjectIds } : {}),
       resources,
       skills: input.skills !== undefined ? input.skills : target?.skills,
       ...(input.tags !== undefined ? { tags: input.tags } : target?.tags ? { tags: target.tags } : {}),
       description: input.description ?? target?.description,
+      display: mergeAgentDisplay(input.display, target?.display),
       enabled: input.enabled ?? target?.enabled ?? true,
       createdAt: target?.createdAt ?? now,
       updatedAt: now,
@@ -388,12 +404,8 @@ export class WorkStore {
   public deleteAgent(id: string): boolean {
     const before = this.data.agents.length
     this.data.agents = this.data.agents.filter((a) => a.id !== id)
-    // 同步从任务成员里摘除
-    for (const t of this.data.tasks) {
-      if (t.memberAgentIds.includes(id)) {
-        t.memberAgentIds = t.memberAgentIds.filter((x) => x !== id)
-      }
-    }
+    // Tasks retain participant snapshots. Project associations retain the ID as a deleted BOT
+    // until explicitly unlinked, so history and missing-member state remain understandable.
     // 同步从定时任务目标里摘除
     for (const s of this.data.schedules) {
       if (s.agentIds.includes(id)) {
@@ -445,6 +457,7 @@ export class WorkStore {
       members: (input.members as ExpertTeam['members']) || existing?.members || [],
       coordinatorPrompt: input.coordinatorPrompt !== undefined ? (String(input.coordinatorPrompt).trim() || undefined) : existing?.coordinatorPrompt,
       templateId: (input.templateId as TeamTemplateId | undefined) ?? existing?.templateId,
+      ...(input.ownerUserId !== undefined ? { ownerUserId: input.ownerUserId } : existing?.ownerUserId ? { ownerUserId: existing.ownerUserId } : {}),
       enabled: input.enabled ?? existing?.enabled ?? false,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
@@ -493,6 +506,8 @@ export class WorkStore {
       skills: input.skills !== undefined ? [...(input.skills || [])] : existing?.skills,
       message: String(input.message ?? existing?.message ?? ''),
       rule: (input.rule as ScheduledTask['rule']) || existing?.rule || { kind: 'daily', times: ['09:00'] },
+      // §11 归属只在创建时写入（服务端权威）；编辑不夺走原归属（与 upsertAgent 同款约束）
+      ownerUserId: existing ? existing.ownerUserId : (input.ownerUserId || undefined),
       enabled: input.enabled ?? existing?.enabled ?? true,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
@@ -566,6 +581,35 @@ export class WorkStore {
     return changed
   }
 
+  /** Observe semantic activity only: repeated polls and metadata writes keep the same revision. */
+  public observeTaskActivity(taskId: string, signature: string): number {
+    const entries = this.data.taskActivities ||= []
+    const previous = entries.find(x => x.taskId === taskId)
+    if (previous?.signature === signature) return previous.version
+    const version = (this.data.activityClock || 0) + 1
+    this.data.activityClock = version
+    if (previous) Object.assign(previous, { signature, version })
+    else entries.push({ taskId, signature, version })
+    this.save()
+    return version
+  }
+
+  public get activityClock(): number { return this.data.activityClock || 0 }
+
+  public taskReadVersion(userId: string, taskId: string): number {
+    return this.data.taskReadPositions?.find(x => x.userId === userId && x.taskId === taskId)?.version || 0
+  }
+
+  public markTaskRead(userId: string, taskId: string, version: number): number {
+    const positions = this.data.taskReadPositions ||= []
+    const previous = positions.find(x => x.userId === userId && x.taskId === taskId)
+    if (previous && previous.version >= version) return previous.version
+    if (previous) previous.version = version
+    else positions.push({ userId, taskId, version })
+    this.save()
+    return version
+  }
+
   // ---- Tasks ----
 
   public getTasks(): WorkTask[] {
@@ -576,7 +620,22 @@ export class WorkStore {
     return this.data.tasks.find((t) => t.id === id)
   }
 
+  private captureTaskProject(task: WorkTask): void {
+    const p = task.projectId ? this.getProject(task.projectId) : undefined
+    if (p && !task.projectSnapshot) task.projectSnapshot = { projectId: p.id, name: p.name, capturedAt: Date.now() }
+  }
+
+  private assertChatBinding(task: WorkTask, previous?: WorkTask): void {
+    if (previous && task.chatAgentId !== previous.chatAgentId) throw new Error('已有任务不能添加、更换或清除 chatAgentId')
+    if (task.chatAgentId && (task.mode !== 'chat' || task.memberAgentIds.length !== 1 || task.memberAgentIds[0] !== task.chatAgentId || task.teamId || task.expertMembers?.length)) throw new Error('直聊绑定与模式/成员/团队冲突')
+  }
+
   public upsertTask(task: WorkTask): WorkTask {
+    const previous = this.getTask(task.id)
+    this.assertChatBinding(task, previous)
+    // Historical project metadata is server-owned, never accepted from create payloads.
+    task.projectSnapshot = previous?.projectSnapshot
+    this.captureTaskProject(task)
     this.touchTask(task)
     task.updatedAt = Date.now()
     const idx = this.data.tasks.findIndex((t) => t.id === task.id)
@@ -591,6 +650,8 @@ export class WorkStore {
     this.data.tasks = this.data.tasks.filter((t) => t.id !== id)
     const changed = this.data.tasks.length !== before
     if (changed) {
+      this.data.taskActivities = this.data.taskActivities?.filter(x => x.taskId !== id)
+      this.data.taskReadPositions = this.data.taskReadPositions?.filter(x => x.taskId !== id)
       try {
         if (existsSync(this.archivePath(id))) unlinkSync(this.archivePath(id))
       } catch {
@@ -623,6 +684,8 @@ export class WorkStore {
     if (!victims.length) return 0
     const victimIds = new Set(victims.map((t) => t.id))
     this.data.tasks = this.data.tasks.filter((t) => !victimIds.has(t.id))
+    this.data.taskActivities = this.data.taskActivities?.filter(x => !victimIds.has(x.taskId))
+    this.data.taskReadPositions = this.data.taskReadPositions?.filter(x => !victimIds.has(x.taskId))
     for (const id of victimIds) {
       try {
         if (existsSync(this.archivePath(id))) unlinkSync(this.archivePath(id))
@@ -644,10 +707,27 @@ export class WorkStore {
     return this.data.projects.find((p) => p.id === id)
   }
 
+  /** Includes archived and legacy duplicates; callers may reuse a visible match but must never merge their ACLs. */
+  public getProjectsForWorkspace(dshRef: DshRef, workspace: string | undefined): Project[] {
+    return this.getProjects().filter((p) => sameWorkspace(p, { dshRef, workspace }))
+  }
+
   /** 归档字段入参约定：传 null/0 表示清除（恢复），见 archivedAt 合并行 */
   public upsertProject(input: Omit<Partial<Project>, 'archivedAt'> & { archivedAt?: number | null }): Project {
     const now = Date.now()
     const existing = input.id ? this.data.projects.find((p) => p.id === input.id) : undefined
+    const dshRef = input.dshRef || existing?.dshRef || { kind: 'direct' as const, apiBaseUrl: '' }
+    const rawWorkspace = input.workspace !== undefined ? input.workspace : existing?.workspace
+    const normalizedWorkspace = normalizeWorkspacePath(rawWorkspace)
+    const identityChanged = !existing || !sameDshRef(existing.dshRef, dshRef) || normalizeWorkspacePath(existing.workspace) !== normalizedWorkspace
+    if (identityChanged) {
+      validateWorkspacePath(rawWorkspace)
+      if (this.getProjectsForWorkspace(dshRef, normalizedWorkspace).some((p) => p.id !== existing?.id)) {
+        throw new ProjectWorkspaceConflictError()
+      }
+    }
+    // Preserve untouched legacy paths and duplicate records; only explicit root changes normalize stored data.
+    const workspace = !existing || input.workspace !== undefined ? normalizedWorkspace : existing.workspace
     // 默认协作成员：defaultAgentIds 为 canonical；expertIds（旧字段）仅为兼容别名。
     // 任一字段显式传入（含 []）都更新 canonical 并镜像另一份，保证旧读者（expertIds）与新读者一致；
     // 两字段都未传 = 不变更（读取侧经 projectDefaultAgentIds 兼容旧库 expertIds）。
@@ -656,17 +736,20 @@ export class WorkStore {
     const project: Project = {
       id: existing?.id || `proj-${Math.random().toString(36).slice(2, 10)}`,
       name: String(input.name ?? existing?.name ?? '未命名项目'),
-      dshRef: (input.dshRef as Project['dshRef']) || existing?.dshRef || { kind: 'direct', apiBaseUrl: '' },
-      apiKey: input.apiKey !== undefined ? input.apiKey : existing?.apiKey,
-      workspace: input.workspace !== undefined ? (String(input.workspace).trim() || undefined) : existing?.workspace,
+      dshRef,
+      defaultExecutionNodeRef: 'defaultExecutionNodeRef' in input ? input.defaultExecutionNodeRef : existing?.defaultExecutionNodeRef,
+      apiKey: input.apiKey !== undefined ? input.apiKey : existing && sameDshRef(existing.dshRef, dshRef) ? existing.apiKey : undefined,
+      workspace,
       instruction: input.instruction !== undefined ? (String(input.instruction).trim() || undefined) : existing?.instruction,
       defaultAgentIds,
-      expertIds: defaultAgentIds,
+      expertIds: [...defaultAgentIds],
+      legacyAgentAccessIds: (existing?.legacyAgentAccessIds ?? []).filter(id => defaultAgentIds.includes(id)),
       connectorIds: input.connectorIds ? [...new Set(input.connectorIds.map(String))] : existing?.connectorIds || [],
       skillNames: input.skillNames ? [...new Set(input.skillNames.map(String))] : existing?.skillNames || [],
       owner: input.owner !== undefined ? input.owner : existing?.owner,
       projectMembers: input.projectMembers !== undefined ? input.projectMembers : existing?.projectMembers,
       visibility: input.visibility !== undefined ? input.visibility : existing?.visibility,
+      allowMemberInvite: input.allowMemberInvite !== undefined ? Boolean(input.allowMemberInvite) : existing?.allowMemberInvite,
       importedFrom: input.importedFrom ?? existing?.importedFrom,
       // 归档：传 truthy 时间戳=归档；传 null/0=恢复（清空）；不传=保持
       archivedAt: input.archivedAt !== undefined ? (input.archivedAt || undefined) : existing?.archivedAt,
@@ -682,6 +765,7 @@ export class WorkStore {
 
   public deleteProject(id: string): boolean {
     const before = this.data.projects.length
+    for (const task of this.data.tasks) if (task.projectId === id) this.captureTaskProject(task)
     this.data.projects = this.data.projects.filter((p) => p.id !== id)
     const changed = this.data.projects.length !== before
     if (changed) this.save()
@@ -692,7 +776,20 @@ export class WorkStore {
     const task = this.data.tasks.find((t) => t.id === id)
     if (!task) return undefined
     this.touchTask(task)
-    const out = fn(task)
+    // Bound tasks validate a detached draft so a rejected mutation has no in-memory side effects.
+    const previousBinding = task.chatAgentId
+    const draft = previousBinding ? structuredClone(task) : task
+    const out = fn(draft)
+    if (draft.chatAgentId !== previousBinding) {
+      if (draft === task) delete task.chatAgentId
+      throw new Error('已有任务不能添加、更换或清除 chatAgentId')
+    }
+    this.assertChatBinding(draft, task)
+    if (draft !== task) {
+      for (const key of Object.keys(task)) if (!(key in draft)) delete (task as any)[key]
+      Object.assign(task, draft)
+    }
+    this.captureTaskProject(task)
     task.updatedAt = Date.now()
     this.save()
     return out

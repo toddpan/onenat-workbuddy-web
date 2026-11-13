@@ -63,7 +63,7 @@ async function main() {
   const dataDir = mkdtempSync(join(tmpdir(), 'workbuddy-console-e2e-'))
   console.log('\n== AI 控制台 E2E ==\n')
   await new Promise((r) => stub.listen(STUB_PORT, '127.0.0.1', r))
-  const server = spawn(process.execPath, [join(ROOT, 'dist', 'server.js'), '--port', String(PORT), '--data', dataDir, '--quiet'], { cwd: ROOT, stdio: ['ignore', 'ignore', 'pipe'] })
+  const server = spawn(process.execPath, [join(ROOT, 'dist', 'server.js'), '--port', String(PORT), '--data', dataDir, '--quiet'], { cwd: ROOT, env: { ...process.env, WORKBUDDY_ALLOW_PRIVATE_DIRECT: '1' }, stdio: ['ignore', 'ignore', 'pipe'] })
   procs.push(server)
   await waitFor(async () => (await fetch(`${BASE}/healthz`)).ok, 'server 就绪')
   const loginRes = await fetch(`${BASE}${PREFIX}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'workbuddy', password: 'workbuddy-admin' }) })

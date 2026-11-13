@@ -1,0 +1,8 @@
+{
+  "scope": "first-turn file tool definition JSON, other prompt context held constant",
+  "tokenizer": "cl100k_base proxy; exact deployed model tokenizer unavailable",
+  "before": 758,
+  "after": 817,
+  "delta": 59,
+  "baseline": "HEAD definition; entry baseline patch has no fileManage description/parameter changes"
+}

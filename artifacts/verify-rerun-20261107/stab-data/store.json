@@ -1,0 +1,44 @@
+{
+  "agents": [],
+  "tasks": [],
+  "schedules": [],
+  "projects": [
+    {
+      "id": "proj-90fhqoas",
+      "name": "stab-persist-project",
+      "dshRef": {
+        "kind": "mapping",
+        "mappingId": "map-dsh-01"
+      },
+      "defaultAgentIds": [],
+      "expertIds": [],
+      "connectorIds": [],
+      "skillNames": [],
+      "owner": "usr-95dbf63f6834b546",
+      "projectMembers": [
+        {
+          "userId": "usr-95dbf63f6834b546",
+          "role": "owner",
+          "joinedAt": 1794008102115
+        }
+      ],
+      "createdAt": 1794008102115,
+      "updatedAt": 1794008102115
+    }
+  ],
+  "teams": [],
+  "settings": {
+    "onenat": {
+      "baseUrl": "http://127.0.0.1:18085",
+      "apiKey": "onk-mock-key-000",
+      "autoRefreshMs": 60000
+    },
+    "planner": {},
+    "xiaozhi": {
+      "endpoints": []
+    },
+    "archive": {
+      "taskArchiveDays": 7
+    }
+  }
+}
