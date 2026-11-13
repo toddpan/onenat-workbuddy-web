@@ -56,6 +56,7 @@
     "test:model-badge": "node --test scripts/model-badge-regression.test.mjs",
     "smoke:capabilities": "node scripts/capabilities-e2e.mjs",
     "test:wbmcp": "node --test scripts/wbmcp-regression.test.mjs",
+    "test:install-client": "node --test scripts/install-client-regression.test.mjs",
     "smoke:users": "node scripts/smoke-users.mjs",
     "smoke:perm": "node scripts/perm-owner-e2e.mjs",
     "smoke:backlog": "node scripts/backlog-e2e.mjs",

@@ -25,6 +25,40 @@
 # =============================================================
 set -euo pipefail
 
+# 帮助正文内联在本脚本里：`curl ... | bash -s --` 管道安装时 $0 是 bash 而非脚本文件，
+# 用 sed 读 "$0" 会失败（task-104），因此不再依赖脚本路径。
+usage() {
+  cat <<'USAGE'
+OneNat WorkBuddy — SKILL 一键安装脚本（双通道：HTTP + MCP）
+
+由 WorkBuddy 服务端提供（GET <前缀>/install-skill.sh），
+本脚本不含任何秘密：APIKEY 由安装者在参数里传入，只写入本机配置文件。
+
+一次安装两套技能（同源工具、同一份配置 ~/.workbuddy-skill.json）：
+  - onenat-workbuddy   HTTP 工具通道技能（wb.mjs 命令行直连 + 子技能分块文档）
+  - workbuddy-mcp      MCP 通道技能（wbmcp.sh 客户端直连 /mcp；MCP 原生宿主按 SKILL 内
+                       的 mcpServers 条目注册，脚本通道作为无 MCP 宿主的等价兜底）
+
+默认安装到本机全部 AI 技能目录（DSH / ZCode / Claude / agents，已存在或不存在都会创建安装）；
+用 --dir 可只装到指定目录（支持别名 dsh / zcode / claude / agents 或任意路径）。
+
+用法:
+  curl -fsSL http://<host>:3081/onenat-workbuddy/install-skill.sh | bash -s -- \
+    --base-url http://<host>:3081/onenat-workbuddy --token wbk-xxxx [--dir dsh|zcode|claude|agents|路径]
+
+参数:
+  --base-url <url>   WorkBuddy 服务地址（含前缀，必填）
+  --token <apikey>   AI APIKEY（控制台「设置 → AI 接入」生成，必填）
+  --dir <path|别名>   只装到指定技能目录；别名: dsh / zcode / claude / agents。缺省 = 全部 AI 目录
+  --uninstall         卸载（删除全部已装文件、本机配置与安装报告）
+  -h, --help          显示本帮助
+
+环境变量:
+  HOME                配置与默认技能目录的基准（配置写入 $HOME/.workbuddy-skill.json）
+  WORKBUDDY_CONFIG    wb.mjs / wbmcp.sh 读取的配置路径覆盖（默认 $HOME/.workbuddy-skill.json）
+USAGE
+}
+
 BASE_URL="" TOKEN="" TARGET_DIR="" UNINSTALL=0
 
 while [ $# -gt 0 ]; do
@@ -34,7 +68,7 @@ while [ $# -gt 0 ]; do
     --dir) TARGET_DIR="${2:-}"; shift 2 ;;
     --uninstall) UNINSTALL=1; shift ;;
     -h|--help)
-      sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'
+      usage
       exit 0 ;;
     *) echo "未知参数: $1（--help 查看用法）" >&2; exit 1 ;;
   esac
@@ -54,6 +88,7 @@ resolve_dir() {
 }
 
 CFG="$HOME/.workbuddy-skill.json"
+REPORT="$HOME/.workbuddy-install-report.json"
 
 # ---------- 卸载（全部目录） ----------
 if [ "$UNINSTALL" = "1" ]; then
@@ -68,6 +103,9 @@ if [ "$UNINSTALL" = "1" ]; then
   fi
   rm -f "$CFG"
   echo "✓ 已卸载配置 $CFG"
+  # 安装报告必须一并清除：残留 filesInstalled/verified=true 会让后来的人和 AI 误判「已安装且验证通过」（task-105）
+  rm -f "$REPORT"
+  echo "✓ 已清除安装报告 $REPORT"
   exit 0
 fi
 
@@ -161,7 +199,6 @@ else
 fi
 
 # 安装报告不包含令牌；持久化实际检查结果，供人和 AI 复查。
-REPORT="$HOME/.workbuddy-install-report.json"
 if command -v python3 >/dev/null 2>&1; then
   (umask 077; python3 -c '
 import json,sys

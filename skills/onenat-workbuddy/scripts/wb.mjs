@@ -19,7 +19,8 @@ import { join } from 'node:path'
 
 function loadConfig() {
   let file = {}
-  const cfgPath = join(homedir(), '.workbuddy-skill.json')
+  // 与 wbmcp.sh 同名同语义：WORKBUDDY_CONFIG 可覆盖配置路径（自定义 --dir 安装、多账号共享 HOME）
+  const cfgPath = process.env.WORKBUDDY_CONFIG || join(homedir(), '.workbuddy-skill.json')
   try {
     if (existsSync(cfgPath)) file = JSON.parse(readFileSync(cfgPath, 'utf-8'))
   } catch { /* 忽略坏配置 */ }
@@ -35,7 +36,7 @@ function die(msg) {
   if (!CFG.base || !CFG.token) {
     console.error('配置缺失。两种方式任选：')
     console.error('  1) 一键安装: curl -fsSL <服务地址>/onenat-workbuddy/install-skill.sh | bash -s -- --base-url <...> --token wbk-xxx')
-    console.error('  2) 环境变量: export WORKBUDDY_BASE_URL=<...> WORKBUDDY_TOKEN=wbk-xxx')
+    console.error('  2) 环境变量: export WORKBUDDY_BASE_URL=<...> WORKBUDDY_TOKEN=wbk-xxx（也可用 WORKBUDDY_CONFIG 指向配置文件）')
     console.error('配置文件路径: ' + CFG.cfgPath)
   }
   process.exit(1)
@@ -83,11 +84,27 @@ async function toolRaw(name, args) {
   return json
 }
 
+/**
+ * 工具业务结果：HTTP 工具通道回包是 {ok,tool,result} 信封，外层 ok 只表示传输成功，
+ * 真正的业务成败在 result.ok。同时兼容两种历史形状：直接返回工具结果、以及字符串结果。
+ */
+function toolResult(json) {
+  if (json && typeof json === 'object' && !Array.isArray(json)) {
+    const inner = json.result
+    if (inner && typeof inner === 'object' && !Array.isArray(inner) && 'ok' in inner) return inner
+    if ('ok' in json) return json
+    const structured = json.structuredContent
+    if (structured && typeof structured === 'object' && 'ok' in structured) return structured
+  }
+  return undefined
+}
+
 async function tool(name, args) {
   const json = await toolRaw(name, args)
   console.log(typeof json === 'string' ? json : JSON.stringify(json, null, 2))
-  const ok = json && typeof json === 'object' && 'ok' in json ? json.ok : true
-  if (!ok) process.exit(2)
+  // 外层 ok 恒为 true，必须下钻业务结果，否则业务失败会被误判为成功（task-102/106）
+  const result = toolResult(json)
+  if (result && result.ok === false) process.exit(2)
 }
 
 const flagsJson = (f, key) => {
@@ -99,7 +116,12 @@ const flagsJson = (f, key) => {
 
 // ---------- 命令表 ----------
 
-const HELP = `WorkBuddy CLI — AI 管理 OneNat WorkBuddy（配置: ${CFG.cfgPath} 或环境变量）
+const HELP = `WorkBuddy CLI — AI 管理 OneNat WorkBuddy（配置: ${CFG.cfgPath}；可用 WORKBUDDY_CONFIG 覆盖路径）
+
+环境变量（优先级高于配置文件）:
+  WORKBUDDY_BASE_URL   服务地址（含前缀）
+  WORKBUDDY_TOKEN      AI APIKEY
+  WORKBUDDY_CONFIG     配置文件路径（默认 ~/.workbuddy-skill.json，与 wbmcp.sh 同语义）
 
 用法: wb.mjs <命令> [子命令] [选项]
 
@@ -250,8 +272,10 @@ async function main() {
       }
       if (action === 'download' && flags.out) {
         const json = await toolRaw('workbuddy_file_manage', args)
-        if (json && json.ok) {
-          const buf = json.encoding === 'base64' ? Buffer.from(json.content, 'base64') : Buffer.from(json.content, 'utf-8')
+        // 回包是 {ok,tool,result} 信封；内容/编码在 result 里（task-103）
+        const payload = (json && typeof json === 'object' && json.result && typeof json.result === 'object') ? json.result : json
+        if (payload && payload.ok === true && typeof payload.content === 'string') {
+          const buf = payload.encoding === 'base64' ? Buffer.from(payload.content, 'base64') : Buffer.from(payload.content, 'utf-8')
           writeFileSync(String(flags.out), buf)
           console.log('✓ 已保存 ' + String(flags.out) + '（' + buf.length + ' 字节，来自 ' + args.path + '）')
           return
