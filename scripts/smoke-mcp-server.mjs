@@ -15,7 +15,7 @@
  *  5. tools/call：真实调用 workbuddy_task_manage(list) 结构化回包；未知工具 → isError
  *     tools/call：workbuddy_backlog_manage(projects) 返回可解析 JSON 且 ok=true（无项目环境为空数组）
  *  6. 幂等回放：同会话 + 同 JSON-RPC id + 同参数重复投递 → 不重复执行（/api/mcp/status 的 replays 递增）
- *  7. 未知方法 → -32601；会话校验：假会话 id → -32001
+ *  7. 未知方法 → -32601；未知/过期会话透明恢复，initialize 旧 id 成功换发
  */
 
 import { spawn } from 'node:child_process'
@@ -325,13 +325,14 @@ async function main() {
   const notFound = await rawReq('POST', `${PREFIX}/mcp`, { jsonrpc: '2.0', id: 10, method: 'no/such/method' }, authHeaders({ 'Mcp-Session-Id': sessionId }))
   check('未知方法：-32601 Method not found', notFound.json?.error?.code === -32601)
   const fakeSession = await rawReq('POST', `${PREFIX}/mcp`, { jsonrpc: '2.0', id: 11, method: 'tools/list' }, authHeaders({ 'Mcp-Session-Id': 'not-a-real-session' }))
-  check('会话校验：假会话 → -32001 要求重新 initialize', fakeSession.json?.error?.code === -32001)
+  check('会话恢复：未知旧 id tools/list 透明成功', Array.isArray(fakeSession.json?.result?.tools))
   check('JSON-RPC：未知方法保留 numeric code，data 含统一错误', errorContract(notFound.json?.error?.data) && notFound.json.error.data.code === 'METHOD_NOT_FOUND' && notFound.json.error.data.retryable === false)
-  check('JSON-RPC：过期会话恢复只重新握手', errorContract(fakeSession.json?.error?.data) && fakeSession.json.error.data.code === 'SESSION_EXPIRED' && fakeSession.json.error.data.recovery.kind === 'call' && fakeSession.json.error.data.recovery.tool === 'initialize' && fakeSession.json.error.data.retryable === false)
+  const reset = await rawReq('POST', `${PREFIX}/mcp`, { jsonrpc: '2.0', id: 13, method: 'initialize' }, authHeaders({ 'Mcp-Session-Id': 'expired-initialize-id' }))
+  check('initialize：旧 id 不阻塞握手，回传 reset 与新 id', reset.json?.result?.sessionReset === true && !!reset.json.result.previousSessionIdDigest && !!reset.headers.get('mcp-session-id') && reset.headers.get('mcp-session-id') !== 'expired-initialize-id')
   const del = await rawReq('DELETE', `${PREFIX}/mcp`, undefined, authHeaders({ 'Mcp-Session-Id': sessionId }))
   check('DELETE /mcp：204 会话结束', del.status === 204, `status=${del.status}`)
   const afterDel = await rawReq('POST', `${PREFIX}/mcp`, { jsonrpc: '2.0', id: 12, method: 'tools/list' }, authHeaders({ 'Mcp-Session-Id': sessionId }))
-  check('DELETE 后旧会话失效 → -32001', afterDel.json?.error?.code === -32001, `status=${afterDel.status}`)
+  check('DELETE 后已鉴权旧客户端可透明重建会话', Array.isArray(afterDel.json?.result?.tools), `status=${afterDel.status}`)
 
   console.log(results.join('\n'))
   console.log(`\n== 结果：${results.length - failures}/${results.length} 通过 ==\n`)

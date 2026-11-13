@@ -131,11 +131,15 @@ chmod 600 "$CFG"
 # ---------- 连通性自检（跑一次即可） ----------
 # 注意：自检输出直接捕获到变量，不落盘——/tmp 不可写的沙箱（Termux 等）也能通过。
 echo "▸ 连通性自检（HTTP 通道 wb.mjs + MCP 通道 wbmcp.sh）"
-SELFTEST="" SELFTEST_RC=0
+SELFTEST="" SELFTEST_RC=1
+HTTP_STATUS=skipped
 if command -v node >/dev/null 2>&1 && [ -n "$FIRST_WB" ]; then
   # set -e 下用 `|| RC=$?` 形式：命令非 0 时脚本不会中断，且 $? 仍是 node 的退出码
+  SELFTEST_RC=0
   SELFTEST="$(node "$FIRST_WB" tools 2>&1)" || SELFTEST_RC=$?
+  HTTP_STATUS=failed
   if [ "$SELFTEST_RC" = "0" ]; then
+    HTTP_STATUS=passed
     echo "$SELFTEST"
   else
     echo "$SELFTEST" >&2
@@ -143,9 +147,10 @@ if command -v node >/dev/null 2>&1 && [ -n "$FIRST_WB" ]; then
 else
   echo "  ⚠️ 未找到 node，跳过 wb.mjs 自检（wb.mjs 需要 Node ≥ 18）"
 fi
-MCP_SELFTEST="" MCP_SELFTEST_RC=0
+MCP_SELFTEST='{"handshake":"skipped","tools/list":"skipped","ping":"skipped"}' MCP_SELFTEST_RC=1
 if command -v python3 >/dev/null 2>&1 && [ -n "$FIRST_MCP" ]; then
-  MCP_SELFTEST="$(bash "$FIRST_MCP" tools 2>&1)" || MCP_SELFTEST_RC=$?
+  MCP_SELFTEST_RC=0
+  MCP_SELFTEST="$(bash "$FIRST_MCP" probe)" || MCP_SELFTEST_RC=$?
   if [ "$MCP_SELFTEST_RC" = "0" ]; then
     echo "$MCP_SELFTEST"
   else
@@ -155,9 +160,24 @@ else
   echo "  ⚠️ 未找到 python3，跳过 wbmcp.sh 自检（wbmcp.sh 需要 curl + python3）"
 fi
 
+# 安装报告不包含令牌；持久化实际检查结果，供人和 AI 复查。
+REPORT="$HOME/.workbuddy-install-report.json"
+if command -v python3 >/dev/null 2>&1; then
+  (umask 077; python3 -c '
+import json,sys
+try: probes=json.loads(sys.argv[4])
+except ValueError: probes={"handshake":"failed","tools/list":"skipped","ping":"skipped"}
+with open(sys.argv[1],"w") as f:
+    json.dump({"baseUrl":sys.argv[2],"filesInstalled":True,"http":sys.argv[3],"mcp":probes,"verified":sys.argv[3]=="passed" and all(probes.get(k)=="passed" for k in ("handshake","tools/list","ping")),"tokenExpiresAt":None,"tokenExpiryPolicy":"never"},f,ensure_ascii=False,indent=2)
+' "$REPORT" "$BASE_URL" "$HTTP_STATUS" "$MCP_SELFTEST")
+  echo "  安装报告: $REPORT"
+else
+  echo '  安装报告: 无法写入 JSON（缺少 python3）；探针未验证' >&2
+fi
+
 installed_note() {
   echo ""
-  echo "✅ 安装完成（${#TARGETS[@]} 个技能目录 × 2 套技能）"
+  echo "文件已安装（${#TARGETS[@]} 个技能目录 × 2 套技能）；HTTP=${HTTP_STATUS}，MCP=${MCP_SELFTEST}"
   for d in "${TARGETS[@]}"; do
     echo "  技能: $d/onenat-workbuddy/SKILL.md（HTTP 通道；子技能分块文档在 skills/ 子目录，按需读取）"
     echo "        $d/workbuddy-mcp/SKILL.md（MCP 通道；MCP 原生宿主按其内 mcpServers 条目注册）"
@@ -165,7 +185,8 @@ installed_note() {
   echo "  脚本: ${FIRST_WB}（HTTP 通道）/ ${FIRST_MCP}（MCP 通道，AI 可直接命令行调用）"
   echo "  配置: ${CFG}（600 权限，两通道共用；也可用环境变量 WORKBUDDY_BASE_URL / WORKBUDDY_TOKEN 覆盖）"
   echo ""
-  echo "  快速验证: ${FIRST_WB} monitor overview  或  bash ${FIRST_MCP} tools"
+  echo "  令牌永久有效（无 TTL）；仅显式重置令牌后旧令牌失效。MCP 会话续期不改变令牌。"
+  echo "  快速验证: ${FIRST_WB} monitor overview  或  bash ${FIRST_MCP} probe"
 }
 
 if [ "$SELFTEST_RC" = "0" ] && [ "$MCP_SELFTEST_RC" = "0" ]; then
@@ -175,8 +196,7 @@ fi
 
 # 自检失败：先打印「文件已安装」，再按失败原因分别提示（区分本地环境 / 鉴权 / 网络）
 # 退出码约定：
-#   本地环境限制（如 /tmp 不可写）→ 退出 0：安装动作本身成功，仅自检受环境限制，不让 CI 误判安装失败
-#   鉴权 / 网络 / 其他 → 退出 1：文件已装好，但连通性存疑，CI 应感知并提示人工检查
+#   任一探针失败或依赖缺失 → 退出 1：文件可能已安装，但尚未验证可用。
 SELFTEST_ALL="$SELFTEST
 ${MCP_SELFTEST:-}"
 case "$SELFTEST_ALL" in
@@ -185,14 +205,14 @@ case "$SELFTEST_ALL" in
     echo "⚠️ 自检未通过：本地环境限制（例如 ${TMPDIR:-/tmp} 不可写或 node/python3 异常），与 --base-url/--token 无关"
     echo "   文件已安装（安装动作成功），请在正常环境手动验证: ${FIRST_WB} tools"
     installed_note
-    exit 0
+    exit 1
     ;;
   *鉴权失败*|*"HTTP 401"*|*"HTTP 403"*|*Unauthorized*|*Invalid*or*missing*API*key*)
     echo ""
     echo "✅ 文件已安装（${#TARGETS[@]} 个技能目录，清单见下）"
     installed_note
     echo "" >&2
-    echo "❌ 自检失败：鉴权被拒（APIKEY 无效/过期，或 --base-url 指向了错误的服务地址）" >&2
+    echo "❌ 自检失败：鉴权被拒（APIKEY 无效/已重置，或 --base-url 指向了错误的服务地址）" >&2
     echo "   APIKEY 在控制台「设置 → AI 接入」生成；修正后手动验证: ${FIRST_WB} tools" >&2
     exit 1
     ;;

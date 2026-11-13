@@ -53,6 +53,7 @@
     "smoke:xiaozhi": "node scripts/smoke-xiaozhi-mcp.mjs",
     "smoke:mcp": "node scripts/smoke-mcp-server.mjs",
     "test:mcp-sessions": "node --test scripts/mcp-session-regression.test.mjs",
+    "test:model-badge": "node --test scripts/model-badge-regression.test.mjs",
     "smoke:capabilities": "node scripts/capabilities-e2e.mjs",
     "test:wbmcp": "node --test scripts/wbmcp-regression.test.mjs",
     "smoke:users": "node scripts/smoke-users.mjs",

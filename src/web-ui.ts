@@ -694,6 +694,16 @@ a.dsh-change-link code { text-decoration: underline; text-decoration-style: dott
 }
 .dsh-sendnow:hover { background: rgba(77, 107, 254, .16); }
 .dsh-sendnow:disabled { opacity: .5; cursor: default; }
+/* 排队消息「✕ 取消」：样式对齐 .dsh-sendnow，警示红色调 */
+.dsh-queued-cancel {
+  display: inline-flex; align-items: center; height: 20px; padding: 0 9px;
+  border: 1px solid rgba(229, 72, 77, .35); border-radius: 999px;
+  background: var(--err-light); color: var(--err);
+  font-size: 11px; font-weight: 600; line-height: 18px; white-space: nowrap; cursor: pointer;
+  transition: background-color 100ms ease;
+}
+.dsh-queued-cancel:hover { background: rgba(229, 72, 77, .16); }
+.dsh-queued-cancel:disabled { opacity: .5; cursor: default; }
 /* 带排队标记的用户轮：即便紧跟另一条用户轮（actions 默认 hover 才显示）也常驻可见 */
 .dsh-flow[data-chat-flow-kind='user'] ~ .dsh-flow[data-chat-flow-kind='user'].has-queued .dsh-actions { opacity: 1; }
 
@@ -1092,6 +1102,13 @@ body.task-running .dsh-sysRow.sys-planning .markdown::after {
 }
 .mini-btn:hover { color: var(--pri); border-color: var(--pri); background: var(--bg-hover); }
 .mini-btn.danger:hover { color: var(--err); border-color: var(--err); }
+/* 项目卡片单项目刷新按钮（task-100）：loading 时 ↻ 旋转；transform 双写 -webkit- 前缀，兼容微信 X5 旧内核 */
+.pj-refresh { min-width: 26px; text-align: center; }
+.pj-refresh .glyph { display: inline-block; }
+.pj-refresh.pj-refreshing { color: var(--pri); border-color: var(--pri); pointer-events: none; }
+@keyframes pjSpin { to { transform: rotate(360deg); } }
+@-webkit-keyframes pjSpin { to { -webkit-transform: rotate(360deg); } }
+.pj-refreshing .glyph { animation: pjSpin .8s linear infinite; -webkit-animation: pjSpin .8s linear infinite; }
 .composer-bar {
   display: flex; align-items: center; gap: 8px; padding: 6px 18px 8px;
   background: #f2f3f5; min-height: 32px; flex-wrap: wrap; font-size: 12px;
@@ -2446,6 +2463,9 @@ tr.tunnel-row td { background: var(--bg3); color: var(--acc); font-weight: 600; 
 .bl-group-h .node-ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent); }
 .bl-group-h .node-err { color: var(--err); background: color-mix(in srgb, var(--err) 10%, transparent); cursor: pointer; }
 .bl-row { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 12.5px; flex-wrap: wrap; }
+.bl-row { transition: background-color 600ms ease; }
+.bl-row.bl-fresh { background-color: var(--pri-light); transition: none; }
+.bl-poll-notice { color: var(--tx2); font-size: 12px; margin: 6px 0; }
 .bl-row .bl-title { font-weight: 600; cursor: pointer; }
 .bl-row .bl-title:hover { color: var(--pri); }
 .bl-board { display: flex; gap: 10px; align-items: flex-start; overflow-x: auto; padding-bottom: 8px; }
@@ -2844,6 +2864,7 @@ nav button { position: relative; }
           <span class="hspacer"></span>
           <button class="btn" id="btn-bl-refresh">↻ 刷新</button>
         </div>
+        <div id="bl-poll-notice" class="bl-poll-notice" role="status" hidden></div>
         <div id="bl-root"><div class="bl-empty">加载中…</div></div>
       </div>
     </div>
@@ -3151,7 +3172,7 @@ nav button { position: relative; }
           <input id="set-ai-token" readonly style="font-family:var(--mono);flex:1" placeholder="未生成">
           <button class="btn" id="btn-reset-ai-token" style="white-space:nowrap" title="生成新令牌，旧令牌立即失效（无需重启）">生成 / 重置</button>
         </div>
-        <div style="font-size:11.5px;color:var(--tx3);margin-top:6px">两通道共用一张凭证，已内嵌于下方提示词 · 重置后旧令牌立即失效（无需重启）</div>
+        <div style="font-size:11.5px;color:var(--tx3);margin-top:6px">令牌永久有效（无 TTL），两通道共用 · 仅显式重置后旧令牌立即失效（无需重启）；MCP 会话续期不改变令牌</div>
         <div style="display:flex;gap:8px;align-items:center;margin-top:14px">
           <b style="font-size:12.5px;color:var(--tx2);white-space:nowrap">② 接口地址</b>
           <input id="set-mcp-url" readonly style="font-family:var(--mono);flex:1" placeholder="…">
@@ -5096,6 +5117,7 @@ function projectCardHtml(p) {
     (chips ? '<div class="pj-chips"><span class="tag">' + chips + '</span></div>' : '') +
     '<div class="ops pj-ops">' +
     '<button class="mini-btn pj-enter" title="切到工作台并展开该项目">🚀 工作台</button>' +
+    '<button class="mini-btn pj-refresh" title="仅刷新本项目（详情/节点状态/待办），不影响其他项目"><span class="glyph">↻</span></button>' +
     '<button class="mini-btn pj-files" title="浏览项目工作区文件">📁 文件</button>' +
     '<button class="mini-btn pj-backlog" title="打开该项目待办">✅ 待办</button>' +
     '<button class="mini-btn pj-edit" title="项目配置">⚙</button>' +
@@ -5115,15 +5137,16 @@ function wireProjectCard(card) {
     // P3-1：项目不再是模式 —— 切到工作台、展开该项目分组、在组内新建草稿
     enterProjectWorkspace(pid);
   });
+  var refreshBtn = card.querySelector('.pj-refresh');
+  if (refreshBtn) refreshBtn.addEventListener('click', function (e) { e.stopPropagation(); void refreshProjectRow(pid, refreshBtn); });
   var filesBtn = card.querySelector('.pj-files');
   if (filesBtn) filesBtn.addEventListener('click', function (e) { e.stopPropagation(); void openProjectFiles(pid); });
   var blBtn = card.querySelector('.pj-backlog');
   if (blBtn) blBtn.addEventListener('click', function (e) {
     e.stopPropagation();
-    // 待办聚合页按项目分组；这里直接把筛选落到该项目再切页，省掉用户自己找分组
-    if (typeof blState !== 'undefined' && blState.filters) { blState.filters.projectId = pid; }
-    switchView('backlog');
-    if (typeof blLoad === 'function') void blLoad();
+    // 直接打开该项目自己的看板（task-99）：projectId 贯穿看板加载/增删改/派发（board.projectId），
+    // 不再落到全局待办聚合页
+    blOpenProjectBoard(pid);
   });
   card.querySelector('.pj-edit').addEventListener('click', function (e) { e.stopPropagation(); openProjectDrawer(pid); });
   card.querySelector('.pj-copy').addEventListener('click', function () {
@@ -5147,6 +5170,61 @@ function wireProjectCard(card) {
     if (r.ok) { toast('✓ 项目已删除'); loadProjects(); renderProjects(); }
     else toast(r.error || '删除失败', true);
   });
+}
+
+/**
+ * 单项目刷新（task-100）：只重新拉取该项目详情（GET /projects/:id）+ 该项目待办概览
+ * （/backlog/overview?projectId=），原地替换该项目卡片；不整页刷新、不影响其他项目行。
+ * loading 态直接改按钮 class（↻ 旋转），避免整卡重建打断用户当前滚动位置。
+ */
+async function refreshProjectRow(pid, btn) {
+  if (btn._loading) return; // 防连点
+  btn._loading = true;
+  btn.classList.add('pj-refreshing');
+  btn.disabled = true;
+  try {
+    var results = await Promise.all([
+      api('/projects/' + encodeURIComponent(pid)),
+      api('/backlog/overview?projectId=' + encodeURIComponent(pid)),
+    ]);
+    var rProj = results[0], rOv = results[1];
+    if (!rProj.ok || !rProj.data) { toast(rProj.error || '刷新项目失败', true); return; }
+    // 详情：原地替换 state.projects 中该条（保持引用更新，其他视图取值也拿到新数据）
+    var idx = (state.projects || []).findIndex(function (x) { return x.id === pid; });
+    if (idx >= 0) state.projects[idx] = rProj.data;
+    // 待办概览：只更新该项目的进度条数据（服务端已按 projectIds 作用域隔离）
+    if (rOv.ok && Array.isArray(rOv.data)) {
+      var row = rOv.data.filter(function (x) { return x && x.projectId === pid; })[0];
+      if (row) {
+        state.projOverview[pid] = { open: row.open || 0, done: row.done || 0, ready: row.ready || 0, blocked: row.blocked || 0, total: row.total || 0 };
+        state.projOverviewAt = Date.now();
+      }
+    }
+    // 原地替换该卡片（findIndex 在两次 await 之间可能因整表刷新漂移，用 id 再取一次）
+    var cur = (state.projects || []).find(function (x) { return x.id === pid; });
+    var sel = '.proj-card[data-proj="' + (window.CSS && CSS.escape ? CSS.escape(pid) : pid) + '"]';
+    var cardEl = null;
+    try { cardEl = document.querySelector(sel); } catch (e2) { /* X5 老内核无 CSS.escape 时选择器可能非法 → 走兜底 */ }
+    if (cur && cardEl) {
+      var fresh = document.createElement('div');
+      fresh.innerHTML = projectCardHtml(cur);
+      var newCard = fresh.firstElementChild;
+      if (newCard) {
+        cardEl.replaceWith(newCard);
+        wireProjectCard(newCard);
+        toast('✓ 已刷新「' + (cur.name || pid) + '」');
+        return;
+      }
+    }
+    // 兜底：卡片已被整页重渲染替换/移除时退化为整表重绘（正常路径不会走到）
+    renderProjects();
+  } catch (e) {
+    toast('刷新项目失败：' + String(e && e.message || e), true);
+  } finally {
+    btn._loading = false;
+    btn.classList.remove('pj-refreshing');
+    btn.disabled = false;
+  }
 }
 
 /**
@@ -5669,7 +5747,7 @@ function switchView(v) {
   if (v === 'voice') voiceStart(); else voiceStop();
   if (v === 'monitor') monitorStart(); else monitorStop();
   if (v === 'projects') renderProjects();
-  if (v === 'backlog') renderBacklogView();
+  if (v === 'backlog') renderBacklogView(); else blPollSync();
   if (v === 'groups') renderGroupsView(); else if (typeof groupState !== 'undefined' && groupState.pollTimer) stopGroupPoll();
   if (v === 'library' || v === 'plugins') libLoad();
   // 当前页签写入 hash：刷新/分享链接都停留在原页签（replaceState 不产生历史噪音）
@@ -7127,6 +7205,7 @@ function connectStream(taskId) {
       if (el) {
         finalizeTurnBlocks(el, ev.turn, taskId);
         applyUsageBadge(el, ev.turn.usage, ev.turn);
+        applyModelBadge(el.wrap, ev.turn.model);
       }
       smartScrollBottom();
       loadTasksQuiet();
@@ -7706,6 +7785,22 @@ function applyUsageBadge(el, usage, turn) {
   const anchor = el.foot.querySelector('.dsh-timeEnd');
   if (anchor) el.foot.insertBefore(pill, anchor); else el.foot.appendChild(pill);
 }
+
+/**
+ * 模型角标更新（SSE turn_end / 流式刷新后回填）：该轮实际使用的 provider/model 显示在发送者名旁。
+ * 兼容历史消息（无 model 字段时不改写，保留初始渲染的推断标签或留空）。
+ */
+function applyModelBadge(el, model) {
+  if (!el || !model) return;
+  const pill = el.querySelector('.dsh-usage-pill[data-role="agent"]');
+  if (!pill) return;
+  const raw = el.dataset.agentName || '';
+  const name = raw === '__node__' || raw === '__main__' ? '主智能体' : (raw || '子智能体');
+  const m = String(model);
+  if (pill.textContent === name + ' · ' + m) return;
+  pill.innerHTML = esc(name) + ' · ' + esc(m);
+  pill.title = '该轮实际使用模型';
+}
 /** 单轮用量明细弹层（S2-2）：输入 / 输出 / 缓存读 / 缓存写 / 命中率（/ 首 token：远端透传 ttftMs 时展示） */
 function openTurnUsageDetail(usage, durMs, pct, total) {
   const row = function (label, val) { return '<div class="sp-r"><span>' + esc(label) + '</span><b>' + esc(val || '—') + '</b></div>'; };
@@ -7825,11 +7920,14 @@ function buildTurnElement(taskId, turn) {
   const isPlanningWait = roleClass === 'system' && /正在拆解|规划子任务|流水线/.test(turn.text || '');
 
   const agent = state.agents.find(a => a.id === turn.agentId);
-  // 模型标签取「该轮实际生效的模型」：主智能体 = 模型列表当前选中；被 @ 的子智能体 = 其自身配置的模型
+  // 模型标签：优先「该轮实际使用的模型」（服务端回合收尾回填的 provider/model）；
+  // 历史消息缺 model 字段时回退推断（主智能体 = 模型列表当前选中；子智能体 = 其自身配置的模型）
   const isMainTurn = turn.agentId && turn.agentId === (mainAgentState.cur || mainAgentState.resolvedAgentId);
-  const badgeModel = (isMainTurn && modelState.cur)
-    ? String(modelState.cur).split('/').pop()
-    : (agent ? String(agent.model || '').split('/').pop() : '');
+  const badgeModel = turn.model
+    ? String(turn.model)
+    : (isMainTurn && modelState.cur)
+      ? String(modelState.cur).split('/').pop()
+      : (agent ? String(agent.model || '').split('/').pop() : '');
 
   if (roleClass === 'user') {
     // DSH UserStyleBubble：右对齐 22px 气泡 + 气泡下 IconActions（时间 + 复制）
@@ -7925,12 +8023,12 @@ function buildTurnElement(taskId, turn) {
   return flow;
 }
 
-/** 排队消息 UI（对齐移动端）：turn.queued ↔ 「⏳ 排队中」pill + 「⚡ 立即发送」按钮 */
+/** 排队消息 UI（对齐移动端）：turn.queued ↔ 「⏳ 排队中」pill + 「⚡ 立即发送」+「✕ 取消」 */
 function syncQueuedUI(flow, taskId, turn) {
   if (!flow) return;
   const foot = flow.querySelector('.dsh-actions-foot');
   if (!foot) return;
-  const old = foot.querySelector('.dsh-queued-pill, .dsh-sendnow');
+  const old = foot.querySelector('.dsh-queued-pill, .dsh-sendnow, .dsh-queued-cancel');
   if (!turn || !turn.queued) {
     if (old) old.remove();
     flow.classList.remove('has-queued');
@@ -7947,9 +8045,38 @@ function syncQueuedUI(flow, taskId, turn) {
   btn.textContent = '⚡ 立即发送';
   btn.title = '运行中 = steer 插话进当前回合；空闲 = 立即派发';
   btn.addEventListener('click', () => sendQueuedTurnNow(taskId, turn.id, btn, pill));
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'dsh-queued-cancel';
+  cancel.textContent = '✕ 取消';
+  cancel.title = '移出队列并删除该排队轮次';
+  cancel.addEventListener('click', () => cancelQueuedTurn(taskId, turn.id, cancel));
   const anchor = foot.querySelector('.dsh-timeStart');
-  if (anchor) { foot.insertBefore(pill, anchor); foot.insertBefore(btn, anchor); }
-  else { foot.appendChild(pill); foot.appendChild(btn); }
+  if (anchor) { foot.insertBefore(pill, anchor); foot.insertBefore(btn, anchor); foot.insertBefore(cancel, anchor); }
+  else { foot.appendChild(pill); foot.appendChild(btn); foot.appendChild(cancel); }
+}
+
+/** 排队消息「✕ 取消」：移出队列并删除该排队轮次（服务端 deleteQueuedMessage 裁决，权限语义同「立即发送」） */
+async function cancelQueuedTurn(taskId, turnId, btn) {
+  if (btn._busy) return;
+  btn._busy = true;
+  btn.disabled = true;
+  const r = await api('/tasks/' + taskId + '/queue/delete', { method: 'POST', body: JSON.stringify({ turnId }) });
+  btn._busy = false;
+  btn.disabled = false;
+  if (!r.ok) { hintComposer(r.error || '取消排队失败', true); return; }
+  // 移除该气泡 flow，并同步 taskCache 剔除该轮
+  const cached = state.taskCache.get(taskId);
+  if (cached && Array.isArray(cached.turns)) {
+    cached.turns = cached.turns.filter(x => x.id !== turnId);
+  }
+  if (state.turnEls && state.turnEls[turnId]) {
+    delete state.turnEls[turnId];
+  }
+  const flow = btn.closest('.dsh-flow');
+  if (flow) flow.remove();
+  hintComposer('✕ 已取消排队消息');
+  loadTasksQuiet();
 }
 
 /** 排队消息「立即发送」：运行中 → steer 插话；空闲 → 立即派发（服务端 sendQueuedNow 裁决） */
@@ -13970,8 +14097,10 @@ async function showSubtaskChat(subtaskId, agentId) {
     msgs.map(m => {
       const raw = typeof m.content === 'string' ? m.content : Array.isArray(m.content) ? m.content.filter(b => b.type === 'text').map(b => b.text).join('\\n') : '';
       const badge = m.local ? ' <span style="background:rgba(100,116,139,.18);color:var(--tx3);padding:1px 6px;border-radius:6px;font-size:10.5px">本地缓存</span>' : '';
+      // 模型标注：API 返回的 model（provider/model）；历史数据缺该字段时不显示，兼容渲染
+      const modelBadge = (m.role === 'assistant' && m.model) ? ' <span style="background:rgba(59,130,246,.15);color:var(--tx2);padding:1px 6px;border-radius:6px;font-size:10.5px">' + esc(String(m.model)) + '</span>' : '';
       const rendered = m.role === 'assistant' ? md(withFileLinks(taskIdUsed, agentId, raw.slice(0, 20000))) : md(raw.slice(0, 20000));
-      return '<div style="margin-bottom:12px"><div style="font-size:11.5px;color:var(--tx3)">' + esc(roleLabel[m.role] || m.role) + badge + '</div><div class="content" style="white-space:pre-wrap;line-height:1.6;font-size:12.5px">' + rendered + (raw.length > 20000 ? '<div style="color:var(--tx3);font-size:11px;margin-top:4px">（内容过长，已截断显示）</div>' : '') + '</div></div>';
+      return '<div style="margin-bottom:12px"><div style="font-size:11.5px;color:var(--tx3)">' + esc(roleLabel[m.role] || m.role) + badge + modelBadge + '</div><div class="content" style="white-space:pre-wrap;line-height:1.6;font-size:12.5px">' + rendered + (raw.length > 20000 ? '<div style="color:var(--tx3);font-size:11px;margin-top:4px">（内容过长，已截断显示）</div>' : '') + '</div></div>';
     }).join('') +
   '<div style="margin-top:12px;display:flex;gap:8px"><input id="fu-input" placeholder="向该远端会话追问…"><button class="btn pri" id="fu-send">发送</button></div><div id="fu-reply"></div>';
   $('fu-send').addEventListener('click', async () => {
@@ -14562,7 +14691,8 @@ async function openScheduleDrawer(s, tpl, copyMode) {
   let lastRule = (s && s.rule) || null;
   const origUpdatePreview = updatePreview;
   updatePreview = function () { try { lastRule = currentRule(); } catch { /* 半填状态忽略 */ } origUpdatePreview(); };
-  kindSel.addEventListener('change', () => { s = { rule: lastRule || (s && s.rule) }; renderRuleBox(); });
+  // 保留 s 的全部字段（尤其 id）：只覆盖 rule —— 否则切换 kind 后编辑态丢 id，保存会“另建新任务”而非更新原任务
+  kindSel.addEventListener('change', () => { s = Object.assign({}, s, { rule: lastRule || (s && s.rule) }); renderRuleBox(); });
   $('sc-cancel').addEventListener('click', closeDrawer);
   $('sc-save').addEventListener('click', async () => {
     const btn = $('sc-save');
@@ -17211,6 +17341,75 @@ function blOverviewUrl() {
   var qs = blQs(blQueryParams(blState.filters));
   return '/backlog/overview' + (qs ? '?' + qs : '');
 }
+// 既有 API 没有项目级更新时间：每项目只取最新一条，结合全量计数/分面探测变化。
+function blProbeUrl() {
+  var p = blQueryParams(blState.filters);
+  p.sort = 'updatedAt'; p.order = 'desc'; p.maxCount = '1';
+  return '/backlog/overview?' + blQs(p);
+}
+function blProbeSignature(r) {
+  return JSON.stringify((r.data || []).map(function (g) {
+    var latest = (g.items || []).slice().sort(function (a, b) {
+      var ad = a.updatedDate || '', bd = b.updatedDate || '';
+      if (!ad && bd) return 1;
+      if (ad && !bd) return -1;
+      var ai = String(a.itemId || '').match(/[0-9]+$/), bi = String(b.itemId || '').match(/[0-9]+$/);
+      return ad === bd ? (bi ? Number(bi[0]) : Number.MAX_SAFE_INTEGER) - (ai ? Number(ai[0]) : Number.MAX_SAFE_INTEGER) : (ad < bd ? 1 : -1);
+    })[0];
+    return [g.projectId, g.projectName, g.nodeStatus, g.error, g.initialized,
+      g.total, g.matched, g.open, g.done, g.ready, g.blocked, g.statuses, g.facets, latest || null];
+  }).sort(function (a, b) { return String(a[0]).localeCompare(String(b[0])); }));
+}
+var blPoll = { timer: null, busy: false, failures: 0, signature: null, epoch: 0 };
+var blLoadSeq = 0;
+function blPollAllowed() { return currentView === 'backlog' && !document.hidden && !blState.board; }
+function blPollDelay() { return blPoll.failures < 3 ? 8000 : Math.min(60000, 8000 * Math.pow(2, blPoll.failures - 2)); }
+function blPollNotice() {
+  var el = document.getElementById('bl-poll-notice');
+  if (el) {
+    el.hidden = !blPollAllowed() || blPoll.failures < 3;
+    el.textContent = el.hidden ? '' : '自动更新暂时不可用，' + (blPollDelay() / 1000) + ' 秒后重试；可手动刷新。';
+  }
+}
+function blPollSchedule(immediate) {
+  if (blPoll.timer !== null) clearTimeout(blPoll.timer);
+  blPoll.timer = null;
+  if (blPollAllowed() && !blPoll.busy) blPoll.timer = setTimeout(blPollTick, immediate ? 0 : blPollDelay());
+}
+function blPollSync(immediate) {
+  blPoll.epoch++;
+  blPollSchedule(immediate);
+  blPollNotice();
+}
+async function blPollTick() {
+  blPoll.timer = null;
+  if (!blPollAllowed() || blPoll.busy) return;
+  if (blState.loading || blState.composing || blState.searchTimer) { blPollSchedule(); return; }
+  blPoll.busy = true;
+  var epoch = blPoll.epoch, url = blOverviewUrl();
+  try {
+    var r = await api(blProbeUrl());
+    if (epoch !== blPoll.epoch || !blPollAllowed() || url !== blOverviewUrl()) return;
+    if (!r || !r.ok) throw new Error('probe failed');
+    var degraded = (r.data || []).some(function (g) { return g.nodeStatus === 'unreachable'; });
+    var signature = blProbeSignature(r);
+    var changed = signature !== blPoll.signature || !blState.data || !blState.data.ok;
+    if (changed) {
+      var loaded = await renderBacklogView(true, true);
+      if (epoch !== blPoll.epoch || !blPollAllowed() || url !== blOverviewUrl()) return;
+      if (!loaded) throw new Error('refresh failed');
+    }
+    // 全量刷新可能已读到比探针更新的数据；成功时保留其签名。
+    if (degraded) blPoll.failures++; else blPoll.failures = 0;
+  } catch (e) {
+    if (epoch === blPoll.epoch && blPollAllowed() && url === blOverviewUrl()) blPoll.failures++;
+  } finally {
+    blPoll.busy = false;
+    blPollNotice();
+    blPollSchedule();
+  }
+}
+document.addEventListener('visibilitychange', function () { blPollSync(!document.hidden); });
 /** 「仅分配给我」需要 assignee 名：先取当前用户显示名，取不到再让用户输入（沿用既有 localStorage['bl-mine'] 流程） */
 async function blEnsureMineName() {
   if (blState.mineName) return blState.mineName;
@@ -17236,6 +17435,28 @@ function blClearFilters() {
 function blNewBoard(projectId, name, data) {
   blState.picked = {};
   return { projectId: projectId, name: name || projectId, data: data || null, filters: blNewFilters(false), filtersOpen: false, loading: false, nextSkip: null };
+}
+
+/**
+ * 直接打开某项目的 backlog 看板（task-99）：项目卡片「待办」按钮的唯一入口。
+ * - projectId 只存在 blState.board.projectId 一处，看板加载（GET /projects/:id/backlog）、
+ *   拖拽/编辑/删除/派发/改派全部以它为准，不存在串项目数据；
+ * - 每次进入都 blNewBoard 重置看板与筛选态（各看板独立，切项目再点不会带上上一个项目的状态）；
+ * - 项目不在列表时先刷新一次项目列表再定位（与 enterProjectWorkspace 同思路），拿不到名称退化为 pid；
+ * - 未初始化 backlog 的项目：GET 列表返回 initialized:false，blBoardHtml 渲染初始化引导（AC#4）。
+ */
+async function blOpenProjectBoard(projectId) {
+  const pid = String(projectId || '');
+  if (!pid) { toast('无法打开看板：项目 ID 为空', true); return; }
+  let pj = (state.projects || []).find(function (x) { return x.id === pid; });
+  if (!pj) {
+    try { await Promise.resolve(loadProjects()); } catch (e) {}
+    pj = (state.projects || []).find(function (x) { return x.id === pid; });
+  }
+  blState.board = blNewBoard(pid, (pj && pj.name) || pid, null);
+  if (currentView !== 'backlog') switchView('backlog');
+  else renderBacklogView(true);
+  void blLoadBoard({});
 }
 
 // ---------- facets（筛选项候选值） ----------
@@ -17526,21 +17747,48 @@ function blSortItems(items, statuses, orderBy, order) {
   });
 }
 
-async function renderBacklogView(force) {
-  if (blState.board && !force) { blRender(); return; }
+async function renderBacklogView(force, automatic) {
+  if (blState.board) { blPollSync(); if (!automatic) blRender(); return false; }
+  if (!automatic) blPollSync(Boolean(blState.data && !force));
+  var seq = ++blLoadSeq, epoch = blPoll.epoch;
+  blState.loading = false;
   // 「仅分配给我」要先把名称解析出来：assignee 参数在请求前就得进 query 串（服务端过滤）
   if (blState.filters.mine && !blState.mineName) {
     const n = await blEnsureMineName();
+    if (seq !== blLoadSeq) return false;
     if (!n) blState.filters.mine = false;
   }
+  var url = blOverviewUrl();
   if (!blState.data || force) {
-    blState.loading = true; blRender();
-    var r = await api(blOverviewUrl());
-    blState.loading = false;
-    // 聚合失败也保存响应对象（含 error），交给 blOverviewHtml 渲染明确错误态，而不是静默空列表
-    blState.data = r || { ok: false, error: '请求失败' };
+    blState.loading = true;
+    if (!automatic) blRender();
+    try {
+      var r = await api(url);
+      if (seq !== blLoadSeq || epoch !== blPoll.epoch || blState.board || url !== blOverviewUrl() || (automatic && (!blPollAllowed() || blState.composing || blState.searchTimer))) return false;
+      if (automatic && (!r || !r.ok)) return false;
+      var previous = {};
+      ((blState.data && blState.data.data) || []).forEach(function (g) {
+        (g.items || []).forEach(function (it) { previous[JSON.stringify([g.projectId, it.itemId])] = true; });
+      });
+      blState.fresh = {};
+      if (automatic) ((r && r.data) || []).forEach(function (g) {
+        (g.items || []).forEach(function (it) {
+          var key = JSON.stringify([g.projectId, it.itemId]);
+          if (!previous[key]) blState.fresh[key] = true;
+        });
+      });
+      blState.data = r || { ok: false, error: '请求失败' };
+      if (r && r.ok) {
+        blPoll.signature = blProbeSignature(r);
+        if (!automatic) blPoll.failures = 0;
+      }
+    } finally {
+      if (seq === blLoadSeq) blState.loading = false;
+    }
   }
-  blRender();
+  blRender(Boolean(automatic));
+  blState.fresh = {};
+  return Boolean(blState.data && blState.data.ok);
 }
 
 function blBadgeOf(tasks) {
@@ -17730,6 +17978,13 @@ function blBoardHtml() {
     '<button class="mini-btn pri" id="bl-new" ' + (d && d.archived ? 'disabled' : '') + '>＋ 新建待办</button>' +
     '</div>';
   if (!d) return head + qbar + '<div class="bl-empty">' + (b.loading ? '加载中…' : '看板加载失败，点「刷新」重试') + '</div>';
+  // 未初始化 backlog（task-99 AC#4）：服务端返回 initialized:false 且 statuses 为空 —— 给明确引导而不是空列
+  if (d.initialized === false) {
+    return head + '<div class="bl-empty">该项目尚未初始化 backlog。' +
+      '初始化会在项目工作区创建 backlog/ 目录与协作约定，之后即可在此看板增删改与派发待办。<br>' +
+      '<button class="mini-btn pri" data-init="' + esc(b.projectId) + '" style="margin-top:8px">初始化 backlog</button>' +
+      '</div>';
+  }
   const hidden = (typeof d.total === 'number' && typeof d.matched === 'number') ? Math.max(0, d.total - d.matched) : 0;
   const hideHint = hidden > 0 ? '<div class="bl-hide">被筛选隐藏 ' + hidden + ' 条</div>' : '';
   const cols = (d.statuses && d.statuses.length ? d.statuses : ['To Do', 'In Progress', 'Done']);
@@ -17832,9 +18087,18 @@ function blSyncBatchBtn() {
   if (g) { g.disabled = !n; g.textContent = '👥 派到群 (' + n + ')'; }
 }
 
-function blRender() {
+function blRender(preserve) {
   const root = document.getElementById('bl-root'); if (!root) return;
-  const searchFocused = Boolean(blState.focusSearch || (document.activeElement && document.activeElement.id === 'bl-q'));
+  const active = document.activeElement;
+  const searchFocused = Boolean(blState.focusSearch || (active && active.id === 'bl-q'));
+  const selection = preserve && active && active.id === 'bl-q' ? [active.selectionStart, active.selectionEnd, active.value] : null;
+  const scrolls = [];
+  if (preserve) {
+    for (var parent = root; parent; parent = parent.parentElement) scrolls.push([parent, parent.scrollTop, parent.scrollLeft]);
+  }
+  const wx = window.scrollX, wy = window.scrollY;
+  const anchor = preserve ? Array.from(root.querySelectorAll('.bl-row[data-item]')).find(function (row) { return row.getBoundingClientRect().bottom > 0; }) : null;
+  const anchorKey = anchor ? [anchor.dataset.grp, anchor.dataset.item, anchor.getBoundingClientRect().top] : null;
   // 「显示更多」/拖拽/操作后重载都会整块重渲染：先把勾选态收进内存，渲染后回填，
   // 否则用户选了几条再翻页/拖一下，批量派发的勾选就全丢了（选择作用于合并后的 items）
   root.querySelectorAll('.bl-pick').forEach(function (el) {
@@ -17854,7 +18118,10 @@ function blRender() {
       const pid = el.dataset.init;
       const r = await api('/projects/' + pid + '/backlog/init', { method: 'POST', body: JSON.stringify({ sample: false, updateInstruction: true }) });
       toast(r.ok ? '✓ backlog 已初始化（协作约定已追加到项目指令）' : '初始化失败: ' + (r.error || ''), !r.ok);
-      if (r.ok) { blState.data = null; renderBacklogView(true); }
+      if (!r.ok) return;
+      // task-99 AC#4：从项目看板内的引导初始化成功后，留在该项目看板并重新加载（不再退回聚合页）
+      if (blState.board && blState.board.projectId === pid) void blLoadBoard({});
+      else { blState.data = null; renderBacklogView(true); }
     });
   });
   root.querySelectorAll('[data-enter]').forEach(function (el) {
@@ -17989,10 +18256,34 @@ function blRender() {
   if (searchFocused) {
     const q = document.getElementById('bl-q');
     if (q) {
-      try { q.focus(); const n = q.value.length; q.setSelectionRange(n, n); } catch (e) {}
+      try {
+        if (selection) q.value = selection[2];
+        q.focus({ preventScroll: true });
+        const n = q.value.length;
+        q.setSelectionRange(selection ? selection[0] : n, selection ? selection[1] : n);
+      } catch (e) {}
     }
   }
   blState.focusSearch = false;
+  if (preserve) {
+    scrolls.forEach(function (s) { s[0].scrollTop = s[1]; s[0].scrollLeft = s[2]; });
+    window.scrollTo(wx, wy);
+    if (anchorKey) {
+      var nextAnchor = Array.from(root.querySelectorAll('.bl-row[data-item]')).find(function (row) { return row.dataset.grp === anchorKey[0] && row.dataset.item === anchorKey[1]; });
+      if (nextAnchor) {
+        var delta = nextAnchor.getBoundingClientRect().top - anchorKey[2];
+        var scroller = scrolls.find(function (s) { return s[0].scrollHeight > s[0].clientHeight && /auto|scroll/.test(window.getComputedStyle(s[0]).overflowY); });
+        if (scroller) scroller[0].scrollTop += delta; else if (delta) window.scrollTo(wx, wy + delta);
+      }
+    }
+    var freshRows = Array.from(root.querySelectorAll('.bl-row[data-item]')).filter(function (row) { return blState.fresh && blState.fresh[JSON.stringify([row.dataset.grp, row.dataset.item])]; });
+    freshRows.forEach(function (row) { row.classList.add('bl-fresh'); });
+    if (freshRows.length) {
+      void root.offsetHeight;
+      setTimeout(function () { freshRows.forEach(function (row) { row.classList.remove('bl-fresh'); }); }, 50);
+    }
+  }
+  blPollNotice();
 }
 
 function blBoardItem(itemId) {
@@ -18009,6 +18300,7 @@ function blBoardItem(itemId) {
  * - 操作成功后的重载（blReloadBoard）：保持当前筛选与已加载条数，避免用户翻到第二页后操作一下又缩回第一页。
  */
 async function blLoadBoard(opts) {
+  blPollSync();
   const b = blState.board; if (!b) return false;
   opts = opts || {};
   const append = Boolean(opts.append);

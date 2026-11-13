@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -51,6 +51,10 @@ async function fixture(t, respond, options = {}) {
   return {
     requests,
     uploadSource,
+    async session() {
+      const files = (await readdir(dir)).filter(name => name.endsWith('.sid'));
+      return files.length ? readFile(path.join(dir, files[0]), 'utf8') : null;
+    },
     async run(args = ['call', 'invalid_readonly_probe', '{}'], options = {}) {
       return await new Promise((resolve, reject) => {
         const child = spawn('bash', [script, ...args], {
@@ -389,4 +393,56 @@ test('failure diagnostics do not leak bearer tokens or node credentials', async 
   const result = await mock.run();
   failed(result);
   noSecrets(result);
+});
+
+function sessionExpired(res, request) {
+  res.writeHead(404, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: -32001, message: 'expired', data: { code: 'SESSION_EXPIRED' } } }));
+}
+
+test('legacy SESSION_EXPIRED reinitializes and retries the original write once', async t => {
+  let count = 0;
+  const mock = await fixture(t, (_req, res, request) => ++count === 1 ? sessionExpired(res, request) : reply(res, request));
+  succeeded(await mock.run(['call', 'workbuddy_task_manage', '{"action":"create","title":"legacy"}']));
+  assert.equal(count, 2);
+  assert.equal(initializeCount(mock), 2);
+  assert.deepEqual(businessRequests(mock)[0].params, businessRequests(mock)[1].params);
+});
+
+test('persistent SESSION_EXPIRED stops after one compatibility retry', async t => {
+  const mock = await fixture(t, (_req, res, request) => sessionExpired(res, request));
+  const result = await mock.run();
+  failed(result);
+  assert.equal(businessRequests(mock).length, 2);
+  assert.equal(initializeCount(mock), 2);
+  assert.match(result.stderr, /persisted after one retry/);
+});
+
+test('successful response session header is cached for the next command', async t => {
+  const mock = await fixture(t, (_req, res, request) => reply(res, request, success, { headers: { 'Mcp-Session-Id': 'rotated-session' } }));
+  succeeded(await mock.run());
+  assert.equal(await mock.session(), 'rotated-session');
+  succeeded(await mock.run());
+  assert.equal(businessRequests(mock)[1].headers['mcp-session-id'], 'rotated-session');
+  assert.equal(initializeCount(mock), 1);
+});
+
+for (const failing of [null, 'tools/list', 'ping']) {
+  test(`probe reports actual stages (${failing ?? 'success'})`, async t => {
+    const mock = await fixture(t, (_req, res, request) => request.method === failing
+      ? rpcError(res, request)
+      : reply(res, request, request.method === 'tools/list' ? { tools: [] } : {}));
+    const result = await mock.run(['probe']);
+    if (failing) failed(result); else succeeded(result);
+    assert.deepEqual(JSON.parse(result.stdout), { handshake: 'passed', 'tools/list': failing === 'tools/list' ? 'failed' : 'passed', ping: failing === 'ping' ? 'failed' : 'passed' });
+    noSecrets(result);
+  });
+}
+
+test('probe handshake failure reports remaining stages skipped', async t => {
+  const mock = await fixture(t, () => {}, { handshake(_req, res) { res.writeHead(401).end(); } });
+  const result = await mock.run(['probe']);
+  failed(result);
+  assert.deepEqual(JSON.parse(result.stdout), { handshake: 'failed', 'tools/list': 'skipped', ping: 'skipped' });
+  assert.equal(businessRequests(mock).length, 0);
 });

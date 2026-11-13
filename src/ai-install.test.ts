@@ -75,7 +75,12 @@ test('buildAiInstallPrompt：无 token 时用占位符，正文仍完整', () =>
 test('buildAiInstallPayload：字段齐全、token 权威、hasToken 正确', () => {
   const withToken = buildAiInstallPayload(BASE, TOKEN)
   assert.equal(withToken.version, AI_INSTALL_PROMPT_VERSION)
-  assert.equal(withToken.version, 1)
+  assert.equal(withToken.version, 2)
+  assert.equal(withToken.tokenExpiresAt, null)
+  assert.equal(withToken.tokenExpiryPolicy, 'never')
+  assert.match(withToken.installPrompt, /令牌永久有效（无 TTL）/)
+  assert.match(withToken.installPrompt, /handshake → tools\/list → ping/)
+  assert.match(withToken.installPrompt, /workbuddy-install-report\.json/)
   assert.equal(withToken.base, BASE)
   assert.equal(withToken.token, TOKEN)
   assert.equal(withToken.hasToken, true)

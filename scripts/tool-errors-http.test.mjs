@@ -89,14 +89,12 @@ test('JSON-RPC errors retain numeric codes and add recovery contract in data', a
       ['{invalid-json', {}, -32700, 'PARSE_ERROR'],
       [[], {}, -32600, 'INVALID_REQUEST'],
       [{ jsonrpc: '2.0', id: 1, method: 'missing/method' }, {}, -32601, 'METHOD_NOT_FOUND'],
-      [{ jsonrpc: '2.0', id: 2, method: 'tools/list' }, { 'Mcp-Session-Id': 'expired-session' }, -32001, 'SESSION_EXPIRED'],
-      [{ jsonrpc: '2.0', id: 3, method: 'initialize' }, { 'Mcp-Session-Id': 'expired-session' }, -32001, 'SESSION_EXPIRED'],
     ]) {
       const response = await request(body, headers)
       assert.equal(response.json.error.code, numeric)
       contract(response.json.error.data, code)
       assert.equal(response.json.error.data.retryable, false)
-      if (code === 'SESSION_EXPIRED') assert.deepEqual(response.json.error.data.recovery, { kind: 'call', tool: 'initialize', arguments: {} })
+
     }
   })
 })

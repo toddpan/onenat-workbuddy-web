@@ -291,6 +291,8 @@ engine.startPendingAskSweeper()
   const mcpServer = new WorkBuddyMcpServer({
     serverName: 'onenat-workbuddy',
     serverVersion: pkgVersion(),
+    dataDir: cfg.dataDir,
+    sessionMax: Number(process.env.WORKBUDDY_MCP_SESSION_MAX),
     prefix: cfg.prefix || '',
     getTools: () => tools,
     log,

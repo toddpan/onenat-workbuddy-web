@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # OneNat WorkBuddy MCP 客户端（Streamable HTTP，JSON-RPC over POST）
 # 用法:
+#   wbmcp.sh probe                          # 握手 + tools/list + ping，输出逐项验证结果
 #   wbmcp.sh tools                          # 列出全部工具(name+描述)
 #   wbmcp.sh call <toolName> '<json-arguments>'
 #   wbmcp.sh raw  '<完整 JSON-RPC 请求体>'
@@ -12,8 +13,8 @@
 #   create 带 message 会立即执行——文件没传任务就开跑，执行者读不到附件
 # 配置: 环境变量 WORKBUDDY_BASE_URL / WORKBUDDY_TOKEN > ~/.workbuddy-skill.json（一键安装脚本写入）；
 #       MCP 地址 = $BASE_URL/mcp。缺配置时脚本会提示安装命令。
-# 会话自动握手并缓存于 $TMPDIR/workbuddy-mcp.sid；失败清缓存，下次显式调用重新握手。
-# 请求绝不自动重放（包括超时/会话过期），避免重复执行 create/send/dispatch。
+# 会话自动握手并缓存；新服务端透明复活原 id，成功响应的新会话头会更新缓存。
+# 仅旧服务端明确 SESSION_EXPIRED（请求尚未执行）时重握手并重试一次；超时/其他错误绝不重放。
 # WORKBUDDY_TIMEOUT_SECONDS 可调整单次 HTTP 超时（默认 300 秒）。
 set -uo pipefail
 
@@ -28,7 +29,9 @@ if [[ -z "$BASE_URL" || -z "$TOKEN" ]]; then
   exit 1
 fi
 URL="${BASE_URL%/}/mcp"
-SID_FILE="${TMPDIR:-/tmp}/workbuddy-mcp.sid"
+# 按服务地址与凭证隔离，避免不同安装/调用者共用同一会话。
+SID_KEY=$(python3 -c 'import hashlib,sys;print(hashlib.sha256("\0".join(sys.argv[1:]).encode()).hexdigest()[:24])' "$URL" "$TOKEN")
+SID_FILE="${TMPDIR:-/tmp}/workbuddy-mcp-${SID_KEY}.sid"
 
 # 只打印固定诊断，不回显远端错误文本、响应头或 curl 详情（可能含凭据）。
 _rpc_response() { # $1=request $2=HTTP status；stdin=JSON/SSE，stdout=单个匹配的 RPC 响应
@@ -71,6 +74,10 @@ try:
     if len(matches) != 1: raise ValueError()
     response = matches[0]
     if ("result" in response) == ("error" in response): raise ValueError()
+    # Only this explicit pre-dispatch legacy error permits a bounded retry.
+    error = response.get("error")
+    if isinstance(error, dict) and isinstance(error.get("data"), dict) and error["data"].get("code") == "SESSION_EXPIRED":
+        sys.exit(75)
     print(json.dumps(response, ensure_ascii=False))
     if not 200 <= status < 300: fail("HTTP request failed (status %d)" % status)
     if "error" in response: fail("RPC request failed")
@@ -130,7 +137,22 @@ handshake() {
   post '{"jsonrpc":"2.0","method":"notifications/initialized"}' >/dev/null
 }
 
-call_json() { post "$1"; }
+call_json() {
+  local out rc=0
+  out=$(post "$1") || rc=$?
+  if [[ "$rc" -eq 75 ]]; then
+    echo 'wbmcp: legacy SESSION_EXPIRED; reinitializing and retrying once' >&2
+    handshake || return $?
+    rc=0
+    out=$(post "$1") || rc=$?
+    if [[ "$rc" -eq 75 ]]; then
+      echo 'wbmcp: SESSION_EXPIRED persisted after one retry' >&2
+      return 1
+    fi
+  fi
+  [[ -z "$out" ]] || printf '%s\n' "$out"
+  return "$rc"
+}
 
 ensure_session() { [[ -s "$SID_FILE" ]] || handshake; }
 
@@ -158,6 +180,25 @@ except (ValueError, TypeError, KeyError, AttributeError):
 
 cmd="${1:-help}"
 case "$cmd" in
+  probe)
+    # 强制真实握手；分阶段报告，未执行的步骤不能算成功。
+    hs=failed; tools_status=skipped; ping_status=skipped
+    if handshake; then
+      hs=passed
+      tools_status=failed
+      if out=$(call_json '{"jsonrpc":"2.0","id":1,"method":"tools/list"}') &&
+        printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if isinstance(d.get("result",{}).get("tools"),list) else 1)'; then
+        tools_status=passed
+      fi
+      ping_status=failed
+      if out=$(call_json '{"jsonrpc":"2.0","id":3,"method":"ping"}') &&
+        printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if isinstance(d.get("result"),dict) else 1)'; then
+        ping_status=passed
+      fi
+    fi
+    printf '{"handshake":"%s","tools/list":"%s","ping":"%s"}\n' "$hs" "$tools_status" "$ping_status"
+    [[ "$hs" == passed && "$tools_status" == passed && "$ping_status" == passed ]]
+    ;;
   tools)
     ensure_session || exit $?
     out=$(call_json '{"jsonrpc":"2.0","id":1,"method":"tools/list"}') || exit $?
@@ -201,8 +242,7 @@ except ValueError: sys.exit("wbmcp: invalid JSON-RPC request")' "$2" || exit $?
     src="$2"; taskId="$3"; nameArg="${4:-$(basename "$2")}"
     [[ -f "$src" ]] || { echo "no such file: $src" >&2; exit 1; }
     sz=$(stat -f%z "$src" 2>/dev/null || stat -c%s "$src")
-    # 强制新 MCP 会话：同参数 init 在 10 分钟幂等回放窗口内会返回旧 uploadId（可能已被上次运行消费）
-    rm -f "$SID_FILE"
+    # 握手仅更新传输会话；写请求的回放键按调用者+名称+参数，与会话 id 无关。
     # 宿主中断时把 python 子进程一并带走，避免孤儿继续跑完造成状态错乱
     trap 'pkill -P $$ 2>/dev/null' EXIT INT TERM
     handshake || exit $?

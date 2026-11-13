@@ -2036,10 +2036,14 @@ export class TaskEngine {
       return
     }
 
+    // 回合实际使用模型 best-effort 回填（provider/model）：远端会话详情优先，成员自带模型兜底
+    const usedModel = await this.resolveUsedModel(target, session.remoteSessionId!, agent)
+
     this.store.updateTurn(taskId, turn.id, (tt) => {
       tt.streaming = false
       // 回合收尾时刻：token 消耗归属日按它算（跨日回合归完成日，见 token-stats.ts）
       tt.endedAt = Date.now()
+      if (usedModel) tt.model = usedModel
       // 收尾回填：轮询整轮重建的结果覆盖流式累积；但若流式累积反而更长（对账退化只取到尾部），保留流式版本避免丢内容
       if (result.ok && result.content) {
         if (!tt.text || result.content.length >= tt.text.length) tt.text = result.content
@@ -2083,6 +2087,23 @@ export class TaskEngine {
     })
     this.backlogWritebackFire(taskId, { chatFallback: true })
     this.emit(taskId, { type: 'task_status', status: 'completed' })
+  }
+
+  /**
+   * 回合/子任务实际使用模型的 best-effort 回填：优先远端会话详情的当前模型选择（3s 超时防拖慢收尾），
+   * 拿不到时回退成员实体自带 provider/model 配置。返回 provider/model 字符串或 undefined。
+   */
+  private async resolveUsedModel(target: DshTarget, sessionId: string, agent?: { provider?: string; model?: string }): Promise<string | undefined> {
+    try {
+      const detail = await Promise.race([
+        this.client.getSessionDetail(target, sessionId),
+        new Promise<{ ok: false }>((resolve) => setTimeout(() => resolve({ ok: false }), 3000)),
+      ])
+      const m = (detail as any)?.session?.model
+      if (m?.provider && m?.model) return `${m.provider}/${m.model}`
+    } catch { /* 会话详情不可达不影响回合收尾 */ }
+    if (agent?.provider && agent?.model) return `${agent.provider}/${agent.model}`
+    return undefined
   }
 
   // ---------- ask_user_question 挂起治理 ----------
@@ -3107,8 +3128,11 @@ export class TaskEngine {
       }
     }
     const viaText = result.via === 'sse' ? 'SSE 流式' : result.via === 'sync' ? '同步调用' : result.via === 'poll' ? '轮询' : '未知通道'
+    // 子任务实际使用模型 best-effort 回填（回退重试后的会话模型以远端详情为准）
+    const usedModel = await this.resolveUsedModel(target, activeSession.remoteSessionId!, agent)
 
     this.store.mutateSubtask(taskId, sub.id, (s) => {
+      if (usedModel) s.model = usedModel
       if (result.ok && result.content && result.content.trim()) {
         s.status = 'completed'
         // 防覆盖：轮询整轮重建应比流式累积更完整；若流式版本反而更长（对账退化），保留更长的一份避免丢内容

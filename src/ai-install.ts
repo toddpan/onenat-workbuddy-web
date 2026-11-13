@@ -9,7 +9,7 @@
  */
 
 /** 提示词结构版本：正文结构变更时递增，客户端可据此判断是否需要重新拉取 */
-export const AI_INSTALL_PROMPT_VERSION = 1 as const
+export const AI_INSTALL_PROMPT_VERSION = 2 as const
 /** base 参数最大长度（防超长输入） */
 export const AI_INSTALL_BASE_MAX_LEN = 512
 /** 未生成 APIKEY 时 token 位置的占位符（保持旧 Web 行为；客户端靠 hasToken 阻断复制） */
@@ -30,6 +30,9 @@ export interface AiInstallPayload {
   /** 发给 AI 的安装提示词正文（与旧 Web 端逐字一致） */
   installPrompt: string
   version: typeof AI_INSTALL_PROMPT_VERSION
+  /** AI token has no TTL; explicit reset revokes it. */
+  tokenExpiresAt: null
+  tokenExpiryPolicy: 'never'
 }
 
 /**
@@ -69,10 +72,11 @@ export function buildAiInstallPrompt(base: string, token: string): string {
     '请把「OneNat WorkBuddy 多智能体工作台」接入为你的工具平台并验证可用。它提供 16 个工具：任务创建/管理/查询/答复提问、监控态势、定时任务、项目管理、文件管理、专家库、SSH 资源池、项目待办（backlog）等（接入后 tools/list 查看全部）。\n' +
     '\n【第 1 步 · 一键安装（有终端就先做这步）】\n' +
     'curl -fsSL ' + base + '/install-skill.sh | bash -s -- --base-url ' + base + ' --token ' + tok + '\n' +
-    '自动装两套技能到本机 AI 技能目录（DSH/ZCode/Claude/agents）：HTTP 通道 wb.mjs + MCP 通道 workbuddy-mcp（共用 ~/.workbuddy-skill.json），并双通道自检。完成后即已可用：bash <技能目录>/workbuddy-mcp/scripts/wbmcp.sh tools 验证（脚本通道与 MCP 等价）。\n' +
+    '自动装两套技能到本机 AI 技能目录（DSH/ZCode/Claude/agents）：HTTP 通道 wb.mjs + MCP 通道 workbuddy-mcp（共用 ~/.workbuddy-skill.json），并双通道自检。MCP 须逐项通过 handshake → tools/list → ping；结果写入 ~/.workbuddy-install-report.json，失败或跳过不算验证成功。可用 bash <技能目录>/workbuddy-mcp/scripts/wbmcp.sh probe 重验（脚本通道与 MCP 等价）。\n' +
     '\n【第 2 步 · MCP 原生注册（仅宿主支持 MCP 时叠加，否则跳过）】\n' +
     '服务地址（Streamable HTTP，JSON-RPC over POST）：' + mcpUrl + '\n' +
     '鉴权：Authorization: Bearer ' + tok + '（也支持 X-WorkBuddy-Token 请求头或 ?token= 查询参数）。\n' +
+    '令牌永久有效（无 TTL），仅显式重置令牌会使旧令牌失效；MCP 会话失效与令牌有效期无关。\n' +
     'mcpServers 条目：\n' +
     '{ "mcpServers": { "onenat-workbuddy": { "url": "' + mcpUrl + '", "headers": { "Authorization": "Bearer ' + tok + '" } } } }\n' +
     '生效后 tools/list 应能看到 workbuddy_task_manage 等工具。说明：MCP 只提供工具签名，大文件三步流程、@ 派活等使用知识在技能 SKILL.md 里，操作前先读。\n' +
@@ -99,5 +103,7 @@ export function buildAiInstallPayload(base: string, token: string): AiInstallPay
     installScriptUrl: base + '/install-skill.sh',
     installPrompt: buildAiInstallPrompt(base, tok),
     version: AI_INSTALL_PROMPT_VERSION,
+    tokenExpiresAt: null,
+    tokenExpiryPolicy: 'never',
   }
 }

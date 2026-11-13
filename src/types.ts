@@ -359,6 +359,8 @@ export interface TaskTurn {
   /** 执行中的排队消息：当前轮结束后自动补发（立即发送/插话后清除） */
   queued?: boolean
   reasoning?: string
+  /** 本轮实际使用的模型（provider/model，如 deepseek/deepseek-v3）：回合结束时从远端会话详情 best-effort 回填；历史消息可能缺失 */
+  model?: string
   /** 本轮工具调用过程（对齐 DSH ui-chat 的 turn-process 展示） */
   tools?: TurnToolCall[]
   /** 本轮远端返回的真实 token 账本（含缓存命中），供前端展示缓存率 */
@@ -399,6 +401,8 @@ export interface PlanSubtask {
   acceptance?: string[]
   status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
   remoteSessionId?: string
+  /** 实际执行使用的模型（provider/model）：完成后 best-effort 回填；历史数据可能缺失 */
+  model?: string
   result?: { content: string; reasoning?: string }
   error?: string
   logs: SubtaskLogEntry[]

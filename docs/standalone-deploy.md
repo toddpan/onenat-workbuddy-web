@@ -89,6 +89,16 @@ node dist/server.js --port 3081 \
 `WORKBUDDY_AUTO_REFRESH_MS`、`WORKBUDDY_TOKEN`、`WORKBUDDY_ADMIN_USERNAME`、`WORKBUDDY_ADMIN_PASSWORD`。
 命令行参数优先于环境变量，环境变量优先于存储中的设置。
 
+### MCP 会话恢复与幂等
+
+MCP 的 transport session 与 AI 令牌相互独立：AI 令牌没有 TTL，仅显式重置时轮换。MCP 会话空闲 30 分钟回收；旧客户端的已鉴权请求会透明恢复同一 id，携带旧 id 的 `initialize` 也能成功，返回新 `Mcp-Session-Id`，过期时附 `sessionReset:true` 和旧 id 的 SHA-256 摘要。
+
+会话 `id/createdAt/lastAt` 原子保存到数据目录 `mcp-sessions.json`（权限 0600）。服务重启可识别已有会话；未知或 LRU 淘汰的 id 按需重建。`WORKBUDDY_MCP_SESSION_MAX` 可设置正整数会话上限，默认 200，淘汰与恢复记录入日志。
+
+写调用在 10 分钟内按「已鉴权调用者身份 + 工具名 + 规范化参数摘要」回放，不受 transport session 或 RPC id 变化影响；并发相同调用合并执行。这个窗口内有意提交完全相同的写命令也会复用结果。读取另含 RPC id，新的轮询 id 会获取新结果。回放仍检查当前权限和工具的对象授权钩子；所有工具结果仅保留内存，不随会话元数据落盘，避免凭证副本和业务提交顺序不一致。回放缓存最多 300 条，超出窗口/容量或进程重启后仍需业务层幂等或操作回执协助判断，不能把 transport 回放视为永久 exactly-once 保证。
+
+验证：构建后运行 `npm run test:mcp-sessions` 和 `npm run smoke:mcp`。
+
 ### 登录鉴权（默认开启）
 
 控制台与全部业务 API（`{prefix}/api/**`）均需登录：未登录访问控制台返回登录页，访问 API 返回 401；

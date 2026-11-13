@@ -5304,7 +5304,7 @@ export class WorkBuddyRouter {
     // 兜底视图：远端不可达/记录缺失时，用本地缓存的指令与产出还原对话
     const localFallback = (note: string): { ok: boolean; source: string; note: string; messages: any[] } => {
       const messages: any[] = [{ role: 'user', content: sub.prompt, time: sub.startedAt || task.createdAt }]
-      if (sub.result?.content) messages.push({ role: 'assistant', content: sub.result.content, time: sub.completedAt, local: true })
+      if (sub.result?.content) messages.push({ role: 'assistant', content: sub.result.content, time: sub.completedAt, model: sub.model, local: true })
       return { ok: true, source: 'local', note, messages }
     }
     // A legacy subtask session ID alone cannot identify the physical node that created it.
@@ -5324,10 +5324,16 @@ export class WorkBuddyRouter {
       return c.startsWith('<system-reminder>') || c.startsWith('Current runtime context.') || c.startsWith('<system>')
     }
     const messages = (hist.messages || []).filter((m: any) => !isNoise(m))
+    // 远端 history 不带模型标注：子任务记录有实际模型时按会话粒度补齐（子任务会话内模型通常一致；缺记录时不编造）
+    if (sub.model) {
+      for (const m of messages) {
+        if (m?.role === 'assistant' && !m.model) m.model = sub.model
+      }
+    }
     // 旧版远端 dsh-web-service 的 history 可能缺 assistant 消息 —— 用本地缓存产出补齐
     const hasAssistant = messages.some((m) => m?.role === 'assistant' && String(m?.content || '').trim())
     if (!hasAssistant && sub.result?.content) {
-      messages.push({ role: 'assistant', content: sub.result.content, time: sub.completedAt, local: true })
+      messages.push({ role: 'assistant', content: sub.result.content, time: sub.completedAt, model: sub.model, local: true })
     }
     if (!messages.some((m) => m?.role === 'user')) {
       messages.unshift({ role: 'user', content: sub.prompt, time: sub.startedAt || task.createdAt })
