@@ -10,11 +10,27 @@ WorkBuddy 工作台的 **MCP 通道技能**：宿主支持 MCP 时把服务注�
 
 - 服务地址：`$BASE_URL/mcp`（`BASE_URL` 即工作台地址，含前缀；由安装脚本写进 `~/.workbuddy-skill.json`，或用环境变量 `WORKBUDDY_BASE_URL` / `WORKBUDDY_TOKEN` 覆盖）
 - 鉴权：`Authorization: Bearer <APIKEY>`（也支持 `X-WorkBuddy-Token` 头或 `?token=` 参数）
-- MCP 原生宿主（Claude / Cursor / Cline / DSH 等）的 mcpServers 条目：
+- MCP 原生宿主（Claude / Cursor / Cline 等）的 mcpServers 条目：
 
 ```json
 { "mcpServers": { "onenat-workbuddy": { "url": "<BASE_URL>/mcp", "headers": { "Authorization": "Bearer <APIKEY>" } } } }
 ```
+
+- **DSH 宿主例外**：DSH 不解析 `mcpServers` JSON，只认 profile 里的 `dsh-mcp-client` 插件条目。照上面那段 JSON 写进 DSH 不会生效（工具不会出现），必须在 profile 的 `cordis.patch.yml` 中注册：
+
+```yaml
+- insert:
+    - id: onenat-workbuddy-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: onenat          # ← 决定工具名前缀，见下方「工具名前缀」
+        transport: streamable-http
+        url: <BASE_URL>/mcp
+        headers:
+          Authorization: Bearer <APIKEY>
+```
+
+  patch 是启动期加载的，改完需重启 DSH 才生效。`serverName` 在同一 profile 内必须唯一，重复会导致该条目启动报错。
 
 ## 为什么接了 MCP 还要这份 SKILL
 
@@ -74,6 +90,18 @@ bash $WB call workbuddy_task_manage '{"action":"send","taskId":"task-xxxx","mess
 **反模式（真实事故 2026-10-14 task-80e9bfbd）**：create 带 message 并在正文写「日志包正在上传，收到路径后再开始分析」——任务照样立即开跑，执行者不会等文件；用户看到空跑的任务手动删除，上传中的附件 complete 直接 409「任务不存在」，206MB 白传。**永远不要在 create 的 message 里承诺"文件随后上传"，必须先传完再 send。**
 
 `putfile` 会在 init 时回显任务状态；任务非 draft 时服务端返回 warning（说明附件很可能传了也读不到），看到 warning 应停手改走三步流程。
+
+## 工具名前缀
+
+本文件统一用**裸名**（如 `workbuddy_task_manage`）指代工具。实际调用时按宿主加前缀：
+
+| 通道 / 宿主 | 实际工具名 |
+|---|---|
+| 脚本通道（`wbmcp.sh`，任何宿主） | `workbuddy_task_manage`（裸名，直接用） |
+| MCP 通道 · Claude / Cursor / Cline | `mcp__onenat-workbuddy__workbuddy_task_manage`（`mcpServers` 的 key 即前缀） |
+| MCP 通道 · DSH | `mcp__<serverName>__workbuddy_task_manage`，`serverName` 取 patch 里配的值（如 `onenat`） |
+
+不确定前缀时，先 `tools/list` 读一遍实际工具名，不要凭记忆拼前缀。
 
 ## 工具清单（17 个）
 

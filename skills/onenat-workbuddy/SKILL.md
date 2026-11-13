@@ -29,6 +29,7 @@ description: OneNat WorkBuddy 多智能体工作台 AI 管理技能：发任务�
 | 建/改子智能体（绑定节点）、建/改项目 | `skills/agents-projects.md` |
 | 看监控/值守、告警增量、定时任务、主调度(规划器)配置 | `skills/ops-monitoring.md` |
 | 上传/下载工作区文件、SSH 资源池、隧道资源目录 | `skills/files-resources.md` |
+| 把本地文件落到远程 DSH 节点的指定路径（装技能、铺插件、跨节点搬运） | `skills/node-file-upload.md` |
 | 群管理/群聊频道/讨论轮与已读语义（仅控制台身份） | `skills/groups.md` |
 | 宿主无工具通道（改用 wb.mjs 命令行） | `skills/cli.md` |
 

@@ -79,6 +79,17 @@ export function buildAiInstallPrompt(base: string, token: string): string {
     '令牌永久有效（无 TTL），仅显式重置令牌会使旧令牌失效；MCP 会话失效与令牌有效期无关。\n' +
     'mcpServers 条目：\n' +
     '{ "mcpServers": { "onenat-workbuddy": { "url": "' + mcpUrl + '", "headers": { "Authorization": "Bearer ' + tok + '" } } } }\n' +
+    '【DSH 宿主注意】DSH 不解析上面的 mcpServers JSON，必须在 DSH profile 的 cordis.patch.yml 里用 dsh-mcp-client 插件条目注册（serverName 决定工具名前缀 mcp__<serverName>__workbuddy_*）：\n' +
+    '- insert:\n' +
+    '    - id: onenat-workbuddy-mcp\n' +
+    "      name: '@deepseek-ai/dsh-mcp-client'\n" +
+    '      config:\n' +
+    '        serverName: onenat\n' +
+    '        transport: streamable-http\n' +
+    "        url: '" + mcpUrl + "'\n" +
+    '        headers:\n' +
+    "          Authorization: Bearer '" + tok + "'\n" +
+    'patch 在 DSH 启动期加载，改完需重启 DSH 才生效；同一 profile 内 serverName 必须唯一。\n' +
     '生效后 tools/list 应能看到 workbuddy_task_manage 等工具。说明：MCP 只提供工具签名，大文件三步流程、@ 派活等使用知识在技能 SKILL.md 里，操作前先读。\n' +
     '\n【使用约定（两通道一致）】\n' +
     '1. 发任务前先调用 project_manage list 判断需求归属的项目：能确定项目就从该项目发起并带 projectId。\n' +
