@@ -39,6 +39,10 @@ OneNat WorkBuddy — SKILL 一键安装脚本（双通道：HTTP + MCP）
   - workbuddy-mcp      MCP 通道技能（wbmcp.sh 客户端直连 /mcp；MCP 原生宿主按 SKILL 内
                        的 mcpServers 条目注册，脚本通道作为无 MCP 宿主的等价兜底）
 
+装到 DSH 技能目录时，额外把 MCP 注册写进 ~/.dsh/profiles/*/cordis.patch.yml
+（DSH 不解析 mcpServers JSON，只认 dsh-mcp-client 插件条目；不注册则 MCP 工具不会出现）。
+注册幂等、可重复安装；--uninstall 会一并拆除。patch 是启动期加载，需重启 DSH 生效。
+
 默认安装到本机全部 AI 技能目录（DSH / ZCode / Claude / agents，已存在或不存在都会创建安装）；
 用 --dir 可只装到指定目录（支持别名 dsh / zcode / claude / agents 或任意路径）。
 
@@ -90,6 +94,88 @@ resolve_dir() {
 CFG="$HOME/.workbuddy-skill.json"
 REPORT="$HOME/.workbuddy-install-report.json"
 
+# ---------- DSH MCP 注册 ----------
+# DSH 不解析 mcpServers JSON，只认 profile 的 cordis.patch.yml 里的 dsh-mcp-client 插件条目。
+# 不注册的后果：技能装上了，但 MCP 工具在 DSH 里根本不会出现（只剩脚本通道）。
+# 注册块用标记注释包裹，重装时先剥旧块再追加，保证幂等；--uninstall 时整块移除。
+DSH_MCP_MARK_BEGIN='# >>> onenat-workbuddy-mcp (managed by install-skill.sh) >>>'
+DSH_MCP_MARK_END='# <<< onenat-workbuddy-mcp <<<'
+
+# 从 patch 中剥掉本脚本管理的块（标记行本身也不保留）
+strip_dsh_mcp_block() {
+  awk -v b="$DSH_MCP_MARK_BEGIN" -v e="$DSH_MCP_MARK_END" '
+    $0==b {skip=1; next}
+    $0==e {skip=0; next}
+    !skip {print}
+  ' "$1"
+}
+
+# 为单个 profile 的 cordis.patch.yml 注册 MCP。
+# 返回码：0=已注册，1=跳过（已存在同地址注册 / 不是数组），2=失败。
+register_dsh_mcp_one() {
+  local patch="$1" url="$2" token="$3"
+  local profile="$(basename "$(dirname "$1")")" cand="" c tmp tok
+  [ -f "$patch" ] || return 1
+  # 同一 profile 内 serverName 必须唯一，重复会让 DSH 启动报错。
+  # 已有同地址注册 → 不重复注册；但令牌可能已过期，需提醒核对。
+  if grep -qF "$url" "$patch"; then
+    echo "  · profile ${profile}：已有同地址 MCP 注册，跳过（避免 serverName 冲突）；若令牌已重置，请手工更新该条目的 Authorization"
+    return 1
+  fi
+  for c in onenat onenat-workbuddy workbuddy; do
+    if ! grep -qE "serverName:[[:space:]]*['\"]?$c['\"]?[[:space:]]*$" "$patch"; then cand="$c"; break; fi
+  done
+  if [ -z "$cand" ]; then
+    echo "  ⚠️ profile ${profile}：候选 serverName 都被占用，未注册（请手工指定一个唯一名字）" >&2
+    return 2
+  fi
+  # patch 顶层必须是数组，追加 '- insert:' 才合法
+  if [ -s "$patch" ] && ! grep -q '^- ' "$patch"; then
+    echo "  ⚠️ profile ${profile}：cordis.patch.yml 顶层不是数组，未自动注册（请手工添加条目）" >&2
+    return 2
+  fi
+  cp "$patch" "$patch.bak-workbuddy-mcp" 2>/dev/null || true
+  tmp="$patch.tmp.$$" tok="$token"
+  tok="${tok//\'/\'\'}"   # YAML 单引号串里单引号需转义
+  if ! strip_dsh_mcp_block "$patch" > "$tmp"; then rm -f "$tmp"; return 2; fi
+  {
+    printf '\n%s\n' "$DSH_MCP_MARK_BEGIN"
+    cat <<EOF
+- insert:
+    - id: onenat-workbuddy-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: $cand
+        transport: streamable-http
+        url: '$url'
+        headers:
+          Authorization: Bearer '$tok'
+EOF
+    printf '%s\n' "$DSH_MCP_MARK_END"
+  } >> "$tmp"
+  mv "$tmp" "$patch"
+  echo "  ✓ profile ${profile}：已注册 MCP（serverName=$cand）；patch 启动期加载，需重启 DSH 生效"
+  return 0
+}
+
+# 移除所有 profile 里的本脚本注册块
+unregister_dsh_mcp_all() {
+  local patch tmp
+  for patch in "$HOME/.dsh/profiles/"*/cordis.patch.yml; do
+    [ -f "$patch" ] || continue
+    if grep -qF "$DSH_MCP_MARK_BEGIN" "$patch"; then
+      tmp="$patch.tmp.$$"
+      if strip_dsh_mcp_block "$patch" > "$tmp"; then
+        mv "$tmp" "$patch"
+        echo "✓ 已移除 DSH MCP 注册：$patch"
+      else
+        rm -f "$tmp"
+      fi
+    fi
+    rm -f "$patch.bak-workbuddy-mcp"
+  done
+}
+
 # ---------- 卸载（全部目录） ----------
 if [ "$UNINSTALL" = "1" ]; then
   for d in "$(resolve_dir dsh)" "$(resolve_dir zcode)" "$(resolve_dir claude)" "$(resolve_dir agents)"; do
@@ -106,6 +192,8 @@ if [ "$UNINSTALL" = "1" ]; then
   # 安装报告必须一并清除：残留 filesInstalled/verified=true 会让后来的人和 AI 误判「已安装且验证通过」（task-105）
   rm -f "$REPORT"
   echo "✓ 已清除安装报告 $REPORT"
+  # DSH 的 MCP 注册块也要拆：留着会让 DSH 指向一个已卸载的技能
+  unregister_dsh_mcp_all
   exit 0
 fi
 
@@ -212,6 +300,25 @@ else
   echo '  安装报告: 无法写入 JSON（缺少 python3）；探针未验证' >&2
 fi
 
+# ---------- DSH MCP 注册（仅当装到 DSH 技能目录、且 MCP 通道自检通过） ----------
+# 服务不通时注册了也没用，所以放在自检之后。
+DSH_SKILL_DIR="$(resolve_dir dsh)"
+DSH_TARGETED=0
+for d in "${TARGETS[@]}"; do [ "$d" = "$DSH_SKILL_DIR" ] && DSH_TARGETED=1; done
+if [ "$DSH_TARGETED" = "1" ] && [ "$MCP_SELFTEST_RC" = "0" ]; then
+  echo ""
+  echo "▸ 注册 DSH MCP（DSH 不解析 mcpServers JSON，需写入 profile 的 cordis.patch.yml）"
+  DSH_PATCH_FOUND=0
+  for patch in "$HOME/.dsh/profiles/"*/cordis.patch.yml; do
+    [ -f "$patch" ] || continue
+    DSH_PATCH_FOUND=1
+    register_dsh_mcp_one "$patch" "$BASE_URL/mcp" "$TOKEN" || true
+  done
+  if [ "$DSH_PATCH_FOUND" = "0" ]; then
+    echo "  · 未找到 $HOME/.dsh/profiles/*/cordis.patch.yml（本机没有 DSH profile？），跳过；DSH 用户需手工注册，见技能 SKILL.md"
+  fi
+fi
+
 installed_note() {
   echo ""
   echo "文件已安装（${#TARGETS[@]} 个技能目录 × 2 套技能）；HTTP=${HTTP_STATUS}，MCP=${MCP_SELFTEST}"
@@ -219,6 +326,7 @@ installed_note() {
     echo "  技能: $d/onenat-workbuddy/SKILL.md（HTTP 通道；子技能分块文档在 skills/ 子目录，按需读取）"
     echo "        $d/workbuddy-mcp/SKILL.md（MCP 通道；MCP 原生宿主按其内 mcpServers 条目注册）"
   done
+  [ "$DSH_TARGETED" = "1" ] && echo "  DSH: MCP 注册见上方「注册 DSH MCP」输出（已装则跳过；改完需重启 DSH）"
   echo "  脚本: ${FIRST_WB}（HTTP 通道）/ ${FIRST_MCP}（MCP 通道，AI 可直接命令行调用）"
   echo "  配置: ${CFG}（600 权限，两通道共用；也可用环境变量 WORKBUDDY_BASE_URL / WORKBUDDY_TOKEN 覆盖）"
   echo ""
